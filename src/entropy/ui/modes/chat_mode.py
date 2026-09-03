@@ -180,6 +180,14 @@ class ChatModeWindow(QMainWindow):
     @Slot(int)
     def _update_tokens(self, tokens: int):
         self.tokens_badge.setText(f"{tokens:,} tokens")
+        self.tokens_badge.setToolTip(
+            f"Gerçek Antigravity Token Metrikleri:\n"
+            f"• Toplam Token: {tokens:,}\n"
+            f"• Girdi (Input): {self.bridge.latest_input_tokens:,}\n"
+            f"• Çıktı (Output): {self.bridge.latest_output_tokens:,}\n"
+            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,}\n"
+            f"• Önbellek (Cache): {self.bridge.latest_cache_read_tokens:,}"
+        )
 
     def _on_send(self):
         prompt = self.input_field.text().strip()

@@ -1,5 +1,6 @@
-"""Antigravity (AGY) CLI asynchronous bridge and real-time output pipeline."""
+"""Antigravity (AGY) CLI asynchronous bridge and real-time output pipeline with genuine token metering."""
 
+import json
 import os
 import re
 import shutil
@@ -16,7 +17,6 @@ from entropy.core.config import config
 class AgyProcessBridge(QObject):
     """Bridges Entropy AI to the authenticated local Antigravity (agy) CLI."""
 
-    # Dynamic Model Detection Patterns (from CLI headers, flags, or stdout)
     MODEL_PATTERNS = [
         re.compile(r"(?:Model\s+Selection|Active\s+Model|Using\s+Model|Model|Engine)\s*[:=]\s*([a-zA-Z0-9\.\-_\s\(\)]+)", re.IGNORECASE),
         re.compile(r"\[([a-zA-Z0-9\.\-_]+(?:flash|pro|sonnet|haiku|opus|codex|gpt|gemini|claude)[a-zA-Z0-9\.\-_]*)\]", re.IGNORECASE),
@@ -28,6 +28,10 @@ class AgyProcessBridge(QObject):
         self.selected_model: str = config.selected_model
         self.current_model: str = self.selected_model or config.model_fallback_name
         self.total_tokens_used: int = 0
+        self.latest_input_tokens: int = 0
+        self.latest_output_tokens: int = 0
+        self.latest_thinking_tokens: int = 0
+        self.latest_cache_read_tokens: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
         self._current_process: Optional[subprocess.Popen] = None
@@ -114,7 +118,6 @@ class AgyProcessBridge(QObject):
         if len(self.conversation_history) <= limit:
             return self.conversation_history
 
-        # Keep the most recent messages, summarize older messages
         preserved = self.conversation_history[-limit:]
         older_count = len(self.conversation_history) - limit
         summary_turn = {
@@ -152,18 +155,12 @@ class AgyProcessBridge(QObject):
         bus.core_state_changed.emit("thinking")
         bus.agent_turn_started.emit(prompt)
 
-        # Count prompt input tokens
-        prompt_tokens = max(1, len(prompt) // 4)
-        self.total_tokens_used += prompt_tokens
-        bus.token_usage_updated.emit(self.total_tokens_used)
-
         # Append to conversation history
         self.conversation_history.append({"role": "user", "content": prompt})
         _ = self._truncate_and_summarize_context()
 
         agy_bin = self.find_agy_executable()
 
-        # Enforce Turkish response when user communicates in Turkish
         system_directive = (
             "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
             "Kullanıcıya daima Türkçe ve samimi, net, profesyonel bir üslupla yanıt ver.\n"
@@ -173,6 +170,7 @@ class AgyProcessBridge(QObject):
         cmd = [
             agy_bin,
             "-p", full_prompt_payload,
+            "--output-format", "stream-json",
             "--mode", mode,
             "--add-dir", str(self.active_project_dir),
         ]
@@ -188,12 +186,10 @@ class AgyProcessBridge(QObject):
         full_response_acc = []
 
         try:
-            # On Windows, suppress the black cmd.exe popup
             creationflags = 0
             if os.name == "nt":
                 creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-            # Start non-blocking Popen pipeline
             self._current_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -207,35 +203,72 @@ class AgyProcessBridge(QObject):
                 cwd=str(self.active_project_dir) if self.active_project_dir.exists() else None
             )
 
-            # Clean readable terminal banner
             short_prompt = prompt.replace("\n", " ")[:65]
             if len(prompt) > 65:
                 short_prompt += "..."
             bus.terminal_output_received.emit(f"\n[Entropy Core | Model: {self.selected_model}] > {short_prompt}\n")
 
-            # Read stdout chunk-by-chunk in real-time
-            for line in iter(self._current_process.stdout.readline, ''):
-                if not line:
+            for raw_line in iter(self._current_process.stdout.readline, ''):
+                if not raw_line:
                     break
 
-                # Stream to terminal
-                bus.terminal_output_received.emit(line)
-                full_response_acc.append(line)
+                line_str = raw_line.strip()
+                if not line_str:
+                    continue
 
-                # Emit token chunk and pulse core visualizer (RULE: agent-ui-routing)
-                bus.token_chunk_received.emit(line)
-                bus.core_pulse_triggered.emit(0.8)
+                # Process NDJSON events from Antigravity engine
+                try:
+                    data = json.loads(line_str)
+                    event = data.get("event")
 
-                # Dynamically extract model name if detected in output
-                detected = self.detect_model_from_text(line)
-                if detected and detected != self.current_model:
-                    self.current_model = detected
-                    bus.model_detected.emit(self.current_model)
+                    if event == "init":
+                        init_data = data.get("init", {})
+                        model = init_data.get("model")
+                        if model:
+                            self.current_model = model
+                            bus.model_detected.emit(model)
 
-                # Approximate generated token counting
-                new_tokens = max(1, len(line) // 4)
-                self.total_tokens_used += new_tokens
-                bus.token_usage_updated.emit(self.total_tokens_used)
+                    elif event == "step_update":
+                        step = data.get("step_update", {})
+                        text_delta = step.get("text_delta")
+                        if text_delta:
+                            bus.terminal_output_received.emit(text_delta)
+                            full_response_acc.append(text_delta)
+                            bus.token_chunk_received.emit(text_delta)
+                            bus.core_pulse_triggered.emit(0.8)
+
+                        usage = step.get("usage")
+                        if usage:
+                            self.latest_input_tokens = usage.get("input_tokens", 0)
+                            self.latest_output_tokens = usage.get("output_tokens", 0)
+                            self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
+                            self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
+                            self.total_tokens_used = usage.get("total_tokens", 0)
+                            bus.token_usage_updated.emit(self.total_tokens_used)
+
+                    elif event == "result":
+                        result = data.get("result", {})
+                        resp = result.get("response", "")
+                        if not full_response_acc and resp:
+                            bus.terminal_output_received.emit(resp)
+                            full_response_acc.append(resp)
+                            bus.token_chunk_received.emit(resp)
+
+                        usage = result.get("usage")
+                        if usage:
+                            self.latest_input_tokens = usage.get("input_tokens", 0)
+                            self.latest_output_tokens = usage.get("output_tokens", 0)
+                            self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
+                            self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
+                            self.total_tokens_used = usage.get("total_tokens", 0)
+                            bus.token_usage_updated.emit(self.total_tokens_used)
+
+                except json.JSONDecodeError:
+                    # Non-JSON output fallback
+                    bus.terminal_output_received.emit(raw_line)
+                    full_response_acc.append(raw_line)
+                    bus.token_chunk_received.emit(raw_line)
+                    bus.core_pulse_triggered.emit(0.6)
 
             self._current_process.stdout.close()
             ret_code = self._current_process.wait()

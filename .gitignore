@@ -10,3 +10,5 @@ build/
 .entropy/
 .venv/
 venv/
+*.exe
+

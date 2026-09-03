@@ -1,0 +1,77 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+block_cipher = None
+
+a = Analysis(
+    ['run_entropy.py'],
+    pathex=['c:/EntropiAI/src', 'c:/EntropiAI'],
+    binaries=[],
+    datas=[
+        ('src/entropy', 'entropy'),
+        ('entropy.ico', '.'),
+    ] + collect_data_files('PySide6'),
+    hiddenimports=[
+        'entropy',
+        'entropy.core',
+        'entropy.core.config',
+        'entropy.core.event_bus',
+        'entropy.core.agy_bridge',
+        'entropy.ui',
+        'entropy.ui.modes',
+        'entropy.ui.modes.floating_mode',
+        'entropy.ui.modes.zen_mode',
+        'entropy.ui.modes.chat_mode',
+        'entropy.ui.widgets',
+        'entropy.ui.widgets.core_visualizer',
+        'entropy.ui.widgets.knowledge_graph',
+        'entropy.ui.widgets.mcp_drawer',
+        'entropy.ui.widgets.reports_viewer',
+        'entropy.ui.widgets.terminal_pane',
+        'entropy.memory',
+        'entropy.memory.obsidian.vault_manager',
+        'entropy.memory.supabase.cognitive_memory',
+        'entropy.memory.rag.project_indexer',
+        'entropy.tools.synthesizer',
+        'entropy.mcp.manager',
+        'entropy.scheduler.cron_engine',
+        'entropy.platform.autostart',
+        'entropy.platform.clipboard',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebEngineCore',
+        'sqlite3',
+    ] + collect_submodules('pydantic'),
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['tkinter', 'matplotlib'],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='EntropyAI_Standalone',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='entropy.ico',
+)
