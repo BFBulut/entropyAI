@@ -22,6 +22,7 @@ from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
 from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 from entropy.ui.widgets.tasks_widget import TasksWidget
+from entropy.ui.widgets.skills_widget import SkillsWidget
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
 class ZenModeWindow(QMainWindow):
@@ -32,8 +33,10 @@ class ZenModeWindow(QMainWindow):
         self.bridge = bridge
         self.clipboard_handler = ClipboardImageHandler()
         self.staged_images: List[str] = []
+        self.staged_pdfs: List[str] = []
         self._streaming_active: bool = False
         self.setStyleSheet(STYLESHEET)
+        self.setAcceptDrops(True)
 
         # Borderless window configuration
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
@@ -162,14 +165,16 @@ class ZenModeWindow(QMainWindow):
         # Top Horizontal Splitter: Left (Tabs: Reports & MCP), Center (Visual Core & Prompt), Right (Graph)
         top_h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left Column: Tabbed Interface for Reports, MCP Hub & Tasks
+        # Left Column: Tabbed Interface for Reports, MCP Hub, Tasks & Skills
         self.left_tabs = QTabWidget()
         self.reports_viewer = ReportsViewerWidget()
         self.mcp_drawer = MCPDrawerWidget()
         self.tasks_widget = TasksWidget()
+        self.skills_widget = SkillsWidget()
         self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
-        self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
+        self.left_tabs.addTab(self.skills_widget, "🎯 Yetenekler")
         self.left_tabs.addTab(self.tasks_widget, "⏰ Görevler")
+        self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
         top_h_splitter.addWidget(self.left_tabs)
 
         # Center Column: Organic Visual Core & Quick Command Input
@@ -273,6 +278,13 @@ class ZenModeWindow(QMainWindow):
         self.chat_input.setPlaceholderText("Mesajınızı yazın veya Ctrl+V ile görsel yapıştırın...")
         self.chat_input.returnPressed.connect(self._on_send_chat)
         chat_input_bar.addWidget(self.chat_input)
+
+        self.chat_pdf_btn = QPushButton("📎 PDF")
+        self.chat_pdf_btn.setToolTip("Finansal Rapor veya PDF Belgesi Ekle")
+        self.chat_pdf_btn.setFixedHeight(28)
+        self.chat_pdf_btn.setStyleSheet("background-color:#141C2C; color:#00FF9D; border:1px solid #00FF9D; font-weight:bold; padding:2px 8px; border-radius:4px;")
+        self.chat_pdf_btn.clicked.connect(self._select_pdf_file)
+        chat_input_bar.addWidget(self.chat_pdf_btn)
 
         self.chat_send_btn = QPushButton("Gönder")
         self.chat_send_btn.setStyleSheet("background-color:#00F0FF; color:#080B10; font-weight:bold; padding:6px 14px;")
@@ -389,21 +401,52 @@ class ZenModeWindow(QMainWindow):
             self.chat_input.setText(text)
             self._on_send_chat()
 
+    def _select_pdf_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "PDF Belgesi Seç", str(self.bridge.active_project_dir), "PDF Dosyaları (*.pdf)"
+        )
+        if file_path:
+            self.stage_pdf_file(file_path)
+
+    def stage_pdf_file(self, path_str: str):
+        self.staged_pdfs.append(path_str)
+        filename = Path(path_str).name
+        self.attach_label.setText(f"📄 Eklenen PDF: <b>{filename}</b>")
+        self.attachment_bar.setVisible(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            local_path = url.toLocalFile()
+            if local_path.lower().endswith(".pdf"):
+                self.stage_pdf_file(local_path)
+            elif local_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                self.staged_images.append(local_path)
+                self.attach_label.setText(f"📎 Eklenen Görsel: <b>{Path(local_path).name}</b>")
+                self.attachment_bar.setVisible(True)
+
     def _on_send_chat(self):
         prompt = self.chat_input.text().strip()
-        if not prompt and not self.staged_images:
+        if not prompt and not self.staged_images and not self.staged_pdfs:
             return
 
         display_prompt = prompt
         if self.staged_images:
             img_names = ", ".join([Path(p).name for p in self.staged_images])
             display_prompt += f" <i style='color:#00F0FF;'>[Eklenen Görsel: {img_names}]</i>"
+        if self.staged_pdfs:
+            pdf_names = ", ".join([Path(p).name for p in self.staged_pdfs])
+            display_prompt += f" <i style='color:#00FF9D;'>[Eklenen PDF: {pdf_names}]</i>"
 
         self._append_chat_message("Siz", display_prompt)
         self.chat_input.clear()
         self.terminal_pane.append_output(f"\n▶ [SİZ]:\n{prompt}\n")
 
         images_to_send = list(self.staged_images)
+        pdfs_to_send = list(self.staged_pdfs)
         self._clear_staged_images()
 
         actual_prompt = prompt
@@ -418,7 +461,11 @@ class ZenModeWindow(QMainWindow):
         self.chat_input.setEnabled(False)
         self.submit_btn.setEnabled(False)
         self.submit_btn.setText("İşleniyor...")
-        self.bridge.send_prompt_async(prompt=actual_prompt, image_attachments=images_to_send)
+        self.bridge.send_prompt_async(
+            prompt=actual_prompt,
+            image_attachments=images_to_send,
+            pdf_attachments=pdfs_to_send
+        )
 
     def _on_turn_started(self, prompt: str):
         self.chat_send_btn.setEnabled(False)
@@ -462,6 +509,7 @@ class ZenModeWindow(QMainWindow):
 
     def _clear_staged_images(self):
         self.staged_images.clear()
+        self.staged_pdfs.clear()
         self.attachment_bar.setVisible(False)
 
     def _append_chat_message(self, sender: str, text: str, is_system: bool = False):

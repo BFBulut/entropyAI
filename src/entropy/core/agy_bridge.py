@@ -182,6 +182,16 @@ class AgyProcessBridge(QObject):
             except Exception:
                 pass
 
+        # 4. Inject Active Skills & Tools Ecosystem (Progressive Disclosure)
+        try:
+            from entropy.skills.manager import SkillManager
+            sm = SkillManager()
+            manifest = sm.get_skills_manifest()
+            if manifest:
+                context_parts.append(manifest)
+        except Exception:
+            pass
+
         return "\n\n".join(context_parts)
 
     def get_mini_cognitive_context(self, prompt: str) -> str:
@@ -259,12 +269,14 @@ class AgyProcessBridge(QObject):
         self,
         prompt: str,
         image_attachments: Optional[List[str]] = None,
+        pdf_attachments: Optional[List[str]] = None,
+        active_skill: Optional[str] = None,
         mode: str = "accept-edits"
     ):
         """Execute a user prompt against agy CLI, queueing if currently busy."""
         with self._lock:
             if self._is_running:
-                self._prompt_queue.append((prompt, image_attachments, mode))
+                self._prompt_queue.append((prompt, image_attachments, pdf_attachments, active_skill, mode))
                 bus.terminal_output_received.emit(
                     f"\n[Entropy Core] Başka bir işlem yürütülüyor. Mesajınız sıraya alındı ({len(self._prompt_queue)}. sırada)...\n"
                 )
@@ -273,7 +285,7 @@ class AgyProcessBridge(QObject):
 
         thread = threading.Thread(
             target=self._execute_prompt_worker,
-            args=(prompt, image_attachments, mode),
+            args=(prompt, image_attachments, pdf_attachments, active_skill, mode),
             daemon=True
         )
         thread.start()
@@ -282,8 +294,46 @@ class AgyProcessBridge(QObject):
         self,
         prompt: str,
         image_attachments: Optional[List[str]] = None,
+        pdf_attachments: Optional[List[str]] = None,
+        active_skill: Optional[str] = None,
         mode: str = "accept-edits"
     ):
+        # 1. Process PDF Attachments if any
+        if pdf_attachments:
+            try:
+                from entropy.skills.pdf_engine import PDFIngestionEngine
+                pdf_eng = PDFIngestionEngine()
+                pdf_blocks = []
+                for pdf_file in pdf_attachments:
+                    res = pdf_eng.ingest_and_store_memory(pdf_file)
+                    meta = res["metadata"]
+                    content_body = res["full_content"][:4000]
+                    pdf_blocks.append(
+                        f"\n[EKLENEN PDF BELGESİ: {meta['filename']} - {meta['pages']} Sayfa, {meta['word_count']} Kelime]:\n"
+                        f"{content_body}\n"
+                        f"(Tam özet arşivi: {res['digest_path']})\n"
+                    )
+                if pdf_blocks:
+                    prompt = "\n".join(pdf_blocks) + "\n\n" + prompt
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[PDF İşleme Hatası]: {e}\n")
+
+        # 2. Inject Explicit Active Skill if selected
+        if active_skill and active_skill.lower() not in ["auto", "otomatik", "otomatik algıla"]:
+            try:
+                from entropy.skills.manager import SkillManager
+                sm = SkillManager()
+                skills = {s.name: s for s in sm.list_skills()}
+                if active_skill in skills:
+                    target_skill = skills[active_skill]
+                    skill_banner = (
+                        f"\n[KULLANICI TARAFINDAN SEÇİLEN UZMANLIK YETENEĞİ: {target_skill.name.upper()}]\n"
+                        f"{target_skill.instructions}\n"
+                    )
+                    prompt = skill_banner + "\n\n" + prompt
+            except Exception:
+                pass
+
         bus.core_state_changed.emit("thinking")
         bus.agent_turn_started.emit(prompt)
 
@@ -571,10 +621,10 @@ class AgyProcessBridge(QObject):
                 pass
 
             if next_task:
-                next_prompt, next_imgs, next_mode = next_task
+                next_prompt, next_imgs, next_pdfs, next_skill, next_mode = next_task
                 next_thread = threading.Thread(
                     target=self._execute_prompt_worker,
-                    args=(next_prompt, next_imgs, next_mode),
+                    args=(next_prompt, next_imgs, next_pdfs, next_skill, next_mode),
                     daemon=True
                 )
                 next_thread.start()

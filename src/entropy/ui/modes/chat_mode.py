@@ -39,10 +39,12 @@ class ChatModeWindow(QMainWindow):
         self.bridge = bridge
         self.clipboard_handler = ClipboardImageHandler()
         self.staged_images: List[str] = []
+        self.staged_pdfs: List[str] = []
 
         self.setStyleSheet(STYLESHEET)
         self.setWindowTitle("Entropy AI Chat")
         self.resize(540, 700)
+        self.setAcceptDrops(True)
 
         self._init_ui()
         self._connect_signals()
@@ -74,6 +76,22 @@ class ChatModeWindow(QMainWindow):
         self.model_combo.setCurrentText(self.bridge.selected_model)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
+
+        # Dynamic Skill Selector Combo
+        self.skill_combo = QComboBox()
+        self.skill_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #05070A;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        """)
+        self._populate_skills_combo()
+        h_layout.addWidget(self.skill_combo)
 
         self.tokens_badge = QLabel("0 tokens")
         self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
@@ -182,6 +200,13 @@ class ChatModeWindow(QMainWindow):
         self.input_field.returnPressed.connect(self._on_send)
         input_bar.addWidget(self.input_field)
 
+        self.pdf_btn = QPushButton("📎 PDF")
+        self.pdf_btn.setToolTip("Finansal Rapor veya PDF Belgesi Yükle")
+        self.pdf_btn.setFixedHeight(28)
+        self.pdf_btn.setStyleSheet("background-color:#141C2C; color:#00FF9D; border:1px solid #00FF9D; font-weight:bold; padding:2px 8px; border-radius:4px;")
+        self.pdf_btn.clicked.connect(self._select_pdf_file)
+        input_bar.addWidget(self.pdf_btn)
+
         self.send_btn = QPushButton("Gönder")
         self.send_btn.setStyleSheet("background-color:#00F0FF; color:#080B10; font-weight:bold;")
         self.send_btn.clicked.connect(self._on_send)
@@ -256,6 +281,45 @@ class ChatModeWindow(QMainWindow):
         else:
             self._open_reports_window()
 
+    def _populate_skills_combo(self):
+        self.skill_combo.clear()
+        self.skill_combo.addItem("🎯 Yetenek: Otomatik", "auto")
+        try:
+            from entropy.skills.manager import SkillManager
+            sm = SkillManager()
+            for s in sm.list_skills():
+                if s.enabled:
+                    self.skill_combo.addItem(f"🎯 {s.name}", s.name)
+        except Exception:
+            pass
+
+    def _select_pdf_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "PDF Belgesi Seç", str(self.bridge.active_project_dir), "PDF Dosyaları (*.pdf)"
+        )
+        if file_path:
+            self.stage_pdf_file(file_path)
+
+    def stage_pdf_file(self, path_str: str):
+        self.staged_pdfs.append(path_str)
+        filename = Path(path_str).name
+        self.attach_label.setText(f"📄 Eklenen PDF: <b>{filename}</b>")
+        self.attachment_bar.setVisible(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            local_path = url.toLocalFile()
+            if local_path.lower().endswith(".pdf"):
+                self.stage_pdf_file(local_path)
+            elif local_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                self.staged_images.append(local_path)
+                self.attach_label.setText(f"📎 Eklenen Görsel: <b>{Path(local_path).name}</b>")
+                self.attachment_bar.setVisible(True)
+
     def try_paste_image(self) -> bool:
         """Handle Ctrl+V image detection and staging."""
         res = self.clipboard_handler.save_clipboard_image()
@@ -270,6 +334,7 @@ class ChatModeWindow(QMainWindow):
 
     def _clear_staged_images(self):
         self.staged_images.clear()
+        self.staged_pdfs.clear()
         self.attachment_bar.setVisible(False)
 
     def _toggle_terminal(self):
@@ -335,18 +400,22 @@ class ChatModeWindow(QMainWindow):
 
     def _on_send(self):
         prompt = self.input_field.text().strip()
-        if not prompt and not self.staged_images:
+        if not prompt and not self.staged_images and not self.staged_pdfs:
             return
 
         display_prompt = prompt
         if self.staged_images:
             img_names = ", ".join([Path(p).name for p in self.staged_images])
             display_prompt += f" <i style='color:#00F0FF;'>[Eklenen Görsel: {img_names}]</i>"
+        if self.staged_pdfs:
+            pdf_names = ", ".join([Path(p).name for p in self.staged_pdfs])
+            display_prompt += f" <i style='color:#00FF9D;'>[Eklenen PDF: {pdf_names}]</i>"
 
         self._append_message("Siz", display_prompt)
         self.input_field.clear()
 
         images_to_send = list(self.staged_images)
+        pdfs_to_send = list(self.staged_pdfs)
         self._clear_staged_images()
 
         actual_prompt = prompt
@@ -356,7 +425,13 @@ class ChatModeWindow(QMainWindow):
         if self.bridge.is_running:
             self._append_message("Entropy AI", "⏳ <i>Önceki işlem tamamlanıyor, mesajınız sıraya alındı ve hemen ardından yanıtlanacak...</i>", is_system=True)
 
-        self.bridge.send_prompt_async(prompt=actual_prompt, image_attachments=images_to_send)
+        chosen_skill = self.skill_combo.currentData()
+        self.bridge.send_prompt_async(
+            prompt=actual_prompt,
+            image_attachments=images_to_send,
+            pdf_attachments=pdfs_to_send,
+            active_skill=chosen_skill
+        )
 
     def _on_turn_started(self, prompt: str):
         self.send_btn.setEnabled(False)

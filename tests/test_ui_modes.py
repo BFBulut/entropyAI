@@ -17,14 +17,6 @@ from entropy.ui.modes.chat_mode import ChatModeWindow
 from entropy.ui.modes.zen_mode import ZenModeWindow
 from entropy.ui.manager import EntropyUIManager
 
-@pytest.fixture(scope="session")
-def qapp():
-    # Ensure offscreen platform plugin for headless CI/CD testing
-    os.environ["QT_QPA_PLATFORM"] = "offscreen"
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
 
 def test_core_visualizer_widget(qapp):
     widget = CoreVisualizerWidget(radius=40)
@@ -139,7 +131,7 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     assert hasattr(zen, "submit_btn")
 
     # Prevent real background thread in UI test
-    monkeypatch.setattr(zen.bridge, "send_prompt_async", lambda prompt, image_attachments=None: True)
+    monkeypatch.setattr(zen.bridge, "send_prompt_async", lambda *args, **kwargs: True)
 
     # Verify input routing doesn't throw AttributeError
     zen.prompt_input.setText("Test quick prompt")
