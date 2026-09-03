@@ -28,14 +28,33 @@ class WindowsAutostartManager:
         """Check if startup batch file exists."""
         return self.startup_bat.exists()
 
-    def enable_autostart(self, python_exe: Optional[str] = None, script_path: Optional[str] = None) -> bool:
+    def enable_autostart(
+        self,
+        exe_path: Optional[str] = None,
+        python_exe: Optional[str] = None,
+        script_path: Optional[str] = None
+    ) -> bool:
         """Create a startup script in the Windows Startup directory."""
-        py = python_exe or sys.executable
-        script = script_path or str(Path(__file__).parent.parent / "main.py")
+        if exe_path:
+            target = f'"{exe_path}" --mode floating'
+        elif python_exe and script_path:
+            target = f'"{python_exe}" "{script_path}" --mode floating'
+        elif getattr(sys, 'frozen', False):
+            target = f'"{sys.executable}" --mode floating'
+        else:
+            project_root = Path(__file__).parent.parent.parent.parent
+            dist_exe = project_root / "dist" / "EntropyAI" / "EntropyAI.exe"
+            onefile_exe = project_root / "dist" / "EntropyAI.exe"
+            if dist_exe.exists():
+                target = f'"{dist_exe}" --mode floating'
+            elif onefile_exe.exists():
+                target = f'"{onefile_exe}" --mode floating'
+            else:
+                target = f'"{sys.executable}" "{project_root / "run_entropy.py"}" --mode floating'
 
         batch_content = (
             "@echo off\n"
-            f'start "" "{py}" "{script}" --mode floating\n'
+            f'start "" {target}\n'
         )
         try:
             self.startup_bat.write_text(batch_content, encoding="utf-8")
