@@ -4,7 +4,7 @@ import time
 import datetime
 from pathlib import Path
 from typing import Optional
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget, QCheckBox, QDialog,
@@ -133,26 +133,41 @@ class TasksWidget(QFrame):
 
         for t_id, task in self.scheduler.tasks.items():
             item = QListWidgetItem()
-            item.setSizeHint(QWidget().sizeHint())
+            item.setSizeHint(QSize(280, 64))
 
             row_widget = QWidget()
+            row_widget.setMinimumHeight(58)
+            row_widget.setStyleSheet("""
+                QWidget {
+                    background-color: #0E1420;
+                    border: 1px solid #1F2B42;
+                    border-radius: 6px;
+                }
+            """)
             row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(6, 4, 6, 4)
+            row_layout.setContentsMargins(10, 8, 10, 8)
+            row_layout.setSpacing(10)
 
             # Enable checkbox
             cb = QCheckBox()
             cb.setChecked(task.enabled)
+            cb.setToolTip("Görevi etkinleştir / devre dışı bırak")
             cb.toggled.connect(lambda checked, t=task: self._on_toggle_task(t, checked))
             row_layout.addWidget(cb)
 
             # Details
             info_layout = QVBoxLayout()
-            info_layout.setSpacing(2)
-            name_lbl = QLabel(f"<b style='color:#F0F6FC;'>{task.name}</b>")
+            info_layout.setContentsMargins(0, 0, 0, 0)
+            info_layout.setSpacing(3)
             
-            interval_str = f"Tip: {task.interval_type} ({task.interval_value})"
+            title_color = "#00F0FF" if task.enabled else "#8B949E"
+            name_lbl = QLabel(f"<b style='color:{title_color}; font-size:12px;'>{task.name}</b>")
+            name_lbl.setStyleSheet("background: transparent; border: none;")
+            
+            interval_str = f"Periyot: {task.interval_type} ({task.interval_value})"
             next_str = datetime.datetime.fromtimestamp(task.next_run).strftime("%H:%M:%S") if task.next_run else "Planlanmadı"
-            status_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{interval_str} | Sonraki: {next_str}</span>")
+            status_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{interval_str} | Sonraki: <span style='color:#00FF9D;'>{next_str}</span></span>")
+            status_lbl.setStyleSheet("background: transparent; border: none;")
 
             info_layout.addWidget(name_lbl)
             info_layout.addWidget(status_lbl)
@@ -161,25 +176,25 @@ class TasksWidget(QFrame):
 
             # Run Now button
             run_btn = QPushButton("▶ Çalıştır")
-            run_btn.setFixedHeight(22)
+            run_btn.setFixedHeight(24)
             run_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #141C2C;
-                    color: #00F0FF;
-                    border: 1px solid #00F0FF;
-                    border-radius: 3px;
-                    padding: 2px 8px;
-                    font-size: 10px;
+                    color: #00FF9D;
+                    border: 1px solid #00FF9D;
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
                 }
                 QPushButton:hover {
-                    background-color: #00F0FF;
+                    background-color: #00FF9D;
                     color: #080B10;
                 }
             """)
             run_btn.clicked.connect(lambda _, t=task: self._run_task_now(t))
             row_layout.addWidget(run_btn)
 
-            item.setSizeHint(row_widget.sizeHint())
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row_widget)
 
@@ -191,7 +206,6 @@ class TasksWidget(QFrame):
         """Execute a task immediately and trigger its action."""
         bus.terminal_output_received.emit(f"\n[Task Scheduler] '{task.name}' görevi anlık olarak çalıştırılıyor...\n")
         
-        # If it's the dreaming task, trigger cognitive consolidation
         if task.id == "daily-dreaming":
             try:
                 cog = CognitiveMemorySystem()
@@ -201,6 +215,33 @@ class TasksWidget(QFrame):
                 )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Task Scheduler Hata] Konsolidasyon hatası: {e}\n")
+
+        elif task.id == "obsidian-sync":
+            try:
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                ovm = ObsidianVaultManager()
+                log_path = ovm.append_daily_log("Periyodik arka plan bellek senkronu gerçekleştirildi.")
+                notes_count = len(ovm.list_all_notes())
+                bus.terminal_output_received.emit(
+                    f"[Task Scheduler] Obsidian senkronizasyonu tamamlandı ({notes_count} not tarandı, günlük kaydedildi: {log_path.name}).\n"
+                )
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Task Scheduler Hata] Obsidian senkron hatası: {e}\n")
+
+        elif task.id == "rag-reindex":
+            try:
+                from entropy.memory.rag.project_indexer import ProjectIndexer
+                from entropy.core.config import config
+                indexer = ProjectIndexer(root_dir=config.default_project_path)
+                indexed_count = indexer.scan_and_index()
+                bus.terminal_output_received.emit(
+                    f"[Task Scheduler] Kod tabanı indeksleme (RAG) tamamlandı ({indexed_count} dosya indekslendi).\n"
+                )
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Task Scheduler Hata] RAG indeksleme hatası: {e}\n")
+
+        elif task.prompt:
+            bus.terminal_output_received.emit(f"[Task Scheduler] Görev yürütülüyor: {task.prompt}\n")
 
         bus.task_triggered.emit(task.id, task.name)
         task.last_run = time.time()

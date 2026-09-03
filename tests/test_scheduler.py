@@ -68,3 +68,23 @@ def test_clipboard_handler_init(tmp_path):
     staging = tmp_path / "staging"
     handler = ClipboardImageHandler(staging_dir=staging)
     assert staging.exists()
+
+def test_task_execution_flow(tmp_path):
+    storage = tmp_path / "test_tasks.json"
+    scheduler = TaskScheduler(storage_path=storage)
+    executed = []
+
+    scheduler.set_execution_callback(lambda t: executed.append(t.id))
+    task = scheduler.schedule_task(
+        task_id="sample-task",
+        name="Sample Autonomous Task",
+        prompt="Perform sample check",
+        interval_type="minutely",
+        interval_value=1
+    )
+    # Trigger execution directly
+    if scheduler._callback:
+        scheduler._callback(task)
+
+    assert len(executed) == 1
+    assert executed[0] == "sample-task"

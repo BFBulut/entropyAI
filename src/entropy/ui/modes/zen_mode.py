@@ -179,16 +179,16 @@ class ZenModeWindow(QMainWindow):
         self._load_persisted_session_to_terminal()
 
     def _load_persisted_session_to_terminal(self):
-        """Restore conversation history to the terminal pane on launch."""
+        """Restore full conversation history to the terminal pane on launch."""
         from entropy.core.config import CHAT_HISTORY_FILE
         if CHAT_HISTORY_FILE.exists():
             try:
                 import json
                 history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
                 if history:
-                    cid = f" (ID: {self.bridge.current_conversation_id[:8]}...)" if self.bridge.current_conversation_id else ""
-                    self.terminal_pane.append_output(f"════════════════ [ÖNCEKİ AKTİF SOHBET OTURUMU YÜKLENDİ{cid}] ════════════════\n")
-                    for turn in history[-10:]:
+                    cid = f" (Oturum ID: {self.bridge.current_conversation_id[:8]}...)" if self.bridge.current_conversation_id else ""
+                    self.terminal_pane.append_output(f"════════════════ [AKTİF SOHBET GEÇMİŞİ YÜKLENDİ{cid} - {len(history)} Mesaj] ════════════════\n")
+                    for turn in history:
                         role = "SİZ" if turn.get("role") == "user" else f"ENTROPY CORE [{self.bridge.selected_model}]"
                         content = turn.get("content", "").strip()
                         self.terminal_pane.append_output(f"\n▶ [{role}]:\n{content}\n")
@@ -201,6 +201,7 @@ class ZenModeWindow(QMainWindow):
         bus.token_usage_updated.connect(self._update_tokens)
         bus.core_state_changed.connect(self._update_status)
         bus.node_selected.connect(self._on_node_selected)
+        bus.agent_turn_completed.connect(self._on_agent_turn_completed)
 
     @Slot(str)
     def _on_node_selected(self, node_id: str):
@@ -326,14 +327,20 @@ class ZenModeWindow(QMainWindow):
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
-        self.tokens_badge.setText(f"Tokens: {tokens:,}")
+        active = self.bridge.latest_input_tokens + self.bridge.latest_output_tokens
+        cache_k = self.bridge.latest_cache_read_tokens // 1000
+        if cache_k > 0:
+            self.tokens_badge.setText(f"Aktif: {active:,} | Cache: {cache_k}k")
+        else:
+            self.tokens_badge.setText(f"Tokens: {tokens:,}")
+
         self.tokens_badge.setToolTip(
-            f"Gerçek Antigravity Token Metrikleri:\n"
-            f"• Toplam Token: {tokens:,}\n"
-            f"• Girdi (Input): {self.bridge.latest_input_tokens:,}\n"
-            f"• Çıktı (Output): {self.bridge.latest_output_tokens:,}\n"
-            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,}\n"
-            f"• Önbellek (Cache): {self.bridge.latest_cache_read_tokens:,}"
+            f"Gerçek Antigravity Token Kullanım Metrikleri:\n"
+            f"• Yeni Üretilen (Output): {self.bridge.latest_output_tokens:,} token\n"
+            f"• Yeni Girdi (Input): {self.bridge.latest_input_tokens:,} token\n"
+            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,} token\n"
+            f"• Sunucu Önbelleği (Cache Read): {self.bridge.latest_cache_read_tokens:,} token (Hızlı / Ücretsiz)\n"
+            f"• Toplam Bağlam Boyutu: {tokens:,} token"
         )
 
     @Slot(str)
@@ -351,4 +358,9 @@ class ZenModeWindow(QMainWindow):
         text = self.prompt_input.text().strip()
         if text:
             self.prompt_input.clear()
+            self.terminal_pane.append_output(f"\n▶ [SİZ]:\n{text}\n")
             self.bridge.send_prompt_async(prompt=text)
+
+    @Slot(str)
+    def _on_agent_turn_completed(self, response: str):
+        self.terminal_pane.append_output("\n────────────────────────────────────────────────────────────────\n")

@@ -1,5 +1,4 @@
-"""Master UI Manager: Orchestrates Zen, Floating, and Chat modes."""
-
+from pathlib import Path
 from typing import Optional
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtGui import QAction, QIcon, QPixmap, QColor
@@ -24,19 +23,37 @@ class EntropyUIManager(QObject):
         self.zen_window = ZenModeWindow(bridge=self.bridge)
         self.chat_window = ChatModeWindow(bridge=self.bridge)
 
+        self._set_window_icons()
+
         self.current_mode = config.default_mode
 
         self._setup_tray_icon()
         self._connect_signals()
 
+    def _set_window_icons(self):
+        """Apply high-resolution cybernetic app icon to all windows."""
+        icon_path = Path.cwd() / "entropy.ico"
+        if not icon_path.exists():
+            icon_path = Path(__file__).resolve().parents[3] / "entropy.ico"
+        if icon_path.exists():
+            icon = QIcon(str(icon_path))
+            self.floating_widget.setWindowIcon(icon)
+            self.zen_window.setWindowIcon(icon)
+            self.chat_window.setWindowIcon(icon)
+
     def _setup_tray_icon(self):
         """Create Windows notification area icon."""
         self.tray_icon = QSystemTrayIcon(self)
 
-        # Generate simple cyber-cyan pixmap icon
-        pix = QPixmap(16, 16)
-        pix.fill(QColor(0, 240, 255))
-        self.tray_icon.setIcon(QIcon(pix))
+        icon_path = Path.cwd() / "entropy.ico"
+        if not icon_path.exists():
+            icon_path = Path(__file__).resolve().parents[3] / "entropy.ico"
+        if icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            pix = QPixmap(16, 16)
+            pix.fill(QColor(0, 240, 255))
+            self.tray_icon.setIcon(QIcon(pix))
         self.tray_icon.setToolTip("Entropy AI - Agentic OS")
 
         # Context Menu
@@ -66,18 +83,53 @@ class EntropyUIManager(QObject):
 
     @Slot(str)
     def switch_mode(self, mode_name: str):
-        """Transition between Zen, Floating, and Chat modes."""
+        """Transition between Zen, Floating, and Chat modes across multiple monitors."""
         self.current_mode = mode_name.lower()
+
+        # Find active screen where user is currently interacting
+        active_screen = None
+        if self.floating_widget.isVisible():
+            center_pt = self.floating_widget.geometry().center()
+            active_screen = QApplication.screenAt(center_pt) or self.floating_widget.screen()
+        elif self.chat_window.isVisible():
+            center_pt = self.chat_window.geometry().center()
+            active_screen = QApplication.screenAt(center_pt) or self.chat_window.screen()
+        elif self.zen_window.isVisible():
+            center_pt = self.zen_window.geometry().center()
+            active_screen = QApplication.screenAt(center_pt) or self.zen_window.screen()
+
+        if not active_screen:
+            active_screen = QApplication.primaryScreen()
 
         if self.current_mode == "zen":
             self.floating_widget.hide()
             self.chat_window.hide()
+            if active_screen:
+                geom = active_screen.geometry()
+                self.zen_window.setGeometry(geom)
+                self.zen_window.setScreen(active_screen)
             self.zen_window.showFullScreen()
         elif self.current_mode == "floating":
             self.zen_window.hide()
+            self.chat_window.hide()
+            if active_screen and not self.floating_widget.isVisible():
+                s_geom = active_screen.geometry()
+                self.floating_widget.setScreen(active_screen)
+                self.floating_widget.move(
+                    s_geom.x() + (s_geom.width() - self.floating_widget.width()) // 2,
+                    s_geom.y() + (s_geom.height() - self.floating_widget.height()) // 2
+                )
             self.floating_widget.show()
         elif self.current_mode == "chat":
             self.zen_window.hide()
+            self.floating_widget.hide()
+            if active_screen and not self.chat_window.isVisible():
+                s_geom = active_screen.geometry()
+                self.chat_window.setScreen(active_screen)
+                self.chat_window.move(
+                    s_geom.x() + (s_geom.width() - self.chat_window.width()) // 2,
+                    s_geom.y() + (s_geom.height() - self.chat_window.height()) // 2
+                )
             self.chat_window.show()
             self.chat_window.raise_()
             self.chat_window.activateWindow()

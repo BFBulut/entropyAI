@@ -206,14 +206,20 @@ class ChatModeWindow(QMainWindow):
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
-        self.tokens_badge.setText(f"{tokens:,} tokens")
+        active = self.bridge.latest_input_tokens + self.bridge.latest_output_tokens
+        cache_k = self.bridge.latest_cache_read_tokens // 1000
+        if cache_k > 0:
+            self.tokens_badge.setText(f"Aktif: {active:,} | Cache: {cache_k}k")
+        else:
+            self.tokens_badge.setText(f"{tokens:,} tokens")
+
         self.tokens_badge.setToolTip(
-            f"Gerçek Antigravity Token Metrikleri:\n"
-            f"• Toplam Token: {tokens:,}\n"
-            f"• Girdi (Input): {self.bridge.latest_input_tokens:,}\n"
-            f"• Çıktı (Output): {self.bridge.latest_output_tokens:,}\n"
-            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,}\n"
-            f"• Önbellek (Cache): {self.bridge.latest_cache_read_tokens:,}"
+            f"Gerçek Antigravity Token Kullanım Metrikleri:\n"
+            f"• Yeni Üretilen (Output): {self.bridge.latest_output_tokens:,} token\n"
+            f"• Yeni Girdi (Input): {self.bridge.latest_input_tokens:,} token\n"
+            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,} token\n"
+            f"• Sunucu Önbelleği (Cache Read): {self.bridge.latest_cache_read_tokens:,} token (Hızlı / Ücretsiz)\n"
+            f"• Toplam Bağlam Boyutu: {tokens:,} token"
         )
 
     def _on_send(self):

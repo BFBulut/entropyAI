@@ -10,6 +10,8 @@ from entropy.core.event_bus import bus
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
+from entropy.ui.widgets.tasks_widget import TasksWidget
+from entropy.scheduler.cron_engine import TaskScheduler
 from entropy.ui.modes.floating_mode import FloatingModeWidget
 from entropy.ui.modes.chat_mode import ChatModeWindow
 from entropy.ui.modes.zen_mode import ZenModeWindow
@@ -115,4 +117,12 @@ def test_ui_manager_mode_switching(qapp):
     ui_mgr.floating_widget.close()
     ui_mgr.zen_window.close()
     ui_mgr.chat_window.close()
-    ui_mgr.tray_icon.hide()
+
+def test_tasks_widget_card_layout(qapp, tmp_path):
+    storage = tmp_path / "tasks_layout.json"
+    scheduler = TaskScheduler(storage_path=storage)
+    tasks_w = TasksWidget(scheduler=scheduler)
+    assert tasks_w.list_widget.count() >= 3
+    # Verify card size hints
+    item = tasks_w.list_widget.item(0)
+    assert item.sizeHint().height() >= 58

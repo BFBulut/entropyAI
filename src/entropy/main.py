@@ -2,6 +2,8 @@
 
 import argparse
 import sys
+from pathlib import Path
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from entropy.core.config import config
@@ -17,7 +19,13 @@ def main():
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(config.app_name)
-    app.setQuitOnLastWindowClosed(False) # Allows floating/tray background persistence
+    app.setQuitOnLastWindowClosed(False)
+
+    icon_path = Path.cwd() / "entropy.ico"
+    if not icon_path.exists():
+        icon_path = Path(__file__).resolve().parents[2] / "entropy.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Initialize Core Bridge & Scheduler
     bridge = AgyProcessBridge()
