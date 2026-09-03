@@ -120,7 +120,22 @@ class MCPDrawerWidget(QFrame):
         header_layout.addWidget(add_btn)
 
         self.sync_btn = QPushButton("Yenile")
-        self.sync_btn.setFixedHeight(22)
+        self.sync_btn.setFixedHeight(24)
+        self.sync_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #00F0FF;
+                border-radius: 4px;
+                padding: 2px 14px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #00F0FF;
+                color: #080B10;
+            }
+        """)
         self.sync_btn.clicked.connect(self.refresh_servers)
         header_layout.addWidget(self.sync_btn)
 

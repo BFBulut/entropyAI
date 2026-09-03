@@ -1,8 +1,11 @@
-"""Core configuration and settings for Entropy AI."""
+"""Core configuration and settings for Entropy AI with persistence."""
 
+import json
 from typing import List
 from pathlib import Path
 from pydantic import BaseModel, Field
+
+SETTINGS_FILE = Path(r"C:\EntropiAI\.entropy\settings.json")
 
 class EntropyConfig(BaseModel):
     app_name: str = "Entropy AI"
@@ -12,14 +15,48 @@ class EntropyConfig(BaseModel):
     autostart_enabled: bool = True
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
-    selected_model: str = "gemini-2.5-pro"
+    selected_model: str = "gemini-3.1-pro-high"
     available_models: List[str] = [
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gemini-3.1-pro",
-        "claude-3-7-sonnet",
-        "claude-3-5-sonnet",
-        "claude-3-5-haiku",
+        "gemini-3.1-pro-high",
+        "gemini-3.1-pro-low",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
+        "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-low",
+        "gemini-3.6-flash-high",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6-thinking",
+        "gpt-oss-120b-medium",
     ]
 
+    def save_settings(self):
+        """Persist user preferences to disk."""
+        try:
+            SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "selected_model": self.selected_model,
+                "default_mode": self.default_mode,
+                "autostart_enabled": self.autostart_enabled,
+            }
+            SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def load_settings(self):
+        """Load persistent preferences from disk."""
+        try:
+            if SETTINGS_FILE.exists():
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                if "selected_model" in data and data["selected_model"]:
+                    self.selected_model = data["selected_model"]
+                if "default_mode" in data and data["default_mode"]:
+                    self.default_mode = data["default_mode"]
+                if "autostart_enabled" in data:
+                    self.autostart_enabled = data["autostart_enabled"]
+        except Exception:
+            pass
+
 config = EntropyConfig()
+config.load_settings()

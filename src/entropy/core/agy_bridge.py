@@ -39,10 +39,43 @@ class AgyProcessBridge(QObject):
         return self._is_running
 
     def set_model(self, model_name: str):
-        """Update active model dynamically."""
+        """Update active model dynamically and persist to configuration."""
         self.selected_model = model_name
         self.current_model = model_name
+        config.selected_model = model_name
+        config.save_settings()
         bus.model_detected.emit(model_name)
+
+    def fetch_available_models(self) -> List[str]:
+        """Dynamically fetch supported models from 'agy models' CLI."""
+        agy_bin = self.find_agy_executable()
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
+        try:
+            res = subprocess.run(
+                [agy_bin, "models"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                timeout=10
+            )
+            if res.returncode == 0:
+                models = []
+                for line in res.stdout.splitlines():
+                    line = line.strip()
+                    if not line or "Fetching" in line:
+                        continue
+                    parts = line.split("\t")
+                    model_id = parts[0].strip()
+                    if model_id and model_id not in models:
+                        models.append(model_id)
+                if models:
+                    config.available_models = models
+                    return models
+        except Exception:
+            pass
+        return config.available_models
 
     def find_agy_executable(self) -> str:
         """Locate agy CLI binary in system PATH or default Windows installation folders."""

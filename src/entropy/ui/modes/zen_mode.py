@@ -62,7 +62,8 @@ class ZenModeWindow(QMainWindow):
         h_layout.addWidget(QLabel("<span style='color:#8B949E; font-size:11px;'>Model:</span>"))
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        for m in config.available_models:
+        models = self.bridge.fetch_available_models()
+        for m in models:
             self.model_combo.addItem(m)
         self.model_combo.setCurrentText(self.bridge.selected_model)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
