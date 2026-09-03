@@ -180,3 +180,66 @@ def test_multi_criteria_hybrid_scoring_and_noise_pruning(temp_cognitive_db):
     noise_ids = [node.id for node, s in noise_matches]
     assert not any("12345" in node.content for node, s in noise_matches)
 
+def test_dream_consolidation_and_pruning(temp_cognitive_db):
+    # T3.1 & T3.2: Dreaming consolidation
+    temp_cognitive_db.record_memory("episodic", "Session log 1: Discussed vector embeddings", importance=0.4)
+    temp_cognitive_db.record_memory("episodic", "Session log 2: Discussed Obsidian wikilinks", importance=0.4)
+
+    rules = temp_cognitive_db.dream_and_consolidate()
+    assert len(rules) >= 1
+    assert "Konsolide Bilişsel Özet" in rules[0]
+
+    # Verify a new semantic memory was created
+    semantic_nodes = temp_cognitive_db.recall("Konsolide Bilişsel Özet")
+    assert any("Konsolide Bilişsel Özet" in n["content"] for n in semantic_nodes)
+
+    # T3.3: Pruning test - create an old, low-importance decayed memory
+    old_time = time.time() - (35 * 86400.0) # 35 days ago
+    temp_cognitive_db.record_memory("episodic", "Ancient noise log to be pruned", importance=0.05)
+    # Manually backdate created_at and last_accessed
+    node_id = temp_cognitive_db._generate_node_id("episodic", "Ancient noise log to be pruned")
+    import sqlite3
+    with sqlite3.connect(temp_cognitive_db.db_path) as conn:
+        conn.execute("UPDATE cognitive_nodes SET last_accessed = ?, created_at = ? WHERE id = ?", (old_time, old_time, node_id))
+        conn.commit()
+
+    pruned = temp_cognitive_db.prune_decayed_memories(min_strength=0.10, days_dormant=30.0)
+    assert pruned >= 1
+    assert temp_cognitive_db.get_node(node_id) is None
+
+def test_syntax_aware_ast_and_incremental_indexing(tmp_path):
+    # T4.1 & T4.2: AST chunking and incremental caching
+    py_code = (
+        "class EntropyCore:\n"
+        "    \"\"\"Main OS Core Controller.\"\"\"\n"
+        "    def run(self):\n"
+        "        return True\n\n"
+        "def launch_terminal(mode: str):\n"
+        "    \"\"\"Launch terminal in given mode.\"\"\"\n"
+        "    print(mode)\n"
+    )
+    code_file = tmp_path / "engine.py"
+    code_file.write_text(py_code, encoding="utf-8")
+
+    indexer = ProjectIndexer(root_dir=tmp_path)
+    count1 = indexer.scan_and_index()
+    assert count1 >= 1
+
+    # Verify AST extracted discrete symbols
+    symbols = [c["symbol"] for c in indexer.chunks]
+    assert any("class EntropyCore" in s for s in symbols)
+    assert any("def launch_terminal" in s for s in symbols)
+
+    # Verify search returns exact symbol and line numbers
+    results = indexer.search_codebase("launch_terminal")
+    assert len(results) >= 1
+    assert "def launch_terminal" in results[0]["symbol"]
+    assert "L" in results[0]["lines"]
+
+    # T4.2: Incremental indexing - second scan should reuse cache
+    mtime_before = indexer._file_cache["engine.py"]["mtime"]
+    count2 = indexer.scan_and_index()
+    assert count2 == count1
+    assert indexer._file_cache["engine.py"]["mtime"] == mtime_before
+
+

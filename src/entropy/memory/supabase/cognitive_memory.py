@@ -379,34 +379,87 @@ class CognitiveMemorySystem:
 
     def dream_and_consolidate(self) -> List[str]:
         """
-        Layer 6: Dreaming / Clustering Consolidation.
-        Gathers episodic memories from the past 24 hours, aggregates common themes,
-        and generates synthesized semantic facts.
+        Layer 6: Dreaming / Clustering Consolidation (T3.1 & T3.2).
+        Gathers episodic memories from the past 24-48 hours, aggregates themes,
+        saves consolidated semantic facts, and appends architectural decisions to Obsidian MEMORY.md.
         """
         now = time.time()
-        one_day_ago = now - 86400.0
+        two_days_ago = now - (2 * 86400.0)
         synthesized_rules = []
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT content, metadata_json FROM cognitive_nodes WHERE category = 'episodic' AND created_at >= ?",
-                (one_day_ago,)
+                "SELECT content, metadata_json, importance FROM cognitive_nodes WHERE category = 'episodic' AND created_at >= ?",
+                (two_days_ago,)
             )
             rows = cursor.fetchall()
 
-        if len(rows) >= 3:
-            # Cluster and create a consolidated semantic memory
-            summary = f"Synthesized from {len(rows)} recent episodic interactions on {time.strftime('%Y-%m-%d')}"
+        if len(rows) >= 2:
+            date_str = time.strftime('%Y-%m-%d')
+            topics = [r[0][:80] for r in rows[:5]]
+            summary = f"Konsolide Bilişsel Özet ({date_str}): {len(rows)} bölümsel etkileşimden damıtıldı."
+
             self.record_memory(
                 category="semantic",
                 content=summary,
-                importance=0.8,
-                metadata={"source": "dream_consolidation", "items_clustered": len(rows)}
+                importance=0.85,
+                metadata={"source": "dream_consolidation", "items_clustered": len(rows), "samples": topics}
             )
             synthesized_rules.append(summary)
 
+            # T3.2: Export to Obsidian MEMORY.md if available
+            try:
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                ovm = ObsidianVaultManager()
+                ovm.append_to_global_memory("Otonom Bilişsel Konsolidasyon (Rüya)", f"{summary}\n- İpuçları: {'; '.join(topics)}")
+            except Exception:
+                pass
+
+        # Also run pruning during dream cycle
+        self.prune_decayed_memories()
         return synthesized_rules
+
+    def prune_decayed_memories(self, min_strength: float = 0.10, days_dormant: float = 30.0) -> int:
+        """
+        Layer 5 & T3.3: Prune decayed low-importance episodic memories.
+        Prunes nodes where:
+        - category is 'episodic'
+        - initial importance < 0.35
+        - days since last access >= days_dormant
+        - calculated Ebbinghaus retention strength < min_strength
+        Never prunes 'ego', 'semantic', or 'procedural' memories.
+        """
+        now = time.time()
+        dormant_cutoff = now - (days_dormant * 86400.0)
+        pruned_ids = []
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, category, content, importance, created_at, last_accessed, access_count FROM cognitive_nodes WHERE category = 'episodic' AND last_accessed <= ? AND importance < 0.35",
+                (dormant_cutoff,)
+            )
+            rows = cursor.fetchall()
+
+            for r in rows:
+                node = CognitiveMemoryNode(
+                    id=r[0],
+                    category=r[1],
+                    content=r[2],
+                    importance=r[3],
+                    created_at=r[4],
+                    last_accessed=r[5],
+                    access_count=r[6]
+                )
+                if node.calculate_ebbinghaus_strength(current_time=now) < min_strength:
+                    pruned_ids.append(node.id)
+
+            if pruned_ids:
+                cursor.executemany("DELETE FROM cognitive_nodes WHERE id = ?", [(pid,) for pid in pruned_ids])
+                conn.commit()
+
+        return len(pruned_ids)
 
 def re_tokenize(text: str) -> List[str]:
     """Simple alphanumeric tokenizer."""
