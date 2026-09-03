@@ -126,3 +126,28 @@ def test_tasks_widget_card_layout(qapp, tmp_path):
     # Verify card size hints
     item = tasks_w.list_widget.item(0)
     assert item.sizeHint().height() >= 58
+
+def test_zen_mode_dual_chat_and_terminal(qapp):
+    bridge = AgyProcessBridge()
+    zen = ZenModeWindow(bridge=bridge)
+    zen.show()
+
+    # Verify presence of both chat and terminal
+    assert hasattr(zen, "chat_browser")
+    assert hasattr(zen, "chat_input")
+    assert hasattr(zen, "terminal_pane")
+    assert hasattr(zen, "submit_btn")
+
+    # Verify input routing doesn't throw AttributeError
+    zen.prompt_input.setText("Test quick prompt")
+    zen._on_submit_prompt()
+    assert zen.chat_browser.toPlainText() != ""
+    assert "Test quick prompt" in zen.chat_browser.toPlainText()
+
+    # Verify staging images works
+    zen.staged_images.append("test.png")
+    assert len(zen.staged_images) == 1
+    zen._clear_staged_images()
+    assert len(zen.staged_images) == 0
+
+    zen.close()

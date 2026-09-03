@@ -1,7 +1,10 @@
 """Zen Mode: Borderless fullscreen workstation for Entropy AI."""
 
+import json
 from pathlib import Path
+from typing import List, Optional
 from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QProgressBar, QPushButton, QSizePolicy, QSplitter, QTabWidget,
@@ -11,6 +14,8 @@ from PySide6.QtWidgets import (
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
+from entropy.platform.clipboard import ClipboardImageHandler
+from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, STYLESHEET
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
@@ -25,6 +30,9 @@ class ZenModeWindow(QMainWindow):
     def __init__(self, bridge: AgyProcessBridge, parent=None):
         super().__init__(parent)
         self.bridge = bridge
+        self.clipboard_handler = ClipboardImageHandler()
+        self.staged_images: List[str] = []
+        self._streaming_active: bool = False
         self.setStyleSheet(STYLESHEET)
 
         # Borderless window configuration
@@ -150,14 +158,14 @@ class ZenModeWindow(QMainWindow):
         # Prompt input bar in Zen Mode
         prompt_bar = QHBoxLayout()
         self.prompt_input = QLineEdit()
-        self.prompt_input.setPlaceholderText("Entropy AI'a bir talimat verin (örn: 'Kod tabanını analiz et ve testleri çalıştır')...")
+        self.prompt_input.setPlaceholderText("Hızlı talimat verin (örn: 'Kod tabanını analiz et ve testleri çalıştır')...")
         self.prompt_input.returnPressed.connect(self._on_submit_prompt)
         prompt_bar.addWidget(self.prompt_input)
 
-        send_btn = QPushButton("Çalıştır")
-        send_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
-        send_btn.clicked.connect(self._on_submit_prompt)
-        prompt_bar.addWidget(send_btn)
+        self.submit_btn = QPushButton("Çalıştır")
+        self.submit_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        self.submit_btn.clicked.connect(self._on_submit_prompt)
+        prompt_bar.addWidget(self.submit_btn)
         center_layout.addLayout(prompt_bar)
 
         top_h_splitter.addWidget(center_col)
@@ -169,13 +177,87 @@ class ZenModeWindow(QMainWindow):
         top_h_splitter.setSizes([340, 480, 380])
         main_v_splitter.addWidget(top_h_splitter)
 
-        # Bottom Area: Infinite Split Terminal
-        self.terminal_pane = TerminalPaneWidget(title="Canlı AGY Çıktı Akışı ve Terminal")
-        main_v_splitter.addWidget(self.terminal_pane)
+        # Bottom Area: Dual Splitter with Interactive Chat (Left) and Live AGY Terminal (Right)
+        bottom_h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        main_v_splitter.setSizes([560, 240])
+        # 1. Left Side: Full Interactive Chat Panel
+        chat_card = QFrame()
+        chat_card.setObjectName("cardFrame")
+        chat_layout = QVBoxLayout(chat_card)
+        chat_layout.setContentsMargins(12, 8, 12, 8)
+        chat_layout.setSpacing(6)
+
+        # Chat Header
+        chat_hdr = QHBoxLayout()
+        chat_title = QLabel("<b style='color:#00F0FF; font-size:12px;'>💬 Bilişsel Sohbet & Diyalog</b>")
+        chat_hdr.addWidget(chat_title)
+        chat_hdr.addStretch()
+
+        btn_new_chat_zen = QPushButton("+ Yeni Sohbet")
+        btn_new_chat_zen.setFixedHeight(22)
+        btn_new_chat_zen.setStyleSheet(
+            "background-color:#141C2C; color:#00F0FF; border:1px solid #00F0FF; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px;"
+        )
+        btn_new_chat_zen.clicked.connect(self._on_new_chat)
+        chat_hdr.addWidget(btn_new_chat_zen)
+        chat_layout.addLayout(chat_hdr)
+
+        # Chat Browser
+        self.chat_browser = QTextBrowser()
+        self.chat_browser.setStyleSheet(f"""
+            QTextBrowser {{
+                background-color: {CYBER_THEME['bg_surface']};
+                border: 1px solid {CYBER_THEME['border']};
+                border-radius: 6px;
+                padding: 10px;
+                color: {CYBER_THEME['text_primary']};
+                font-size: 13px;
+                line-height: 1.5;
+            }}
+        """)
+        chat_layout.addWidget(self.chat_browser)
+
+        # Staged image preview bar
+        self.attachment_bar = QFrame()
+        self.attachment_bar.setVisible(False)
+        self.attach_layout = QHBoxLayout(self.attachment_bar)
+        self.attach_layout.setContentsMargins(4, 2, 4, 2)
+        self.attach_label = QLabel()
+        self.attach_label.setStyleSheet("color:#00F0FF; font-size:11px;")
+        self.attach_layout.addWidget(self.attach_label)
+        self.attach_layout.addStretch()
+        remove_attach_btn = QPushButton("✕ Kaldır")
+        remove_attach_btn.setFixedHeight(20)
+        remove_attach_btn.clicked.connect(self._clear_staged_images)
+        self.attach_layout.addWidget(remove_attach_btn)
+        chat_layout.addWidget(self.attachment_bar)
+
+        # Chat Input Bar
+        chat_input_bar = QHBoxLayout()
+        self.chat_input = ChatInputField(self)
+        self.chat_input.setPlaceholderText("Mesajınızı yazın veya Ctrl+V ile görsel yapıştırın...")
+        self.chat_input.returnPressed.connect(self._on_send_chat)
+        chat_input_bar.addWidget(self.chat_input)
+
+        self.chat_send_btn = QPushButton("Gönder")
+        self.chat_send_btn.setStyleSheet("background-color:#00F0FF; color:#080B10; font-weight:bold; padding:6px 14px;")
+        self.chat_send_btn.clicked.connect(self._on_send_chat)
+        chat_input_bar.addWidget(self.chat_send_btn)
+        chat_layout.addLayout(chat_input_bar)
+
+        bottom_h_splitter.addWidget(chat_card)
+
+        # 2. Right Side: Live Terminal
+        self.terminal_pane = TerminalPaneWidget(title="Canlı AGY Çıktı Akışı ve Terminal")
+        bottom_h_splitter.addWidget(self.terminal_pane)
+
+        bottom_h_splitter.setSizes([550, 450])
+        main_v_splitter.addWidget(bottom_h_splitter)
+
+        main_v_splitter.setSizes([520, 340])
         root_layout.addWidget(main_v_splitter)
 
+        self._load_chat_history()
         self._load_persisted_session_to_terminal()
 
     def _load_persisted_session_to_terminal(self):
@@ -201,6 +283,8 @@ class ZenModeWindow(QMainWindow):
         bus.token_usage_updated.connect(self._update_tokens)
         bus.core_state_changed.connect(self._update_status)
         bus.node_selected.connect(self._on_node_selected)
+        bus.agent_turn_started.connect(self._on_turn_started)
+        bus.token_chunk_received.connect(self._on_chunk)
         bus.agent_turn_completed.connect(self._on_agent_turn_completed)
 
     @Slot(str)
@@ -369,15 +453,105 @@ class ZenModeWindow(QMainWindow):
         text = self.prompt_input.text().strip()
         if text:
             self.prompt_input.clear()
-            self.terminal_pane.append_output(f"\n▶ [SİZ]:\n{text}\n")
-            if self.bridge.is_running:
-                self.terminal_pane.append_output("[Entropy Core] Önceki işlem tamamlanıyor, mesajınız sıraya alındı...\n")
-            self.submit_btn.setEnabled(False)
-            self.submit_btn.setText("İşleniyor...")
-            self.bridge.send_prompt_async(prompt=text)
+            self.chat_input.setText(text)
+            self._on_send_chat()
+
+    def _on_send_chat(self):
+        prompt = self.chat_input.text().strip()
+        if not prompt and not self.staged_images:
+            return
+
+        display_prompt = prompt
+        if self.staged_images:
+            img_names = ", ".join([Path(p).name for p in self.staged_images])
+            display_prompt += f" <i style='color:#00F0FF;'>[Eklenen Görsel: {img_names}]</i>"
+
+        self._append_chat_message("Siz", display_prompt)
+        self.chat_input.clear()
+        self.terminal_pane.append_output(f"\n▶ [SİZ]:\n{prompt}\n")
+
+        images_to_send = list(self.staged_images)
+        self._clear_staged_images()
+
+        actual_prompt = prompt
+        if images_to_send:
+            actual_prompt += "\n" + "\n".join([f"[Eklenen Görsel Dosyası: {p}]" for p in images_to_send])
+
+        if self.bridge.is_running:
+            self._append_chat_message("Entropy AI", "⏳ <i>Önceki işlem tamamlanıyor, mesajınız sıraya alındı...</i>", is_system=True)
+            self.terminal_pane.append_output("[Entropy Core] Önceki işlem tamamlanıyor, mesajınız sıraya alındı...\n")
+
+        self.chat_send_btn.setEnabled(False)
+        self.chat_input.setEnabled(False)
+        self.submit_btn.setEnabled(False)
+        self.submit_btn.setText("İşleniyor...")
+        self.bridge.send_prompt_async(prompt=actual_prompt, image_attachments=images_to_send)
+
+    def _on_turn_started(self, prompt: str):
+        self.chat_send_btn.setEnabled(False)
+        self.chat_input.setEnabled(False)
+        self.submit_btn.setEnabled(False)
+        self.submit_btn.setText("İşleniyor...")
+        self._streaming_active = True
+        self.chat_browser.append("<div style='margin-bottom:8px;'><b style='color:#00F0FF;'>Entropy AI:</b><br/></div>")
+        self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _on_chunk(self, chunk: str):
+        if getattr(self, "_streaming_active", False):
+            cursor = self.chat_browser.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText(chunk)
+            self.chat_browser.setTextCursor(cursor)
+            self.chat_browser.ensureCursorVisible()
 
     @Slot(str)
     def _on_agent_turn_completed(self, response: str):
+        self._streaming_active = False
+        self.chat_send_btn.setEnabled(True)
+        self.chat_input.setEnabled(True)
         self.submit_btn.setEnabled(True)
         self.submit_btn.setText("Çalıştır")
+        self.chat_browser.append("<div style='margin-bottom:12px;'></div>")
+        self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
         self.terminal_pane.append_output("\n────────────────────────────────────────────────────────────────\n")
+
+    def try_paste_image(self) -> bool:
+        """Handle Ctrl+V image detection and staging."""
+        res = self.clipboard_handler.save_clipboard_image()
+        if res:
+            path_str, w, h = res
+            self.staged_images.append(path_str)
+            filename = Path(path_str).name
+            self.attach_label.setText(f"📎 Yapıştırılan Görsel: <b>{filename}</b> ({w}x{h} px)")
+            self.attachment_bar.setVisible(True)
+            return True
+        return False
+
+    def _clear_staged_images(self):
+        self.staged_images.clear()
+        self.attachment_bar.setVisible(False)
+
+    def _append_chat_message(self, sender: str, text: str, is_system: bool = False):
+        color = "#00F0FF" if sender == "Entropy AI" else "#00FF9D" if sender == "Siz" else "#FFB300"
+        html = f"<div style='margin-bottom:8px;'><b style='color:{color};'>{sender}:</b><br/>{text.replace('\n', '<br/>')}</div>"
+        self.chat_browser.append(html)
+        self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _on_new_chat(self):
+        self.bridge.reset_conversation()
+        self.chat_browser.clear()
+        self.terminal_pane.clear_output()
+        self._append_chat_message("Entropy AI", "Yeni sohbet oturumu başlatıldı. Nasıl yardımcı olabilirim?", is_system=True)
+
+    def _load_chat_history(self):
+        from entropy.core.config import CHAT_HISTORY_FILE
+        if CHAT_HISTORY_FILE.exists():
+            try:
+                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+                for msg in history:
+                    sender = "Siz" if msg.get("role") == "user" else "Entropy AI"
+                    self._append_chat_message(sender, msg.get("content", ""))
+            except Exception:
+                pass
+        if self.chat_browser.toPlainText().strip() == "":
+            self._append_chat_message("Entropy AI", "Zen Çalışma Alanı aktif. Size nasıl yardımcı olabilirim?", is_system=True)

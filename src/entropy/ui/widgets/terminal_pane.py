@@ -57,5 +57,11 @@ class TerminalPaneWidget(QFrame):
         self.text_area.insertPlainText(text)
         self.text_area.moveCursor(QTextCursor.MoveOperation.End)
 
+    def append_output(self, text: str):
+        self.append_text(text)
+
     def clear_terminal(self):
         self.text_area.clear()
+
+    def clear_output(self):
+        self.clear_terminal()
