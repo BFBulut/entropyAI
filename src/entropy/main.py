@@ -33,7 +33,37 @@ def main():
         bridge.set_project_directory(args.project)
 
     scheduler = TaskScheduler()
-    scheduler.set_execution_callback(lambda task: bridge.send_prompt_async(task.prompt))
+
+    def handle_scheduled_task(task):
+        from entropy.core.event_bus import bus
+        if task.id == "daily-dreaming":
+            try:
+                from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                cog = CognitiveMemorySystem()
+                rules = cog.dream_and_consolidate()
+                bus.terminal_output_received.emit(f"[Otonom Görev] Hafıza konsolidasyonu tamamlandı ({len(rules)} kural sentezlendi).\n")
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
+        elif task.id == "obsidian-sync":
+            try:
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                ovm = ObsidianVaultManager()
+                log_p = ovm.append_daily_log("Otonom arka plan senkronu.")
+                bus.terminal_output_received.emit(f"[Otonom Görev] Obsidian günlüğü senkronlandı: {log_p.name}\n")
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
+        elif task.id == "rag-reindex":
+            try:
+                from entropy.memory.rag.project_indexer import ProjectIndexer
+                indexer = ProjectIndexer(config.default_project_path)
+                cnt = indexer.scan_and_index()
+                bus.terminal_output_received.emit(f"[Otonom Görev] Proje kodları indekslendi ({cnt} dosya).\n")
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
+        elif task.prompt:
+            bridge.send_prompt_async(task.prompt)
+
+    scheduler.set_execution_callback(handle_scheduled_task)
     scheduler.start()
 
     # Launch UI Manager

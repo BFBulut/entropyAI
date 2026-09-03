@@ -206,20 +206,30 @@ class ChatModeWindow(QMainWindow):
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
-        active = self.bridge.latest_input_tokens + self.bridge.latest_output_tokens
+        turn_out = self.bridge.latest_output_tokens
+        turn_in = self.bridge.latest_input_tokens
+        sess_k = self.bridge.session_total_tokens // 1000
         cache_k = self.bridge.latest_cache_read_tokens // 1000
-        if cache_k > 0:
-            self.tokens_badge.setText(f"Aktif: {active:,} | Cache: {cache_k}k")
+
+        if turn_out > 0:
+            if sess_k > 0:
+                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | Oturum: {sess_k}k")
+            else:
+                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | Girdi: {turn_in:,}")
+        elif sess_k > 0:
+            self.tokens_badge.setText(f"Oturum: {sess_k}k | Cache: {cache_k}k")
         else:
-            self.tokens_badge.setText(f"{tokens:,} tokens")
+            self.tokens_badge.setText(f"Tokens: {tokens:,}")
 
         self.tokens_badge.setToolTip(
             f"Gerçek Antigravity Token Kullanım Metrikleri:\n"
-            f"• Yeni Üretilen (Output): {self.bridge.latest_output_tokens:,} token\n"
-            f"• Yeni Girdi (Input): {self.bridge.latest_input_tokens:,} token\n"
+            f"• Son Yanıt Üretimi (Output): {self.bridge.latest_output_tokens:,} token\n"
+            f"• Son İstek Girdisi (Input): {self.bridge.latest_input_tokens:,} token\n"
             f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,} token\n"
-            f"• Sunucu Önbelleği (Cache Read): {self.bridge.latest_cache_read_tokens:,} token (Hızlı / Ücretsiz)\n"
-            f"• Toplam Bağlam Boyutu: {tokens:,} token"
+            f"• Son Yanıttaki Önbellek (Cache Read): {self.bridge.latest_cache_read_tokens:,} token\n"
+            f"─────────────────────────────\n"
+            f"• Tüm Oturum Toplamı (Session Lifetime): {self.bridge.session_total_tokens:,} token\n"
+            f"• Tüm Oturum Önbelleği (Cumulative Cache): {self.bridge.session_cache_tokens:,} token"
         )
 
     def _on_send(self):
@@ -241,6 +251,9 @@ class ChatModeWindow(QMainWindow):
         actual_prompt = prompt
         if images_to_send:
             actual_prompt += "\n" + "\n".join([f"[Eklenen Görsel Dosyası: {p}]" for p in images_to_send])
+
+        if self.bridge.is_running:
+            self._append_message("Entropy AI", "⏳ <i>Önceki işlem tamamlanıyor, mesajınız sıraya alındı ve hemen ardından yanıtlanacak...</i>", is_system=True)
 
         self.bridge.send_prompt_async(prompt=actual_prompt, image_attachments=images_to_send)
 

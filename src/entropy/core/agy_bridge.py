@@ -33,10 +33,13 @@ class AgyProcessBridge(QObject):
         self.latest_output_tokens: int = 0
         self.latest_thinking_tokens: int = 0
         self.latest_cache_read_tokens: int = 0
+        self.session_total_tokens: int = 0
+        self.session_cache_tokens: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
         self._current_process: Optional[subprocess.Popen] = None
         self._is_running: bool = False
+        self._prompt_queue: List[Tuple[str, Optional[List[str]], str]] = []
         self._lock = threading.Lock()
 
         # Load persisted conversation history if available
@@ -68,6 +71,9 @@ class AgyProcessBridge(QObject):
         self.latest_output_tokens = 0
         self.latest_thinking_tokens = 0
         self.latest_cache_read_tokens = 0
+        self.session_total_tokens = 0
+        self.session_cache_tokens = 0
+        self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
         bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Hafıza ve bağlam sıfırlandı)\n")
 
@@ -239,7 +245,16 @@ class AgyProcessBridge(QObject):
         image_attachments: Optional[List[str]] = None,
         mode: str = "accept-edits"
     ):
-        """Execute a user prompt against agy CLI in a non-blocking background worker."""
+        """Execute a user prompt against agy CLI, queueing if currently busy."""
+        with self._lock:
+            if self._is_running:
+                self._prompt_queue.append((prompt, image_attachments, mode))
+                bus.terminal_output_received.emit(
+                    f"\n[Entropy Core] Başka bir işlem yürütülüyor. Mesajınız sıraya alındı ({len(self._prompt_queue)}. sırada)...\n"
+                )
+                return
+            self._is_running = True
+
         thread = threading.Thread(
             target=self._execute_prompt_worker,
             args=(prompt, image_attachments, mode),
@@ -253,12 +268,6 @@ class AgyProcessBridge(QObject):
         image_attachments: Optional[List[str]] = None,
         mode: str = "accept-edits"
     ):
-        with self._lock:
-            if self._is_running:
-                bus.terminal_output_received.emit("[Entropy AI] Uyarı: Zaten aktif bir komut çalıştırılıyor.\n")
-                return
-            self._is_running = True
-
         bus.core_state_changed.emit("thinking")
         bus.agent_turn_started.emit(prompt)
 
@@ -376,8 +385,8 @@ class AgyProcessBridge(QObject):
                             self.latest_output_tokens = usage.get("output_tokens", 0)
                             self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
                             self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
-                            self.total_tokens_used = usage.get("total_tokens", 0)
-                            bus.token_usage_updated.emit(self.total_tokens_used)
+                            self.total_tokens_used = self.latest_output_tokens
+                            bus.token_usage_updated.emit(self.latest_output_tokens)
 
                     elif event == "result":
                         result = data.get("result", {})
@@ -389,12 +398,11 @@ class AgyProcessBridge(QObject):
 
                         usage = result.get("usage")
                         if usage:
-                            self.latest_input_tokens = usage.get("input_tokens", 0)
-                            self.latest_output_tokens = usage.get("output_tokens", 0)
-                            self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
-                            self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
-                            self.total_tokens_used = usage.get("total_tokens", 0)
-                            bus.token_usage_updated.emit(self.total_tokens_used)
+                            self.session_total_tokens = usage.get("total_tokens", 0)
+                            self.session_cache_tokens = usage.get("cache_read_tokens", 0)
+                            if self.latest_output_tokens == 0:
+                                self.latest_output_tokens = usage.get("output_tokens", 0)
+                            bus.token_usage_updated.emit(self.latest_output_tokens)
 
                 except json.JSONDecodeError:
                     bus.terminal_output_received.emit(raw_line)
@@ -412,9 +420,13 @@ class AgyProcessBridge(QObject):
             ret_code = -1
 
         finally:
+            next_task = None
             with self._lock:
                 self._is_running = False
                 self._current_process = None
+                if self._prompt_queue:
+                    next_task = self._prompt_queue.pop(0)
+                    self._is_running = True
 
             full_text = "".join(full_response_acc)
             self._save_chat_turn(prompt, full_text)
@@ -469,6 +481,15 @@ class AgyProcessBridge(QObject):
                 vm.append_daily_log(f"- **Etkileşim**: {short_p} -> {short_r}...")
             except Exception:
                 pass
+
+            if next_task:
+                next_prompt, next_imgs, next_mode = next_task
+                next_thread = threading.Thread(
+                    target=self._execute_prompt_worker,
+                    args=(next_prompt, next_imgs, next_mode),
+                    daemon=True
+                )
+                next_thread.start()
 
     def terminate_current_process(self):
         """Cancel the currently active agy execution."""
