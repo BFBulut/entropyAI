@@ -23,6 +23,7 @@ from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 from entropy.ui.widgets.tasks_widget import TasksWidget
 from entropy.ui.widgets.skills_widget import SkillsWidget
+from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
 class ZenModeWindow(QMainWindow):
@@ -177,36 +178,72 @@ class ZenModeWindow(QMainWindow):
         self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
         top_h_splitter.addWidget(self.left_tabs)
 
-        # Center Column: Organic Visual Core & Quick Command Input
+        # Center Column: Organic Visual Core & Cyber Telemetry Workstation
         center_col = QFrame()
         center_col.setObjectName("cardFrame")
         center_layout = QVBoxLayout(center_col)
-        center_layout.setContentsMargins(16, 16, 16, 16)
-        center_layout.setSpacing(12)
+        center_layout.setContentsMargins(14, 12, 14, 12)
+        center_layout.setSpacing(10)
+
+        # Center Top Bar: Telemetry Status & Floating Report Bubble
+        center_top_bar = QHBoxLayout()
+        self.zen_telemetry_status = QLabel("<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>🟢 SİSTEM HAZIR</span> | <span style='color:#8B949E; font-size:11px;'>SIFIR-API AGY ÇALIŞIYOR</span>")
+        center_top_bar.addWidget(self.zen_telemetry_status)
+        center_top_bar.addStretch()
+
+        self.zen_report_bubble = QPushButton("📑 Rapor Hazır (Oku ↗)")
+        self.zen_report_bubble.setVisible(False)
+        self.zen_report_bubble.setStyleSheet("""
+            QPushButton {
+                background-color: #0E1420;
+                color: #00FF9D;
+                border: 1px solid #00FF9D;
+                border-radius: 12px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #00FF9D;
+                color: #080B10;
+            }
+        """)
+        self.zen_report_bubble.clicked.connect(self._open_latest_zen_report)
+        center_top_bar.addWidget(self.zen_report_bubble)
+        center_layout.addLayout(center_top_bar)
 
         center_layout.addStretch()
-        self.core_visualizer = CoreVisualizerWidget(base_radius=56)
+        self.core_visualizer = CoreVisualizerWidget(base_radius=58)
         self.core_visualizer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         center_layout.addWidget(self.core_visualizer, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.core_status_lbl = QLabel("AI ÇEKİRDEK: HAZIR | SIFIR-API AGY AKTİF")
         self.core_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.core_status_lbl.setStyleSheet("color: #00F0FF; font-family: 'Consolas'; font-size: 12px; letter-spacing: 1px;")
+        self.core_status_lbl.setStyleSheet("color: #00F0FF; font-family: 'Consolas'; font-size: 12px; letter-spacing: 1px; font-weight: bold;")
         center_layout.addWidget(self.core_status_lbl)
         center_layout.addStretch()
 
-        # Prompt input bar in Zen Mode
-        prompt_bar = QHBoxLayout()
-        self.prompt_input = QLineEdit()
-        self.prompt_input.setPlaceholderText("Hızlı talimat verin (örn: 'Kod tabanını analiz et ve testleri çalıştır')...")
-        self.prompt_input.returnPressed.connect(self._on_submit_prompt)
-        prompt_bar.addWidget(self.prompt_input)
+        # Telemetry Metrics Dashboard
+        telemetry_bar = QHBoxLayout()
+        telemetry_bar.setSpacing(6)
 
-        self.submit_btn = QPushButton("Çalıştır")
-        self.submit_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
-        self.submit_btn.clicked.connect(self._on_submit_prompt)
-        prompt_bar.addWidget(self.submit_btn)
-        center_layout.addLayout(prompt_bar)
+        self.badge_memory = QLabel("🧠 Bellek: 0 Düğüm")
+        self.badge_memory.setStyleSheet("background-color: #0E1420; color: #00F0FF; border: 1px solid #1F2B42; border-radius: 4px; padding: 4px 8px; font-size: 10px; font-weight: bold;")
+        telemetry_bar.addWidget(self.badge_memory)
+
+        self.badge_skills = QLabel("🎯 Yetenekler: 4 Aktif")
+        self.badge_skills.setStyleSheet("background-color: #0E1420; color: #00FF9D; border: 1px solid #1F2B42; border-radius: 4px; padding: 4px 8px; font-size: 10px; font-weight: bold;")
+        telemetry_bar.addWidget(self.badge_skills)
+
+        self.badge_mcp = QLabel("🔌 MCP: Aktif")
+        self.badge_mcp.setStyleSheet("background-color: #0E1420; color: #FFB300; border: 1px solid #1F2B42; border-radius: 4px; padding: 4px 8px; font-size: 10px; font-weight: bold;")
+        telemetry_bar.addWidget(self.badge_mcp)
+
+        self.badge_telemetry_model = QLabel(f"⚡ Model: {self.bridge.selected_model or 'Auto'}")
+        self.badge_telemetry_model.setStyleSheet("background-color: #0E1420; color: #E6EDF3; border: 1px solid #1F2B42; border-radius: 4px; padding: 4px 8px; font-size: 10px;")
+        telemetry_bar.addWidget(self.badge_telemetry_model)
+
+        center_layout.addLayout(telemetry_bar)
 
         top_h_splitter.addWidget(center_col)
 
@@ -244,6 +281,8 @@ class ZenModeWindow(QMainWindow):
 
         # Chat Browser
         self.chat_browser = QTextBrowser()
+        self.chat_browser.setOpenExternalLinks(False)
+        self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {CYBER_THEME['bg_surface']};
@@ -268,6 +307,7 @@ class ZenModeWindow(QMainWindow):
         self.attach_layout.addStretch()
         remove_attach_btn = QPushButton("✕ Kaldır")
         remove_attach_btn.setFixedHeight(20)
+        remove_attach_btn.setStyleSheet("background:transparent; color:#8B949E; border:none; font-size:11px;")
         remove_attach_btn.clicked.connect(self._clear_staged_images)
         self.attach_layout.addWidget(remove_attach_btn)
         chat_layout.addWidget(self.attachment_bar)
@@ -291,6 +331,10 @@ class ZenModeWindow(QMainWindow):
         self.chat_send_btn.clicked.connect(self._on_send_chat)
         chat_input_bar.addWidget(self.chat_send_btn)
         chat_layout.addLayout(chat_input_bar)
+
+        # Aliases for input controls
+        self.prompt_input = self.chat_input
+        self.submit_btn = self.chat_send_btn
 
         bottom_h_splitter.addWidget(chat_card)
 
@@ -333,6 +377,64 @@ class ZenModeWindow(QMainWindow):
         bus.agent_turn_started.connect(self._on_turn_started)
         bus.token_chunk_received.connect(self._on_chunk)
         bus.agent_turn_completed.connect(self._on_agent_turn_completed)
+        bus.report_created.connect(self._on_report_created)
+        bus.cognitive_memory_updated.connect(self._update_telemetry_badges)
+        bus.skills_updated.connect(self._update_telemetry_badges)
+        self._update_telemetry_badges()
+
+    @Slot(str)
+    def _on_report_created(self, path_str: str):
+        """Display floating notification bubble in center column and rich card in chat."""
+        p = Path(path_str)
+        self.latest_report_path = str(p)
+        self.zen_report_bubble.setText(f"📑 Rapor Hazır: {p.stem[:22]} (Oku ↗)")
+        self.zen_report_bubble.setVisible(True)
+
+        card_html = (
+            f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>📑 Yeni Araştırma Raporu Oluşturuldu</div>"
+            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
+            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
+            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Raporu Aç ve Oku ↗</a>"
+            f"</div>"
+        )
+        self.chat_browser.append(card_html)
+
+    def _open_latest_zen_report(self):
+        if hasattr(self, "latest_report_path") and self.latest_report_path:
+            self._open_report_path(self.latest_report_path)
+
+    def _open_report_path(self, path_str: str):
+        if not hasattr(self, "standalone_report_window") or self.standalone_report_window is None:
+            self.standalone_report_window = StandaloneReportWindow(self)
+        self.standalone_report_window.open_report_file(path_str)
+
+    def _on_anchor_clicked(self, url):
+        """Intercept entropy-report:// links to open the standalone viewer."""
+        url_str = url.toString()
+        if "entropy-report://" in url_str:
+            target = url_str.split("entropy-report://")[-1]
+            self._open_report_path(target)
+        elif url_str.startswith("http://") or url_str.startswith("https://"):
+            import webbrowser
+            webbrowser.open(url_str)
+
+    def _update_telemetry_badges(self):
+        """Dynamically refresh telemetry metric badges in the center column."""
+        try:
+            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.skills.manager import SkillManager
+            mem = CognitiveMemorySystem()
+            nodes = mem.get_all_nodes()
+            if hasattr(self, "badge_memory"):
+                self.badge_memory.setText(f"🧠 Bellek: {len(nodes)} Düğüm")
+
+            sm = SkillManager()
+            skills = sm.list_skills()
+            if hasattr(self, "badge_skills"):
+                self.badge_skills.setText(f"🎯 Yetenekler: {len(skills)} Aktif")
+        except Exception:
+            pass
 
     @Slot(str)
     def _on_node_selected(self, node_id: str):

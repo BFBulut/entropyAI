@@ -36,6 +36,8 @@ class EntropyEventBus(QObject):
     report_created = Signal(str)         # report_path
     node_selected = Signal(str)          # node_id
     knowledge_graph_updated = Signal()   # reload knowledge graph signal
+    cognitive_memory_updated = Signal()  # memory nodes updated
+    skills_updated = Signal()            # skills catalog updated
 
 # Global Event Bus Instance
 bus = EntropyEventBus()

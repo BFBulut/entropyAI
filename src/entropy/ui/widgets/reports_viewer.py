@@ -3,8 +3,9 @@
 from pathlib import Path
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
+    QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -76,9 +77,32 @@ class ReportsViewerWidget(QFrame):
         # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left list
+        # Left Container: Search + Report List
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(4)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 Rapor ara...")
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #05070A;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #F0F6FC;
+                font-size: 11px;
+            }
+            QLineEdit:focus {
+                border-color: #00F0FF;
+            }
+        """)
+        self.search_input.textChanged.connect(self._filter_reports)
+        left_layout.addWidget(self.search_input)
+
         self.list_widget = QListWidget()
-        self.list_widget.setFixedWidth(190)
+        self.list_widget.setFixedWidth(200)
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
                 background-color: {CYBER_THEME['bg_terminal']};
@@ -89,10 +113,12 @@ class ReportsViewerWidget(QFrame):
             QListWidget::item:selected {{
                 background-color: #1A263C;
                 color: {CYBER_THEME['accent_cyan']};
+                font-weight: bold;
             }}
         """)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
-        self.splitter.addWidget(self.list_widget)
+        left_layout.addWidget(self.list_widget)
+        self.splitter.addWidget(left_container)
 
         # Right container: RAG Status Bar + Markdown Text Browser
         right_container = QWidget()
@@ -100,7 +126,7 @@ class ReportsViewerWidget(QFrame):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
 
-        # RAG / Memory Status Banner
+        # RAG / Memory Status & Reading Tools Banner
         self.rag_status_bar = QFrame()
         self.rag_status_bar.setStyleSheet("""
             QFrame {
@@ -112,12 +138,65 @@ class ReportsViewerWidget(QFrame):
         """)
         bar_layout = QHBoxLayout(self.rag_status_bar)
         bar_layout.setContentsMargins(4, 2, 4, 2)
+        bar_layout.setSpacing(6)
 
-        self.rag_status_lbl = QLabel("<span style='color:#00FF9D; font-size:11px;'>● RAG İndeksinde Aktif</span> | <span style='color:#00F0FF; font-size:11px;'>🧠 Bilişsel Bellek: Semantik Düğüm Bağlı</span>")
+        self.rag_status_lbl = QLabel("<span style='color:#00FF9D; font-size:11px;'>● RAG İndeksinde Aktif</span> | <span style='color:#00F0FF; font-size:11px;'>🧠 Bilişsel Bellek Bağlı</span>")
         bar_layout.addWidget(self.rag_status_lbl)
         bar_layout.addStretch()
 
-        distill_btn = QPushButton("⚡ Hafızaya Sentezle")
+        # Zoom Controls
+        zoom_in_btn = QPushButton("A+")
+        zoom_in_btn.setFixedSize(26, 22)
+        zoom_in_btn.setToolTip("Yazı Boyutunu Büyüt")
+        zoom_in_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1A263C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 3px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #00F0FF; color: #080B10; }
+        """)
+        zoom_in_btn.clicked.connect(self._zoom_in_text)
+        bar_layout.addWidget(zoom_in_btn)
+
+        zoom_out_btn = QPushButton("A-")
+        zoom_out_btn.setFixedSize(26, 22)
+        zoom_out_btn.setToolTip("Yazı Boyutunu Küçült")
+        zoom_out_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1A263C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 3px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #00F0FF; color: #080B10; }
+        """)
+        zoom_out_btn.clicked.connect(self._zoom_out_text)
+        bar_layout.addWidget(zoom_out_btn)
+
+        copy_btn = QPushButton("📋 Kopyala")
+        copy_btn.setFixedHeight(22)
+        copy_btn.setToolTip("Rapor Metnini Panoya Kopyala")
+        copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #F0F6FC;
+                border: 1px solid #1F2B42;
+                border-radius: 3px;
+                font-size: 10px;
+                padding: 1px 8px;
+            }
+            QPushButton:hover { background-color: #00F0FF; color: #080B10; border-color: #00F0FF; }
+        """)
+        copy_btn.clicked.connect(self._copy_content)
+        bar_layout.addWidget(copy_btn)
+
+        distill_btn = QPushButton("⚡ Sentezle")
         distill_btn.setFixedHeight(22)
         distill_btn.setStyleSheet("""
             QPushButton {
@@ -137,7 +216,7 @@ class ReportsViewerWidget(QFrame):
         distill_btn.clicked.connect(self._distill_current_report)
         bar_layout.addWidget(distill_btn)
 
-        delete_btn = QPushButton("🗑️ Notu Sil")
+        delete_btn = QPushButton("🗑️ Sil")
         delete_btn.setFixedHeight(22)
         delete_btn.setStyleSheet("""
             QPushButton {
@@ -159,18 +238,19 @@ class ReportsViewerWidget(QFrame):
 
         right_layout.addWidget(self.rag_status_bar)
 
-        # Right text browser
+        # Right text browser: High-Contrast, Ergonomic Markdown Reader
         self.content_browser = QTextBrowser()
         self.content_browser.setOpenExternalLinks(True)
         self.content_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {CYBER_THEME['bg_surface']};
                 border: 1px solid {CYBER_THEME['border']};
-                border-radius: 4px;
+                border-radius: 6px;
                 color: {CYBER_THEME['text_primary']};
-                padding: 12px;
-                font-size: 13px;
-                line-height: 1.5;
+                padding: 16px 20px;
+                font-size: 14px;
+                line-height: 1.6;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
             }}
         """)
         right_layout.addWidget(self.content_browser)
@@ -183,6 +263,34 @@ class ReportsViewerWidget(QFrame):
         bus.agent_turn_completed.connect(lambda _: self.refresh_reports())
 
         self.refresh_reports()
+
+    def _filter_reports(self, query: str):
+        """Filter the list of reports according to search input."""
+        q = query.strip().lower()
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item:
+                item.setHidden(bool(q and q not in item.text().lower()))
+
+    def _zoom_in_text(self):
+        """Increase reader typography font size."""
+        font = self.content_browser.font()
+        font.setPointSize(font.pointSize() + 1)
+        self.content_browser.setFont(font)
+
+    def _zoom_out_text(self):
+        """Decrease reader typography font size."""
+        font = self.content_browser.font()
+        if font.pointSize() > 8:
+            font.setPointSize(font.pointSize() - 1)
+            self.content_browser.setFont(font)
+
+    def _copy_content(self):
+        """Copy current report markdown text to system clipboard."""
+        text = self.content_browser.toPlainText()
+        if text:
+            QApplication.clipboard().setText(text)
+            bus.terminal_output_received.emit("[📚 Rapor Merkezi] Rapor metni panoya kopyalandı.\n")
 
     def _open_custom_file(self):
         """Allow user to browse and view any markdown file from disk."""

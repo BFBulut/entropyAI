@@ -137,13 +137,24 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     zen.prompt_input.setText("Test quick prompt")
     zen._on_submit_prompt()
     assert zen.chat_browser.toPlainText() != ""
-    assert "Test quick prompt" in zen.chat_browser.toPlainText()
+    # Verify telemetry badges & report bubble
+    assert hasattr(zen, "zen_report_bubble")
+    assert hasattr(zen, "badge_memory")
+    assert hasattr(zen, "badge_skills")
+    assert hasattr(zen, "badge_mcp")
 
-    # Verify staging images works
-    zen.staged_images.append("test.png")
-    assert len(zen.staged_images) == 1
-    zen._clear_staged_images()
-    assert len(zen.staged_images) == 0
+    # Verify report created event displays bubble
+    zen._on_report_created("c:/test_report.md")
+    assert zen.zen_report_bubble.isVisible()
+    assert "test_report" in zen.zen_report_bubble.text()
+
+    # Verify ReportsViewerWidget search and zoom
+    viewer = zen.reports_viewer
+    assert hasattr(viewer, "search_input")
+    viewer.search_input.setText("test")
+    viewer._zoom_in_text()
+    viewer._zoom_out_text()
+    viewer._copy_content()
 
     zen.close()
 

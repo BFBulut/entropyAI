@@ -43,27 +43,44 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             top: 10px;
             left: 10px;
             font-size: 11px;
-            background: rgba(14, 20, 32, 0.88);
+            background: rgba(14, 20, 32, 0.92);
             border: 1px solid #1F2B42;
             border-radius: 6px;
-            padding: 6px 10px;
+            padding: 5px 10px;
             display: flex;
-            gap: 12px;
-            backdrop-filter: blur(4px);
+            flex-wrap: wrap;
+            gap: 10px;
+            backdrop-filter: blur(6px);
             z-index: 10;
+            max-width: calc(100vw - 20px);
         }
-        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            padding: 2px 5px;
+            border-radius: 4px;
+            transition: all 0.15s ease;
+        }
+        .legend-item:hover {
+            background: rgba(0, 240, 255, 0.12);
+        }
+        .legend-item.dimmed {
+            opacity: 0.30;
+            text-decoration: line-through;
+        }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         #controls {
             position: absolute;
-            top: 10px;
-            right: 10px;
+            bottom: 12px;
+            right: 12px;
             display: flex;
             gap: 6px;
             z-index: 10;
         }
         .ctrl-btn {
-            background: rgba(14, 20, 32, 0.90);
+            background: rgba(14, 20, 32, 0.92);
             border: 1px solid #1F2B42;
             border-radius: 4px;
             color: #00F0FF;
@@ -76,6 +93,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             align-items: center;
             justify-content: center;
             transition: all 0.15s ease;
+            backdrop-filter: blur(4px);
         }
         .ctrl-btn:hover {
             background: #00F0FF;
@@ -86,7 +104,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             position: absolute;
             bottom: 12px;
             left: 12px;
-            right: 12px;
+            right: 120px;
             background: rgba(14, 20, 32, 0.95);
             border: 1px solid #00F0FF;
             border-radius: 6px;
@@ -95,15 +113,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             color: #F0F6FC;
             display: none;
             z-index: 10;
+            backdrop-filter: blur(6px);
         }
     </style>
 </head>
 <body>
     <div id="legend">
-        <div class="legend-item"><span class="dot" style="background:#00F0FF;"></span> Çekirdek</div>
-        <div class="legend-item"><span class="dot" style="background:#00FF9D;"></span> Semantik Hafıza</div>
-        <div class="legend-item"><span class="dot" style="background:#FFB300;"></span> Episodik Anı</div>
-        <div class="legend-item"><span class="dot" style="background:#9D00FF;"></span> Obsidian Notu / Rapor</div>
+        <div class="legend-item" onclick="toggleCategory('ego', this)" title="Filtrele"><span class="dot" style="background:#00F0FF;"></span> Çekirdek</div>
+        <div class="legend-item" onclick="toggleCategory('semantic', this)" title="Filtrele"><span class="dot" style="background:#00FF9D;"></span> Semantik Hafıza</div>
+        <div class="legend-item" onclick="toggleCategory('episodic', this)" title="Filtrele"><span class="dot" style="background:#FFB300;"></span> Episodik Anı</div>
+        <div class="legend-item" onclick="toggleCategory('obsidian', this)" title="Filtrele"><span class="dot" style="background:#9D00FF;"></span> Obsidian Notu / Rapor</div>
     </div>
     <div id="controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
@@ -142,6 +161,27 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let panStartX = 0;
         let panStartY = 0;
 
+        const activeCategories = {
+            'ego': true,
+            'semantic': true,
+            'episodic': true,
+            'obsidian': true,
+            'Entropy': true,
+            'DailyNotes': true,
+            'Reports': true
+        };
+
+        function toggleCategory(cat, el) {
+            const newState = !activeCategories[cat];
+            activeCategories[cat] = newState;
+            if (cat === 'obsidian') {
+                activeCategories['Reports'] = newState;
+                activeCategories['DailyNotes'] = newState;
+            }
+            el.classList.toggle('dimmed', !newState);
+            alpha = 0.5;
+        }
+
         function updateDimensions() {
             width = canvas.width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 300);
             height = canvas.height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 250);
@@ -169,7 +209,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     n.y = cy;
                 } else {
                     const angle = (idx / Math.max(1, nodes.length - 1)) * Math.PI * 2;
-                    const dist = 110 + (idx % 4) * 45;
+                    const dist = 140 + (idx % 5) * 50;
                     n.x = cx + Math.cos(angle) * dist;
                     n.y = cy + Math.sin(angle) * dist;
                 }
@@ -179,7 +219,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         let alpha = 1.0;
         const alphaMin = 0.003;
-        const alphaDecay = 0.025;
+        const alphaDecay = 0.020;
 
         function tickPhysics() {
             if (alpha < alphaMin && !draggedNode) {
@@ -189,16 +229,33 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const cx = width / 2;
             const cy = height / 2;
 
-            // Repulsion force
+            // 1. Collision Prevention & Strong Repulsion
             for (let i = 0; i < nodes.length; i++) {
+                const a = nodes[i];
+                if (activeCategories[a.group] === false) continue;
+
                 for (let j = i + 1; j < nodes.length; j++) {
-                    const a = nodes[i];
                     const b = nodes[j];
+                    if (activeCategories[b.group] === false) continue;
+
                     const dx = b.x - a.x;
                     const dy = b.y - a.y;
                     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    if (dist < 150) {
-                        const force = ((150 - dist) / 150) * 2.5 * alpha;
+
+                    // Hard collision buffer
+                    const rA = a.val || 12;
+                    const rB = b.val || 12;
+                    const minDist = rA + rB + 48; // Generous safety buffer to prevent any overlap
+
+                    if (dist < minDist) {
+                        const overlap = (minDist - dist) / dist;
+                        const pushX = dx * overlap * 0.6;
+                        const pushY = dy * overlap * 0.6;
+                        if (a.group !== 'ego' && a !== draggedNode) { a.x -= pushX; a.y -= pushY; }
+                        if (b.group !== 'ego' && b !== draggedNode) { b.x += pushX; b.y += pushY; }
+                    } else if (dist < 260) {
+                        // Ambient celestial repulsion
+                        const force = ((260 - dist) / 260) * 3.5 * alpha;
                         const fx = (dx / dist) * force;
                         const fy = (dy / dist) * force;
                         if (a.group !== 'ego' && a !== draggedNode) { a.x -= fx; a.y -= fy; }
@@ -207,15 +264,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 }
             }
 
-            // Spring link tension
+            // 2. Spring link tension
             links.forEach(l => {
                 const s = nodes.find(n => n.id === l.source);
                 const t = nodes.find(n => n.id === l.target || n.name === l.target);
-                if (s && t) {
+                if (s && t && activeCategories[s.group] !== false && activeCategories[t.group] !== false) {
                     const dx = t.x - s.x;
                     const dy = t.y - s.y;
                     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const force = (dist - 100) * 0.035 * alpha;
+                    const targetLen = 135;
+                    const force = (dist - targetLen) * 0.028 * alpha;
                     if (t.group !== 'ego' && t !== draggedNode) {
                         t.x -= (dx / dist) * force;
                         t.y -= (dy / dist) * force;
@@ -223,11 +281,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 }
             });
 
-            // Center gravity
+            // 3. Gentle center gravity (loose celestial pull)
             nodes.forEach(n => {
-                if (n.group !== 'ego' && n !== draggedNode) {
-                    n.x += (cx - n.x) * 0.015 * alpha;
-                    n.y += (cy - n.y) * 0.015 * alpha;
+                if (n.group !== 'ego' && n !== draggedNode && activeCategories[n.group] !== false) {
+                    n.x += (cx - n.x) * 0.005 * alpha;
+                    n.y += (cy - n.y) * 0.005 * alpha;
                 }
             });
 
@@ -239,7 +297,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let isDragging = false;
         let startX = 0, startY = 0;
 
-        // Mouse wheel zoom
+        // Smooth mouse wheel zoom
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const rect = canvas.getBoundingClientRect();
@@ -247,7 +305,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const my = e.clientY - rect.top;
 
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-            const newZoom = Math.max(0.35, Math.min(3.5, zoom * zoomFactor));
+            const newZoom = Math.max(0.30, Math.min(4.0, zoom * zoomFactor));
 
             panX = mx - (mx - panX) * (newZoom / zoom);
             panY = my - (my - panY) * (newZoom / zoom);
@@ -264,7 +322,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 startX = mx;
                 startY = my;
                 isDragging = false;
-                alpha = 0.3;
+                alpha = 0.4;
             } else {
                 isPanning = true;
                 panStartX = e.clientX - panX;
@@ -283,24 +341,28 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const wx = (mx - panX) / zoom;
-            const wy = (my - panY) / zoom;
-
             if (draggedNode) {
-                if (Math.hypot(mx - startX, my - startY) > 5) {
-                    isDragging = true;
-                }
+                isDragging = true;
+                const wx = (mx - panX) / zoom;
+                const wy = (my - panY) / zoom;
                 draggedNode.x = wx;
                 draggedNode.y = wy;
+                alpha = 0.3;
                 return;
             }
 
+            // Hit test in world coords
+            const wx = (mx - panX) / zoom;
+            const wy = (my - panY) / zoom;
             hoveredNode = null;
-            for (let n of nodes) {
-                const r = n.val || 14;
-                const dx = wx - n.x;
-                const dy = wy - n.y;
-                if (dx * dx + dy * dy < (r + 8) * (r + 8)) {
+
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                if (activeCategories[n.group] === false) continue;
+                const r = n.val || 12;
+                const dx = n.x - wx;
+                const dy = n.y - wy;
+                if (dx * dx + dy * dy < (r + 10) * (r + 10)) {
                     hoveredNode = n;
                     break;
                 }
@@ -309,7 +371,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (hoveredNode) {
                 canvas.style.cursor = 'pointer';
                 infoBox.style.display = 'block';
-                infoBox.innerHTML = `<b>${hoveredNode.name}</b> [${hoveredNode.group}] <span style="color:#00FF9D; font-size:11px;">(Görüntülemek için tıkla)</span><br/><span style="color:#8B949E;">${hoveredNode.info || ''}</span>`;
+                infoBox.innerHTML = `<b>${hoveredNode.name}</b> [${hoveredNode.group}] <span style="color:#00FF9D; font-size:11px;">(Detayları ve İlişkileri Açmak İçin Tıkla)</span><br/><span style="color:#8B949E;">${hoveredNode.info || ''}</span>`;
             } else {
                 canvas.style.cursor = isPanning ? 'grabbing' : 'default';
                 infoBox.style.display = 'none';
@@ -334,7 +396,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         function zoomIn() {
             const cx = width / 2;
             const cy = height / 2;
-            const newZoom = Math.min(3.5, zoom * 1.25);
+            const newZoom = Math.min(4.0, zoom * 1.25);
             panX = cx - (cx - panX) * (newZoom / zoom);
             panY = cy - (cy - panY) * (newZoom / zoom);
             zoom = newZoom;
@@ -343,7 +405,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         function zoomOut() {
             const cx = width / 2;
             const cy = height / 2;
-            const newZoom = Math.max(0.35, zoom * 0.8);
+            const newZoom = Math.max(0.30, zoom * 0.8);
             panX = cx - (cx - panX) * (newZoom / zoom);
             panY = cy - (cy - panY) * (newZoom / zoom);
             zoom = newZoom;
@@ -353,7 +415,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             zoom = 1.0;
             panX = 0;
             panY = 0;
-            alpha = 0.5;
+            alpha = 0.6;
         }
 
         function render() {
@@ -367,16 +429,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 ctx.translate(panX, panY);
                 ctx.scale(zoom, zoom);
 
-                // Draw Links
+                // 1. Draw Links
                 ctx.lineWidth = 1;
                 links.forEach(l => {
                     const s = nodes.find(n => n.id === l.source);
                     const t = nodes.find(n => n.id === l.target || n.name === l.target || (typeof l.target === 'string' && l.target && n.id.includes(l.target)));
-                    if (s && t) {
+                    if (s && t && activeCategories[s.group] !== false && activeCategories[t.group] !== false) {
                         try {
                             const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
-                            grad.addColorStop(0, 'rgba(0, 240, 255, 0.45)');
-                            grad.addColorStop(1, 'rgba(157, 0, 255, 0.25)');
+                            grad.addColorStop(0, 'rgba(0, 240, 255, 0.40)');
+                            grad.addColorStop(1, 'rgba(157, 0, 255, 0.20)');
                             ctx.strokeStyle = grad;
                         } catch (e) {
                             ctx.strokeStyle = 'rgba(0, 240, 255, 0.3)';
@@ -388,8 +450,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     }
                 });
 
-                // Draw Nodes
+                // 2. Draw Nodes and Anti-Collision Pill Labels
                 nodes.forEach(n => {
+                    if (activeCategories[n.group] === false) return;
+
                     const color = colors[n.group] || '#00F0FF';
                     const r = (n.val || 12) * (n === hoveredNode ? 1.25 : 1.0);
 
@@ -406,22 +470,48 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     ctx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2);
                     ctx.fill();
 
-                    // Inner Node
+                    // Inner Solid Circle
                     ctx.fillStyle = color;
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
                     ctx.fill();
 
-                    // White Core Center
+                    // White Core Pulse Center
                     ctx.fillStyle = '#FFFFFF';
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
                     ctx.fill();
 
-                    // Label
-                    ctx.fillStyle = n === hoveredNode ? '#00F0FF' : '#E6EDF3';
-                    ctx.font = (n.group === 'ego' ? 'bold 11px' : '10px') + ' monospace';
-                    ctx.fillText(n.name, n.x + r + 6, n.y + 4);
+                    // Clean Pill Label Rendering
+                    let labelText = n.name || '';
+                    const isHovered = (n === hoveredNode);
+                    if (!isHovered && labelText.length > 18) {
+                        labelText = labelText.substring(0, 16) + '..';
+                    }
+
+                    ctx.font = (n.group === 'ego' ? 'bold 11px' : '10px') + ' "Segoe UI", Consolas, monospace';
+                    const textWidth = ctx.measureText(labelText).width;
+                    const pillX = n.x + r + 6;
+                    const pillY = n.y - 9;
+                    const pillW = textWidth + 10;
+                    const pillH = 18;
+
+                    // Translucent dark pill backing to prevent text overlap and line collision
+                    ctx.fillStyle = isHovered ? 'rgba(0, 240, 255, 0.22)' : 'rgba(8, 11, 16, 0.88)';
+                    ctx.strokeStyle = isHovered ? '#00F0FF' : 'rgba(31, 43, 66, 0.85)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    if (ctx.roundRect) {
+                        ctx.roundRect(pillX, pillY, pillW, pillH, 4);
+                    } else {
+                        ctx.rect(pillX, pillY, pillW, pillH);
+                    }
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Text inside pill
+                    ctx.fillStyle = isHovered ? '#00F0FF' : '#E6EDF3';
+                    ctx.fillText(labelText, pillX + 5, pillY + 13);
                 });
 
                 ctx.restore();

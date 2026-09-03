@@ -242,12 +242,15 @@ class ChatModeWindow(QMainWindow):
         self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
         self.report_bar.setVisible(True)
 
-        self._append_message(
-            "Entropy AI",
-            f"📄 **Yeni Araştırma Raporu Oluşturuldu:** `{p.name}`\n\n"
-            f"[👉 Ayrı Ekranda Aç ve İncele](entropy-report://{p.as_posix()})",
-            is_system=True
+        card_html = (
+            f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>📑 Yeni Araştırma Raporu Oluşturuldu</div>"
+            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
+            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
+            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Raporu Aç ve Oku ↗</a>"
+            f"</div>"
         )
+        self.chat_browser.append(card_html)
 
     def _on_anchor_clicked(self, url):
         """Intercept entropy-report:// links to open the standalone viewer."""
