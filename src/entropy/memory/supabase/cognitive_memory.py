@@ -22,6 +22,7 @@ class CognitiveMemoryNode:
     last_accessed: float
     access_count: int = 1
     metadata: Dict[str, Any] = None
+    embedding: Optional[List[float]] = None
 
     def calculate_ebbinghaus_strength(self, current_time: Optional[float] = None, decay_rate: float = 0.05) -> float:
         """Layer 5: Ebbinghaus Forgetting Curve strength calculation."""
@@ -31,6 +32,87 @@ class CognitiveMemoryNode:
         stability = 1.0 + math.log(self.access_count + 1)
         strength = self.importance * math.exp(- (decay_rate * days_elapsed) / stability)
         return max(0.0, min(1.0, strength))
+
+class LocalEmbeddingEngine:
+    """Zero-API, 100% offline neural embedding engine with fast fallback (T2.1)."""
+    _instance = None
+    _model = None
+    _is_neural = False
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        try:
+            from fastembed import TextEmbedding
+            # Lightweight 384-dimensional ONNX embedding model (<5ms on CPU)
+            self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            self._is_neural = True
+        except Exception:
+            self._model = None
+            self._is_neural = False
+
+    def embed_text(self, text: str) -> List[float]:
+        """Generate a 384-dimensional dense embedding vector."""
+        if not text or not text.strip():
+            return [0.0] * 384
+
+        if self._is_neural and self._model is not None:
+            try:
+                vecs = list(self._model.embed([text]))
+                return [float(x) for x in vecs[0]]
+            except Exception:
+                pass
+
+        return self._hash_dense_embedding(text, dim=384)
+
+    def _hash_dense_embedding(self, text: str, dim: int = 384) -> List[float]:
+        """Deterministic dense representation when neural model is unavailable or initializing."""
+        vec = [0.0] * dim
+        tokens = re.findall(r"\w+", text.lower())
+        if not tokens:
+            return vec
+        for token in tokens:
+            h = int(hashlib.md5(token.encode("utf-8")).hexdigest(), 16)
+            idx = h % dim
+            sign = 1.0 if (h % 2 == 0) else -1.0
+            vec[idx] += sign
+        norm = math.sqrt(sum(x * x for x in vec))
+        if norm > 0:
+            vec = [x / norm for x in vec]
+        return vec
+
+def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+    """Compute cosine similarity between two dense vectors."""
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    dot = 0.0
+    norm1 = 0.0
+    norm2 = 0.0
+    for a, b in zip(v1, v2):
+        dot += a * b
+        norm1 += a * a
+        norm2 += b * b
+    if norm1 <= 0.0 or norm2 <= 0.0:
+        return 0.0
+    sim = dot / (math.sqrt(norm1) * math.sqrt(norm2))
+    return max(0.0, min(1.0, sim))
+
+def compute_bm25_score(query_tokens: List[str], doc_tokens: List[str], avg_doc_len: float = 25.0, k1: float = 1.2, b: float = 0.75) -> float:
+    """BM25 term frequency saturation and document length normalization (T2.2)."""
+    if not query_tokens or not doc_tokens:
+        return 0.0
+    doc_len = len(doc_tokens)
+    score = 0.0
+    for q in query_tokens:
+        count = doc_tokens.count(q)
+        if count > 0:
+            tf = (count * (k1 + 1)) / (count + k1 * (1 - b + b * (doc_len / max(1.0, avg_doc_len))))
+            score += tf
+    return min(1.0, score / max(1.0, len(query_tokens) * 1.5))
 
 class CognitiveMemorySystem:
     """Manages multi-layered cognitive memory with Supabase pgvector and offline SQLite fallback."""
@@ -47,7 +129,7 @@ class CognitiveMemorySystem:
         self._seed_ego_identity()
 
     def _init_sqlite_db(self):
-        """Initialize local SQLite persistence schema."""
+        """Initialize local SQLite persistence schema with embedding vector support (T2.1)."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -59,12 +141,18 @@ class CognitiveMemorySystem:
                     created_at REAL,
                     last_accessed REAL,
                     access_count INTEGER DEFAULT 1,
-                    metadata_json TEXT
+                    metadata_json TEXT,
+                    embedding_json TEXT
                 )
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_category ON cognitive_nodes (category);
             """)
+            # Migration check: ensure embedding_json column exists
+            cursor.execute("PRAGMA table_info(cognitive_nodes)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "embedding_json" not in cols:
+                cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_json TEXT")
             conn.commit()
 
     def _seed_ego_identity(self):
@@ -92,16 +180,20 @@ class CognitiveMemorySystem:
         return f"{category}-{h}"
 
     def _save_node(self, node: CognitiveMemoryNode):
+        if node.embedding is None or len(node.embedding) == 0:
+            node.embedding = LocalEmbeddingEngine.get_instance().embed_text(node.content)
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     importance = excluded.importance,
                     last_accessed = excluded.last_accessed,
                     access_count = cognitive_nodes.access_count + 1,
-                    metadata_json = excluded.metadata_json
+                    metadata_json = excluded.metadata_json,
+                    embedding_json = excluded.embedding_json
             """, (
                 node.id,
                 node.category,
@@ -110,17 +202,19 @@ class CognitiveMemorySystem:
                 node.created_at,
                 node.last_accessed,
                 node.access_count,
-                json.dumps(node.metadata or {})
+                json.dumps(node.metadata or {}),
+                json.dumps(node.embedding or [])
             ))
             conn.commit()
 
     def get_node(self, node_id: str) -> Optional[CognitiveMemoryNode]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json FROM cognitive_nodes WHERE id = ?", (node_id,))
+            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes WHERE id = ?", (node_id,))
             row = cursor.fetchone()
             if not row:
                 return None
+            embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
             return CognitiveMemoryNode(
                 id=row[0],
                 category=row[1],
@@ -129,7 +223,8 @@ class CognitiveMemorySystem:
                 created_at=row[4],
                 last_accessed=row[5],
                 access_count=row[6],
-                metadata=json.loads(row[7] or "{}")
+                metadata=json.loads(row[7] or "{}"),
+                embedding=embedding
             )
 
     def record_memory(
@@ -157,7 +252,8 @@ class CognitiveMemorySystem:
             self._save_node(existing)
             return existing, False
 
-        # Novel memory: insert new node
+        # Novel memory: insert new node with dense embedding
+        embedding = LocalEmbeddingEngine.get_instance().embed_text(content)
         new_node = CognitiveMemoryNode(
             id=node_id,
             category=category,
@@ -166,26 +262,37 @@ class CognitiveMemorySystem:
             created_at=now,
             last_accessed=now,
             access_count=1,
-            metadata=metadata or {}
+            metadata=metadata or {},
+            embedding=embedding
         )
         self._save_node(new_node)
         return new_node, True
 
-    def hybrid_recall(self, query: str, top_k: int = 5) -> List[Tuple[CognitiveMemoryNode, float]]:
+    def hybrid_recall(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_threshold: float = 0.15
+    ) -> List[Tuple[CognitiveMemoryNode, float]]:
         """
-        RecollectionEngine: Combines Lexical/Semantic Match + Importance + Recency.
-        Score = 0.50 * SimScore + 0.30 * Importance + 0.20 * Recency
+        T2.2 & T2.3: Recollection Engine with Multi-Criteria Hybrid Scoring & Noise Pruning.
+        Score = 0.40 * VectorSim + 0.20 * BM25 + 0.25 * Ebbinghaus + 0.15 * Recency
+        Filters out noise where final_score < min_threshold.
         """
         now = time.time()
-        query_words = set(re_tokenize(query))
+        query_vector = LocalEmbeddingEngine.get_instance().embed_text(query)
+        query_tokens = re_tokenize(query)
         results = []
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json FROM cognitive_nodes")
+            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes")
             rows = cursor.fetchall()
 
+        nodes_to_update = []
+
         for row in rows:
+            embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
             node = CognitiveMemoryNode(
                 id=row[0],
                 category=row[1],
@@ -194,24 +301,54 @@ class CognitiveMemorySystem:
                 created_at=row[4],
                 last_accessed=row[5],
                 access_count=row[6],
-                metadata=json.loads(row[7] or "{}")
+                metadata=json.loads(row[7] or "{}"),
+                embedding=embedding
             )
 
-            # Text match score (Jaccard similarity approximation)
-            node_words = set(re_tokenize(node.content))
-            intersection = query_words.intersection(node_words)
-            sim_score = len(intersection) / max(1, len(query_words.union(node_words)))
+            # 1. Dense Vector Cosine Similarity (Weight: 0.40)
+            if not node.embedding:
+                node.embedding = LocalEmbeddingEngine.get_instance().embed_text(node.content)
+                nodes_to_update.append((json.dumps(node.embedding), node.id))
+            raw_sim = cosine_similarity(query_vector, node.embedding)
+            # Rescale cosine similarity to [0, 1] removing typical dense embedding anisotropy baseline (~0.50)
+            vec_sim = max(0.0, min(1.0, (raw_sim - 0.50) / 0.50))
 
-            # Ebbinghaus-adjusted strength
-            strength = node.calculate_ebbinghaus_strength(current_time=now)
+            # 2. Sparse Lexical BM25 Score (Weight: 0.20)
+            node_tokens = re_tokenize(node.content)
+            bm25_sim = compute_bm25_score(query_tokens, node_tokens)
 
-            # Recency factor (0 to 1 over last 30 days)
+            # 3. Ebbinghaus Forgetting Curve Retention (Weight: 0.25)
+            ebbinghaus_strength = node.calculate_ebbinghaus_strength(current_time=now)
+
+            # 4. Recency Exponential Decay (Weight: 0.15)
             days_ago = max(0.0, (now - node.last_accessed) / 86400.0)
-            recency = math.exp(-0.1 * days_ago)
+            recency = math.exp(-0.05 * days_ago)
 
-            # Hybrid scoring formula from research report
-            final_score = (0.50 * sim_score) + (0.30 * strength) + (0.20 * recency)
-            results.append((node, final_score))
+            # Multi-criteria hybrid score formula (T2.2)
+            final_score = (
+                (0.40 * vec_sim) +
+                (0.20 * bm25_sim) +
+                (0.25 * ebbinghaus_strength) +
+                (0.15 * recency)
+            )
+
+            # T2.3: Noise pruning: If both lexical and semantic relevance are low, suppress recency leakage
+            if bm25_sim == 0.0 and vec_sim < 0.35:
+                final_score *= (vec_sim / 0.35)
+
+            # T2.3: Noise pruning threshold
+            if final_score >= min_threshold:
+                results.append((node, final_score))
+
+        # Lazy backfill embeddings into SQLite if any were missing
+        if nodes_to_update:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.executemany("UPDATE cognitive_nodes SET embedding_json = ? WHERE id = ?", nodes_to_update)
+                    conn.commit()
+            except Exception:
+                pass
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]

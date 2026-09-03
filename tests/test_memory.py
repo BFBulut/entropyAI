@@ -101,3 +101,82 @@ def test_project_indexer(tmp_path):
     results = indexer.search_codebase("run_entropy_core")
     assert len(results) > 0
     assert results[0]["path"] == "main.py"
+
+def test_wikilink_pipe_alias_and_extraction(temp_vault):
+    # T1.1: Wikilink pipe [[Target|Alias]] and header parsing
+    sample_text = (
+        "Check out [[CognitiveArchitecture|Bilişsel Mimari]] and [[MEMORY#Directives|Temel Direktifler]]. "
+        "Also see plain [[Research_Report.md]]."
+    )
+    links = temp_vault.extract_wikilinks(sample_text)
+    assert len(links) == 3
+    assert links[0]["target"] == "CognitiveArchitecture"
+    assert links[0]["alias"] == "Bilişsel Mimari"
+    assert links[1]["target"] == "MEMORY"
+    assert links[1]["alias"] == "Temel Direktifler"
+    assert links[2]["target"] == "Research_Report"
+    assert links[2]["alias"] == "Research_Report"
+
+def test_bidirectional_backlinks_and_moc_sync(temp_vault):
+    # T1.2 & T1.3: Inbound/Outbound Backlinks and BELLEK_HARITASI.md MOC
+    # Note A links to Note B
+    temp_vault.save_research_report("Note_A", "Reference to [[Note_B|Hedef B Notu]] and [[MEMORY]].")
+    temp_vault.save_research_report("Note_B", "Content in Note B without outbound links.")
+
+    backlinks = temp_vault.get_backlinks_index()
+    assert "Note_B" in backlinks["outbound"]["Note_A"]
+    assert "Note_A" in backlinks["inbound"]["Note_B"]
+    assert "Hedef B Notu" in backlinks["aliases"].get("Note_B", [])
+
+    # Test MOC generation
+    moc_path = temp_vault.sync_map_of_content()
+    assert moc_path.exists()
+    moc_content = moc_path.read_text(encoding="utf-8")
+    assert "Master Bellek Haritası" in moc_content
+    assert "Note_A" in moc_content
+    assert "Note_B" in moc_content
+
+def test_local_embedding_engine_and_cosine_sim():
+    # T2.1: Local zero-API embedding vector generation
+    from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine, cosine_similarity
+
+    engine = LocalEmbeddingEngine.get_instance()
+    v1 = engine.embed_text("Entropy AI autonomous operating system")
+    v2 = engine.embed_text("Autonomous AI agent on Windows")
+    v3 = engine.embed_text("Cooking recipes for Italian pasta")
+
+    assert len(v1) == 384
+    assert len(v2) == 384
+    assert len(v3) == 384
+
+    sim_1_2 = cosine_similarity(v1, v2)
+    sim_1_3 = cosine_similarity(v1, v3)
+
+    # AI system should be semantically closer to autonomous agent than Italian pasta
+    assert sim_1_2 > sim_1_3
+
+def test_multi_criteria_hybrid_scoring_and_noise_pruning(temp_cognitive_db):
+    # T2.2 & T2.3: Multi-criteria recall and noise pruning threshold
+    temp_cognitive_db.record_memory(
+        category="semantic",
+        content="Antigravity CLI provides headless zero API key execution",
+        importance=0.95
+    )
+    temp_cognitive_db.record_memory(
+        category="episodic",
+        content="Random unrelated noise log 12345",
+        importance=0.01
+    )
+
+    # High relevance query
+    matches = temp_cognitive_db.hybrid_recall("Antigravity CLI headless execution", top_k=5, min_threshold=0.15)
+    assert len(matches) >= 1
+    top_node, score = matches[0]
+    assert "Antigravity" in top_node.content
+    assert score > 0.30
+
+    # Ensure completely unrelated noise with low importance is pruned by threshold
+    noise_matches = temp_cognitive_db.hybrid_recall("Completely unrelated query xyz 999", top_k=5, min_threshold=0.35)
+    noise_ids = [node.id for node, s in noise_matches]
+    assert not any("12345" in node.content for node, s in noise_matches)
+

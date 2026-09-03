@@ -49,7 +49,8 @@ def main():
                 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 log_p = ovm.append_daily_log("Otonom arka plan senkronu.")
-                bus.terminal_output_received.emit(f"[Otonom Görev] Obsidian günlüğü senkronlandı: {log_p.name}\n")
+                moc_p = ovm.sync_map_of_content()
+                bus.terminal_output_received.emit(f"[Otonom Görev] Obsidian günlüğü ve {moc_p.name} senkronlandı.\n")
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
         elif task.id == "rag-reindex":

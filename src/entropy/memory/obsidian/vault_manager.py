@@ -3,14 +3,15 @@
 import datetime
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from entropy.core.config import config
 
 class ObsidianVaultManager:
     """Manages the local Obsidian markdown vault as Entropy AI's persistent memory."""
 
-    WIKILINK_PATTERN = re.compile(r"\[\[(.*?)\]\]")
+    # T1.1: Regex matching [[Target|Alias]] or [[Target#Header|Alias]] or [[Target]]
+    WIKILINK_PATTERN = re.compile(r"\[\[(?P<target>[^\|\]#]+)(?:#[^\|\]]+)?(?:\|(?P<alias>[^\]]+))?\]\]")
 
     def __init__(self, vault_path: Optional[Path] = None):
         self.vault_path = Path(vault_path or config.obsidian_vault_path)
@@ -93,16 +94,133 @@ class ObsidianVaultManager:
             })
         return reports
 
+    def extract_wikilinks(self, content: str) -> List[Dict[str, str]]:
+        """
+        T1.1: Extract structured wikilinks containing target and optional alias.
+        Supports [[Target]], [[Target|Alias]], [[Target#Header]], [[Target#Header|Alias]].
+        """
+        links = []
+        for match in self.WIKILINK_PATTERN.finditer(content):
+            target = match.group("target").strip()
+            if target.lower().endswith(".md"):
+                target = target[:-3]
+            alias = match.group("alias").strip() if match.group("alias") else target
+            links.append({"target": target, "alias": alias})
+        return links
+
+    def get_backlinks_index(self) -> Dict[str, Any]:
+        """
+        T1.2: Build a complete bidirectional backlink index for all markdown files in the vault.
+        Returns:
+            {
+                "outbound": { "NoteA": ["NoteB", "NoteC"] },
+                "inbound":  { "NoteB": ["NoteA"], "NoteC": ["NoteA"] },
+                "aliases":  { "NoteB": ["Görünen Ad"] }
+            }
+        """
+        outbound: Dict[str, List[str]] = {}
+        inbound: Dict[str, List[str]] = {}
+        aliases_map: Dict[str, Set[str]] = {}
+
+        for file in self.entropy_dir.rglob("*.md"):
+            source_stem = file.stem
+            outbound.setdefault(source_stem, [])
+            inbound.setdefault(source_stem, [])
+
+            try:
+                content = file.read_text(encoding="utf-8", errors="ignore")
+                extracted = self.extract_wikilinks(content)
+                for item in extracted:
+                    target = item["target"]
+                    alias = item["alias"]
+                    if target not in outbound[source_stem]:
+                        outbound[source_stem].append(target)
+
+                    inbound.setdefault(target, [])
+                    if source_stem not in inbound[target]:
+                        inbound[target].append(source_stem)
+
+                    if alias and alias != target:
+                        aliases_map.setdefault(target, set()).add(alias)
+            except Exception:
+                continue
+
+        return {
+            "outbound": outbound,
+            "inbound": inbound,
+            "aliases": {k: sorted(list(v)) for k, v in aliases_map.items()}
+        }
+
+    def sync_map_of_content(self) -> Path:
+        """
+        T1.3: Generate or refresh the master Map of Content (BELLEK_HARITASI.md) in the vault root.
+        Catalogues directives, reports, inbound link counts, and detects orphaned notes.
+        """
+        moc_file = self.entropy_dir / "BELLEK_HARITASI.md"
+        backlinks = self.get_backlinks_index()
+        inbound = backlinks["inbound"]
+
+        today_str = datetime.date.today().isoformat()
+        lines = [
+            "# 🗺️ Entropy AI - Master Bellek Haritası (Map of Content)\n",
+            f"*Son Güncelleme: {today_str} | Otomatik MOC Senkronizasyonu*\n",
+            "Bu doküman, Entropy AI'ın Obsidian exocortex'indeki tüm bilgi düğümlerinin ve bağlantı ağının canlı indeksidir.\n",
+            "## 🧭 1. Çekirdek Sistem & Ego Direktifleri",
+            "- [[MEMORY|Global Bellek & Mimari Kararlar]] (Kalıcı direktifler ve öğrenilmiş tercihler)",
+            "",
+            "## 📚 2. Araştırma Raporları & Teknik Dosyalar",
+        ]
+
+        reports = self.list_reports()
+        if reports:
+            lines.append("| Rapor Başlığı | Dosya | Gelen Bağlantı (Inbound) | Son Değişiklik |")
+            lines.append("| :--- | :--- | :---: | :--- |")
+            for rep in reports:
+                stem = Path(rep["path"]).stem
+                in_count = len(inbound.get(stem, []))
+                lines.append(f"| [[{stem}|{rep['title']}]] | `{stem}.md` | **{in_count}** | {rep['modified']} |")
+        else:
+            lines.append("*Henüz kayıtlı araştırma raporu bulunmuyor.*")
+
+        lines.append("\n## 📅 3. Günlük Oturum Notları (Daily Notes)")
+        daily_files = sorted(self.daily_notes_dir.glob("*.md"), reverse=True)
+        if daily_files:
+            for df in daily_files[:7]:
+                d_stem = df.stem
+                in_count = len(inbound.get(d_stem, []))
+                lines.append(f"- [[{d_stem}]] (Gelen Bağlantılar: {in_count})")
+        else:
+            lines.append("*Henüz günlük oturum notu kaydedilmedi.*")
+
+        # Orphaned notes check
+        orphans = [
+            f.stem for f in self.entropy_dir.rglob("*.md")
+            if f.stem != "MEMORY" and f.stem != "BELLEK_HARITASI" and len(inbound.get(f.stem, [])) == 0
+        ]
+        if orphans:
+            lines.append("\n## ⚠️ 4. Yalıtılmış Düğümler (Orphaned Notes - 0 Gelen Bağlantı)")
+            for o in sorted(orphans):
+                lines.append(f"- [[{o}]]")
+
+        moc_content = "\n".join(lines) + "\n"
+        moc_file.write_text(moc_content, encoding="utf-8")
+        return moc_file
+
     def build_knowledge_graph(self) -> Dict[str, List[Dict[str, str]]]:
-        """Parse all markdown files in the Entropy folder and extract nodes & links."""
+        """
+        Parse all markdown files in the Entropy folder and extract nodes & links.
+        Uses normalized wikilink targets and alias mappings.
+        """
         nodes = []
         links = []
         node_ids: Set[str] = set()
+        stem_to_id: Dict[str, str] = {}
 
         for file in self.entropy_dir.rglob("*.md"):
             name = file.stem
             category = file.parent.name
             node_id = f"{category}/{name}"
+            stem_to_id[name] = node_id
 
             if node_id not in node_ids:
                 node_ids.add(node_id)
@@ -113,13 +231,19 @@ class ObsidianVaultManager:
                     "path": str(file)
                 })
 
+        for file in self.entropy_dir.rglob("*.md"):
+            source_id = stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
             try:
                 content = file.read_text(encoding="utf-8", errors="ignore")
-                matches = self.WIKILINK_PATTERN.findall(content)
-                for target in matches:
+                extracted = self.extract_wikilinks(content)
+                for item in extracted:
+                    target_stem = item["target"]
+                    # If target matches an existing note stem, link to its full node_id
+                    target_id = stem_to_id.get(target_stem, target_stem)
                     links.append({
-                        "source": node_id,
-                        "target": target.strip()
+                        "source": source_id,
+                        "target": target_id,
+                        "alias": item["alias"]
                     })
             except Exception:
                 continue
