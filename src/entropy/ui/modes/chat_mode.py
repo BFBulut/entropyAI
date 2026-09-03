@@ -105,6 +105,7 @@ class ChatModeWindow(QMainWindow):
             }}
         """)
         self.layout.addWidget(self.chat_browser)
+        self._load_chat_history()
 
         # 3. Staged image preview thumbnail bar
         self.attachment_bar = QFrame()
@@ -178,6 +179,20 @@ class ChatModeWindow(QMainWindow):
         self.bridge.reset_conversation()
         self.chat_browser.clear()
         self._append_message("Entropy AI", "Yeni sohbet oturumu başlatıldı. Nasıl yardımcı olabilirim?", is_system=True)
+
+    def _load_chat_history(self):
+        """Restore conversation history from disk upon opening."""
+        from entropy.core.config import CHAT_HISTORY_FILE
+        if CHAT_HISTORY_FILE.exists():
+            try:
+                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+                for msg in history:
+                    sender = "Sen" if msg.get("role") == "user" else "Entropy AI"
+                    self._append_message(sender, msg.get("content", ""))
+            except Exception:
+                pass
+        if self.chat_browser.toPlainText().strip() == "":
+            self._append_message("Entropy AI", "Sistem aktif. Size nasıl yardımcı olabilirim?", is_system=True)
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):

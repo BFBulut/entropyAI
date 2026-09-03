@@ -1,4 +1,4 @@
-"""Interactive Cognitive Memory & Knowledge Graph Viewer using QWebEngineView."""
+"""Interactive Cognitive Memory & Knowledge Graph Viewer using QWebEngineView with alpha-cooled physics."""
 
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
@@ -73,7 +74,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="legend-item"><span class="dot" style="background:#00F0FF;"></span> Çekirdek</div>
         <div class="legend-item"><span class="dot" style="background:#00FF9D;"></span> Semantik Hafıza</div>
         <div class="legend-item"><span class="dot" style="background:#FFB300;"></span> Episodik Anı</div>
-        <div class="legend-item"><span class="dot" style="background:#9D00FF;"></span> Obsidian Notu</div>
+        <div class="legend-item"><span class="dot" style="background:#9D00FF;"></span> Obsidian Notu / Rapor</div>
     </div>
     <div id="infoBox"></div>
     <canvas id="canvas"></canvas>
@@ -113,10 +114,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'obsidian': '#9D00FF',
             'Entropy': '#9D00FF',
             'DailyNotes': '#9D00FF',
-            'Reports': '#38BDF8'
+            'Reports': '#FF0055'
         };
 
-        // Initialize positions relative to canvas center
+        // Initialize positions distributed evenly in an orbital circle
         function initNodePositions() {
             const cx = width / 2;
             const cy = height / 2;
@@ -125,19 +126,79 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n.group === 'ego') {
                     n.x = cx;
                     n.y = cy;
-                    n.vx = 0;
-                    n.vy = 0;
                 } else {
                     const angle = (idx / Math.max(1, nodes.length - 1)) * Math.PI * 2;
-                    const dist = 70 + (idx % 3) * 45;
+                    const dist = 75 + (idx % 3) * 35;
                     n.x = cx + Math.cos(angle) * dist;
                     n.y = cy + Math.sin(angle) * dist;
-                    n.vx = (Math.random() - 0.5) * 0.3;
-                    n.vy = (Math.random() - 0.5) * 0.3;
                 }
             });
         }
         initNodePositions();
+
+        // Alpha decay simulation (Cools down in ~2 seconds to become 100% static)
+        let alpha = 1.0;
+        const alphaMin = 0.003;
+        const alphaDecay = 0.025;
+
+        function tickPhysics() {
+            if (alpha < alphaMin && !draggedNode) {
+                return; // Completely frozen in place, 0 vibration!
+            }
+
+            const cx = width / 2;
+            const cy = height / 2;
+
+            // Repulsion force between pairs
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const a = nodes[i];
+                    const b = nodes[j];
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    if (dist < 130) {
+                        const force = ((130 - dist) / 130) * 2.0 * alpha;
+                        const fx = (dx / dist) * force;
+                        const fy = (dy / dist) * force;
+                        if (a.group !== 'ego' && a !== draggedNode) { a.x -= fx; a.y -= fy; }
+                        if (b.group !== 'ego' && b !== draggedNode) { b.x += fx; b.y += fy; }
+                    }
+                }
+            }
+
+            // Spring link tension
+            links.forEach(l => {
+                const s = nodes.find(n => n.id === l.source);
+                const t = nodes.find(n => n.id === l.target || n.name === l.target);
+                if (s && t) {
+                    const dx = t.x - s.x;
+                    const dy = t.y - s.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const force = (dist - 85) * 0.04 * alpha;
+                    if (t.group !== 'ego' && t !== draggedNode) {
+                        t.x -= (dx / dist) * force;
+                        t.y -= (dy / dist) * force;
+                    }
+                }
+            });
+
+            // Center gravity
+            nodes.forEach(n => {
+                if (n.group !== 'ego' && n !== draggedNode) {
+                    n.x += (cx - n.x) * 0.02 * alpha;
+                    n.y += (cy - n.y) * 0.02 * alpha;
+
+                    // Bounds clamp
+                    if (n.x < 40) n.x = 40;
+                    if (n.x > width - 40) n.x = width - 40;
+                    if (n.y < 50) n.y = 50;
+                    if (n.y > height - 45) n.y = height - 45;
+                }
+            });
+
+            alpha *= (1 - alphaDecay);
+        }
 
         let hoveredNode = null;
         let draggedNode = null;
@@ -175,7 +236,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         });
 
         canvas.addEventListener('mousedown', (e) => {
-            if (hoveredNode) draggedNode = hoveredNode;
+            if (hoveredNode) {
+                draggedNode = hoveredNode;
+                alpha = 0.3;
+            }
         });
 
         window.addEventListener('mouseup', () => {
@@ -184,70 +248,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         function render() {
             try {
+                tickPhysics();
+
                 ctx.fillStyle = '#080B10';
                 ctx.fillRect(0, 0, width, height);
-
-                const cx = width / 2;
-                const cy = height / 2;
-
-                // Physics update with repulsion and friction damping (prevents continuous jitter)
-                for (let i = 0; i < nodes.length; i++) {
-                    for (let j = i + 1; j < nodes.length; j++) {
-                        const a = nodes[i];
-                        const b = nodes[j];
-                        const dx = b.x - a.x;
-                        const dy = b.y - a.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                        if (dist < 110) {
-                            const force = ((110 - dist) / 110) * 0.8;
-                            const fx = (dx / dist) * force;
-                            const fy = (dy / dist) * force;
-                            if (a.group !== 'ego' && a !== draggedNode) { a.vx -= fx; a.vy -= fy; }
-                            if (b.group !== 'ego' && b !== draggedNode) { b.vx += fx; b.vy += fy; }
-                        }
-                    }
-                }
-
-                // Spring attraction for links
-                links.forEach(l => {
-                    const s = nodes.find(n => n.id === l.source);
-                    const t = nodes.find(n => n.id === l.target || n.name === l.target);
-                    if (s && t) {
-                        const dx = t.x - s.x;
-                        const dy = t.y - s.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                        const force = (dist - 80) * 0.002;
-                        if (t.group !== 'ego' && t !== draggedNode) {
-                            t.vx -= (dx / dist) * force;
-                            t.vy -= (dy / dist) * force;
-                        }
-                    }
-                });
-
-                // Update velocities and apply friction damping
-                nodes.forEach(n => {
-                    if (n !== draggedNode && n.group !== 'ego') {
-                        // Centering gravity
-                        n.vx += (cx - n.x) * 0.0006;
-                        n.vy += (cy - n.y) * 0.0006;
-
-                        // Apply strong damping (friction) so nodes quickly settle
-                        n.vx *= 0.86;
-                        n.vy *= 0.86;
-
-                        // Only move if kinetic energy is meaningful
-                        if (Math.abs(n.vx) > 0.02 || Math.abs(n.vy) > 0.02) {
-                            n.x += n.vx;
-                            n.y += n.vy;
-                        }
-
-                        // Bounce bounds
-                        if (n.x < 35) { n.x = 35; n.vx = 0; }
-                        if (n.x > width - 35) { n.x = width - 35; n.vx = 0; }
-                        if (n.y < 45) { n.y = 45; n.vy = 0; }
-                        if (n.y > height - 40) { n.y = height - 40; n.vy = 0; }
-                    }
-                });
 
                 // Draw Links
                 ctx.lineWidth = 1;
@@ -315,6 +319,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         setTimeout(() => {
             updateDimensions();
             initNodePositions();
+            alpha = 1.0;
             render();
         }, 80);
     </script>
@@ -375,6 +380,10 @@ class KnowledgeGraphWidget(QFrame):
         self.web_view.setStyleSheet("background: #080B10; border-radius: 6px;")
         self.layout.addWidget(self.web_view)
 
+        # Auto-refresh on new reports or turns
+        bus.report_created.connect(lambda _: self.refresh_graph())
+        bus.agent_turn_completed.connect(lambda _: self.refresh_graph())
+
         self.refresh_graph()
 
     def build_unified_graph(self) -> Dict[str, List[Dict[str, str]]]:
@@ -417,7 +426,7 @@ class KnowledgeGraphWidget(QFrame):
         except Exception:
             pass
 
-        # 3. Obsidian Vault Markdown Nodes
+        # 3. Obsidian Vault Markdown Nodes & Reports
         obsidian_data = self.vault_manager.build_knowledge_graph()
         for o_node in obsidian_data["nodes"]:
             o_id = o_node["id"]
@@ -426,7 +435,7 @@ class KnowledgeGraphWidget(QFrame):
                 nodes.append({
                     "id": o_id,
                     "name": o_node["name"],
-                    "group": "obsidian",
+                    "group": o_node.get("group", "obsidian"),
                     "info": f"Obsidian Dosyası: {o_node['path']}",
                     "val": 14
                 })

@@ -1,11 +1,12 @@
 """Core configuration and settings for Entropy AI with persistence."""
 
 import json
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 from pydantic import BaseModel, Field
 
 SETTINGS_FILE = Path(r"C:\EntropiAI\.entropy\settings.json")
+CHAT_HISTORY_FILE = Path(r"C:\EntropiAI\.entropy\chat_history.json")
 
 class EntropyConfig(BaseModel):
     app_name: str = "Entropy AI"
@@ -16,6 +17,7 @@ class EntropyConfig(BaseModel):
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
+    last_conversation_id: Optional[str] = None
     available_models: List[str] = [
         "gemini-3.1-pro-high",
         "gemini-3.1-pro-low",
@@ -39,6 +41,7 @@ class EntropyConfig(BaseModel):
                 "selected_model": self.selected_model,
                 "default_mode": self.default_mode,
                 "autostart_enabled": self.autostart_enabled,
+                "last_conversation_id": self.last_conversation_id,
             }
             SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
@@ -55,6 +58,8 @@ class EntropyConfig(BaseModel):
                     self.default_mode = data["default_mode"]
                 if "autostart_enabled" in data:
                     self.autostart_enabled = data["autostart_enabled"]
+                if "last_conversation_id" in data:
+                    self.last_conversation_id = data["last_conversation_id"]
         except Exception:
             pass
 

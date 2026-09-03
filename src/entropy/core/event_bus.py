@@ -32,5 +32,8 @@ class EntropyEventBus(QObject):
     task_triggered = Signal(str, str)    # task_id, task_name
     task_completed = Signal(str, bool)   # task_id, success
 
+    # Knowledge & Reports
+    report_created = Signal(str)         # report_path
+
 # Global Event Bus Instance
 bus = EntropyEventBus()

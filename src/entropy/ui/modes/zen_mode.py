@@ -173,6 +173,12 @@ class ZenModeWindow(QMainWindow):
         main_v_splitter.setSizes([560, 240])
         root_layout.addWidget(main_v_splitter)
 
+        if self.bridge.current_conversation_id:
+            bus.terminal_output_received.emit(
+                f"[Entropy Core] Aktif sohbet oturumu yüklendi (ID: {self.bridge.current_conversation_id[:8]}...). "
+                f"Sohbetinize kaldığınız yerden devam edebilirsiniz.\n"
+            )
+
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)

@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, Tuple
 from PySide6.QtCore import QObject, Signal
 
 from entropy.core.event_bus import bus
-from entropy.core.config import config
+from entropy.core.config import config, CHAT_HISTORY_FILE
 
 class AgyProcessBridge(QObject):
     """Bridges Entropy AI to the authenticated local Antigravity (agy) CLI."""
@@ -27,7 +27,7 @@ class AgyProcessBridge(QObject):
         super().__init__(parent)
         self.selected_model: str = config.selected_model
         self.current_model: str = self.selected_model or config.model_fallback_name
-        self.current_conversation_id: Optional[str] = None
+        self.current_conversation_id: Optional[str] = config.last_conversation_id
         self.total_tokens_used: int = 0
         self.latest_input_tokens: int = 0
         self.latest_output_tokens: int = 0
@@ -39,20 +39,37 @@ class AgyProcessBridge(QObject):
         self._is_running: bool = False
         self._lock = threading.Lock()
 
+        # Load persisted conversation history if available
+        if CHAT_HISTORY_FILE.exists():
+            try:
+                self.conversation_history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                self.conversation_history = []
+
     @property
     def is_running(self) -> bool:
         return self._is_running
 
     def reset_conversation(self):
-        """Start a fresh conversation topic in Antigravity."""
+        """Start a fresh conversation topic in Antigravity and clear local chat history."""
         self.current_conversation_id = None
+        config.last_conversation_id = None
+        config.save_settings()
+
+        self.conversation_history = []
+        if CHAT_HISTORY_FILE.exists():
+            try:
+                CHAT_HISTORY_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         self.total_tokens_used = 0
         self.latest_input_tokens = 0
         self.latest_output_tokens = 0
         self.latest_thinking_tokens = 0
         self.latest_cache_read_tokens = 0
         bus.token_usage_updated.emit(0)
-        bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Bağlam sıfırlandı)\n")
+        bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Hafıza ve bağlam sıfırlandı)\n")
 
     def set_model(self, model_name: str):
         """Update active model dynamically and persist to configuration."""
@@ -165,6 +182,19 @@ class AgyProcessBridge(QObject):
         }
         return [summary_turn] + preserved
 
+    def _save_chat_turn(self, user_prompt: str, assistant_resp: str):
+        """Save conversation turns persistently to disk for app restart continuity."""
+        try:
+            CHAT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.conversation_history.append({"role": "user", "content": user_prompt})
+            self.conversation_history.append({"role": "assistant", "content": assistant_resp})
+            CHAT_HISTORY_FILE.write_text(
+                json.dumps(self.conversation_history, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception:
+            pass
+
     def send_prompt_async(
         self,
         prompt: str,
@@ -198,7 +228,6 @@ class AgyProcessBridge(QObject):
 
         # Check if continuing an existing conversation or starting turn 1
         if self.current_conversation_id:
-            # Continuing conversation: Antigravity already has system prompt and context cached!
             cmd = [
                 agy_bin,
                 "-p", prompt,
@@ -207,7 +236,6 @@ class AgyProcessBridge(QObject):
                 "--mode", mode,
             ]
         else:
-            # Starting new conversation: inject system persona & cognitive memory!
             cognitive_context = self.get_cognitive_context(prompt)
             system_directive = (
                 "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
@@ -268,14 +296,15 @@ class AgyProcessBridge(QObject):
                 if not line_str:
                     continue
 
-                # Process NDJSON events from Antigravity engine
                 try:
                     data = json.loads(line_str)
                     
-                    # Capture and preserve conversation ID
+                    # Capture and persist conversation ID
                     c_id = data.get("conversation_id")
-                    if c_id and not self.current_conversation_id:
+                    if c_id:
                         self.current_conversation_id = c_id
+                        config.last_conversation_id = c_id
+                        config.save_settings()
 
                     event = data.get("event")
 
@@ -322,7 +351,6 @@ class AgyProcessBridge(QObject):
                             bus.token_usage_updated.emit(self.total_tokens_used)
 
                 except json.JSONDecodeError:
-                    # Non-JSON output fallback
                     bus.terminal_output_received.emit(raw_line)
                     full_response_acc.append(raw_line)
                     bus.token_chunk_received.emit(raw_line)
@@ -343,9 +371,26 @@ class AgyProcessBridge(QObject):
                 self._current_process = None
 
             full_text = "".join(full_response_acc)
-            self.conversation_history.append({"role": "assistant", "content": full_text})
+            self._save_chat_turn(prompt, full_text)
             bus.core_state_changed.emit("idle")
             bus.agent_turn_completed.emit(full_text)
+
+            # Auto-save research reports and technical dossiers
+            is_research = any(w in prompt.lower() for w in ["araştır", "rapor", "analiz", "incele", "doküman", "özetle"])
+            has_markdown = ("# " in full_text or "## " in full_text) and len(full_text) > 200
+            if (is_research or has_markdown) and len(full_text) > 150:
+                try:
+                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    vm = ObsidianVaultManager()
+                    first_line = prompt.strip().split("\n")[0][:36]
+                    clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
+                    rep_path = vm.save_research_report(clean_title, full_text)
+                    bus.report_created.emit(str(rep_path))
+                    bus.terminal_output_received.emit(
+                        f"\n[📚 Araştırma Raporu Kaydedildi]: '{clean_title}.md' dosyası sol paneldeki Raporlar sekmesine ve Obsidian kasanıza kaydedildi.\n"
+                    )
+                except Exception:
+                    pass
 
     def terminate_current_process(self):
         """Cancel the currently active agy execution."""
