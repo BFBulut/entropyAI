@@ -143,10 +143,24 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     assert hasattr(zen, "badge_skills")
     assert hasattr(zen, "badge_mcp")
 
-    # Verify report created event displays bubble
+    # Verify report created event displays bubble and stackable pill
     zen._on_report_created("c:/test_report.md")
     assert zen.zen_report_bubble.isVisible()
     assert "test_report" in zen.zen_report_bubble.text()
+    assert zen.notification_stack_layout.count() >= 1
+
+    # Verify memory badge shows real non-zero count
+    assert "Düğüm" in zen.badge_memory.text()
+    assert "0 Düğüm" not in zen.badge_memory.text()
+
+    # Verify task notification creates a task pill and chat card
+    bus.task_notification.emit("task-finans", "Finans Bilgisi Toplama", "c:/finans_raporu.md")
+    assert "OTONOM PLANLI GÖREV" in zen.chat_browser.toPlainText()
+    assert zen.notification_stack_layout.count() >= 2
+
+    # Dismiss first pill
+    first_pill = zen.notification_stack_layout.itemAt(0).widget()
+    zen._remove_notification_pill(first_pill)
 
     # Verify ReportsViewerWidget search and zoom
     viewer = zen.reports_viewer

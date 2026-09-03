@@ -19,10 +19,14 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME
 class TasksWidget(QFrame):
     """Visual Task Scheduler displaying cron jobs, intervals, and manual triggers."""
 
-    def __init__(self, parent=None, scheduler: Optional[TaskScheduler] = None):
+    def __init__(self, parent=None, scheduler: Optional[TaskScheduler] = None, bridge=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.scheduler = scheduler or TaskScheduler()
+        self.bridge = bridge or getattr(parent, "bridge", None)
+
+        # Set execution callback for scheduled background triggers
+        self.scheduler.set_execution_callback(self._run_task_now)
 
         # Seed default autonomous jobs if empty
         if not self.scheduler.tasks:
@@ -248,11 +252,23 @@ class TasksWidget(QFrame):
             try:
                 cog = CognitiveMemorySystem()
                 rules = cog.dream_and_consolidate()
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                ovm = ObsidianVaultManager()
+                today_str = datetime.date.today().isoformat()
+                content = f"# Bilişsel Hafıza Konsolidasyonu & Rüya Raporu ({today_str})\n\n"
+                content += f"- Sentezlenen Kural Sayısı: {len(rules)}\n- Tarih: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n## Konsolide Edilen Kurallar:\n"
+                for r in rules:
+                    content += f"- {r}\n"
+                rep_path = ovm.save_research_report(f"Konsolide_Hafiza_{today_str}", content, tags=["dream", "consolidation"])
+                bus.report_created.emit(str(rep_path))
+                bus.task_notification.emit(task.id, task.name, str(rep_path))
+                bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
-                    f"[Task Scheduler] Bilişsel hafıza konsolidasyonu tamamlandı ({len(rules)} semantik kural sentezlendi).\n"
+                    f"[Task Scheduler] Bilişsel hafıza konsolidasyonu tamamlandı ({len(rules)} semantik kural sentezlendi, rapor: {rep_path.name}).\n"
                 )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Task Scheduler Hata] Konsolidasyon hatası: {e}\n")
+                bus.task_completed.emit(task.id, False)
 
         elif task.id == "obsidian-sync":
             try:
@@ -260,26 +276,51 @@ class TasksWidget(QFrame):
                 ovm = ObsidianVaultManager()
                 log_path = ovm.append_daily_log("Periyodik arka plan bellek senkronu gerçekleştirildi.")
                 notes_count = len(ovm.list_all_notes())
+                content = f"# Obsidian Exocortex Senkronizasyon Raporu\n\n- Taranan Not Sayısı: {notes_count}\n- Günlük Kayıt: {log_path.name}\n- Senkron Zamanı: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                rep_path = ovm.save_research_report("Obsidian_Senkronizasyon_Raporu", content, tags=["sync", "obsidian"])
+                bus.report_created.emit(str(rep_path))
+                bus.task_notification.emit(task.id, task.name, str(rep_path))
+                bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
                     f"[Task Scheduler] Obsidian senkronizasyonu tamamlandı ({notes_count} not tarandı, günlük kaydedildi: {log_path.name}).\n"
                 )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Task Scheduler Hata] Obsidian senkron hatası: {e}\n")
+                bus.task_completed.emit(task.id, False)
 
         elif task.id == "rag-reindex":
             try:
                 from entropy.memory.rag.project_indexer import ProjectIndexer
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 from entropy.core.config import config
                 indexer = ProjectIndexer(root_dir=config.default_project_path)
                 indexed_count = indexer.scan_and_index()
+                ovm = ObsidianVaultManager()
+                content = f"# Kod Tabanı RAG İndeksleme Raporu\n\n- İndekslenen Kod Dosyası: {indexed_count}\n- Proje Dizini: {config.default_project_path}\n- Zaman: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                rep_path = ovm.save_research_report("Kod_Tabani_RAG_Raporu", content, tags=["rag", "codebase"])
+                bus.report_created.emit(str(rep_path))
+                bus.task_notification.emit(task.id, task.name, str(rep_path))
+                bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
-                    f"[Task Scheduler] Kod tabanı indeksleme (RAG) tamamlandı ({indexed_count} dosya indekslendi).\n"
+                    f"[Task Scheduler] Kod tabanı indeksleme (RAG) tamamlandı ({indexed_count} dosya indekslendi, rapor: {rep_path.name}).\n"
                 )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Task Scheduler Hata] RAG indeksleme hatası: {e}\n")
+                bus.task_completed.emit(task.id, False)
 
         elif task.prompt:
-            bus.terminal_output_received.emit(f"[Task Scheduler] Görev yürütülüyor: {task.prompt}\n")
+            bus.terminal_output_received.emit(f"[Task Scheduler] '{task.name}' görevi AGY motoruna gönderiliyor: {task.prompt}\n")
+            if self.bridge:
+                exec_prompt = (
+                    f"⏰ [OTONOM PLANLI GÖREV: {task.name}]\n"
+                    f"Talimat: {task.prompt}\n\n"
+                    f"Bu görevi otonom olarak icra et. Gerekli araç ve yeteneklerini kullan. Elde ettiğin bulguları ve analizleri "
+                    f"ayrıntılı bir araştırma raporu olarak yapılandır, Obsidian Reports/ altına kaydet ve bilişsel hafıza sistemine işle."
+                )
+                self.bridge.send_prompt_async(prompt=exec_prompt)
+                bus.task_notification.emit(task.id, task.name, task.prompt)
+            else:
+                bus.terminal_output_received.emit("[Task Scheduler Uyarı] AGY Bridge bağlı değil, görev gönderilemedi.\n")
 
         bus.task_triggered.emit(task.id, task.name)
         task.last_run = time.time()

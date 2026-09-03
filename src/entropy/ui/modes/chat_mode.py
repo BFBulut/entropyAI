@@ -15,6 +15,7 @@ from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.ui.themes.cyber_theme import CYBER_THEME, STYLESHEET
+from entropy.ui.widgets.notification_pill import NotificationPillWidget
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
 class ChatInputField(QLineEdit):
@@ -160,6 +161,13 @@ class ChatModeWindow(QMainWindow):
 
         self.layout.addWidget(self.report_bar)
 
+        # Multi-notification Stack: Stackable pills for reports and tasks with [✕]
+        self.notification_stack_widget = QWidget()
+        self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
+        self.notification_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.notification_stack_layout.setSpacing(4)
+        self.layout.addWidget(self.notification_stack_widget)
+
         # 2. Chat history browser
         self.chat_browser = QTextBrowser()
         self.chat_browser.setOpenExternalLinks(False)
@@ -233,6 +241,24 @@ class ChatModeWindow(QMainWindow):
         bus.agent_turn_completed.connect(self._on_turn_completed)
         bus.token_chunk_received.connect(self._on_chunk)
         bus.report_created.connect(self._on_report_created)
+        bus.task_notification.connect(self._on_task_notification)
+
+    def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
+        """Add a stackable notification pill to the chat mode window."""
+        pill = NotificationPillWidget(
+            title=title,
+            path_or_content=path_or_content,
+            is_task=is_task,
+            on_open=self._open_report_path,
+            on_dismiss=self._remove_notification_pill,
+            parent=self.notification_stack_widget
+        )
+        self.notification_stack_layout.addWidget(pill)
+
+    def _remove_notification_pill(self, pill: NotificationPillWidget):
+        """Dismiss and remove a specific notification pill."""
+        self.notification_stack_layout.removeWidget(pill)
+        pill.deleteLater()
 
     @Slot(str)
     def _on_report_created(self, path_str: str):
@@ -241,6 +267,7 @@ class ChatModeWindow(QMainWindow):
         self.latest_report_path = str(p)
         self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
         self.report_bar.setVisible(True)
+        self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
             f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
@@ -250,6 +277,23 @@ class ChatModeWindow(QMainWindow):
             f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Raporu Aç ve Oku ↗</a>"
             f"</div>"
         )
+        self.chat_browser.append(card_html)
+
+    @Slot(str, str, str)
+    def _on_task_notification(self, task_id: str, task_name: str, path_or_content: str):
+        """Handle task execution and result notification in chat mode."""
+        self.add_notification_pill(title=task_name, path_or_content=path_or_content, is_task=True)
+
+        card_html = (
+            f"<div style='background-color:#0E1420; border:1px solid #00FF9D; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:#00FF9D; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
+            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
+            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
+        )
+        if path_or_content.endswith(".md"):
+            p = Path(path_or_content)
+            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Görev Raporunu Aç ↗</a>"
+        card_html += "</div>"
         self.chat_browser.append(card_html)
 
     def _on_anchor_clicked(self, url):

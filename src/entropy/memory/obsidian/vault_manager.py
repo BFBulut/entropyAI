@@ -94,6 +94,12 @@ class ObsidianVaultManager:
             })
         return reports
 
+    def list_all_notes(self) -> List[Path]:
+        """List all markdown notes across all subdirectories of the Obsidian exocortex."""
+        if not self.entropy_dir.exists():
+            return []
+        return list(self.entropy_dir.rglob("*.md"))
+
     def extract_wikilinks(self, content: str) -> List[Dict[str, str]]:
         """
         T1.1: Extract structured wikilinks containing target and optional alias.

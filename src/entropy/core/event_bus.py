@@ -31,6 +31,7 @@ class EntropyEventBus(QObject):
     # Task Scheduler
     task_triggered = Signal(str, str)    # task_id, task_name
     task_completed = Signal(str, bool)   # task_id, success
+    task_notification = Signal(str, str, str) # task_id, task_name, report_path_or_summary
 
     # Knowledge & Reports
     report_created = Signal(str)         # report_path

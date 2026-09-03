@@ -269,6 +269,27 @@ class CognitiveMemorySystem:
                 embedding=embedding
             )
 
+    def get_all_nodes(self) -> List[CognitiveMemoryNode]:
+        """Return all cognitive memory nodes from local SQLite persistence."""
+        nodes = []
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes")
+            for row in cursor.fetchall():
+                embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
+                nodes.append(CognitiveMemoryNode(
+                    id=row[0],
+                    category=row[1],
+                    content=row[2],
+                    importance=row[3],
+                    created_at=row[4],
+                    last_accessed=row[5],
+                    access_count=row[6],
+                    metadata=json.loads(row[7] or "{}"),
+                    embedding=embedding
+                ))
+        return nodes
+
     def record_memory(
         self,
         category: str,

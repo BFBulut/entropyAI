@@ -23,6 +23,7 @@ from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 from entropy.ui.widgets.tasks_widget import TasksWidget
 from entropy.ui.widgets.skills_widget import SkillsWidget
+from entropy.ui.widgets.notification_pill import NotificationPillWidget
 from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
@@ -170,7 +171,7 @@ class ZenModeWindow(QMainWindow):
         self.left_tabs = QTabWidget()
         self.reports_viewer = ReportsViewerWidget()
         self.mcp_drawer = MCPDrawerWidget()
-        self.tasks_widget = TasksWidget()
+        self.tasks_widget = TasksWidget(parent=self, bridge=self.bridge)
         self.skills_widget = SkillsWidget()
         self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
         self.left_tabs.addTab(self.skills_widget, "🎯 Yetenekler")
@@ -185,29 +186,23 @@ class ZenModeWindow(QMainWindow):
         center_layout.setContentsMargins(14, 12, 14, 12)
         center_layout.setSpacing(10)
 
-        # Center Top Bar: Telemetry Status & Floating Report Bubble
+        # Center Top Bar: Telemetry Status & Floating Notification Stack
         center_top_bar = QHBoxLayout()
         self.zen_telemetry_status = QLabel("<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>🟢 SİSTEM HAZIR</span> | <span style='color:#8B949E; font-size:11px;'>SIFIR-API AGY ÇALIŞIYOR</span>")
         center_top_bar.addWidget(self.zen_telemetry_status)
         center_top_bar.addStretch()
 
+        # Multi-notification Stack: Report and Task pills stack vertically, dismissable with ✕
+        self.notification_stack_widget = QWidget()
+        self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
+        self.notification_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.notification_stack_layout.setSpacing(4)
+        self.notification_stack_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+        center_top_bar.addWidget(self.notification_stack_widget)
+
+        # Legacy / test compatibility single button
         self.zen_report_bubble = QPushButton("📑 Rapor Hazır (Oku ↗)")
         self.zen_report_bubble.setVisible(False)
-        self.zen_report_bubble.setStyleSheet("""
-            QPushButton {
-                background-color: #0E1420;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 12px;
-                padding: 4px 12px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
         self.zen_report_bubble.clicked.connect(self._open_latest_zen_report)
         center_top_bar.addWidget(self.zen_report_bubble)
         center_layout.addLayout(center_top_bar)
@@ -378,17 +373,38 @@ class ZenModeWindow(QMainWindow):
         bus.token_chunk_received.connect(self._on_chunk)
         bus.agent_turn_completed.connect(self._on_agent_turn_completed)
         bus.report_created.connect(self._on_report_created)
+        bus.task_notification.connect(self._on_task_notification)
         bus.cognitive_memory_updated.connect(self._update_telemetry_badges)
         bus.skills_updated.connect(self._update_telemetry_badges)
         self._update_telemetry_badges()
 
+    def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
+        """Add a stackable notification pill to the center column."""
+        pill = NotificationPillWidget(
+            title=title,
+            path_or_content=path_or_content,
+            is_task=is_task,
+            on_open=self._open_report_path,
+            on_dismiss=self._remove_notification_pill,
+            parent=self.notification_stack_widget
+        )
+        self.notification_stack_layout.addWidget(pill)
+        self.zen_report_bubble.setText(f"{'⏰ Görev' if is_task else '📑 Rapor'}: {title}")
+        self.zen_report_bubble.setVisible(True)
+
+    def _remove_notification_pill(self, pill: NotificationPillWidget):
+        """Dismiss and remove a specific notification pill."""
+        self.notification_stack_layout.removeWidget(pill)
+        pill.deleteLater()
+        if self.notification_stack_layout.count() == 0:
+            self.zen_report_bubble.setVisible(False)
+
     @Slot(str)
     def _on_report_created(self, path_str: str):
-        """Display floating notification bubble in center column and rich card in chat."""
+        """Display floating notification pill in center column and rich card in chat."""
         p = Path(path_str)
         self.latest_report_path = str(p)
-        self.zen_report_bubble.setText(f"📑 Rapor Hazır: {p.stem[:22]} (Oku ↗)")
-        self.zen_report_bubble.setVisible(True)
+        self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
             f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
@@ -398,6 +414,23 @@ class ZenModeWindow(QMainWindow):
             f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Raporu Aç ve Oku ↗</a>"
             f"</div>"
         )
+        self.chat_browser.append(card_html)
+
+    @Slot(str, str, str)
+    def _on_task_notification(self, task_id: str, task_name: str, path_or_content: str):
+        """Handle task execution and result notification."""
+        self.add_notification_pill(title=task_name, path_or_content=path_or_content, is_task=True)
+
+        card_html = (
+            f"<div style='background-color:#0E1420; border:1px solid #00FF9D; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:#00FF9D; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
+            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
+            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
+        )
+        if path_or_content.endswith(".md"):
+            p = Path(path_or_content)
+            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Görev Raporunu Aç ↗</a>"
+        card_html += "</div>"
         self.chat_browser.append(card_html)
 
     def _open_latest_zen_report(self):
@@ -423,11 +456,17 @@ class ZenModeWindow(QMainWindow):
         """Dynamically refresh telemetry metric badges in the center column."""
         try:
             from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
             from entropy.skills.manager import SkillManager
             mem = CognitiveMemorySystem()
-            nodes = mem.get_all_nodes()
+            cog_nodes = mem.get_all_nodes()
+            ovm = ObsidianVaultManager()
+            notes = ovm.list_all_notes()
+            total_count = len(cog_nodes) + len(notes)
+
             if hasattr(self, "badge_memory"):
-                self.badge_memory.setText(f"🧠 Bellek: {len(nodes)} Düğüm")
+                self.badge_memory.setText(f"🧠 Bellek: {total_count} Düğüm")
+                self.badge_memory.setToolTip(f"Bilişsel Bellek: {len(cog_nodes)} Düğüm\nObsidian Exocortex: {len(notes)} Dosya")
 
             sm = SkillManager()
             skills = sm.list_skills()
