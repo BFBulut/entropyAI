@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "entropy-ai"
+version = "0.1.0"
+description = "Autonomous Agentic Operating System & Desktop Interface for Antigravity"
+readme = "GEMINI.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6.0",
+    "pydantic>=2.5.0",
+    "apscheduler>=3.10.0",
+    "pygments>=2.15.0",
+    "markdown>=3.5.0",
+    "supabase>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.3.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+entropy = "entropy.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
