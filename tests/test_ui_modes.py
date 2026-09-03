@@ -127,7 +127,7 @@ def test_tasks_widget_card_layout(qapp, tmp_path):
     item = tasks_w.list_widget.item(0)
     assert item.sizeHint().height() >= 58
 
-def test_zen_mode_dual_chat_and_terminal(qapp):
+def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     bridge = AgyProcessBridge()
     zen = ZenModeWindow(bridge=bridge)
     zen.show()
@@ -137,6 +137,9 @@ def test_zen_mode_dual_chat_and_terminal(qapp):
     assert hasattr(zen, "chat_input")
     assert hasattr(zen, "terminal_pane")
     assert hasattr(zen, "submit_btn")
+
+    # Prevent real background thread in UI test
+    monkeypatch.setattr(zen.bridge, "send_prompt_async", lambda prompt, image_attachments=None: True)
 
     # Verify input routing doesn't throw AttributeError
     zen.prompt_input.setText("Test quick prompt")
@@ -151,3 +154,52 @@ def test_zen_mode_dual_chat_and_terminal(qapp):
     assert len(zen.staged_images) == 0
 
     zen.close()
+
+def test_memory_inspector_dialog(qapp, tmp_path):
+    from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
+    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+
+    cog = CognitiveMemorySystem()
+    cog.store_node("semantic", "Test semantic insight for inspector panel", importance=0.88, metadata={"test": "1"})
+
+    # Test opening inspector for ego core
+    dlg = MemoryInspectorDialog("ego-entropy-core")
+    assert dlg.windowTitle() != ""
+    dlg.close()
+
+    # Test opening inspector for a report or generic node
+    dlg_gen = MemoryInspectorDialog("generic-test-node")
+    assert dlg_gen.windowTitle() != ""
+    dlg_gen.close()
+
+def test_standalone_report_window(qapp, tmp_path):
+    from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
+
+    win = StandaloneReportWindow()
+    assert hasattr(win, "viewer")
+
+    # Create dummy report
+    rep = tmp_path / "Dummy_Research.md"
+    rep.write_text("# Dummy Research\n\nContent for test.", encoding="utf-8")
+
+    win.open_report_file(str(rep))
+    assert win.viewer.content_browser.toPlainText() != ""
+    win.close()
+
+def test_chat_mode_report_integration(qapp, tmp_path):
+    bridge = AgyProcessBridge()
+    chat = ChatModeWindow(bridge=bridge)
+    chat.show()
+
+    # Trigger report_created signal
+    dummy_rep = tmp_path / "Agent_Report.md"
+    dummy_rep.write_text("# Agent Report\n\nAnalysis findings.", encoding="utf-8")
+
+    bus.report_created.emit(str(dummy_rep))
+    assert chat.report_bar.isVisible()
+    assert "Agent_Report" in chat.report_bar_lbl.text()
+    assert "Yeni Araştırma Raporu Oluşturuldu" in chat.chat_browser.toPlainText()
+
+    chat.close()
+
+

@@ -85,6 +85,26 @@ class ChatModeWindow(QMainWindow):
         btn_new_chat.clicked.connect(self._on_new_chat)
         h_layout.addWidget(btn_new_chat)
 
+        btn_reports = QPushButton("📚 Raporlar")
+        btn_reports.setFixedHeight(24)
+        btn_reports.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #00FF9D;
+                border: 1px solid #00FF9D;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #00FF9D;
+                color: #080B10;
+            }
+        """)
+        btn_reports.clicked.connect(self._open_reports_window)
+        h_layout.addWidget(btn_reports)
+
         btn_zen = QPushButton("Zen Mode")
         btn_zen.setFixedHeight(24)
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
@@ -92,8 +112,40 @@ class ChatModeWindow(QMainWindow):
 
         self.layout.addWidget(header)
 
+        # Report quick notification bar (shown when a report is created)
+        self.report_bar = QFrame()
+        self.report_bar.setVisible(False)
+        self.report_bar.setStyleSheet("""
+            QFrame {
+                background-color: #0E1420;
+                border: 1px solid #00F0FF;
+                border-radius: 5px;
+            }
+        """)
+        rb_layout = QHBoxLayout(self.report_bar)
+        rb_layout.setContentsMargins(8, 4, 8, 4)
+        self.report_bar_lbl = QLabel("<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Araştırma Raporu Hazır</span>")
+        rb_layout.addWidget(self.report_bar_lbl)
+        rb_layout.addStretch()
+
+        self.btn_view_report = QPushButton("Ayrı Ekranda Oku ↗")
+        self.btn_view_report.setFixedHeight(22)
+        self.btn_view_report.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
+        self.btn_view_report.clicked.connect(self._open_latest_report)
+        rb_layout.addWidget(self.btn_view_report)
+
+        btn_dismiss_report = QPushButton("✕")
+        btn_dismiss_report.setFixedSize(20, 20)
+        btn_dismiss_report.setStyleSheet("background: transparent; color: #8B949E; border: none; font-weight: bold;")
+        btn_dismiss_report.clicked.connect(lambda: self.report_bar.setVisible(False))
+        rb_layout.addWidget(btn_dismiss_report)
+
+        self.layout.addWidget(self.report_bar)
+
         # 2. Chat history browser
         self.chat_browser = QTextBrowser()
+        self.chat_browser.setOpenExternalLinks(False)
+        self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {CYBER_THEME['bg_surface']};
@@ -155,6 +207,54 @@ class ChatModeWindow(QMainWindow):
         bus.agent_turn_started.connect(self._on_turn_started)
         bus.agent_turn_completed.connect(self._on_turn_completed)
         bus.token_chunk_received.connect(self._on_chunk)
+        bus.report_created.connect(self._on_report_created)
+
+    @Slot(str)
+    def _on_report_created(self, path_str: str):
+        """Display notification in chat and top bar when a research report is compiled."""
+        p = Path(path_str)
+        self.latest_report_path = str(p)
+        self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
+        self.report_bar.setVisible(True)
+
+        self._append_message(
+            "Entropy AI",
+            f"📄 **Yeni Araştırma Raporu Oluşturuldu:** `{p.name}`\n\n"
+            f"[👉 Ayrı Ekranda Aç ve İncele](entropy-report://{p.as_posix()})",
+            is_system=True
+        )
+
+    def _on_anchor_clicked(self, url):
+        """Intercept entropy-report:// links to open the standalone viewer."""
+        url_str = url.toString()
+        if "entropy-report://" in url_str:
+            target = url_str.split("entropy-report://")[-1]
+            self._open_report_path(target)
+        elif url_str.startswith("http://") or url_str.startswith("https://"):
+            import webbrowser
+            webbrowser.open(url_str)
+
+    def _open_reports_window(self):
+        """Open the dedicated standalone report reader window."""
+        if not hasattr(self, "_report_window") or self._report_window is None:
+            from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
+            self._report_window = StandaloneReportWindow()
+        self._report_window.show()
+        self._report_window.raise_()
+        self._report_window.activateWindow()
+
+    def _open_report_path(self, path_str: str):
+        """Open the standalone report window focused on a specific report."""
+        if not hasattr(self, "_report_window") or self._report_window is None:
+            from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
+            self._report_window = StandaloneReportWindow()
+        self._report_window.open_report_file(path_str)
+
+    def _open_latest_report(self):
+        if hasattr(self, "latest_report_path") and self.latest_report_path:
+            self._open_report_path(self.latest_report_path)
+        else:
+            self._open_reports_window()
 
     def try_paste_image(self) -> bool:
         """Handle Ctrl+V image detection and staging."""

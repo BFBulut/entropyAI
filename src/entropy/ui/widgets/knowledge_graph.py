@@ -503,9 +503,10 @@ class KnowledgeGraphWidget(QFrame):
         self.web_view.setStyleSheet("background: #080B10; border-radius: 6px;")
         self.layout.addWidget(self.web_view)
 
-        # Auto-refresh on new reports or turns
+        # Auto-refresh on new reports, turns, or explicit graph updates
         bus.report_created.connect(lambda _: self.refresh_graph())
         bus.agent_turn_completed.connect(lambda _: self.refresh_graph())
+        bus.knowledge_graph_updated.connect(self.refresh_graph)
 
         self.refresh_graph()
 
