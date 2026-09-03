@@ -35,6 +35,14 @@ class AgyProcessBridge(QObject):
         self.latest_cache_read_tokens: int = 0
         self.session_total_tokens: int = 0
         self.session_cache_tokens: int = 0
+        self.last_cumulative_usage: Dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_tokens": 0,
+        }
+        self.session_turn_count: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
         self._current_process: Optional[subprocess.Popen] = None
@@ -73,6 +81,14 @@ class AgyProcessBridge(QObject):
         self.latest_cache_read_tokens = 0
         self.session_total_tokens = 0
         self.session_cache_tokens = 0
+        self.last_cumulative_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_tokens": 0,
+        }
+        self.session_turn_count = 0
         self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
         bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Hafıza ve bağlam sıfırlandı)\n")
@@ -274,6 +290,18 @@ class AgyProcessBridge(QObject):
         agy_bin = self.find_agy_executable()
 
         # Check if continuing an existing conversation or starting turn 1
+        if self.session_turn_count >= 15 and self.current_conversation_id:
+            bus.terminal_output_received.emit(
+                "\n[Entropy Core] Oturum bağlamı 15 tura ulaştı. Bağlam özetlenerek yeni temiz bir AGY oturumuna aktarılıyor...\n"
+            )
+            self.current_conversation_id = None
+            config.last_conversation_id = None
+            config.save_settings()
+            self.last_cumulative_usage = {
+                "input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0
+            }
+            self.session_turn_count = 0
+
         if self.current_conversation_id:
             mini_context = self.get_mini_cognitive_context(prompt)
             turn_prompt = f"{mini_context}\n{prompt}" if mini_context else prompt
@@ -295,6 +323,13 @@ class AgyProcessBridge(QObject):
             )
             if cognitive_context:
                 system_directive += f"\n{cognitive_context[:2500]}\n"
+
+            # Inject recent chat history summary if starting a fresh session
+            if self.conversation_history:
+                recent = self.conversation_history[-6:]
+                system_directive += "\nÖnceki Sohbet Özeti:\n" + "\n".join(
+                    [f"- {'Kullanıcı' if m.get('role')=='user' else 'Entropy'}: {m.get('content', '')[:100]}" for m in recent]
+                ) + "\n"
 
             full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
             if len(full_prompt_payload) > 3500:
@@ -398,11 +433,43 @@ class AgyProcessBridge(QObject):
 
                         usage = result.get("usage")
                         if usage:
-                            self.session_total_tokens = usage.get("total_tokens", 0)
-                            self.session_cache_tokens = usage.get("cache_read_tokens", 0)
-                            if self.latest_output_tokens == 0:
-                                self.latest_output_tokens = usage.get("output_tokens", 0)
-                            bus.token_usage_updated.emit(self.latest_output_tokens)
+                            # 1. Total lifetime cumulative tokens for this AGY session
+                            cum_in = usage.get("input_tokens", 0)
+                            cum_out = usage.get("output_tokens", 0)
+                            cum_think = usage.get("thinking_tokens", 0)
+                            cum_cache = usage.get("cache_read_tokens", 0)
+                            cum_total = usage.get("total_tokens", cum_in + cum_out)
+
+                            # 2. Compute exact delta tokens for THIS active turn
+                            turn_output = max(0, cum_out - self.last_cumulative_usage.get("output_tokens", 0))
+                            turn_input = max(0, cum_in - self.last_cumulative_usage.get("input_tokens", 0))
+                            turn_thinking = max(0, cum_think - self.last_cumulative_usage.get("thinking_tokens", 0))
+                            turn_cache = max(0, cum_cache - self.last_cumulative_usage.get("cache_read_tokens", 0))
+
+                            # If turn_output is 0 but step had output, fallback to step output
+                            if turn_output == 0 and self.latest_output_tokens > 0:
+                                turn_output = self.latest_output_tokens
+
+                            turn_total = turn_output + turn_input
+
+                            self.latest_output_tokens = turn_output
+                            self.latest_input_tokens = turn_input
+                            self.latest_thinking_tokens = turn_thinking
+                            self.latest_cache_read_tokens = turn_cache
+                            self.session_total_tokens = cum_total
+                            self.session_cache_tokens = cum_cache
+                            self.total_tokens_used = turn_total
+
+                            # Store baseline for next turn's delta
+                            self.last_cumulative_usage = {
+                                "input_tokens": cum_in,
+                                "output_tokens": cum_out,
+                                "thinking_tokens": cum_think,
+                                "cache_read_tokens": cum_cache,
+                                "total_tokens": cum_total,
+                            }
+                            self.session_turn_count += 1
+                            bus.token_usage_updated.emit(turn_total)
 
                 except json.JSONDecodeError:
                     bus.terminal_output_received.emit(raw_line)
@@ -432,6 +499,27 @@ class AgyProcessBridge(QObject):
             self._save_chat_turn(prompt, full_text)
             bus.core_state_changed.emit("idle")
             bus.agent_turn_completed.emit(full_text)
+
+            # Auto-recovery if AGY produced no output or error
+            stripped_text = full_text.strip()
+            is_empty_or_denied = (
+                not stripped_text or
+                "jetski: no output produced" in stripped_text or
+                "auto-denied" in stripped_text or
+                "Traceback" in stripped_text or
+                ret_code != 0
+            )
+            if is_empty_or_denied and self.current_conversation_id:
+                bus.terminal_output_received.emit(
+                    "\n[Entropy Core] Oturum kilitlendi veya yanıtsız kaldı. Gelecek mesaj için temiz oturuma geçiliyor...\n"
+                )
+                self.current_conversation_id = None
+                config.last_conversation_id = None
+                config.save_settings()
+                self.last_cumulative_usage = {
+                    "input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0
+                }
+                self.session_turn_count = 0
 
             # Auto-save research reports and technical dossiers ONLY when explicitly requested
             is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
@@ -492,11 +580,15 @@ class AgyProcessBridge(QObject):
                 next_thread.start()
 
     def terminate_current_process(self):
-        """Cancel the currently active agy execution."""
+        """Cancel the currently active agy execution and its child language_server process tree."""
         with self._lock:
             if self._current_process and self._is_running:
                 try:
-                    self._current_process.terminate()
+                    pid = self._current_process.pid
+                    if sys.platform == "win32":
+                        subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        self._current_process.terminate()
                     bus.terminal_output_received.emit("\n[Entropy AI] İşlem kullanıcı tarafından durduruldu.\n")
                 except Exception:
                     pass

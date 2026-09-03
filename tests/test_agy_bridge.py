@@ -57,3 +57,27 @@ def test_greeting_cognitive_context_filtering(bridge):
     assert bridge.get_cognitive_context("selam") == ""
     assert bridge.get_cognitive_context("merhaba") == ""
     assert bridge.get_cognitive_context("günaydın") == ""
+
+def test_delta_token_accounting(bridge):
+    # Turn 1: cumulative usage {"input_tokens": 15000, "output_tokens": 500, "total_tokens": 15500}
+    cum_1 = {"input_tokens": 15000, "output_tokens": 500, "thinking_tokens": 200, "cache_read_tokens": 5000, "total_tokens": 15500}
+    t1_out = max(0, cum_1["output_tokens"] - bridge.last_cumulative_usage["output_tokens"])
+    t1_in = max(0, cum_1["input_tokens"] - bridge.last_cumulative_usage["input_tokens"])
+    assert t1_out == 500
+    assert t1_in == 15000
+    bridge.last_cumulative_usage = cum_1
+
+    # Turn 2: cumulative usage {"input_tokens": 32000, "output_tokens": 1200, "total_tokens": 33200}
+    cum_2 = {"input_tokens": 32000, "output_tokens": 1200, "thinking_tokens": 400, "cache_read_tokens": 12000, "total_tokens": 33200}
+    t2_out = max(0, cum_2["output_tokens"] - bridge.last_cumulative_usage["output_tokens"])
+    t2_in = max(0, cum_2["input_tokens"] - bridge.last_cumulative_usage["input_tokens"])
+    assert t2_out == 700  # 1200 - 500 = 700
+    assert t2_in == 17000 # 32000 - 15000 = 17000
+    assert t2_out + t2_in == 17700  # Turn 2 delta total
+    bridge.last_cumulative_usage = cum_2
+
+    # Reset conversation: baseline returns to 0
+    bridge.reset_conversation()
+    assert bridge.last_cumulative_usage["total_tokens"] == 0
+    assert bridge.session_turn_count == 0
+

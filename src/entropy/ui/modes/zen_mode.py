@@ -334,23 +334,24 @@ class ZenModeWindow(QMainWindow):
 
         if turn_out > 0:
             if sess_k > 0:
-                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | Oturum: {sess_k}k")
+                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | İstek: {turn_in:,} | Oturum: {sess_k}k")
             else:
-                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | Girdi: {turn_in:,}")
+                self.tokens_badge.setText(f"Yanıt: +{turn_out:,} | İstek: {turn_in:,}")
         elif sess_k > 0:
             self.tokens_badge.setText(f"Oturum: {sess_k}k | Cache: {cache_k}k")
         else:
             self.tokens_badge.setText(f"Tokens: {tokens:,}")
 
         self.tokens_badge.setToolTip(
-            f"Gerçek Antigravity Token Kullanım Metrikleri:\n"
-            f"• Son Yanıt Üretimi (Output): {self.bridge.latest_output_tokens:,} token\n"
-            f"• Son İstek Girdisi (Input): {self.bridge.latest_input_tokens:,} token\n"
-            f"• Düşünme (Thinking): {self.bridge.latest_thinking_tokens:,} token\n"
-            f"• Son Yanıttaki Önbellek (Cache Read): {self.bridge.latest_cache_read_tokens:,} token\n"
-            f"─────────────────────────────\n"
-            f"• Tüm Oturum Toplamı (Session Lifetime): {self.bridge.session_total_tokens:,} token\n"
-            f"• Tüm Oturum Önbelleği (Cumulative Cache): {self.bridge.session_cache_tokens:,} token"
+            f"Gerçek Antigravity (AGY) Token Kullanım Metrikleri:\n"
+            f"• Son Yanıt Üretimi (Output): +{self.bridge.latest_output_tokens:,} token\n"
+            f"• Son İstek Girdisi (Input Context): {self.bridge.latest_input_tokens:,} token\n"
+            f"• Model Düşünme Payı (Thinking): {self.bridge.latest_thinking_tokens:,} token (Output dahilinde)\n"
+            f"• Son Yanıttaki Önbellek (Cache Read): {self.bridge.latest_cache_read_tokens:,} token (Hızlı / Ücretsiz)\n"
+            f"──────────────────────────────────────────────\n"
+            f"• Bu Tur Toplamı (Delta Total): {self.bridge.total_tokens_used:,} token\n"
+            f"• Tüm Oturum Kümülatif Toplamı: {self.bridge.session_total_tokens:,} token ({self.bridge.session_turn_count} Tur)\n"
+            f"• Tüm Oturum Önbellek Toplamı: {self.bridge.session_cache_tokens:,} token"
         )
 
     @Slot(str)
@@ -369,8 +370,14 @@ class ZenModeWindow(QMainWindow):
         if text:
             self.prompt_input.clear()
             self.terminal_pane.append_output(f"\n▶ [SİZ]:\n{text}\n")
+            if self.bridge.is_running:
+                self.terminal_pane.append_output("[Entropy Core] Önceki işlem tamamlanıyor, mesajınız sıraya alındı...\n")
+            self.submit_btn.setEnabled(False)
+            self.submit_btn.setText("İşleniyor...")
             self.bridge.send_prompt_async(prompt=text)
 
     @Slot(str)
     def _on_agent_turn_completed(self, response: str):
+        self.submit_btn.setEnabled(True)
+        self.submit_btn.setText("Çalıştır")
         self.terminal_pane.append_output("\n────────────────────────────────────────────────────────────────\n")
