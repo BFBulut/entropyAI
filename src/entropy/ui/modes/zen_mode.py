@@ -3,9 +3,9 @@
 from pathlib import Path
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QSizePolicy, QSplitter, QTabWidget,
-    QVBoxLayout, QWidget
+    QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QProgressBar, QPushButton, QSizePolicy, QSplitter, QTabWidget,
+    QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -176,16 +176,144 @@ class ZenModeWindow(QMainWindow):
         main_v_splitter.setSizes([560, 240])
         root_layout.addWidget(main_v_splitter)
 
-        if self.bridge.current_conversation_id:
-            bus.terminal_output_received.emit(
-                f"[Entropy Core] Aktif sohbet oturumu yüklendi (ID: {self.bridge.current_conversation_id[:8]}...). "
-                f"Sohbetinize kaldığınız yerden devam edebilirsiniz.\n"
-            )
+        self._load_persisted_session_to_terminal()
+
+    def _load_persisted_session_to_terminal(self):
+        """Restore conversation history to the terminal pane on launch."""
+        from entropy.core.config import CHAT_HISTORY_FILE
+        if CHAT_HISTORY_FILE.exists():
+            try:
+                import json
+                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+                if history:
+                    cid = f" (ID: {self.bridge.current_conversation_id[:8]}...)" if self.bridge.current_conversation_id else ""
+                    self.terminal_pane.append_output(f"════════════════ [ÖNCEKİ AKTİF SOHBET OTURUMU YÜKLENDİ{cid}] ════════════════\n")
+                    for turn in history[-10:]:
+                        role = "SİZ" if turn.get("role") == "user" else f"ENTROPY CORE [{self.bridge.selected_model}]"
+                        content = turn.get("content", "").strip()
+                        self.terminal_pane.append_output(f"\n▶ [{role}]:\n{content}\n")
+                    self.terminal_pane.append_output("\n════════════════ [CANLI ÇIKTI AKIŞI BAŞLATILDI] ════════════════\n\n")
+            except Exception:
+                pass
 
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)
         bus.core_state_changed.connect(self._update_status)
+        bus.node_selected.connect(self._on_node_selected)
+
+    @Slot(str)
+    def _on_node_selected(self, node_id: str):
+        """Handle clicking any node in the knowledge graph."""
+        # 1. Try to open matching report / markdown file in the left reader
+        found = self.reports_viewer.open_report_by_path_or_id(node_id)
+        if found:
+            self.left_tabs.setCurrentWidget(self.reports_viewer)
+            return
+
+        # 2. Check if it's a cognitive memory node in SQLite
+        try:
+            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            cog = CognitiveMemorySystem()
+            node = cog.get_node(node_id)
+            if node:
+                self._show_memory_inspector_dialog(node)
+        except Exception:
+            pass
+
+    def _show_memory_inspector_dialog(self, node):
+        """Cyber-styled modal inspecting a cognitive memory node."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Bilişsel Düğüm Denetleyicisi - {node.id}")
+        dialog.setFixedSize(500, 420)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #080B10;
+                color: #F0F6FC;
+                border: 1px solid #00F0FF;
+                border-radius: 8px;
+            }
+        """)
+        d_layout = QVBoxLayout(dialog)
+        d_layout.setContentsMargins(16, 16, 16, 16)
+        d_layout.setSpacing(10)
+
+        # Header with Category badge
+        hdr = QHBoxLayout()
+        title_lbl = QLabel(f"<b style='color:#00F0FF; font-size:13px;'>🧠 {node.id}</b>")
+        cat_color = "#00FF9D" if node.category == "semantic" else "#FFB300" if node.category == "episodic" else "#9D00FF"
+        badge = QLabel(f"<span style='background:#141C2C; color:{cat_color}; border:1px solid {cat_color}; padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;'>KATMAN: {node.category.upper()}</span>")
+        hdr.addWidget(title_lbl)
+        hdr.addStretch()
+        hdr.addWidget(badge)
+        d_layout.addLayout(hdr)
+
+        # Content text box
+        content_lbl = QLabel("<b>Düğüm İçeriği / Hatırlanan Bilgi:</b>")
+        content_lbl.setStyleSheet("color: #8B949E; font-size: 11px;")
+        d_layout.addWidget(content_lbl)
+
+        text_box = QTextBrowser()
+        text_box.setStyleSheet("background-color: #0E1420; border: 1px solid #1F2B42; color: #F0F6FC; padding: 8px; font-size: 12px; border-radius: 4px;")
+        text_box.setText(node.content)
+        d_layout.addWidget(text_box)
+
+        # Cognitive Metrics
+        ebbinghaus = node.calculate_ebbinghaus_strength()
+        metrics_layout = QHBoxLayout()
+        imp_lbl = QLabel(f"Önem Skoru: <b>{node.importance:.2f}</b>")
+        imp_lbl.setStyleSheet("color:#00FF9D; font-size:11px;")
+        decay_lbl = QLabel(f"Ebbinghaus Gücü: <b>{ebbinghaus:.2f}</b>")
+        decay_lbl.setStyleSheet("color:#00F0FF; font-size:11px;")
+        access_lbl = QLabel(f"Erişim: <b>{node.access_count}</b>")
+        access_lbl.setStyleSheet("color:#FFB300; font-size:11px;")
+        metrics_layout.addWidget(imp_lbl)
+        metrics_layout.addWidget(decay_lbl)
+        metrics_layout.addWidget(access_lbl)
+        d_layout.addLayout(metrics_layout)
+
+        # Retention progress bar
+        pbar = QProgressBar()
+        pbar.setRange(0, 100)
+        pbar.setValue(int(ebbinghaus * 100))
+        pbar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                text-align: center;
+                height: 12px;
+                background: #0E1420;
+                color: #F0F6FC;
+                font-size: 10px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00F0FF, stop:1 #00FF9D);
+                border-radius: 3px;
+            }
+        """)
+        d_layout.addWidget(pbar)
+
+        # Buttons
+        btn_box = QHBoxLayout()
+        export_btn = QPushButton("📄 Obsidian Kasasına Aktar")
+        export_btn.setStyleSheet("background-color: #141C2C; color: #00FF9D; border: 1px solid #00FF9D; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        def on_export():
+            from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+            vm = ObsidianVaultManager()
+            path = vm.save_research_report(f"Hafiza_{node.id}", f"# Bilişsel Düğüm: {node.id}\n\n**Kategori**: {node.category}\n**Önem**: {node.importance}\n\n{node.content}")
+            bus.terminal_output_received.emit(f"[Obsidian Export] Düğüm kaydedildi: {path.name}\n")
+            dialog.accept()
+        export_btn.clicked.connect(on_export)
+        btn_box.addWidget(export_btn)
+
+        btn_box.addStretch()
+        close_btn = QPushButton("Kapat")
+        close_btn.setStyleSheet("background-color: #1A263C; color: #F0F6FC; border: 1px solid #1F2B42; padding: 6px 16px; border-radius: 4px;")
+        close_btn.clicked.connect(dialog.accept)
+        btn_box.addWidget(close_btn)
+
+        d_layout.addLayout(btn_box)
+        dialog.exec()
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):

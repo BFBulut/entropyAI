@@ -112,6 +112,14 @@ class AgyProcessBridge(QObject):
 
     def get_cognitive_context(self, prompt: str) -> str:
         """Retrieve relevant Obsidian MEMORY.md and cognitive memory nodes to inject into agent consciousness."""
+        # Casual greetings do not require heavy technical context injection
+        is_greeting = prompt.strip().lower() in [
+            "selam", "selamlar", "merhaba", "merhabalar", "hey", "nasılsın",
+            "günaydın", "iyi akşamlar", "iyi geceler", "naber"
+        ]
+        if is_greeting:
+            return ""
+
         context_parts = []
 
         # 1. Read Global MEMORY.md
@@ -136,17 +144,21 @@ class AgyProcessBridge(QObject):
         except Exception:
             pass
 
-        # 3. Query Project RAG Indexer for codebase context
-        try:
-            from entropy.memory.rag.project_indexer import ProjectIndexer
-            indexer = ProjectIndexer(self.active_project_dir)
-            indexer.scan_and_index(max_files=120)
-            matches = indexer.search_codebase(prompt, top_k=3)
-            if matches:
-                snippets = [f"• [{m['path']}] {m['snippet']}" for m in matches]
-                context_parts.append("[İlgili Proje Kodları / Belgeler]:\n" + "\n".join(snippets))
-        except Exception:
-            pass
+        # 3. Query Project RAG Indexer for codebase context (only for technical/code queries)
+        is_code_or_tech = any(w in prompt.lower() for w in [
+            "kod", "dosya", "hata", "fonksiyon", "class", "test", "build", "mcp", "hafıza", "rag", "terminal", "mode"
+        ])
+        if is_code_or_tech:
+            try:
+                from entropy.memory.rag.project_indexer import ProjectIndexer
+                indexer = ProjectIndexer(self.active_project_dir)
+                indexer.scan_and_index(max_files=120)
+                matches = indexer.search_codebase(prompt, top_k=3)
+                if matches:
+                    snippets = [f"• [{m['path']}] {m['snippet']}" for m in matches]
+                    context_parts.append("[İlgili Proje Kodları / Belgeler]:\n" + "\n".join(snippets))
+            except Exception:
+                pass
 
         return "\n\n".join(context_parts)
 
@@ -409,11 +421,14 @@ class AgyProcessBridge(QObject):
             bus.core_state_changed.emit("idle")
             bus.agent_turn_completed.emit(full_text)
 
-            # Auto-save research reports and technical dossiers (exclude error messages)
+            # Auto-save research reports and technical dossiers ONLY when explicitly requested
             is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
-            is_research = any(w in prompt.lower() for w in ["araştır", "rapor", "analiz", "incele", "doküman", "özetle"])
-            has_markdown = ("# " in full_text or "## " in full_text) and len(full_text) > 200
-            if not is_err and (is_research or has_markdown) and len(full_text) > 150:
+            is_explicit_research = any(w in prompt.lower() for w in [
+                "araştır", "araştırma yap", "rapor hazırla", "raporla", "analiz et", "derinlemesine incele", "dossier", "dokümantasyon oluştur"
+            ])
+            has_markdown_structure = ("# " in full_text or "## " in full_text) and len(full_text) > 350
+
+            if not is_err and is_explicit_research and has_markdown_structure:
                 try:
                     from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                     from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
@@ -422,20 +437,25 @@ class AgyProcessBridge(QObject):
                     clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
                     rep_path = vm.save_research_report(clean_title, full_text)
 
-                    # Also store in cognitive memory graph
+                    # Extract distilled summary (Layer 6 consolidation) rather than storing massive full text
+                    paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip() and not p.startswith("#")]
+                    distilled_summary = paragraphs[0][:250] if paragraphs else full_text[:200]
+
+                    # Also store distilled summary in cognitive memory graph
                     try:
                         cog = CognitiveMemorySystem()
                         cog.store_node(
                             category="semantic",
-                            content=f"Araştırma Raporu: {clean_title} - {full_text[:100].strip()}...",
-                            importance=0.85
+                            content=f"Araştırma Özeti [{clean_title}]: {distilled_summary}",
+                            importance=0.85,
+                            metadata={"source": "research_report", "path": str(rep_path)}
                         )
                     except Exception:
                         pass
 
                     bus.report_created.emit(str(rep_path))
                     bus.terminal_output_received.emit(
-                        f"\n[📚 Araştırma Raporu Kaydedildi]: '{clean_title}.md' dosyası sol paneldeki Raporlar sekmesine ve Obsidian kasanıza kaydedildi.\n"
+                        f"\n[📚 Araştırma Raporu Kaydedildi]: '{clean_title}.md' sol paneldeki Raporlar sekmesine ve Obsidian kasanıza kaydedildi.\n"
                     )
                 except Exception:
                     pass

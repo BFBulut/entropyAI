@@ -54,6 +54,8 @@ def test_reports_viewer_widget(qapp, tmp_path):
 
     viewer = ReportsViewerWidget(vault_manager=vault)
     assert viewer.list_widget.count() >= 1
+    assert viewer.open_report_by_path_or_id("Test Dossier") is True
+    assert "Content Dossier" in viewer.content_browser.toPlainText()
 
 def test_floating_mode_widget(qapp):
     widget = FloatingModeWidget()

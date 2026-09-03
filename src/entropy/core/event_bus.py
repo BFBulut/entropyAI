@@ -34,6 +34,7 @@ class EntropyEventBus(QObject):
 
     # Knowledge & Reports
     report_created = Signal(str)         # report_path
+    node_selected = Signal(str)          # node_id
 
 # Global Event Bus Instance
 bus = EntropyEventBus()

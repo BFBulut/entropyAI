@@ -6,6 +6,7 @@ from typing import Optional, Dict, List
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage
 
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
@@ -202,6 +203,18 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         let hoveredNode = null;
         let draggedNode = null;
+        let isDragging = false;
+        let startX = 0, startY = 0;
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (hoveredNode) {
+                draggedNode = hoveredNode;
+                startX = e.clientX;
+                startY = e.clientY;
+                isDragging = false;
+                alpha = 0.3;
+            }
+        });
 
         canvas.addEventListener('mousemove', (e) => {
             const rect = canvas.getBoundingClientRect();
@@ -209,6 +222,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const my = e.clientY - rect.top;
 
             if (draggedNode) {
+                if (Math.hypot(e.clientX - startX, e.clientY - startY) > 5) {
+                    isDragging = true;
+                }
                 draggedNode.x = mx;
                 draggedNode.y = my;
                 return;
@@ -228,22 +244,21 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (hoveredNode) {
                 canvas.style.cursor = 'pointer';
                 infoBox.style.display = 'block';
-                infoBox.innerHTML = `<b>${hoveredNode.name}</b> [${hoveredNode.group}]<br/><span style="color:#8B949E;">${hoveredNode.info || ''}</span>`;
+                infoBox.innerHTML = `<b>${hoveredNode.name}</b> [${hoveredNode.group}] <span style="color:#00FF9D; font-size:11px;">(Görüntülemek için tıkla)</span><br/><span style="color:#8B949E;">${hoveredNode.info || ''}</span>`;
             } else {
                 canvas.style.cursor = 'default';
                 infoBox.style.display = 'none';
             }
         });
 
-        canvas.addEventListener('mousedown', (e) => {
-            if (hoveredNode) {
-                draggedNode = hoveredNode;
-                alpha = 0.3;
-            }
+        canvas.addEventListener('mouseup', () => {
+            draggedNode = null;
         });
 
-        window.addEventListener('mouseup', () => {
-            draggedNode = null;
+        canvas.addEventListener('click', (e) => {
+            if (hoveredNode && !isDragging) {
+                window.location.href = "entropy-node://" + encodeURIComponent(hoveredNode.id);
+            }
         });
 
         function render() {
@@ -327,32 +342,37 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-class KnowledgeGraphWidget(QFrame):
-    """Visualizes Cognitive Memory (Ego, Episodic, Semantic) and Obsidian Knowledge Graph."""
+class GraphWebEnginePage(QWebEnginePage):
+    """Custom WebEnginePage intercepting entropy-node:// clicks."""
 
-    def __init__(
-        self,
-        parent=None,
-        vault_manager: Optional[ObsidianVaultManager] = None,
-        cognitive_memory: Optional[CognitiveMemorySystem] = None
-    ):
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        if url.scheme() == "entropy-node":
+            node_id = url.host()
+            if not node_id:
+                node_id = url.path().lstrip("/")
+            bus.node_selected.emit(node_id)
+            return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
+class KnowledgeGraphWidget(QFrame):
+    """Interactive Node-Link Knowledge Graph Viewer displaying Obsidian notes & cognitive nodes."""
+
+    def __init__(self, parent=None, vault_manager: Optional[ObsidianVaultManager] = None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.vault_manager = vault_manager or ObsidianVaultManager()
-        self.cognitive_memory = cognitive_memory or CognitiveMemorySystem()
+        self.cognitive_memory = CognitiveMemorySystem()
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(8, 8, 8, 8)
         self.layout.setSpacing(6)
 
-        # Header bar
+        # Header with Title and Legend
         header = QHBoxLayout()
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>🧠 BİLİŞSEL HAFIZA VE BİLGİ HARİTASI</b>")
+        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>🌐 BİLİŞSEL HAFIZA VE BİLGİ HARİTASI</b>")
         header.addWidget(title_label)
-
         header.addStretch()
 
-        # Crisp, bright cybernetic refresh button
         self.refresh_btn = QPushButton("Yenile")
         self.refresh_btn.setFixedHeight(24)
         self.refresh_btn.setStyleSheet("""
@@ -375,8 +395,10 @@ class KnowledgeGraphWidget(QFrame):
 
         self.layout.addLayout(header)
 
-        # WebEngine View
+        # WebEngine View with custom Navigation Page
         self.web_view = QWebEngineView()
+        self.web_page = GraphWebEnginePage(self.web_view)
+        self.web_view.setPage(self.web_page)
         self.web_view.setStyleSheet("background: #080B10; border-radius: 6px;")
         self.layout.addWidget(self.web_view)
 

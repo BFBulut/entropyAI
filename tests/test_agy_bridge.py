@@ -51,3 +51,9 @@ def test_context_window_truncation(bridge):
 def test_project_directory_binding(bridge, tmp_path):
     bridge.set_project_directory(tmp_path)
     assert bridge.active_project_dir == tmp_path.resolve()
+
+def test_greeting_cognitive_context_filtering(bridge):
+    # Casual greetings must not inject technical RAG codebase snippets
+    assert bridge.get_cognitive_context("selam") == ""
+    assert bridge.get_cognitive_context("merhaba") == ""
+    assert bridge.get_cognitive_context("günaydın") == ""
