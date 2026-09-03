@@ -7,7 +7,10 @@ from entropy.core.config import config
 
 @pytest.fixture
 def bridge():
-    return AgyProcessBridge()
+    b = AgyProcessBridge()
+    b.conversation_history = []
+    b.total_tokens_used = 0
+    return b
 
 def test_initial_state(bridge):
     assert bridge.current_model == config.selected_model

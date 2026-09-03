@@ -128,7 +128,7 @@ class AgyProcessBridge(QObject):
         try:
             from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
             cog = CognitiveMemorySystem()
-            recalled = cog.recall(prompt, limit=3)
+            recalled = cog.recall(prompt, limit=4)
             if recalled:
                 items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
                 if items:
@@ -136,7 +136,33 @@ class AgyProcessBridge(QObject):
         except Exception:
             pass
 
+        # 3. Query Project RAG Indexer for codebase context
+        try:
+            from entropy.memory.rag.project_indexer import ProjectIndexer
+            indexer = ProjectIndexer(self.active_project_dir)
+            indexer.scan_and_index(max_files=120)
+            matches = indexer.search_codebase(prompt, top_k=3)
+            if matches:
+                snippets = [f"• [{m['path']}] {m['snippet']}" for m in matches]
+                context_parts.append("[İlgili Proje Kodları / Belgeler]:\n" + "\n".join(snippets))
+        except Exception:
+            pass
+
         return "\n\n".join(context_parts)
+
+    def get_mini_cognitive_context(self, prompt: str) -> str:
+        """Lightweight memory retrieval for follow-up turns."""
+        try:
+            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            cog = CognitiveMemorySystem()
+            recalled = cog.recall(prompt, limit=2)
+            if recalled:
+                items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
+                if items:
+                    return "[Bağlamsal Hafıza]:\n" + "\n".join(items)
+        except Exception:
+            pass
+        return ""
 
     def find_agy_executable(self) -> str:
         """Locate agy CLI binary in system PATH or default Windows installation folders."""
@@ -228,12 +254,16 @@ class AgyProcessBridge(QObject):
 
         # Check if continuing an existing conversation or starting turn 1
         if self.current_conversation_id:
+            mini_context = self.get_mini_cognitive_context(prompt)
+            turn_prompt = f"{mini_context}\n{prompt}" if mini_context else prompt
             cmd = [
                 agy_bin,
-                "-p", prompt,
+                "-p", turn_prompt,
                 "--conversation", self.current_conversation_id,
                 "--output-format", "stream-json",
                 "--mode", mode,
+                "--dangerously-skip-permissions",
+                "--add-dir", str(self.active_project_dir),
             ]
         else:
             cognitive_context = self.get_cognitive_context(prompt)
@@ -243,14 +273,18 @@ class AgyProcessBridge(QObject):
                 "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından tamamen haberdarsın.\n"
             )
             if cognitive_context:
-                system_directive += f"\n{cognitive_context}\n"
+                system_directive += f"\n{cognitive_context[:2500]}\n"
 
             full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
+            if len(full_prompt_payload) > 3500:
+                full_prompt_payload = full_prompt_payload[:3500]
+
             cmd = [
                 agy_bin,
                 "-p", full_prompt_payload,
                 "--output-format", "stream-json",
                 "--mode", mode,
+                "--dangerously-skip-permissions",
                 "--add-dir", str(self.active_project_dir),
             ]
 
@@ -375,22 +409,46 @@ class AgyProcessBridge(QObject):
             bus.core_state_changed.emit("idle")
             bus.agent_turn_completed.emit(full_text)
 
-            # Auto-save research reports and technical dossiers
+            # Auto-save research reports and technical dossiers (exclude error messages)
+            is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
             is_research = any(w in prompt.lower() for w in ["araştır", "rapor", "analiz", "incele", "doküman", "özetle"])
             has_markdown = ("# " in full_text or "## " in full_text) and len(full_text) > 200
-            if (is_research or has_markdown) and len(full_text) > 150:
+            if not is_err and (is_research or has_markdown) and len(full_text) > 150:
                 try:
                     from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
                     vm = ObsidianVaultManager()
                     first_line = prompt.strip().split("\n")[0][:36]
                     clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
                     rep_path = vm.save_research_report(clean_title, full_text)
+
+                    # Also store in cognitive memory graph
+                    try:
+                        cog = CognitiveMemorySystem()
+                        cog.store_node(
+                            category="semantic",
+                            content=f"Araştırma Raporu: {clean_title} - {full_text[:100].strip()}...",
+                            importance=0.85
+                        )
+                    except Exception:
+                        pass
+
                     bus.report_created.emit(str(rep_path))
                     bus.terminal_output_received.emit(
                         f"\n[📚 Araştırma Raporu Kaydedildi]: '{clean_title}.md' dosyası sol paneldeki Raporlar sekmesine ve Obsidian kasanıza kaydedildi.\n"
                     )
                 except Exception:
                     pass
+
+            # Automatically log interaction to Obsidian Daily Note
+            try:
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                vm = ObsidianVaultManager()
+                short_p = prompt.replace("\n", " ")[:60]
+                short_r = full_text.replace("\n", " ")[:100]
+                vm.append_daily_log(f"- **Etkileşim**: {short_p} -> {short_r}...")
+            except Exception:
+                pass
 
     def terminate_current_process(self):
         """Cancel the currently active agy execution."""

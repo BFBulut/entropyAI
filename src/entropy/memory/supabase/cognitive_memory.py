@@ -216,6 +216,30 @@ class CognitiveMemorySystem:
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
+    def store_node(
+        self,
+        category: str,
+        content: str,
+        importance: float = 0.5,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Tuple[CognitiveMemoryNode, bool]:
+        """Convenience alias for record_memory."""
+        return self.record_memory(category, content, importance, metadata)
+
+    def recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Convenience alias returning list of dicts for hybrid_recall."""
+        results = self.hybrid_recall(query, top_k=limit)
+        return [
+            {
+                "id": node.id,
+                "category": node.category,
+                "content": node.content,
+                "importance": node.importance,
+                "score": score
+            }
+            for node, score in results
+        ]
+
     def dream_and_consolidate(self) -> List[str]:
         """
         Layer 6: Dreaming / Clustering Consolidation.

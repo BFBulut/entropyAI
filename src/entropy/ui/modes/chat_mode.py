@@ -1,5 +1,6 @@
 """Chat Mode: Floating conversational modal with multimodal image support and terminal drawer."""
 
+import json
 from pathlib import Path
 from typing import List, Optional
 from PySide6.QtCore import Qt, Slot
@@ -231,19 +232,33 @@ class ChatModeWindow(QMainWindow):
         images_to_send = list(self.staged_images)
         self._clear_staged_images()
 
-        self.bridge.send_prompt_async(prompt=prompt, image_attachments=images_to_send)
+        actual_prompt = prompt
+        if images_to_send:
+            actual_prompt += "\n" + "\n".join([f"[Eklenen Görsel Dosyası: {p}]" for p in images_to_send])
+
+        self.bridge.send_prompt_async(prompt=actual_prompt, image_attachments=images_to_send)
 
     def _on_turn_started(self, prompt: str):
         self.send_btn.setEnabled(False)
         self.input_field.setEnabled(False)
-
-    def _on_turn_completed(self, full_response: str):
-        self.send_btn.setEnabled(True)
-        self.input_field.setEnabled(True)
-        self._append_message("Entropy AI", full_response)
+        self._streaming_active = True
+        self.chat_browser.append("<div style='margin-bottom:8px;'><b style='color:#00F0FF;'>Entropy AI:</b><br/></div>")
+        self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_chunk(self, chunk: str):
-        pass
+        if getattr(self, "_streaming_active", False):
+            cursor = self.chat_browser.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText(chunk)
+            self.chat_browser.setTextCursor(cursor)
+            self.chat_browser.ensureCursorVisible()
+
+    def _on_turn_completed(self, full_response: str):
+        self._streaming_active = False
+        self.send_btn.setEnabled(True)
+        self.input_field.setEnabled(True)
+        self.chat_browser.append("<div style='margin-bottom:12px;'></div>")
+        self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _append_message(self, sender: str, text: str, is_system: bool = False):
         color = "#00F0FF" if sender == "Entropy AI" else "#00FF9D" if sender == "Siz" else "#FFB300"

@@ -16,6 +16,7 @@ from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
 from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
+from entropy.ui.widgets.tasks_widget import TasksWidget
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
 class ZenModeWindow(QMainWindow):
@@ -118,12 +119,14 @@ class ZenModeWindow(QMainWindow):
         # Top Horizontal Splitter: Left (Tabs: Reports & MCP), Center (Visual Core & Prompt), Right (Graph)
         top_h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left Column: Tabbed Interface for Reports & MCP Hub
+        # Left Column: Tabbed Interface for Reports, MCP Hub & Tasks
         self.left_tabs = QTabWidget()
         self.reports_viewer = ReportsViewerWidget()
         self.mcp_drawer = MCPDrawerWidget()
+        self.tasks_widget = TasksWidget()
         self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
         self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
+        self.left_tabs.addTab(self.tasks_widget, "⏰ Görevler")
         top_h_splitter.addWidget(self.left_tabs)
 
         # Center Column: Organic Visual Core & Quick Command Input
