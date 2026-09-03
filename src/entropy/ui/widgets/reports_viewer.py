@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget
+    QMessageBox, QPushButton, QSplitter, QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -137,6 +137,26 @@ class ReportsViewerWidget(QFrame):
         distill_btn.clicked.connect(self._distill_current_report)
         bar_layout.addWidget(distill_btn)
 
+        delete_btn = QPushButton("🗑️ Notu Sil")
+        delete_btn.setFixedHeight(22)
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #261418;
+                color: #FF4D4D;
+                border: 1px solid #FF4D4D;
+                border-radius: 3px;
+                padding: 1px 8px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #FF4D4D;
+                color: #080B10;
+            }
+        """)
+        delete_btn.clicked.connect(self._delete_current_report)
+        bar_layout.addWidget(delete_btn)
+
         right_layout.addWidget(self.rag_status_bar)
 
         # Right text browser
@@ -221,6 +241,72 @@ class ReportsViewerWidget(QFrame):
 
         bus.terminal_output_received.emit(f"\n[🧠 Hafıza & RAG] '{p.name}' raporu başarıyla bilişsel belleğe sentezlendi ve RAG indeksine eklendi.\n")
         bus.report_created.emit(str(p))
+
+    def _delete_current_report(self):
+        """Delete currently selected report from disk, remove from cognitive memory, and update knowledge graph."""
+        current_item = self.list_widget.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "Seçim Yapılmadı", "Lütfen silmek istediğiniz not veya raporu seçin.")
+            return
+
+        path_str = current_item.data(Qt.ItemDataRole.UserRole)
+        if not path_str:
+            return
+
+        p = Path(path_str)
+        if not p.exists():
+            QMessageBox.warning(self, "Dosya Bulunamadı", "Dosya diskte mevcut değil.")
+            return
+
+        # Protect MEMORY.md from accidental full deletion (suggest emptying or confirm strictly)
+        if p.name == "MEMORY.md":
+            reply = QMessageBox.question(
+                self,
+                "Global Hafıza Dosyası",
+                "Bu dosya sistemin temel 'Global Hafıza (MEMORY.md)' dosyasıdır. Dosyayı sıfırlamak istiyor musunuz?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                p.write_text("# Entropy AI - Global Memory & Architecture Decisions\n\n## System Beliefs\n- Reset at user request.\n", encoding="utf-8")
+                self.content_browser.setMarkdown(p.read_text(encoding="utf-8"))
+                bus.terminal_output_received.emit("[Bilişsel Hafıza] MEMORY.md sıfırlandı.\n")
+                bus.knowledge_graph_updated.emit()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Raporu / Notu Sil",
+            f"'{p.name}' dosyasını diskten ve bilişsel bellek dizininden kalıcı olarak silmek istediğinizden emin misiniz?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # 1. Unlink from disk
+                p.unlink()
+
+                # 2. Remove associated memory node from SQLite
+                try:
+                    import sqlite3
+                    db_p = Path.home() / ".entropy" / "cognitive_memory.db"
+                    if db_p.exists():
+                        with sqlite3.connect(db_p) as conn:
+                            pattern = f"%{p.stem}%"
+                            conn.execute("DELETE FROM cognitive_nodes WHERE id LIKE ? OR content LIKE ?", (pattern, pattern))
+                            conn.commit()
+                except Exception:
+                    pass
+
+                # 3. Update Obsidian Map of Content
+                self.vault_manager.sync_map_of_content()
+
+                # 4. Refresh viewer and knowledge graph
+                self.content_browser.clear()
+                self.refresh_reports()
+                bus.knowledge_graph_updated.emit()
+                bus.terminal_output_received.emit(f"[Bilişsel Hafıza] '{p.name}' notu diskten ve hafızadan silindi.\n")
+
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Dosya silinirken hata oluştu: {e}")
 
     def open_report_by_path_or_id(self, path_or_id: str) -> bool:
         """Find and select a report by path or partial title/id."""

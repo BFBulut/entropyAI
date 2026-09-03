@@ -99,3 +99,18 @@ class MCPManager:
             return res.returncode == 0
         except Exception:
             return False
+
+    def remove_server(self, server_name: str) -> bool:
+        """Remove an MCP server configuration via 'agy mcp remove <name>'."""
+        try:
+            cmd = [self.agy_bin, "mcp", "remove", server_name]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=self._get_creationflags(),
+                timeout=15
+            )
+            return res.returncode == 0
+        except Exception:
+            return False

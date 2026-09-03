@@ -88,3 +88,21 @@ def test_task_execution_flow(tmp_path):
 
     assert len(executed) == 1
     assert executed[0] == "sample-task"
+
+def test_scheduler_remove_task(tmp_path):
+    storage = tmp_path / "test_tasks_remove.json"
+    scheduler = TaskScheduler(storage_path=storage)
+    scheduler.schedule_task("task-to-remove", "Temporary Task", "Do something", "hourly", 1)
+    assert "task-to-remove" in scheduler.tasks
+
+    # Remove task
+    ok = scheduler.remove_task("task-to-remove")
+    assert ok is True
+    assert "task-to-remove" not in scheduler.tasks
+
+    # Verify persisted removal
+    reloaded = TaskScheduler(storage_path=storage)
+    assert "task-to-remove" not in reloaded.tasks
+
+    # Removing non-existent task returns False
+    assert scheduler.remove_task("non-existent") is False

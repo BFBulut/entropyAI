@@ -36,7 +36,7 @@ class TaskScheduler:
         self.tasks: Dict[str, ScheduledTask] = {}
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._callback: Optional[Callable[[ScheduledTask], None]] = None
 
         self._load_tasks()
@@ -85,6 +85,15 @@ class TaskScheduler:
         self.tasks[task_id] = task
         self._save_tasks()
         return task
+
+    def remove_task(self, task_id: str) -> bool:
+        """Remove a task by ID and persist changes."""
+        with self._lock:
+            if task_id in self.tasks:
+                del self.tasks[task_id]
+                self._save_tasks()
+                return True
+            return False
 
     def compute_next_run(
         self,

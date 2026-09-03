@@ -91,7 +91,7 @@ class AgyProcessBridge(QObject):
         self.session_turn_count = 0
         self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
-        bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Hafıza ve bağlam sıfırlandı)\n")
+        bus.terminal_output_received.emit("\n[Entropy Core] Yeni diyalog oturumu başlatıldı. (Kalıcı bilişsel hafıza ve bilgi grafiği korunuyor)\n")
 
     def set_model(self, model_name: str):
         """Update active model dynamically and persist to configuration."""

@@ -52,25 +52,46 @@ class ZenModeWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("cardFrame")
         h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(14, 6, 14, 6)
+        h_layout.setContentsMargins(16, 8, 16, 8)
+        h_layout.setSpacing(12)
 
-        # Title
-        title = QLabel("<span style='color:#00F0FF; font-size:16px; font-weight:bold;'>ENTROPY AI</span> <span style='color:#8B949E; font-size:11px;'>ZEN WORKSTATION</span>")
+        # Title Badge
+        title = QLabel("<b style='color:#00F0FF; font-size:15px; letter-spacing:0.5px;'>ENTROPY AI</b> <span style='color:#8B949E; font-size:11px; margin-left:4px;'>ZEN WORKSTATION</span>")
+        title.setStyleSheet("background: transparent; border: none; padding: 2px 0;")
         h_layout.addWidget(title)
 
-        h_layout.addSpacing(16)
+        h_layout.addSpacing(8)
 
         # Project Selector Button
         self.project_btn = QPushButton(f"📁 Proje: {self.bridge.active_project_dir.name}")
+        self.project_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #F0F6FC;
+                border: 1px solid #1F2B42;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                border-color: #00F0FF;
+                color: #00F0FF;
+            }
+        """)
         self.project_btn.clicked.connect(self._select_project_dir)
         h_layout.addWidget(self.project_btn)
 
         h_layout.addStretch()
 
-        # Dynamic Model Selector Combo (RULE: agent-ui-models + Model Selection UX)
-        h_layout.addWidget(QLabel("<span style='color:#8B949E; font-size:11px;'>Model:</span>"))
+        # Dynamic Model Selector Combo (RULE: agent-ui-models)
+        model_tag = QLabel("<span style='color:#8B949E; font-size:11px; font-weight:bold;'>Model:</span>")
+        model_tag.setStyleSheet("background: transparent; border: none;")
+        h_layout.addWidget(model_tag)
+
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(180)
         models = self.bridge.fetch_available_models()
         for m in models:
             self.model_combo.addItem(m)
@@ -78,7 +99,7 @@ class ZenModeWindow(QMainWindow):
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
 
-        h_layout.addSpacing(10)
+        h_layout.addSpacing(6)
 
         # Token Usage Counter (RULE: agent-ui-routing)
         self.tokens_badge = QLabel("Tokens: 0")
@@ -87,8 +108,8 @@ class ZenModeWindow(QMainWindow):
                 background-color: #05070A;
                 color: #00FF9D;
                 border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 4px 10px;
+                border-radius: 5px;
+                padding: 4px 12px;
                 font-family: 'Consolas';
                 font-size: 11px;
                 font-weight: bold;
@@ -96,11 +117,25 @@ class ZenModeWindow(QMainWindow):
         """)
         h_layout.addWidget(self.tokens_badge)
 
-        h_layout.addSpacing(15)
+        h_layout.addSpacing(8)
 
         # New Chat Button
         btn_new_chat = QPushButton("+ Yeni Sohbet")
-        btn_new_chat.setStyleSheet("background-color: #141C2C; color: #00F0FF; border: 1px solid #00F0FF; font-weight: bold;")
+        btn_new_chat.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #00F0FF;
+                border-radius: 5px;
+                padding: 4px 14px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #00F0FF;
+                color: #080B10;
+            }
+        """)
         btn_new_chat.clicked.connect(self.bridge.reset_conversation)
         h_layout.addWidget(btn_new_chat)
 

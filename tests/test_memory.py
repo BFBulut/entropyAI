@@ -242,4 +242,27 @@ def test_syntax_aware_ast_and_incremental_indexing(tmp_path):
     assert count2 == count1
     assert indexer._file_cache["engine.py"]["mtime"] == mtime_before
 
+def test_migrate_and_clean_database(temp_cognitive_db):
+    # Insert a corrupted node with replacement character
+    import sqlite3
+    with sqlite3.connect(temp_cognitive_db.db_path) as conn:
+        conn.execute(
+            "INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("corrupt-1", "semantic", "Aratrma zeti \ufffd\ufffd bozuk", 0.5, time.time(), time.time(), 1, "{}", None)
+        )
+        conn.commit()
+
+    assert temp_cognitive_db.get_node("corrupt-1") is not None
+
+    stats = temp_cognitive_db.migrate_and_clean_database()
+    assert stats["cleaned"] >= 1
+    assert temp_cognitive_db.get_node("corrupt-1") is None
+
+    # Check that ego has 384-d embedding
+    ego = temp_cognitive_db.get_node("ego-entropy-core")
+    assert ego is not None
+    assert ego.embedding is not None
+    assert len(ego.embedding) == 384
+
+
 

@@ -159,21 +159,63 @@ class CognitiveMemorySystem:
         """Layer 12: Ensure core Ego / Identity persona node exists."""
         ego_id = "ego-entropy-core"
         if not self.get_node(ego_id):
-            ego_node = CognitiveMemoryNode(
-                id=ego_id,
-                category="ego",
-                content=(
-                    "I am Entropy AI, an autonomous agentic desktop operating system for Windows. "
-                    "I operate on-device using the Antigravity CLI without demanding external API keys. "
-                    "I continuously adapt, learn, and maintain memory across sessions."
-                ),
-                importance=1.0,
-                created_at=time.time(),
-                last_accessed=time.time(),
-                access_count=100,
-                metadata={"type": "core_identity", "immutable": True}
-            )
-            self._save_node(ego_node)
+            self._update_ego_identity()
+
+    def _update_ego_identity(self):
+        """Ensure core Ego / Identity persona node reflects current system capabilities."""
+        ego_id = "ego-entropy-core"
+        ego_content = (
+            "I am Entropy AI, an autonomous agentic desktop operating system for Windows. "
+            "I operate on-device using the Antigravity CLI without demanding external API keys. "
+            "I integrate an Obsidian exocortex with bidirectional GraphRAG, 384-dimensional local neural vector embeddings, "
+            "Python AST syntax-aware codebase indexing, and background dreaming consolidation."
+        )
+        ego_node = CognitiveMemoryNode(
+            id=ego_id,
+            category="ego",
+            content=ego_content,
+            importance=1.0,
+            created_at=time.time(),
+            last_accessed=time.time(),
+            access_count=100,
+            metadata={"type": "core_identity", "immutable": True}
+        )
+        self._save_node(ego_node)
+
+    def migrate_and_clean_database(self) -> Dict[str, int]:
+        """
+        Audits existing SQLite database:
+        - Removes corrupted nodes with replacement characters or malformed titles.
+        - Backfills dense 384-d vector embeddings for all remaining nodes.
+        - Synchronizes Ego node with current architectural invariants.
+        """
+        cleaned_count = 0
+        reembedded_count = 0
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, category, content, importance, metadata_json, embedding_json FROM cognitive_nodes")
+            rows = cursor.fetchall()
+
+            for r in rows:
+                nid, cat, content, importance, meta_json, emb_json = r
+                # Check for corrupted encoding or fragmented garbage
+                if "\ufffd" in content or "Aratrma" in content or len(content.strip()) < 5:
+                    cursor.execute("DELETE FROM cognitive_nodes WHERE id = ?", (nid,))
+                    cleaned_count += 1
+                    continue
+
+                # Check if embedding is missing or empty
+                emb = json.loads(emb_json) if emb_json else None
+                if not emb or len(emb) != 384:
+                    new_emb = LocalEmbeddingEngine.get_instance().embed_text(content)
+                    cursor.execute("UPDATE cognitive_nodes SET embedding_json = ? WHERE id = ?", (json.dumps(new_emb), nid))
+                    reembedded_count += 1
+
+            conn.commit()
+
+        self._update_ego_identity()
+        return {"cleaned": cleaned_count, "reembedded": reembedded_count}
 
     def _generate_node_id(self, category: str, content: str) -> str:
         h = hashlib.sha256(f"{category}:{content.strip().lower()}".encode("utf-8")).hexdigest()[:16]

@@ -54,6 +54,34 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .legend-item { display: flex; align-items: center; gap: 5px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 6px;
+            z-index: 10;
+        }
+        .ctrl-btn {
+            background: rgba(14, 20, 32, 0.90);
+            border: 1px solid #1F2B42;
+            border-radius: 4px;
+            color: #00F0FF;
+            font-weight: bold;
+            font-size: 13px;
+            width: 28px;
+            height: 28px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+        .ctrl-btn:hover {
+            background: #00F0FF;
+            color: #080B10;
+            border-color: #00F0FF;
+        }
         #infoBox {
             position: absolute;
             bottom: 12px;
@@ -76,6 +104,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="legend-item"><span class="dot" style="background:#00FF9D;"></span> Semantik Hafıza</div>
         <div class="legend-item"><span class="dot" style="background:#FFB300;"></span> Episodik Anı</div>
         <div class="legend-item"><span class="dot" style="background:#9D00FF;"></span> Obsidian Notu / Rapor</div>
+    </div>
+    <div id="controls">
+        <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
+        <button class="ctrl-btn" onclick="zoomOut()" title="Uzaklaştır">-</button>
+        <button class="ctrl-btn" onclick="resetZoom()" title="Görünümü Sıfırla">⟲</button>
     </div>
     <div id="infoBox"></div>
     <canvas id="canvas"></canvas>
@@ -101,6 +134,14 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let width = 600;
         let height = 400;
 
+        // Zoom & Pan state
+        let zoom = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+
         function updateDimensions() {
             width = canvas.width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 300);
             height = canvas.height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 250);
@@ -118,7 +159,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'Reports': '#FF0055'
         };
 
-        // Initialize positions distributed evenly in an orbital circle
         function initNodePositions() {
             const cx = width / 2;
             const cy = height / 2;
@@ -129,7 +169,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     n.y = cy;
                 } else {
                     const angle = (idx / Math.max(1, nodes.length - 1)) * Math.PI * 2;
-                    const dist = 75 + (idx % 3) * 35;
+                    const dist = 110 + (idx % 4) * 45;
                     n.x = cx + Math.cos(angle) * dist;
                     n.y = cy + Math.sin(angle) * dist;
                 }
@@ -137,20 +177,19 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         initNodePositions();
 
-        // Alpha decay simulation (Cools down in ~2 seconds to become 100% static)
         let alpha = 1.0;
         const alphaMin = 0.003;
         const alphaDecay = 0.025;
 
         function tickPhysics() {
             if (alpha < alphaMin && !draggedNode) {
-                return; // Completely frozen in place, 0 vibration!
+                return;
             }
 
             const cx = width / 2;
             const cy = height / 2;
 
-            // Repulsion force between pairs
+            // Repulsion force
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = i + 1; j < nodes.length; j++) {
                     const a = nodes[i];
@@ -158,8 +197,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     const dx = b.x - a.x;
                     const dy = b.y - a.y;
                     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    if (dist < 130) {
-                        const force = ((130 - dist) / 130) * 2.0 * alpha;
+                    if (dist < 150) {
+                        const force = ((150 - dist) / 150) * 2.5 * alpha;
                         const fx = (dx / dist) * force;
                         const fy = (dy / dist) * force;
                         if (a.group !== 'ego' && a !== draggedNode) { a.x -= fx; a.y -= fy; }
@@ -176,7 +215,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     const dx = t.x - s.x;
                     const dy = t.y - s.y;
                     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const force = (dist - 85) * 0.04 * alpha;
+                    const force = (dist - 100) * 0.035 * alpha;
                     if (t.group !== 'ego' && t !== draggedNode) {
                         t.x -= (dx / dist) * force;
                         t.y -= (dy / dist) * force;
@@ -187,14 +226,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             // Center gravity
             nodes.forEach(n => {
                 if (n.group !== 'ego' && n !== draggedNode) {
-                    n.x += (cx - n.x) * 0.02 * alpha;
-                    n.y += (cy - n.y) * 0.02 * alpha;
-
-                    // Bounds clamp
-                    if (n.x < 40) n.x = 40;
-                    if (n.x > width - 40) n.x = width - 40;
-                    if (n.y < 50) n.y = 50;
-                    if (n.y > height - 45) n.y = height - 45;
+                    n.x += (cx - n.x) * 0.015 * alpha;
+                    n.y += (cy - n.y) * 0.015 * alpha;
                 }
             });
 
@@ -206,13 +239,36 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let isDragging = false;
         let startX = 0, startY = 0;
 
+        // Mouse wheel zoom
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+            const newZoom = Math.max(0.35, Math.min(3.5, zoom * zoomFactor));
+
+            panX = mx - (mx - panX) * (newZoom / zoom);
+            panY = my - (my - panY) * (newZoom / zoom);
+            zoom = newZoom;
+        }, { passive: false });
+
         canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
             if (hoveredNode) {
                 draggedNode = hoveredNode;
-                startX = e.clientX;
-                startY = e.clientY;
+                startX = mx;
+                startY = my;
                 isDragging = false;
                 alpha = 0.3;
+            } else {
+                isPanning = true;
+                panStartX = e.clientX - panX;
+                panStartY = e.clientY - panY;
             }
         });
 
@@ -221,21 +277,30 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
 
+            if (isPanning) {
+                panX = e.clientX - panStartX;
+                panY = e.clientY - panStartY;
+                return;
+            }
+
+            const wx = (mx - panX) / zoom;
+            const wy = (my - panY) / zoom;
+
             if (draggedNode) {
-                if (Math.hypot(e.clientX - startX, e.clientY - startY) > 5) {
+                if (Math.hypot(mx - startX, my - startY) > 5) {
                     isDragging = true;
                 }
-                draggedNode.x = mx;
-                draggedNode.y = my;
+                draggedNode.x = wx;
+                draggedNode.y = wy;
                 return;
             }
 
             hoveredNode = null;
             for (let n of nodes) {
                 const r = n.val || 14;
-                const dx = mx - n.x;
-                const dy = my - n.y;
-                if (dx * dx + dy * dy < (r + 6) * (r + 6)) {
+                const dx = wx - n.x;
+                const dy = wy - n.y;
+                if (dx * dx + dy * dy < (r + 8) * (r + 8)) {
                     hoveredNode = n;
                     break;
                 }
@@ -246,13 +311,18 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 infoBox.style.display = 'block';
                 infoBox.innerHTML = `<b>${hoveredNode.name}</b> [${hoveredNode.group}] <span style="color:#00FF9D; font-size:11px;">(Görüntülemek için tıkla)</span><br/><span style="color:#8B949E;">${hoveredNode.info || ''}</span>`;
             } else {
-                canvas.style.cursor = 'default';
+                canvas.style.cursor = isPanning ? 'grabbing' : 'default';
                 infoBox.style.display = 'none';
             }
         });
 
         canvas.addEventListener('mouseup', () => {
             draggedNode = null;
+            isPanning = false;
+        });
+
+        canvas.addEventListener('dblclick', () => {
+            resetZoom();
         });
 
         canvas.addEventListener('click', (e) => {
@@ -261,12 +331,41 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
         });
 
+        function zoomIn() {
+            const cx = width / 2;
+            const cy = height / 2;
+            const newZoom = Math.min(3.5, zoom * 1.25);
+            panX = cx - (cx - panX) * (newZoom / zoom);
+            panY = cy - (cy - panY) * (newZoom / zoom);
+            zoom = newZoom;
+        }
+
+        function zoomOut() {
+            const cx = width / 2;
+            const cy = height / 2;
+            const newZoom = Math.max(0.35, zoom * 0.8);
+            panX = cx - (cx - panX) * (newZoom / zoom);
+            panY = cy - (cy - panY) * (newZoom / zoom);
+            zoom = newZoom;
+        }
+
+        function resetZoom() {
+            zoom = 1.0;
+            panX = 0;
+            panY = 0;
+            alpha = 0.5;
+        }
+
         function render() {
             try {
                 tickPhysics();
 
                 ctx.fillStyle = '#080B10';
                 ctx.fillRect(0, 0, width, height);
+
+                ctx.save();
+                ctx.translate(panX, panY);
+                ctx.scale(zoom, zoom);
 
                 // Draw Links
                 ctx.lineWidth = 1;
@@ -324,6 +423,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     ctx.font = (n.group === 'ego' ? 'bold 11px' : '10px') + ' monospace';
                     ctx.fillText(n.name, n.x + r + 6, n.y + 4);
                 });
+
+                ctx.restore();
             } catch (err) {
                 console.error("Render loop error: " + err);
             }

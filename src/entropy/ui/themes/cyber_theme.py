@@ -30,6 +30,11 @@ QFrame#cardFrame {{
     border-radius: 8px;
 }}
 
+QLabel {{
+    background-color: transparent;
+    color: {CYBER_THEME['text_primary']};
+}}
+
 QPushButton {{
     background-color: {CYBER_THEME['bg_card']};
     color: {CYBER_THEME['accent_cyan']};

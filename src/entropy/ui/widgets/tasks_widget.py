@@ -128,24 +128,27 @@ class TasksWidget(QFrame):
         )
 
     def refresh_tasks(self):
-        """Populate the task list with custom row widgets."""
+        """Populate the task list with modern custom cybernetic row widgets."""
         self.list_widget.clear()
 
         for t_id, task in self.scheduler.tasks.items():
             item = QListWidgetItem()
-            item.setSizeHint(QSize(280, 64))
+            item.setSizeHint(QSize(280, 68))
 
             row_widget = QWidget()
-            row_widget.setMinimumHeight(58)
+            row_widget.setMinimumHeight(62)
             row_widget.setStyleSheet("""
                 QWidget {
                     background-color: #0E1420;
                     border: 1px solid #1F2B42;
                     border-radius: 6px;
                 }
+                QWidget:hover {
+                    border-color: #00F0FF;
+                }
             """)
             row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(10, 8, 10, 8)
+            row_layout.setContentsMargins(10, 6, 10, 6)
             row_layout.setSpacing(10)
 
             # Enable checkbox
@@ -158,12 +161,13 @@ class TasksWidget(QFrame):
             # Details
             info_layout = QVBoxLayout()
             info_layout.setContentsMargins(0, 0, 0, 0)
-            info_layout.setSpacing(3)
-            
+            info_layout.setSpacing(2)
+
             title_color = "#00F0FF" if task.enabled else "#8B949E"
-            name_lbl = QLabel(f"<b style='color:{title_color}; font-size:12px;'>{task.name}</b>")
+            status_badge = "<span style='color:#00FF9D; font-size:10px; font-weight:bold;'>● AKTİF</span>" if task.enabled else "<span style='color:#8B949E; font-size:10px;'>○ PASİF</span>"
+            name_lbl = QLabel(f"<b style='color:{title_color}; font-size:12px;'>{task.name}</b> &nbsp; {status_badge}")
             name_lbl.setStyleSheet("background: transparent; border: none;")
-            
+
             interval_str = f"Periyot: {task.interval_type} ({task.interval_value})"
             next_str = datetime.datetime.fromtimestamp(task.next_run).strftime("%H:%M:%S") if task.next_run else "Planlanmadı"
             status_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{interval_str} | Sonraki: <span style='color:#00FF9D;'>{next_str}</span></span>")
@@ -176,7 +180,7 @@ class TasksWidget(QFrame):
 
             # Run Now button
             run_btn = QPushButton("▶ Çalıştır")
-            run_btn.setFixedHeight(24)
+            run_btn.setFixedHeight(26)
             run_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #141C2C;
@@ -195,12 +199,46 @@ class TasksWidget(QFrame):
             run_btn.clicked.connect(lambda _, t=task: self._run_task_now(t))
             row_layout.addWidget(run_btn)
 
+            # Delete button
+            del_btn = QPushButton("🗑️ Sil")
+            del_btn.setFixedHeight(26)
+            del_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #24141A;
+                    color: #FF4D4D;
+                    border: 1px solid #FF4D4D;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #FF4D4D;
+                    color: #080B10;
+                }
+            """)
+            del_btn.clicked.connect(lambda _, tid=t_id, tname=task.name: self._on_delete_task(tid, tname))
+            row_layout.addWidget(del_btn)
+
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row_widget)
+
+    def _on_delete_task(self, task_id: str, task_name: str):
+        reply = QMessageBox.question(
+            self,
+            "Görevi Sil",
+            f"'{task_name}' görevini listeden kaldırmak istediğinizden emin misiniz?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.scheduler.remove_task(task_id)
+            bus.terminal_output_received.emit(f"[Task Scheduler] '{task_name}' görevi başarıyla silindi.\n")
+            self.refresh_tasks()
 
     def _on_toggle_task(self, task: ScheduledTask, enabled: bool):
         task.enabled = enabled
         self.scheduler._save_tasks()
+        self.refresh_tasks()
 
     def _run_task_now(self, task: ScheduledTask):
         """Execute a task immediately and trigger its action."""
