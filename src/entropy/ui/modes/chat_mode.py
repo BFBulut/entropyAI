@@ -78,6 +78,12 @@ class ChatModeWindow(QMainWindow):
         self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
         h_layout.addWidget(self.tokens_badge)
 
+        btn_new_chat = QPushButton("+ Yeni")
+        btn_new_chat.setFixedHeight(24)
+        btn_new_chat.setStyleSheet("background-color:#141C2C; color:#00F0FF; border:1px solid #00F0FF; font-weight:bold;")
+        btn_new_chat.clicked.connect(self._on_new_chat)
+        h_layout.addWidget(btn_new_chat)
+
         btn_zen = QPushButton("Zen Mode")
         btn_zen.setFixedHeight(24)
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
@@ -167,6 +173,11 @@ class ChatModeWindow(QMainWindow):
     def _toggle_terminal(self):
         is_vis = not self.terminal_drawer.isVisible()
         self.terminal_drawer.setVisible(is_vis)
+
+    def _on_new_chat(self):
+        self.bridge.reset_conversation()
+        self.chat_browser.clear()
+        self._append_message("Entropy AI", "Yeni sohbet oturumu başlatıldı. Nasıl yardımcı olabilirim?", is_system=True)
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):

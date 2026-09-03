@@ -1,4 +1,4 @@
-"""Antigravity (AGY) CLI asynchronous bridge and real-time output pipeline with genuine token metering."""
+"""Antigravity (AGY) CLI asynchronous bridge, persistent conversation resumption, and cognitive memory awareness."""
 
 import json
 import os
@@ -27,6 +27,7 @@ class AgyProcessBridge(QObject):
         super().__init__(parent)
         self.selected_model: str = config.selected_model
         self.current_model: str = self.selected_model or config.model_fallback_name
+        self.current_conversation_id: Optional[str] = None
         self.total_tokens_used: int = 0
         self.latest_input_tokens: int = 0
         self.latest_output_tokens: int = 0
@@ -41,6 +42,17 @@ class AgyProcessBridge(QObject):
     @property
     def is_running(self) -> bool:
         return self._is_running
+
+    def reset_conversation(self):
+        """Start a fresh conversation topic in Antigravity."""
+        self.current_conversation_id = None
+        self.total_tokens_used = 0
+        self.latest_input_tokens = 0
+        self.latest_output_tokens = 0
+        self.latest_thinking_tokens = 0
+        self.latest_cache_read_tokens = 0
+        bus.token_usage_updated.emit(0)
+        bus.terminal_output_received.emit("\n[Entropy Core] Yeni sohbet oturumu başlatıldı. (Bağlam sıfırlandı)\n")
 
     def set_model(self, model_name: str):
         """Update active model dynamically and persist to configuration."""
@@ -81,12 +93,39 @@ class AgyProcessBridge(QObject):
             pass
         return config.available_models
 
+    def get_cognitive_context(self, prompt: str) -> str:
+        """Retrieve relevant Obsidian MEMORY.md and cognitive memory nodes to inject into agent consciousness."""
+        context_parts = []
+
+        # 1. Read Global MEMORY.md
+        mem_file = config.obsidian_vault_path / "Entropy" / "MEMORY.md"
+        if mem_file.exists():
+            try:
+                mem_text = mem_file.read_text(encoding="utf-8", errors="ignore").strip()
+                if mem_text:
+                    context_parts.append(f"[Kalıcı Bilişsel Hafıza (Obsidian MEMORY.md)]:\n{mem_text[:750]}")
+            except Exception:
+                pass
+
+        # 2. Query SQLite / pgvector cognitive memory
+        try:
+            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            cog = CognitiveMemorySystem()
+            recalled = cog.recall(prompt, limit=3)
+            if recalled:
+                items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
+                if items:
+                    context_parts.append("[Hatırlanan İlgili Bilgiler / Anılar]:\n" + "\n".join(items))
+        except Exception:
+            pass
+
+        return "\n\n".join(context_parts)
+
     def find_agy_executable(self) -> str:
         """Locate agy CLI binary in system PATH or default Windows installation folders."""
         path = shutil.which("agy") or shutil.which("agy.exe")
         if path:
             return path
-        # Common fallback paths on Windows
         fallbacks = [
             Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Antigravity" / "bin" / "agy.exe",
             Path(os.environ.get("ProgramFiles", "")) / "Google" / "Antigravity" / "agy.exe",
@@ -155,25 +194,37 @@ class AgyProcessBridge(QObject):
         bus.core_state_changed.emit("thinking")
         bus.agent_turn_started.emit(prompt)
 
-        # Append to conversation history
-        self.conversation_history.append({"role": "user", "content": prompt})
-        _ = self._truncate_and_summarize_context()
-
         agy_bin = self.find_agy_executable()
 
-        system_directive = (
-            "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
-            "Kullanıcıya daima Türkçe ve samimi, net, profesyonel bir üslupla yanıt ver.\n"
-        )
-        full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
+        # Check if continuing an existing conversation or starting turn 1
+        if self.current_conversation_id:
+            # Continuing conversation: Antigravity already has system prompt and context cached!
+            cmd = [
+                agy_bin,
+                "-p", prompt,
+                "--conversation", self.current_conversation_id,
+                "--output-format", "stream-json",
+                "--mode", mode,
+            ]
+        else:
+            # Starting new conversation: inject system persona & cognitive memory!
+            cognitive_context = self.get_cognitive_context(prompt)
+            system_directive = (
+                "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
+                "Kullanıcıya daima Türkçe ve samimi, net, profesyonel bir üslupla yanıt ver.\n"
+                "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından tamamen haberdarsın.\n"
+            )
+            if cognitive_context:
+                system_directive += f"\n{cognitive_context}\n"
 
-        cmd = [
-            agy_bin,
-            "-p", full_prompt_payload,
-            "--output-format", "stream-json",
-            "--mode", mode,
-            "--add-dir", str(self.active_project_dir),
-        ]
+            full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
+            cmd = [
+                agy_bin,
+                "-p", full_prompt_payload,
+                "--output-format", "stream-json",
+                "--mode", mode,
+                "--add-dir", str(self.active_project_dir),
+            ]
 
         if self.selected_model and self.selected_model != config.model_fallback_name:
             cmd.extend(["--model", self.selected_model])
@@ -206,7 +257,8 @@ class AgyProcessBridge(QObject):
             short_prompt = prompt.replace("\n", " ")[:65]
             if len(prompt) > 65:
                 short_prompt += "..."
-            bus.terminal_output_received.emit(f"\n[Entropy Core | Model: {self.selected_model}] > {short_prompt}\n")
+            status_tag = f"Sohbet: {self.current_conversation_id[:8]}..." if self.current_conversation_id else "Yeni Sohbet"
+            bus.terminal_output_received.emit(f"\n[Entropy Core | {self.selected_model} | {status_tag}] > {short_prompt}\n")
 
             for raw_line in iter(self._current_process.stdout.readline, ''):
                 if not raw_line:
@@ -219,6 +271,12 @@ class AgyProcessBridge(QObject):
                 # Process NDJSON events from Antigravity engine
                 try:
                     data = json.loads(line_str)
+                    
+                    # Capture and preserve conversation ID
+                    c_id = data.get("conversation_id")
+                    if c_id and not self.current_conversation_id:
+                        self.current_conversation_id = c_id
+
                     event = data.get("event")
 
                     if event == "init":

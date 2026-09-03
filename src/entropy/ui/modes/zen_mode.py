@@ -89,6 +89,12 @@ class ZenModeWindow(QMainWindow):
 
         h_layout.addSpacing(15)
 
+        # New Chat Button
+        btn_new_chat = QPushButton("+ Yeni Sohbet")
+        btn_new_chat.setStyleSheet("background-color: #141C2C; color: #00F0FF; border: 1px solid #00F0FF; font-weight: bold;")
+        btn_new_chat.clicked.connect(self.bridge.reset_conversation)
+        h_layout.addWidget(btn_new_chat)
+
         # Mode Switch Buttons
         btn_floating = QPushButton("Floating Mod")
         btn_floating.clicked.connect(lambda: bus.mode_requested.emit("floating"))

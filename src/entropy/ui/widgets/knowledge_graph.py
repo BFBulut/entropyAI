@@ -190,21 +190,62 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const cx = width / 2;
                 const cy = height / 2;
 
-                // Physics update
+                // Physics update with repulsion and friction damping (prevents continuous jitter)
+                for (let i = 0; i < nodes.length; i++) {
+                    for (let j = i + 1; j < nodes.length; j++) {
+                        const a = nodes[i];
+                        const b = nodes[j];
+                        const dx = b.x - a.x;
+                        const dy = b.y - a.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        if (dist < 110) {
+                            const force = ((110 - dist) / 110) * 0.8;
+                            const fx = (dx / dist) * force;
+                            const fy = (dy / dist) * force;
+                            if (a.group !== 'ego' && a !== draggedNode) { a.vx -= fx; a.vy -= fy; }
+                            if (b.group !== 'ego' && b !== draggedNode) { b.vx += fx; b.vy += fy; }
+                        }
+                    }
+                }
+
+                // Spring attraction for links
+                links.forEach(l => {
+                    const s = nodes.find(n => n.id === l.source);
+                    const t = nodes.find(n => n.id === l.target || n.name === l.target);
+                    if (s && t) {
+                        const dx = t.x - s.x;
+                        const dy = t.y - s.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                        const force = (dist - 80) * 0.002;
+                        if (t.group !== 'ego' && t !== draggedNode) {
+                            t.vx -= (dx / dist) * force;
+                            t.vy -= (dy / dist) * force;
+                        }
+                    }
+                });
+
+                // Update velocities and apply friction damping
                 nodes.forEach(n => {
                     if (n !== draggedNode && n.group !== 'ego') {
-                        n.x += n.vx;
-                        n.y += n.vy;
+                        // Centering gravity
+                        n.vx += (cx - n.x) * 0.0006;
+                        n.vy += (cy - n.y) * 0.0006;
 
-                        // Center gravity
-                        n.vx += (cx - n.x) * 0.0004;
-                        n.vy += (cy - n.y) * 0.0004;
+                        // Apply strong damping (friction) so nodes quickly settle
+                        n.vx *= 0.86;
+                        n.vy *= 0.86;
 
-                        // Bounce boundaries
-                        if (n.x < 30) { n.x = 30; n.vx *= -0.8; }
-                        if (n.x > width - 30) { n.x = width - 30; n.vx *= -0.8; }
-                        if (n.y < 45) { n.y = 45; n.vy *= -0.8; }
-                        if (n.y > height - 40) { n.y = height - 40; n.vy *= -0.8; }
+                        // Only move if kinetic energy is meaningful
+                        if (Math.abs(n.vx) > 0.02 || Math.abs(n.vy) > 0.02) {
+                            n.x += n.vx;
+                            n.y += n.vy;
+                        }
+
+                        // Bounce bounds
+                        if (n.x < 35) { n.x = 35; n.vx = 0; }
+                        if (n.x > width - 35) { n.x = width - 35; n.vx = 0; }
+                        if (n.y < 45) { n.y = 45; n.vy = 0; }
+                        if (n.y > height - 40) { n.y = height - 40; n.vy = 0; }
                     }
                 });
 
