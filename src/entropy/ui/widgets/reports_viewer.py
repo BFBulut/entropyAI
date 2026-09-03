@@ -1,17 +1,17 @@
-"""Research Reports Viewer for Zen Mode."""
+"""Research Reports & Memory Dossiers Viewer for Zen Mode."""
 
 from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QSplitter, QTextBrowser, QVBoxLayout
+    QPushButton, QSplitter, QTextBrowser, QVBoxLayout
 )
 
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
 class ReportsViewerWidget(QFrame):
-    """Browses and displays agent-generated research reports and dossiers."""
+    """Browses and displays agent-generated research reports and Obsidian dossiers."""
 
     def __init__(self, parent=None, vault_manager: ObsidianVaultManager = None):
         super().__init__(parent)
@@ -23,16 +23,25 @@ class ReportsViewerWidget(QFrame):
         self.layout.setSpacing(6)
 
         # Header
-        title_label = QLabel("<b>📚 RESEARCH & MEMORY DOSSIERS</b>")
-        title_label.setStyleSheet(f"color: {CYBER_THEME['accent_cyan']}; font-size: 13px;")
-        self.layout.addWidget(title_label)
+        header = QHBoxLayout()
+        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>📚 ARAŞTIRMA VE BELLEK DOSYALARI</b>")
+        header.addWidget(title_label)
 
-        # Splitter between Report List and Report Viewer
+        header.addStretch()
+
+        self.refresh_btn = QPushButton("Yenile")
+        self.refresh_btn.setFixedHeight(22)
+        self.refresh_btn.clicked.connect(self.refresh_reports)
+        header.addWidget(self.refresh_btn)
+
+        self.layout.addLayout(header)
+
+        # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left list
         self.list_widget = QListWidget()
-        self.list_widget.setFixedWidth(200)
+        self.list_widget.setFixedWidth(180)
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
                 background-color: {CYBER_THEME['bg_terminal']};
@@ -59,6 +68,7 @@ class ReportsViewerWidget(QFrame):
                 color: {CYBER_THEME['text_primary']};
                 padding: 12px;
                 font-size: 13px;
+                line-height: 1.5;
             }}
         """)
         self.splitter.addWidget(self.content_browser)
@@ -71,31 +81,27 @@ class ReportsViewerWidget(QFrame):
         self.list_widget.clear()
         reports = self.vault_manager.list_reports()
 
-        if not reports:
-            # Add default welcome/architecture report if none exists
-            default_path = self.vault_manager.save_research_report(
-                title="Agentic OS Overview",
-                content=(
-                    "# Entropy AI Agentic Operating System\n\n"
-                    "Welcome to Entropy AI. This system runs on-device using Antigravity CLI.\n\n"
-                    "## Key Capabilities\n"
-                    "- Tri-Modal UI (Zen, Floating, Chat)\n"
-                    "- 12-Layer Mem0 + Supabase Cognitive Memory\n"
-                    "- Obsidian Markdown Vault Integration\n"
-                    "- Dynamic Pydantic AI Self-Tooling\n"
-                ),
-                tags=["overview", "architecture"]
-            )
-            reports = self.vault_manager.list_reports()
+        # Also add MEMORY.md to list
+        if self.vault_manager.memory_file.exists():
+            mem_item = QListWidgetItem("📌 Global Hafıza (MEMORY.md)")
+            mem_item.setData(Qt.ItemDataRole.UserRole, str(self.vault_manager.memory_file))
+            self.list_widget.addItem(mem_item)
 
         for rep in reports:
-            item = QListWidgetItem(rep["title"])
+            item = QListWidgetItem(f"📄 {rep['title']}")
             item.setData(Qt.ItemDataRole.UserRole, rep["path"])
             self.list_widget.addItem(item)
 
         if self.list_widget.count() > 0:
             self.list_widget.setCurrentRow(0)
             self._on_item_clicked(self.list_widget.item(0))
+        else:
+            self.content_browser.setMarkdown(
+                "### 📚 Araştırma ve Hafıza Arşivi\n\n"
+                "Henüz kaydedilmiş bir araştırma raporu bulunmuyor.\n\n"
+                "Zen mod komut satırından yapay zekaya *'... konusunu derinlemesine araştır ve rapor hazırla'* "
+                "talimatı verdiğinizde, üretilen tüm teknik raporlar otomatik olarak buraya ve Obsidian kasanıza kaydedilecektir."
+            )
 
     def _on_item_clicked(self, item: QListWidgetItem):
         path_str = item.data(Qt.ItemDataRole.UserRole)

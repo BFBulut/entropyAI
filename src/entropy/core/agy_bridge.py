@@ -25,7 +25,8 @@ class AgyProcessBridge(QObject):
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self.current_model: str = config.model_fallback_name
+        self.selected_model: str = config.selected_model
+        self.current_model: str = self.selected_model or config.model_fallback_name
         self.total_tokens_used: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
@@ -36,6 +37,12 @@ class AgyProcessBridge(QObject):
     @property
     def is_running(self) -> bool:
         return self._is_running
+
+    def set_model(self, model_name: str):
+        """Update active model dynamically."""
+        self.selected_model = model_name
+        self.current_model = model_name
+        bus.model_detected.emit(model_name)
 
     def find_agy_executable(self) -> str:
         """Locate agy CLI binary in system PATH or default Windows installation folders."""
@@ -105,24 +112,40 @@ class AgyProcessBridge(QObject):
     ):
         with self._lock:
             if self._is_running:
-                bus.terminal_output_received.emit("[Entropy AI] Warning: A prompt is already actively executing.\n")
+                bus.terminal_output_received.emit("[Entropy AI] Uyarı: Zaten aktif bir komut çalıştırılıyor.\n")
                 return
             self._is_running = True
 
         bus.core_state_changed.emit("thinking")
         bus.agent_turn_started.emit(prompt)
 
+        # Count prompt input tokens
+        prompt_tokens = max(1, len(prompt) // 4)
+        self.total_tokens_used += prompt_tokens
+        bus.token_usage_updated.emit(self.total_tokens_used)
+
         # Append to conversation history
         self.conversation_history.append({"role": "user", "content": prompt})
         _ = self._truncate_and_summarize_context()
 
         agy_bin = self.find_agy_executable()
+
+        # Enforce Turkish response when user communicates in Turkish
+        system_directive = (
+            "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
+            "Kullanıcıya daima Türkçe ve samimi, net, profesyonel bir üslupla yanıt ver.\n"
+        )
+        full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
+
         cmd = [
             agy_bin,
-            "-p", prompt,
+            "-p", full_prompt_payload,
             "--mode", mode,
             "--add-dir", str(self.active_project_dir),
         ]
+
+        if self.selected_model and self.selected_model != config.model_fallback_name:
+            cmd.extend(["--model", self.selected_model])
 
         if image_attachments:
             for img in image_attachments:
@@ -132,6 +155,11 @@ class AgyProcessBridge(QObject):
         full_response_acc = []
 
         try:
+            # On Windows, suppress the black cmd.exe popup
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
             # Start non-blocking Popen pipeline
             self._current_process = subprocess.Popen(
                 cmd,
@@ -142,10 +170,15 @@ class AgyProcessBridge(QObject):
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=creationflags,
                 cwd=str(self.active_project_dir) if self.active_project_dir.exists() else None
             )
 
-            bus.terminal_output_received.emit(f"entropy@core:~$ {' '.join(cmd)}\n")
+            # Clean readable terminal banner
+            short_prompt = prompt.replace("\n", " ")[:65]
+            if len(prompt) > 65:
+                short_prompt += "..."
+            bus.terminal_output_received.emit(f"\n[Entropy Core | Model: {self.selected_model}] > {short_prompt}\n")
 
             # Read stdout chunk-by-chunk in real-time
             for line in iter(self._current_process.stdout.readline, ''):
@@ -160,13 +193,13 @@ class AgyProcessBridge(QObject):
                 bus.token_chunk_received.emit(line)
                 bus.core_pulse_triggered.emit(0.8)
 
-                # Dynamically extract model name (RULE: agent-ui-models)
+                # Dynamically extract model name if detected in output
                 detected = self.detect_model_from_text(line)
                 if detected and detected != self.current_model:
                     self.current_model = detected
                     bus.model_detected.emit(self.current_model)
 
-                # Approximate token counting (4 chars ~ 1 token)
+                # Approximate generated token counting
                 new_tokens = max(1, len(line) // 4)
                 self.total_tokens_used += new_tokens
                 bus.token_usage_updated.emit(self.total_tokens_used)
@@ -175,7 +208,7 @@ class AgyProcessBridge(QObject):
             ret_code = self._current_process.wait()
 
         except Exception as e:
-            err_msg = f"[Entropy AI Error] Failed to execute agy CLI: {str(e)}\n"
+            err_msg = f"[Entropy AI Hata] agy CLI yürütülemedi: {str(e)}\n"
             bus.terminal_output_received.emit(err_msg)
             full_response_acc.append(err_msg)
             ret_code = -1
@@ -196,7 +229,7 @@ class AgyProcessBridge(QObject):
             if self._current_process and self._is_running:
                 try:
                     self._current_process.terminate()
-                    bus.terminal_output_received.emit("\n[Entropy AI] Process terminated by user.\n")
+                    bus.terminal_output_received.emit("\n[Entropy AI] İşlem kullanıcı tarafından durduruldu.\n")
                 except Exception:
                     pass
                 self._is_running = False

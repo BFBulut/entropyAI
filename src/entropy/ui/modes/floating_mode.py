@@ -25,11 +25,11 @@ class FloatingModeWidget(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
-        # Core visualizer
-        self.visualizer = CoreVisualizerWidget(radius=40)
+        # Core visualizer with organic, unclipped glow
+        self.visualizer = CoreVisualizerWidget(base_radius=42)
         self.layout.addWidget(self.visualizer)
 
-        self.setFixedSize(140, 140)
+        self.setFixedSize(200, 200)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:

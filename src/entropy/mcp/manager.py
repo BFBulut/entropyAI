@@ -1,5 +1,6 @@
 """Model Context Protocol (MCP) server manager for Entropy AI."""
 
+import os
 import shutil
 import subprocess
 from typing import Dict, List, Optional
@@ -10,6 +11,11 @@ class MCPManager:
     def __init__(self):
         self.agy_bin = shutil.which("agy") or "agy"
 
+    def _get_creationflags(self) -> int:
+        if os.name == "nt":
+            return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        return 0
+
     def list_servers(self) -> List[Dict[str, str]]:
         """Run 'agy mcp list' and return structured list of configured MCP servers."""
         try:
@@ -19,6 +25,7 @@ class MCPManager:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=self._get_creationflags(),
                 timeout=10
             )
             if res.returncode != 0:
@@ -57,6 +64,7 @@ class MCPManager:
                 [self.agy_bin, "mcp", "enable", server_name],
                 capture_output=True,
                 text=True,
+                creationflags=self._get_creationflags(),
                 timeout=10
             )
             return res.returncode == 0
@@ -70,7 +78,23 @@ class MCPManager:
                 [self.agy_bin, "mcp", "disable", server_name],
                 capture_output=True,
                 text=True,
+                creationflags=self._get_creationflags(),
                 timeout=10
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def add_server(self, name: str, server_type: str, command_or_url: str) -> bool:
+        """Add or update an MCP server configuration via 'agy mcp add <name> <type> <command/url>'."""
+        try:
+            cmd = [self.agy_bin, "mcp", "add", name, server_type, command_or_url]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                creationflags=self._get_creationflags(),
+                timeout=15
             )
             return res.returncode == 0
         except Exception:

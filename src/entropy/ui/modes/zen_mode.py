@@ -3,8 +3,9 @@
 from pathlib import Path
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QSplitter, QVBoxLayout, QWidget
+    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QPushButton, QSizePolicy, QSplitter, QTabWidget,
+    QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -42,36 +43,32 @@ class ZenModeWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("cardFrame")
         h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(12, 6, 12, 6)
+        h_layout.setContentsMargins(14, 6, 14, 6)
 
         # Title
         title = QLabel("<span style='color:#00F0FF; font-size:16px; font-weight:bold;'>ENTROPY AI</span> <span style='color:#8B949E; font-size:11px;'>ZEN WORKSTATION</span>")
         h_layout.addWidget(title)
 
-        h_layout.addSpacing(20)
+        h_layout.addSpacing(16)
 
         # Project Selector Button
-        self.project_btn = QPushButton(f"📁 Project: {self.bridge.active_project_dir.name}")
+        self.project_btn = QPushButton(f"📁 Proje: {self.bridge.active_project_dir.name}")
         self.project_btn.clicked.connect(self._select_project_dir)
         h_layout.addWidget(self.project_btn)
 
         h_layout.addStretch()
 
-        # Dynamic Model Badge (RULE: agent-ui-models)
-        self.model_badge = QLabel(config.model_fallback_name)
-        self.model_badge.setStyleSheet(f"""
-            QLabel {{
-                background-color: #05070A;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-family: 'Consolas';
-                font-size: 11px;
-                font-weight: bold;
-            }}
-        """)
-        h_layout.addWidget(self.model_badge)
+        # Dynamic Model Selector Combo (RULE: agent-ui-models + Model Selection UX)
+        h_layout.addWidget(QLabel("<span style='color:#8B949E; font-size:11px;'>Model:</span>"))
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        for m in config.available_models:
+            self.model_combo.addItem(m)
+        self.model_combo.setCurrentText(self.bridge.selected_model)
+        self.model_combo.currentTextChanged.connect(self._on_model_selected)
+        h_layout.addWidget(self.model_combo)
+
+        h_layout.addSpacing(10)
 
         # Token Usage Counter (RULE: agent-ui-routing)
         self.tokens_badge = QLabel("Tokens: 0")
@@ -84,6 +81,7 @@ class ZenModeWindow(QMainWindow):
                 padding: 4px 10px;
                 font-family: 'Consolas';
                 font-size: 11px;
+                font-weight: bold;
             }}
         """)
         h_layout.addWidget(self.tokens_badge)
@@ -91,17 +89,17 @@ class ZenModeWindow(QMainWindow):
         h_layout.addSpacing(15)
 
         # Mode Switch Buttons
-        btn_floating = QPushButton("Floating Mode")
+        btn_floating = QPushButton("Floating Mod")
         btn_floating.clicked.connect(lambda: bus.mode_requested.emit("floating"))
         h_layout.addWidget(btn_floating)
 
-        btn_chat = QPushButton("Chat Mode")
+        btn_chat = QPushButton("Chat Mod")
         btn_chat.clicked.connect(lambda: bus.mode_requested.emit("chat"))
         h_layout.addWidget(btn_chat)
 
         btn_close = QPushButton("✕")
         btn_close.setFixedWidth(30)
-        btn_close.setStyleSheet("background-color: #2D1418; color: #FF4D4D; border: 1px solid #5C2025;")
+        btn_close.setStyleSheet("background-color: #2D1418; color: #FF4D4D; border: 1px solid #5C2025; font-weight: bold;")
         btn_close.clicked.connect(self.close)
         h_layout.addWidget(btn_close)
 
@@ -110,42 +108,44 @@ class ZenModeWindow(QMainWindow):
         # 2. Main Workstation Area (Vertical Splitter)
         main_v_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Top Horizontal Splitter: Left (Reports & MCP), Center (Visual Core & Prompt), Right (Graph)
+        # Top Horizontal Splitter: Left (Tabs: Reports & MCP), Center (Visual Core & Prompt), Right (Graph)
         top_h_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left Column: Reports & MCP
-        left_col = QWidget()
-        left_layout = QVBoxLayout(left_col)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(ReportsViewerWidget())
-        left_layout.addWidget(MCPDrawerWidget())
-        top_h_splitter.addWidget(left_col)
+        # Left Column: Tabbed Interface for Reports & MCP Hub
+        self.left_tabs = QTabWidget()
+        self.reports_viewer = ReportsViewerWidget()
+        self.mcp_drawer = MCPDrawerWidget()
+        self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
+        self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
+        top_h_splitter.addWidget(self.left_tabs)
 
-        # Center Column: Visual Core & Quick Command Input
+        # Center Column: Organic Visual Core & Quick Command Input
         center_col = QFrame()
         center_col.setObjectName("cardFrame")
         center_layout = QVBoxLayout(center_col)
-        center_layout.setContentsMargins(12, 12, 12, 12)
+        center_layout.setContentsMargins(16, 16, 16, 16)
         center_layout.setSpacing(12)
 
         center_layout.addStretch()
-        self.core_visualizer = CoreVisualizerWidget(radius=54)
+        self.core_visualizer = CoreVisualizerWidget(base_radius=56)
+        self.core_visualizer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         center_layout.addWidget(self.core_visualizer, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.core_status_lbl = QLabel("SYSTEM IDLE - ZERO API READY")
+        self.core_status_lbl = QLabel("AI ÇEKİRDEK: HAZIR | SIFIR-API AGY AKTİF")
         self.core_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.core_status_lbl.setStyleSheet("color: #00F0FF; font-family: 'Consolas'; font-size: 12px;")
+        self.core_status_lbl.setStyleSheet("color: #00F0FF; font-family: 'Consolas'; font-size: 12px; letter-spacing: 1px;")
         center_layout.addWidget(self.core_status_lbl)
         center_layout.addStretch()
 
         # Prompt input bar in Zen Mode
         prompt_bar = QHBoxLayout()
         self.prompt_input = QLineEdit()
-        self.prompt_input.setPlaceholderText("Dispatch instruction to Entropy AI (e.g. 'Audit project memory and refactor tests')...")
+        self.prompt_input.setPlaceholderText("Entropy AI'a bir talimat verin (örn: 'Kod tabanını analiz et ve testleri çalıştır')...")
         self.prompt_input.returnPressed.connect(self._on_submit_prompt)
         prompt_bar.addWidget(self.prompt_input)
 
-        send_btn = QPushButton("Execute")
+        send_btn = QPushButton("Çalıştır")
+        send_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
         send_btn.clicked.connect(self._on_submit_prompt)
         prompt_bar.addWidget(send_btn)
         center_layout.addLayout(prompt_bar)
@@ -156,11 +156,11 @@ class ZenModeWindow(QMainWindow):
         self.graph_widget = KnowledgeGraphWidget()
         top_h_splitter.addWidget(self.graph_widget)
 
-        top_h_splitter.setSizes([320, 480, 360])
+        top_h_splitter.setSizes([340, 480, 380])
         main_v_splitter.addWidget(top_h_splitter)
 
         # Bottom Area: Infinite Split Terminal
-        self.terminal_pane = TerminalPaneWidget(title="Live AGY Stream & Agent Shell")
+        self.terminal_pane = TerminalPaneWidget(title="Canlı AGY Çıktı Akışı ve Terminal")
         main_v_splitter.addWidget(self.terminal_pane)
 
         main_v_splitter.setSizes([560, 240])
@@ -173,7 +173,12 @@ class ZenModeWindow(QMainWindow):
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):
-        self.model_badge.setText(f"[{model_name}]")
+        if self.model_combo.currentText() != model_name:
+            self.model_combo.setCurrentText(model_name)
+
+    def _on_model_selected(self, model_name: str):
+        if model_name and model_name != self.bridge.selected_model:
+            self.bridge.set_model(model_name)
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
@@ -181,13 +186,14 @@ class ZenModeWindow(QMainWindow):
 
     @Slot(str)
     def _update_status(self, state: str):
-        self.core_status_lbl.setText(f"SYSTEM {state.upper()} - REAL-TIME AGY ACTIVE")
+        st = "DÜŞÜNÜYOR / İŞLENİYOR" if state == "thinking" else "YÜRÜTÜLÜYOR" if state == "executing" else "HAZIR"
+        self.core_status_lbl.setText(f"AI ÇEKİRDEK: {st} | SIFIR-API AGY AKTİF")
 
     def _select_project_dir(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Project Directory", str(self.bridge.active_project_dir))
+        folder = QFileDialog.getExistingDirectory(self, "Proje Klasörü Seç", str(self.bridge.active_project_dir))
         if folder:
             self.bridge.set_project_directory(folder)
-            self.project_btn.setText(f"📁 Project: {Path(folder).name}")
+            self.project_btn.setText(f"📁 Proje: {Path(folder).name}")
 
     def _on_submit_prompt(self):
         text = self.prompt_input.text().strip()

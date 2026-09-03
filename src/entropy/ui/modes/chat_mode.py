@@ -5,7 +5,7 @@ from typing import List, Optional
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QKeyEvent, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QPushButton, QTextBrowser, QVBoxLayout, QWidget
 )
 
@@ -41,7 +41,7 @@ class ChatModeWindow(QMainWindow):
 
         self.setStyleSheet(STYLESHEET)
         self.setWindowTitle("Entropy AI Chat")
-        self.resize(520, 680)
+        self.resize(540, 700)
 
         self._init_ui()
         self._connect_signals()
@@ -64,13 +64,17 @@ class ChatModeWindow(QMainWindow):
 
         h_layout.addStretch()
 
-        # Dynamic Model badge (RULE: agent-ui-models)
-        self.model_badge = QLabel(config.model_fallback_name)
-        self.model_badge.setStyleSheet("color:#00F0FF; font-family:'Consolas'; font-size:11px; font-weight:bold;")
-        h_layout.addWidget(self.model_badge)
+        # Dynamic Model Selector Combo (RULE: agent-ui-models)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        for m in config.available_models:
+            self.model_combo.addItem(m)
+        self.model_combo.setCurrentText(self.bridge.selected_model)
+        self.model_combo.currentTextChanged.connect(self._on_model_selected)
+        h_layout.addWidget(self.model_combo)
 
         self.tokens_badge = QLabel("0 tokens")
-        self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px;")
+        self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
         h_layout.addWidget(self.tokens_badge)
 
         btn_zen = QPushButton("Zen Mode")
@@ -87,8 +91,10 @@ class ChatModeWindow(QMainWindow):
                 background-color: {CYBER_THEME['bg_surface']};
                 border: 1px solid {CYBER_THEME['border']};
                 border-radius: 6px;
-                padding: 10px;
+                padding: 12px;
                 color: {CYBER_THEME['text_primary']};
+                font-size: 13px;
+                line-height: 1.5;
             }}
         """)
         self.layout.addWidget(self.chat_browser)
@@ -102,7 +108,7 @@ class ChatModeWindow(QMainWindow):
         self.attach_label.setStyleSheet("color:#00F0FF; font-size:11px;")
         self.attach_layout.addWidget(self.attach_label)
         self.attach_layout.addStretch()
-        remove_attach_btn = QPushButton("✕ Remove")
+        remove_attach_btn = QPushButton("✕ Kaldır")
         remove_attach_btn.setFixedHeight(20)
         remove_attach_btn.clicked.connect(self._clear_staged_images)
         self.attach_layout.addWidget(remove_attach_btn)
@@ -111,11 +117,12 @@ class ChatModeWindow(QMainWindow):
         # 4. Input layout
         input_bar = QHBoxLayout()
         self.input_field = ChatInputField(self)
-        self.input_field.setPlaceholderText("Type message or paste image with Ctrl+V...")
+        self.input_field.setPlaceholderText("Mesajınızı yazın veya Ctrl+V ile görsel yapıştırın...")
         self.input_field.returnPressed.connect(self._on_send)
         input_bar.addWidget(self.input_field)
 
-        self.send_btn = QPushButton("Send")
+        self.send_btn = QPushButton("Gönder")
+        self.send_btn.setStyleSheet("background-color:#00F0FF; color:#080B10; font-weight:bold;")
         self.send_btn.clicked.connect(self._on_send)
         input_bar.addWidget(self.send_btn)
 
@@ -126,12 +133,12 @@ class ChatModeWindow(QMainWindow):
         self.layout.addLayout(input_bar)
 
         # 5. Collapsible Terminal Drawer
-        self.terminal_drawer = TerminalPaneWidget(title="Real-Time AGY Subprocess Stream")
-        self.terminal_drawer.setFixedHeight(180)
+        self.terminal_drawer = TerminalPaneWidget(title="Canlı AGY Akış Konsolu")
+        self.terminal_drawer.setFixedHeight(190)
         self.terminal_drawer.setVisible(False)
         self.layout.addWidget(self.terminal_drawer)
 
-        self._append_message("Entropy AI", "Ready. Antigravity CLI initialized on-device without external API keys.", is_system=True)
+        self._append_message("Entropy AI", "Hazır. Yerel Antigravity CLI üzerinden güvenle çalışıyorum.", is_system=True)
 
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
@@ -147,7 +154,7 @@ class ChatModeWindow(QMainWindow):
             path_str, w, h = res
             self.staged_images.append(path_str)
             filename = Path(path_str).name
-            self.attach_label.setText(f"📎 Pasted Image: <b>{filename}</b> ({w}x{h} px)")
+            self.attach_label.setText(f"📎 Yapıştırılan Görsel: <b>{filename}</b> ({w}x{h} px)")
             self.attachment_bar.setVisible(True)
             return True
         return False
@@ -162,7 +169,12 @@ class ChatModeWindow(QMainWindow):
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):
-        self.model_badge.setText(f"[{model_name}]")
+        if self.model_combo.currentText() != model_name:
+            self.model_combo.setCurrentText(model_name)
+
+    def _on_model_selected(self, model_name: str):
+        if model_name and model_name != self.bridge.selected_model:
+            self.bridge.set_model(model_name)
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
@@ -176,9 +188,9 @@ class ChatModeWindow(QMainWindow):
         display_prompt = prompt
         if self.staged_images:
             img_names = ", ".join([Path(p).name for p in self.staged_images])
-            display_prompt += f" <i style='color:#00F0FF;'>[Attached: {img_names}]</i>"
+            display_prompt += f" <i style='color:#00F0FF;'>[Eklenen Görsel: {img_names}]</i>"
 
-        self._append_message("You", display_prompt)
+        self._append_message("Siz", display_prompt)
         self.input_field.clear()
 
         images_to_send = list(self.staged_images)
@@ -196,11 +208,10 @@ class ChatModeWindow(QMainWindow):
         self._append_message("Entropy AI", full_response)
 
     def _on_chunk(self, chunk: str):
-        # Keeps terminal and UI active
         pass
 
     def _append_message(self, sender: str, text: str, is_system: bool = False):
-        color = "#00F0FF" if sender == "Entropy AI" else "#00FF9D" if sender == "You" else "#FFB300"
+        color = "#00F0FF" if sender == "Entropy AI" else "#00FF9D" if sender == "Siz" else "#FFB300"
         html = f"<div style='margin-bottom:8px;'><b style='color:{color};'>{sender}:</b><br/>{text.replace('\n', '<br/>')}</div>"
         self.chat_browser.append(html)
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)

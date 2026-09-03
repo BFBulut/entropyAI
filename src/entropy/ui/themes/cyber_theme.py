@@ -56,4 +56,50 @@ QLineEdit, QTextEdit {{
 QLineEdit:focus, QTextEdit:focus {{
     border-color: {CYBER_THEME['accent_cyan']};
 }}
+
+QComboBox {{
+    background-color: #05070A;
+    color: #00F0FF;
+    border: 1px solid #1F2B42;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: bold;
+}}
+
+QComboBox:hover, QComboBox:focus {{
+    border-color: #00F0FF;
+}}
+
+QComboBox QAbstractItemView {{
+    background-color: #0E1420;
+    color: #F0F6FC;
+    border: 1px solid #1F2B42;
+    selection-background-color: #1A263C;
+    selection-color: #00F0FF;
+}}
+
+QTabWidget::pane {{
+    border: 1px solid #1F2B42;
+    background: #0E1420;
+    border-radius: 6px;
+}}
+
+QTabBar::tab {{
+    background: #080B10;
+    color: #8B949E;
+    border: 1px solid #1F2B42;
+    padding: 6px 12px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-weight: bold;
+    font-size: 11px;
+}}
+
+QTabBar::tab:selected {{
+    background: #0E1420;
+    color: #00F0FF;
+    border-bottom-color: #0E1420;
+}}
 """

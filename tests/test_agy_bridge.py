@@ -10,8 +10,7 @@ def bridge():
     return AgyProcessBridge()
 
 def test_initial_state(bridge):
-    assert bridge.current_model == config.model_fallback_name
-    assert bridge.current_model == "[Model: Unknown]"
+    assert bridge.current_model == config.selected_model
     assert bridge.total_tokens_used == 0
     assert not bridge.is_running
 
