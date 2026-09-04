@@ -32,7 +32,7 @@ def main():
     if args.project:
         bridge.set_project_directory(args.project)
 
-    scheduler = TaskScheduler()
+    scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):
         from entropy.core.event_bus import bus

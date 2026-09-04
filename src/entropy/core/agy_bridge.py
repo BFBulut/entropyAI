@@ -571,20 +571,29 @@ class AgyProcessBridge(QObject):
                 }
                 self.session_turn_count = 0
 
-            # Auto-save research reports and technical dossiers ONLY when explicitly requested
+            # Auto-save research reports and technical dossiers (including autonomous scheduled tasks)
             is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
+            is_task_prompt = "[otonom planlı görev:" in prompt.lower()
             is_explicit_research = any(w in prompt.lower() for w in [
                 "araştır", "araştırma yap", "rapor hazırla", "raporla", "analiz et", "derinlemesine incele", "dossier", "dokümantasyon oluştur"
             ])
-            has_markdown_structure = ("# " in full_text or "## " in full_text) and len(full_text) > 350
+            has_markdown_structure = ("# " in full_text or "## " in full_text) and len(full_text) > 250
 
-            if not is_err and is_explicit_research and has_markdown_structure:
+            if not is_err and (is_task_prompt or (is_explicit_research and has_markdown_structure)):
                 try:
                     from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                     from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
                     vm = ObsidianVaultManager()
-                    first_line = prompt.strip().split("\n")[0][:36]
-                    clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
+
+                    if is_task_prompt:
+                        match = re.search(r"\[OTONOM PLANLI GÖREV:\s*([^\]]+)\]", prompt, re.IGNORECASE)
+                        task_name = match.group(1).strip() if match else "Otonom Görev"
+                        time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                        clean_title = f"Gorev_{task_name.replace(' ', '_')}_{time_tag}"
+                    else:
+                        first_line = prompt.strip().split("\n")[0][:36]
+                        clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
+
                     rep_path = vm.save_research_report(clean_title, full_text)
 
                     # Extract distilled summary (Layer 6 consolidation) rather than storing massive full text
@@ -596,16 +605,22 @@ class AgyProcessBridge(QObject):
                         cog = CognitiveMemorySystem()
                         cog.store_node(
                             category="semantic",
-                            content=f"Araştırma Özeti [{clean_title}]: {distilled_summary}",
-                            importance=0.85,
-                            metadata={"source": "research_report", "path": str(rep_path)}
+                            content=f"Araştırma/Görev Özeti [{clean_title}]: {distilled_summary}",
+                            importance=0.88,
+                            metadata={"source": "task_or_research", "path": str(rep_path)}
                         )
                     except Exception:
                         pass
 
                     bus.report_created.emit(str(rep_path))
+                    bus.cognitive_memory_updated.emit()
+                    bus.knowledge_graph_updated.emit()
+
+                    if is_task_prompt:
+                        bus.task_notification.emit(task_name, task_name, str(rep_path))
+
                     bus.terminal_output_received.emit(
-                        f"\n[📚 Araştırma Raporu Kaydedildi]: '{clean_title}.md' sol paneldeki Raporlar sekmesine ve Obsidian kasanıza kaydedildi.\n"
+                        f"\n[📚 Araştırma Raporu & Hafıza Kaydedildi]: '{clean_title}.md' bilişsel hafızaya işlendi ve Obsidian kasanıza kaydedildi.\n"
                     )
                 except Exception:
                     pass

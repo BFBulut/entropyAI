@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QProgressBar, QPushButton, QSizePolicy, QSplitter, QTabWidget,
+    QMainWindow, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget,
     QTextBrowser, QVBoxLayout, QWidget
 )
 
@@ -186,19 +186,11 @@ class ZenModeWindow(QMainWindow):
         center_layout.setContentsMargins(14, 12, 14, 12)
         center_layout.setSpacing(10)
 
-        # Center Top Bar: Telemetry Status & Floating Notification Stack
+        # Center Top Bar: Telemetry Status & Legacy Bubble
         center_top_bar = QHBoxLayout()
         self.zen_telemetry_status = QLabel("<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>🟢 SİSTEM HAZIR</span> | <span style='color:#8B949E; font-size:11px;'>SIFIR-API AGY ÇALIŞIYOR</span>")
         center_top_bar.addWidget(self.zen_telemetry_status)
         center_top_bar.addStretch()
-
-        # Multi-notification Stack: Report and Task pills stack vertically, dismissable with ✕
-        self.notification_stack_widget = QWidget()
-        self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
-        self.notification_stack_layout.setContentsMargins(0, 0, 0, 0)
-        self.notification_stack_layout.setSpacing(4)
-        self.notification_stack_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
-        center_top_bar.addWidget(self.notification_stack_widget)
 
         # Legacy / test compatibility single button
         self.zen_report_bubble = QPushButton("📑 Rapor Hazır (Oku ↗)")
@@ -206,6 +198,35 @@ class ZenModeWindow(QMainWindow):
         self.zen_report_bubble.clicked.connect(self._open_latest_zen_report)
         center_top_bar.addWidget(self.zen_report_bubble)
         center_layout.addLayout(center_top_bar)
+
+        # Dedicated Scrollable Notification Tray for Completed Tasks and Reports
+        self.notification_scroll = QScrollArea()
+        self.notification_scroll.setWidgetResizable(True)
+        self.notification_scroll.setMaximumHeight(115)
+        self.notification_scroll.setStyleSheet("""
+            QScrollArea {
+                background: #080B10;
+                border: 1px dashed #1F2B42;
+                border-radius: 6px;
+            }
+            QScrollBar:vertical {
+                width: 6px;
+                background: #080B10;
+            }
+            QScrollBar::handle:vertical {
+                background: #00F0FF;
+                border-radius: 3px;
+            }
+        """)
+        self.notification_stack_widget = QWidget()
+        self.notification_stack_widget.setStyleSheet("background: transparent;")
+        self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
+        self.notification_stack_layout.setContentsMargins(6, 6, 6, 6)
+        self.notification_stack_layout.setSpacing(4)
+        self.notification_stack_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.notification_scroll.setWidget(self.notification_stack_widget)
+        self.notification_scroll.setVisible(False)
+        center_layout.addWidget(self.notification_scroll)
 
         center_layout.addStretch()
         self.core_visualizer = CoreVisualizerWidget(base_radius=58)
@@ -380,6 +401,7 @@ class ZenModeWindow(QMainWindow):
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
         """Add a stackable notification pill to the center column."""
+        self.notification_scroll.setVisible(True)
         pill = NotificationPillWidget(
             title=title,
             path_or_content=path_or_content,
@@ -397,6 +419,7 @@ class ZenModeWindow(QMainWindow):
         self.notification_stack_layout.removeWidget(pill)
         pill.deleteLater()
         if self.notification_stack_layout.count() == 0:
+            self.notification_scroll.setVisible(False)
             self.zen_report_bubble.setVisible(False)
 
     @Slot(str)

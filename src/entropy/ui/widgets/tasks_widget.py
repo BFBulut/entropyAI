@@ -22,8 +22,11 @@ class TasksWidget(QFrame):
     def __init__(self, parent=None, scheduler: Optional[TaskScheduler] = None, bridge=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
-        self.scheduler = scheduler or TaskScheduler()
+        self.scheduler = scheduler or TaskScheduler.get_instance()
         self.bridge = bridge or getattr(parent, "bridge", None)
+
+        # Ensure background scheduler loop is running
+        self.scheduler.start()
 
         # Set execution callback for scheduled background triggers
         self.scheduler.set_execution_callback(self._run_task_now)
@@ -241,11 +244,24 @@ class TasksWidget(QFrame):
 
     def _on_toggle_task(self, task: ScheduledTask, enabled: bool):
         task.enabled = enabled
+        now = time.time()
+        if enabled:
+            task.next_run = self.scheduler.compute_next_run(
+                task.interval_type, task.interval_value, task.day_of_week, from_time=now
+            )
+            bus.terminal_output_received.emit(
+                f"[Task Scheduler] '{task.name}' görevi AKTİFLEŞTİRİLDİ (Otomatik periyotta çalışacak).\n"
+            )
+        else:
+            task.next_run = None
+            bus.terminal_output_received.emit(
+                f"[Task Scheduler] '{task.name}' görevi DEVRE DIŞI (PASİF) bırakıldı.\n"
+            )
         self.scheduler._save_tasks()
         self.refresh_tasks()
 
     def _run_task_now(self, task: ScheduledTask):
-        """Execute a task immediately and trigger its action."""
+        """Execute a task immediately (anlık çalıştırma) without altering its scheduled active/passive state."""
         bus.terminal_output_received.emit(f"\n[Task Scheduler] '{task.name}' görevi anlık olarak çalıştırılıyor...\n")
         
         if task.id == "daily-dreaming":
@@ -261,6 +277,8 @@ class TasksWidget(QFrame):
                     content += f"- {r}\n"
                 rep_path = ovm.save_research_report(f"Konsolide_Hafiza_{today_str}", content, tags=["dream", "consolidation"])
                 bus.report_created.emit(str(rep_path))
+                bus.cognitive_memory_updated.emit()
+                bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
                 bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
@@ -279,6 +297,8 @@ class TasksWidget(QFrame):
                 content = f"# Obsidian Exocortex Senkronizasyon Raporu\n\n- Taranan Not Sayısı: {notes_count}\n- Günlük Kayıt: {log_path.name}\n- Senkron Zamanı: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 rep_path = ovm.save_research_report("Obsidian_Senkronizasyon_Raporu", content, tags=["sync", "obsidian"])
                 bus.report_created.emit(str(rep_path))
+                bus.cognitive_memory_updated.emit()
+                bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
                 bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
@@ -299,6 +319,8 @@ class TasksWidget(QFrame):
                 content = f"# Kod Tabanı RAG İndeksleme Raporu\n\n- İndekslenen Kod Dosyası: {indexed_count}\n- Proje Dizini: {config.default_project_path}\n- Zaman: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 rep_path = ovm.save_research_report("Kod_Tabani_RAG_Raporu", content, tags=["rag", "codebase"])
                 bus.report_created.emit(str(rep_path))
+                bus.cognitive_memory_updated.emit()
+                bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
                 bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(

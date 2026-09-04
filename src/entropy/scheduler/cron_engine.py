@@ -24,6 +24,14 @@ class ScheduledTask:
 
 class TaskScheduler:
     """Cron-like background task manager executing off the UI thread."""
+    _instance: Optional["TaskScheduler"] = None
+
+    @classmethod
+    def get_instance(cls, storage_path: Optional[Path] = None) -> "TaskScheduler":
+        """Retrieve or initialize the global singleton scheduler."""
+        if cls._instance is None:
+            cls._instance = cls(storage_path)
+        return cls._instance
 
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:

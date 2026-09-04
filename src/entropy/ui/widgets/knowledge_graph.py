@@ -593,10 +593,11 @@ class KnowledgeGraphWidget(QFrame):
         self.web_view.setStyleSheet("background: #080B10; border-radius: 6px;")
         self.layout.addWidget(self.web_view)
 
-        # Auto-refresh on new reports, turns, or explicit graph updates
+        # Auto-refresh on new reports, turns, cognitive memory, or explicit graph updates
         bus.report_created.connect(lambda _: self.refresh_graph())
         bus.agent_turn_completed.connect(lambda _: self.refresh_graph())
         bus.knowledge_graph_updated.connect(self.refresh_graph)
+        bus.cognitive_memory_updated.connect(self.refresh_graph)
 
         self.refresh_graph()
 
@@ -617,13 +618,13 @@ class KnowledgeGraphWidget(QFrame):
             "val": 22
         })
 
-        # 2. Cognitive Memory Nodes (from SQLite / pgvector)
+        # 2. Cognitive Memory Nodes (from SQLite / pgvector) - Ordered by recency
         try:
             import sqlite3
             if self.cognitive_memory.db_path.exists():
                 with sqlite3.connect(self.cognitive_memory.db_path) as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id, category, content, importance FROM cognitive_nodes LIMIT 30")
+                    cursor.execute("SELECT id, category, content, importance FROM cognitive_nodes ORDER BY created_at DESC LIMIT 60")
                     for row in cursor.fetchall():
                         c_id, cat, content, imp = row[0], row[1], row[2], row[3]
                         if c_id not in node_ids:

@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QKeyEvent, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QTextBrowser, QVBoxLayout, QWidget
+    QPushButton, QScrollArea, QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -162,11 +162,33 @@ class ChatModeWindow(QMainWindow):
         self.layout.addWidget(self.report_bar)
 
         # Multi-notification Stack: Stackable pills for reports and tasks with [✕]
+        self.notification_scroll = QScrollArea()
+        self.notification_scroll.setWidgetResizable(True)
+        self.notification_scroll.setMaximumHeight(100)
+        self.notification_scroll.setStyleSheet("""
+            QScrollArea {
+                background: #080B10;
+                border: 1px dashed #1F2B42;
+                border-radius: 6px;
+            }
+            QScrollBar:vertical {
+                width: 6px;
+                background: #080B10;
+            }
+            QScrollBar::handle:vertical {
+                background: #00F0FF;
+                border-radius: 3px;
+            }
+        """)
         self.notification_stack_widget = QWidget()
+        self.notification_stack_widget.setStyleSheet("background: transparent;")
         self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
-        self.notification_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.notification_stack_layout.setContentsMargins(4, 4, 4, 4)
         self.notification_stack_layout.setSpacing(4)
-        self.layout.addWidget(self.notification_stack_widget)
+        self.notification_stack_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.notification_scroll.setWidget(self.notification_stack_widget)
+        self.notification_scroll.setVisible(False)
+        self.layout.addWidget(self.notification_scroll)
 
         # 2. Chat history browser
         self.chat_browser = QTextBrowser()
@@ -245,6 +267,7 @@ class ChatModeWindow(QMainWindow):
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
         """Add a stackable notification pill to the chat mode window."""
+        self.notification_scroll.setVisible(True)
         pill = NotificationPillWidget(
             title=title,
             path_or_content=path_or_content,
@@ -259,6 +282,8 @@ class ChatModeWindow(QMainWindow):
         """Dismiss and remove a specific notification pill."""
         self.notification_stack_layout.removeWidget(pill)
         pill.deleteLater()
+        if self.notification_stack_layout.count() == 0:
+            self.notification_scroll.setVisible(False)
 
     @Slot(str)
     def _on_report_created(self, path_str: str):

@@ -50,8 +50,8 @@ class NotificationPillWidget(QFrame):
         layout.addWidget(self.label)
 
         # Open button
-        self.btn_open = QPushButton(btn_label)
-        self.btn_open.setFixedHeight(20)
+        self.btn_open = QPushButton("📖 Oku ↗" if not is_task else "🔍 İncele ↗")
+        self.btn_open.setFixedHeight(22)
         self.btn_open.setStyleSheet(f"""
             QPushButton {{
                 background-color: {accent_color};
@@ -60,7 +60,7 @@ class NotificationPillWidget(QFrame):
                 font-weight: bold;
                 border: none;
                 border-radius: 3px;
-                padding: 1px 8px;
+                padding: 1px 10px;
             }}
             QPushButton:hover {{
                 background-color: #FFFFFF;
@@ -71,20 +71,23 @@ class NotificationPillWidget(QFrame):
         layout.addWidget(self.btn_open)
 
         # Dismiss button
-        self.btn_close = QPushButton("✕")
-        self.btn_close.setFixedSize(18, 18)
+        self.btn_close = QPushButton("✕ Kapat")
+        self.btn_close.setFixedHeight(22)
         self.btn_close.setStyleSheet("""
-            QPushButton {{
-                background: transparent;
+            QPushButton {
+                background-color: #1F2B42;
                 color: #8B949E;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: bold;
-                border: none;
-                padding: 0;
-            }}
-            QPushButton:hover {{
+                border: 1px solid #30363D;
+                border-radius: 3px;
+                padding: 1px 8px;
+            }
+            QPushButton:hover {
+                background-color: #24141A;
                 color: #FF4D4D;
-            }}
+                border-color: #FF4D4D;
+            }
         """)
         self.btn_close.clicked.connect(self._handle_dismiss)
         layout.addWidget(self.btn_close)
