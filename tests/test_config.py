@@ -11,3 +11,10 @@ def test_custom_config():
     custom = EntropyConfig(app_name="Test Entropy", default_mode="chat")
     assert custom.app_name == "Test Entropy"
     assert custom.default_mode == "chat"
+
+def test_cumulative_usage_field():
+    cfg = EntropyConfig()
+    assert "input_tokens" in cfg.last_cumulative_usage
+    assert cfg.last_cumulative_usage["input_tokens"] == 0
+    cfg.last_cumulative_usage["input_tokens"] = 12500
+    assert cfg.last_cumulative_usage["input_tokens"] == 12500

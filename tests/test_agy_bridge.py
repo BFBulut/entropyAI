@@ -81,3 +81,21 @@ def test_delta_token_accounting(bridge):
     assert bridge.last_cumulative_usage["total_tokens"] == 0
     assert bridge.session_turn_count == 0
 
+def test_background_task_dispatch_signature(bridge, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        bridge,
+        "send_background_task_async",
+        lambda task_id, task_name, prompt, mode="accept-edits": called.append((task_id, task_name, prompt))
+    )
+    bridge.send_prompt_async(
+        prompt="Test background autonomous prompt",
+        is_background=True,
+        task_id="bg-123",
+        task_name="Bg Task"
+    )
+    assert len(called) == 1
+    assert called[0][0] == "bg-123"
+    assert called[0][1] == "Bg Task"
+    assert not bridge.is_running  # Chat queue not locked!
+

@@ -18,6 +18,15 @@ class EntropyConfig(BaseModel):
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
     last_conversation_id: Optional[str] = None
+    last_cumulative_usage: dict = Field(
+        default_factory=lambda: {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_tokens": 0,
+        }
+    )
     available_models: List[str] = [
         "gemini-3.1-pro-high",
         "gemini-3.1-pro-low",
@@ -42,6 +51,7 @@ class EntropyConfig(BaseModel):
                 "default_mode": self.default_mode,
                 "autostart_enabled": self.autostart_enabled,
                 "last_conversation_id": self.last_conversation_id,
+                "last_cumulative_usage": self.last_cumulative_usage,
             }
             SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
@@ -60,6 +70,8 @@ class EntropyConfig(BaseModel):
                     self.autostart_enabled = data["autostart_enabled"]
                 if "last_conversation_id" in data:
                     self.last_conversation_id = data["last_conversation_id"]
+                if "last_cumulative_usage" in data and isinstance(data["last_cumulative_usage"], dict):
+                    self.last_cumulative_usage = data["last_cumulative_usage"]
         except Exception:
             pass
 

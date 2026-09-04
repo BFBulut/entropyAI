@@ -2,6 +2,7 @@
 
 import time
 import datetime
+import threading
 from pathlib import Path
 from typing import Optional
 from PySide6.QtCore import Qt, Slot, QSize
@@ -261,7 +262,11 @@ class TasksWidget(QFrame):
         self.refresh_tasks()
 
     def _run_task_now(self, task: ScheduledTask):
-        """Execute a task immediately (anlık çalıştırma) without altering its scheduled active/passive state."""
+        """Execute a task in the background without blocking the UI thread or locking interactive chat."""
+        thread = threading.Thread(target=self._execute_task_logic, args=(task,), daemon=True)
+        thread.start()
+
+    def _execute_task_logic(self, task: ScheduledTask):
         bus.terminal_output_received.emit(f"\n[Task Scheduler] '{task.name}' görevi anlık olarak çalıştırılıyor...\n")
         
         if task.id == "daily-dreaming":
@@ -339,10 +344,15 @@ class TasksWidget(QFrame):
                     f"Bu görevi otonom olarak icra et. Gerekli araç ve yeteneklerini kullan. Elde ettiğin bulguları ve analizleri "
                     f"ayrıntılı bir araştırma raporu olarak yapılandır, Obsidian Reports/ altına kaydet ve bilişsel hafıza sistemine işle."
                 )
-                self.bridge.send_prompt_async(prompt=exec_prompt)
-                bus.task_notification.emit(task.id, task.name, task.prompt)
+                self.bridge.send_prompt_async(
+                    prompt=exec_prompt,
+                    is_background=True,
+                    task_id=task.id,
+                    task_name=task.name
+                )
             else:
                 bus.terminal_output_received.emit("[Task Scheduler Uyarı] AGY Bridge bağlı değil, görev gönderilemedi.\n")
+                bus.task_completed.emit(task.id, False)
 
         bus.task_triggered.emit(task.id, task.name)
         task.last_run = time.time()
@@ -350,7 +360,6 @@ class TasksWidget(QFrame):
             task.interval_type, task.interval_value, task.day_of_week, from_time=time.time()
         )
         self.scheduler._save_tasks()
-        self.refresh_tasks()
 
     @Slot(str, str)
     def _on_task_triggered(self, task_id: str, task_name: str):

@@ -1,10 +1,12 @@
 """Antigravity (AGY) CLI asynchronous bridge, persistent conversation resumption, and cognitive memory awareness."""
 
+import datetime
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -35,13 +37,17 @@ class AgyProcessBridge(QObject):
         self.latest_cache_read_tokens: int = 0
         self.session_total_tokens: int = 0
         self.session_cache_tokens: int = 0
-        self.last_cumulative_usage: Dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "thinking_tokens": 0,
-            "cache_read_tokens": 0,
-            "total_tokens": 0,
-        }
+        self.last_cumulative_usage: Dict[str, int] = (
+            dict(config.last_cumulative_usage)
+            if hasattr(config, "last_cumulative_usage") and config.last_cumulative_usage
+            else {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "thinking_tokens": 0,
+                "cache_read_tokens": 0,
+                "total_tokens": 0,
+            }
+        )
         self.session_turn_count: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
@@ -65,6 +71,14 @@ class AgyProcessBridge(QObject):
         """Start a fresh conversation topic in Antigravity and clear local chat history."""
         self.current_conversation_id = None
         config.last_conversation_id = None
+        self.last_cumulative_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cache_read_tokens": 0,
+            "total_tokens": 0,
+        }
+        config.last_cumulative_usage = dict(self.last_cumulative_usage)
         config.save_settings()
 
         self.conversation_history = []
@@ -81,13 +95,6 @@ class AgyProcessBridge(QObject):
         self.latest_cache_read_tokens = 0
         self.session_total_tokens = 0
         self.session_cache_tokens = 0
-        self.last_cumulative_usage = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "thinking_tokens": 0,
-            "cache_read_tokens": 0,
-            "total_tokens": 0,
-        }
         self.session_turn_count = 0
         self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
@@ -271,9 +278,21 @@ class AgyProcessBridge(QObject):
         image_attachments: Optional[List[str]] = None,
         pdf_attachments: Optional[List[str]] = None,
         active_skill: Optional[str] = None,
-        mode: str = "accept-edits"
+        mode: str = "accept-edits",
+        is_background: bool = False,
+        task_id: Optional[str] = None,
+        task_name: Optional[str] = None
     ):
         """Execute a user prompt against agy CLI, queueing if currently busy."""
+        if is_background:
+            self.send_background_task_async(
+                task_id=task_id or "task-bg",
+                task_name=task_name or "Otonom Görev",
+                prompt=prompt,
+                mode=mode
+            )
+            return
+
         with self._lock:
             if self._is_running:
                 self._prompt_queue.append((prompt, image_attachments, pdf_attachments, active_skill, mode))
@@ -289,6 +308,164 @@ class AgyProcessBridge(QObject):
             daemon=True
         )
         thread.start()
+
+    def send_background_task_async(
+        self,
+        task_id: str,
+        task_name: str,
+        prompt: str,
+        mode: str = "accept-edits"
+    ):
+        """Execute an autonomous background task without locking the interactive user chat UI."""
+        thread = threading.Thread(
+            target=self._execute_background_task_worker,
+            args=(task_id, task_name, prompt, mode),
+            daemon=True
+        )
+        thread.start()
+
+    def _execute_background_task_worker(
+        self,
+        task_id: str,
+        task_name: str,
+        prompt: str,
+        mode: str = "accept-edits"
+    ):
+        agy_bin = self.find_agy_executable()
+        bus.terminal_output_received.emit(
+            f"\n[⏰ Otonom Arka Plan Görevi: {task_name}] Başlatıldı...\n"
+        )
+        bus.core_pulse_triggered.emit(0.7)
+
+        cmd = [
+            agy_bin,
+            "-p", prompt,
+            "--output-format", "stream-json",
+            "--mode", mode,
+            "--dangerously-skip-permissions",
+            "--add-dir", str(self.active_project_dir),
+        ]
+        if self.selected_model and self.selected_model != config.model_fallback_name:
+            cmd.extend(["--model", self.selected_model])
+
+        full_response_acc = []
+        ret_code = -1
+        try:
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                cwd=str(self.active_project_dir) if self.active_project_dir.exists() else None
+            )
+
+            for raw_line in iter(proc.stdout.readline, ''):
+                if not raw_line:
+                    break
+                line_str = raw_line.strip()
+                if not line_str:
+                    continue
+
+                try:
+                    data = json.loads(line_str)
+                    event = data.get("event")
+
+                    if event == "step_update":
+                        step = data.get("step_update", {})
+                        text_delta = step.get("text_delta")
+                        if text_delta:
+                            bus.terminal_output_received.emit(text_delta)
+                            full_response_acc.append(text_delta)
+                            bus.core_pulse_triggered.emit(0.5)
+
+                        call = step.get("tool_call")
+                        if call:
+                            tool_name = call.get("name", "Araç")
+                            bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
+                            bus.core_pulse_triggered.emit(0.6)
+
+                        res = step.get("tool_result")
+                        if res:
+                            tool_name = res.get("name", "Araç")
+                            bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
+                            bus.core_pulse_triggered.emit(0.4)
+
+                    elif event == "result":
+                        result = data.get("result", {})
+                        resp = result.get("response", "")
+                        if not full_response_acc and resp:
+                            bus.terminal_output_received.emit(resp)
+                            full_response_acc.append(resp)
+
+                except json.JSONDecodeError:
+                    bus.terminal_output_received.emit(raw_line)
+                    full_response_acc.append(raw_line)
+
+            proc.stdout.close()
+            ret_code = proc.wait()
+
+        except Exception as e:
+            err_msg = f"[Otonom Görev Hata] {task_name} yürütülemedi: {str(e)}\n"
+            bus.terminal_output_received.emit(err_msg)
+            full_response_acc.append(err_msg)
+            ret_code = -1
+
+        finally:
+            full_text = "".join(full_response_acc).strip()
+            success = ret_code == 0 and len(full_text) > 0
+
+            # Generate and save research report for completed background task
+            clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
+            time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+            report_title = f"Gorev_{clean_name}_{time_tag}"
+
+            try:
+                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                vm = ObsidianVaultManager()
+
+                report_content = f"# Otonom Görev Raporu: {task_name}\n\n"
+                report_content += f"- **Görev Kimliği**: `{task_id}`\n"
+                report_content += f"- **Tamamlanma Zamanı**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                report_content += f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
+                report_content += f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
+
+                rep_path = vm.save_research_report(report_title, report_content, tags=["otonom_gorev", task_id])
+
+                # Store distilled summary in cognitive memory
+                try:
+                    cog = CognitiveMemorySystem()
+                    cog.store_node(
+                        category="semantic",
+                        content=f"Otonom Görev Özeti [{task_name}]: {full_text[:300]}",
+                        importance=0.85,
+                        metadata={"source": "scheduled_task", "task_id": task_id, "path": str(rep_path)}
+                    )
+                except Exception:
+                    pass
+
+                bus.report_created.emit(str(rep_path))
+                bus.task_notification.emit(task_id, task_name, str(rep_path))
+                bus.cognitive_memory_updated.emit()
+                bus.knowledge_graph_updated.emit()
+
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
+                bus.task_notification.emit(task_id, task_name, full_text[:200])
+
+            bus.task_completed.emit(task_id, success)
+            bus.terminal_output_received.emit(
+                f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
+            )
 
     def _execute_prompt_worker(
         self,
@@ -413,7 +590,7 @@ class AgyProcessBridge(QObject):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
@@ -464,14 +641,23 @@ class AgyProcessBridge(QObject):
                             bus.token_chunk_received.emit(text_delta)
                             bus.core_pulse_triggered.emit(0.8)
 
+                        call = step.get("tool_call")
+                        if call:
+                            tool_name = call.get("name", "Araç")
+                            bus.terminal_output_received.emit(f"\n[🔧 Araç Yürütülüyor: {tool_name}...]\n")
+                            bus.core_pulse_triggered.emit(0.7)
+
+                        res = step.get("tool_result")
+                        if res:
+                            tool_name = res.get("name", "Araç")
+                            bus.terminal_output_received.emit(f"[✔ Araç Tamamlandı: {tool_name}]\n")
+                            bus.core_pulse_triggered.emit(0.5)
+
                         usage = step.get("usage")
                         if usage:
-                            self.latest_input_tokens = usage.get("input_tokens", 0)
-                            self.latest_output_tokens = usage.get("output_tokens", 0)
-                            self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
-                            self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
-                            self.total_tokens_used = self.latest_output_tokens
-                            bus.token_usage_updated.emit(self.latest_output_tokens)
+                            step_out = usage.get("output_tokens", 0)
+                            if step_out > self.latest_output_tokens:
+                                self.latest_output_tokens = step_out
 
                     elif event == "result":
                         result = data.get("result", {})
@@ -510,7 +696,7 @@ class AgyProcessBridge(QObject):
                             self.session_cache_tokens = cum_cache
                             self.total_tokens_used = turn_total
 
-                            # Store baseline for next turn's delta
+                            # Store baseline for next turn's delta and persist
                             self.last_cumulative_usage = {
                                 "input_tokens": cum_in,
                                 "output_tokens": cum_out,
@@ -518,6 +704,8 @@ class AgyProcessBridge(QObject):
                                 "cache_read_tokens": cum_cache,
                                 "total_tokens": cum_total,
                             }
+                            config.last_cumulative_usage = dict(self.last_cumulative_usage)
+                            config.save_settings()
                             self.session_turn_count += 1
                             bus.token_usage_updated.emit(turn_total)
 

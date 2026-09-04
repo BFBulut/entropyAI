@@ -163,7 +163,6 @@ class TaskScheduler:
                 if self._callback:
                     try:
                         self._callback(task)
-                        bus.task_completed.emit(task.id, True)
                     except Exception:
                         bus.task_completed.emit(task.id, False)
 
