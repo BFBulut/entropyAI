@@ -858,11 +858,35 @@ class SkillManager:
 
         # Pre-configured semantic keywords for core skills
         domain_keywords: Dict[str, List[str]] = {
+            # Genişletildi (2026-09-08): tutma kümesi ve 75'lik değerlendirme
+            # kümesindeki kaçırılan örnekler tek tek incelendi. Eksik olanlar
+            # "borsa dili" (yatırım/hisse/temettü/halka arz) ile kantitatif
+            # finans terminolojisiydi (VaR, oynaklık, faktör modelleri, getiri
+            # eğrisi). Terimler kasadaki finans raporlarının başlıklarından ve
+            # denetim raporlarının yönetici özetlerinden çıkarıldı.
             "financial-auditor": [
                 "bilanco", "gelir tablosu", "nakit akim", "mali tablo", "finansal",
                 "rasyo", "dupont", "z-score", "beneish", "altman", "kar kalitesi",
                 "degerleme", "valuation", "forensic", "audit", "denetim", "portfoy",
-                "hisse", "tahvil", "bilancolar", "finans", "ebitda", "favok"
+                "hisse", "tahvil", "bilancolar", "finans", "ebitda", "favok",
+                # Borsa ve yatırım dili
+                "yatirim", "yatirimci", "yatirimcilik", "borsa", "endeks", "temettu",
+                "halka arz", "halka acik", "sermaye", "sermaye piyasa", "piyasa degeri",
+                "hisse basina", "kar payi", "karlilik", "kaldiracli", "kaldirac",
+                "short", "long", "adil deger", "hedef fiyat", "getiri", "carpan",
+                "fiyat kazanc", "f/k", "pd/dd", "net aktif deger", "holding",
+                # Kantitatif finans / risk
+                # "var" bilinçli olarak yok: Türkçede "ne var", "hangileri var"
+                # gibi gündelik kullanımı yanlış pozitif üretir. Aynı sebeple
+                # "alfa" da yok (alfabetik/alfa sürüm).
+                "cvar", "riske maruz", "oynaklik", "volatilite", "beta",
+                "sharpe", "faiz egrisi", "getiri egrisi", "faiz orani",
+                "risk primi", "sermaye maliyeti", "wacc", "iskonto orani",
+                "faktor modeli", "momentum", "arbitraj", "opsiyon", "turev",
+                "serbest nakit", "iflas riski", "finansal sikinti", "kredi riski",
+                "capm", "garch", "monte carlo", "backtest", "risk butceleme",
+                "piyasa zamanlamasi", "varlik fiyatlama", "cape", "ceyreklik",
+                "konsolide", "denetim raporu", "mali denetim"
             ],
             "autonomous-agent": [
                 "otonom", "autonomous", "agent", "ajan", "gorev", "task",
@@ -963,16 +987,28 @@ class SkillManager:
                         score += 2.0
 
             # Check description words
+            desc_score = 0.0
             desc_norm = normalize_str(s.description or "")
             desc_words = set(w for w in re.findall(r'\w+', desc_norm) if len(w) >= 4)
             for pt in p_tokens:
                 if re.search(rf"\b{re.escape(pt)}\b", desc_norm):
-                    score += 2.0
+                    desc_score += 2.0
                 elif any(dw.startswith(pt) or pt.startswith(dw) for dw in desc_words if min(len(dw), len(pt)) >= 4):
-                    score += 1.0
+                    desc_score += 1.0
 
-            # BM25 description length normalization penalty
-            norm_score = score / (1.0 + 0.0005 * len(s.description or ""))
+            # BM25 uzunluk cezası YALNIZCA açıklamadan gelen puana uygulanır.
+            #
+            # Neden: ceza, uzun bir açıklamanın rastgele kelime çakışmasıyla puan
+            # şişirmesini engellemek için var. Ama önceki sürüm cezayı toplam
+            # puana uyguluyordu; ad, alan anahtar kelimesi ve etiket eşleşmeleri
+            # açıklama uzunluğundan tamamen bağımsız olmasına rağmen onlar da
+            # bölünüyordu. Sonuç ölçüldü: financial-auditor'ın SKILL.md açıklaması
+            # damıtmayla 3.877 karaktere büyüdüğü için bölen 2,94'e çıkmıştı;
+            # "hisse" gibi tam bir anahtar kelime eşleşmesi (+5,0) karar eşiğinin
+            # (3,0) altına, 1,70'e düşüyordu. pdf-analyzer'ın böleni 1,07 olduğu
+            # için aynı mesajı o kazanıyordu. Yani yeteneğin dokümantasyonunu
+            # zenginleştirmek yönlendirilebilirliğini cezalandırıyordu.
+            norm_score = score + desc_score / (1.0 + 0.0005 * len(s.description or ""))
 
             # 2. Anlamsal benzerlik bonusu (taban altı sıfır, tavanla sınırlı).
             if use_semantic and cosine_similarity is not None:
@@ -1233,6 +1269,25 @@ def start_skill_watcher(project_dir: Optional[Path] = None, poll_interval_ms: in
     elif project_dir:
         _skill_watcher.set_project_dir(project_dir)
     return _skill_watcher
+
+
+def stop_skill_watcher() -> bool:
+    """
+    Süreç genelindeki yetenek izleyicisini durdurur; durdurulduysa True.
+
+    Kapanışta gerekli: QFileSystemWatcher ve iki QTimer, Qt olay döngüsü sona
+    ererken hâlâ diriyse yetenek dizinlerinde açık tanıtıcı tutar ve zamanlayıcı
+    yıkım sırasında ateşlenebilir. Yeniden çağrı güvenli.
+    """
+    global _skill_watcher
+    if _skill_watcher is None:
+        return False
+    try:
+        _skill_watcher.stop()
+    except Exception:
+        pass
+    _skill_watcher = None
+    return True
 
 
 def extract_skill_source_from_text(text: str) -> Optional[str]:

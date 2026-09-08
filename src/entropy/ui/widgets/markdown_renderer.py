@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 from entropy.core.config import config
-from entropy.ui.themes.cyber_theme import CYBER_THEME
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, reading_css
 
 
 def _escape(text: str) -> str:
@@ -412,13 +412,15 @@ class MermaidSvgGenerator:
         return simple_id, simple_id
 
 
-def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None) -> str:
+def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -> str:
     """
-    Transforms markdown into rich, cyber-themed HTML with embedded SVG charts,
-    diagrams, styled tables, and typography. Parses YAML frontmatter into a clean metadata banner.
+    Markdown gövdesini satır içi stilli HTML'e çevirir (sarmalayıcı yok).
+
+    Hem sohbet balonları (parça) hem de rapor okuyucu (tam belge) bunu kullanır;
+    böylece üç yüzeyde de tek tasarım sistemi geçerlidir.
     """
     if not markdown_text:
-        return "<html><body style='background-color:#080B10; color:#8B949E;'>Henüz içerik yok.</body></html>"
+        return ""
 
     # 1. Normalize line breaks and extract YAML frontmatter if present
     text = markdown_text.replace('\r\n', '\n').replace('\r', '\n').lstrip()
@@ -446,7 +448,7 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
                 tags_pills = ""
                 if "tags" in meta:
                     for t in meta["tags"][:6]:
-                        tags_pills += f'<span style="background-color:#141C2C; color:#00F0FF; border:1px solid #1F2B42; border-radius:4px; padding:2px 8px; margin-right:6px; font-size:11px; font-family:Consolas,monospace;">#{_escape(t)}</span>'
+                        tags_pills += f'<span style="background-color:{RT["accent_soft"]}; color:{RT["accent"]}; border-radius:10px; padding:2px 10px; margin-right:6px; font-size:11px;">#{_escape(t)}</span>'
 
                 title_text = meta.get("title") or ""
                 date_text = meta.get("date") or ""
@@ -466,12 +468,12 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
                 meta_info = " &nbsp;|&nbsp; ".join(info_line)
 
                 metadata_banner_html = (
-                    f'<div style="background-color:#0E1420; border:1px solid #1F2B42; border-left:4px solid #00F0FF; border-radius:6px; padding:12px 16px; margin-bottom:18px;">'
+                    f'<div style="background-color:{RT["surface_raised"]}; border-left:3px solid {RT["accent"]}; border-radius:{RT["radius"]}; padding:14px 18px; margin-bottom:20px;">'
                 )
                 if title_text:
-                    metadata_banner_html += f'<div style="color:#00F0FF; font-size:16px; font-weight:bold; margin-bottom:6px;">📄 {_escape(title_text)}</div>'
+                    metadata_banner_html += f'<div style="color:{RT["text"]}; font-size:18px; font-weight:600; margin-bottom:6px;">{_escape(title_text)}</div>'
                 if meta_info:
-                    metadata_banner_html += f'<div style="color:#8B949E; font-size:11px; margin-bottom:8px;">{meta_info}</div>'
+                    metadata_banner_html += f'<div style="color:{RT["text_dim"]}; font-size:12px; margin-bottom:8px;">{meta_info}</div>'
                 if tags_pills:
                     metadata_banner_html += f'<div style="margin-top:6px;">{tags_pills}</div>'
                 metadata_banner_html += '</div>'
@@ -490,18 +492,28 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
                 )
         except Exception:
             pass
-        return f'<pre style="background:#05070A; color:#00F0FF; padding:10px; border-radius:5px;"><code>{_escape(code)}</code></pre>'
+        return f'<pre style="background:{RT["surface_raised"]}; color:{RT["accent"]}; padding:12px 16px; border-radius:{RT["radius"]}; font-family:{RT["font_mono"]};"><code>{_escape(code)}</code></pre>'
 
     text = re.sub(r'```mermaid\s*\n(.*?)```', replace_mermaid, text, flags=re.DOTALL | re.IGNORECASE)
 
     # 3. Extract and style generic code blocks ```lang ... ```
+    # Tasarım: siyah şerit yerine yüzeyle uyumlu yumuşak köşeli kart, solda
+    # renk şeridi ve pil biçiminde dil etiketi.
     def replace_code_block(match):
         lang = match.group(1).strip() or "kod"
         code_content = match.group(2).strip()
         return (
-            f'<div style="background-color:#05070A; border:1px solid #1F2B42; border-radius:6px; margin:12px 0; padding:10px 14px;">'
-            f'<div style="color:#00F0FF; font-size:10px; font-weight:bold; letter-spacing:1px; margin-bottom:6px;">💻 {lang.upper()}</div>'
-            f'<pre style="margin:0; font-family:Consolas, monospace; font-size:12px; color:#F0F6FC; white-space:pre-wrap;"><code>{_escape(code_content)}</code></pre>'
+            f'<div style="background-color:{RT["surface_raised"]}; border:1px solid {RT["divider_soft"]};'
+            f' border-left:3px solid {RT["accent"]}; border-radius:{RT["radius"]};'
+            f' margin:{RT["block_margin"]} 0; padding:12px 16px;">'
+            f'<div style="margin-bottom:8px;">'
+            f'<span style="background-color:{RT["accent_soft"]}; color:{RT["accent"]};'
+            f' border-radius:10px; padding:2px 10px; font-size:10px; font-weight:600;'
+            f' letter-spacing:0.6px; font-family:{RT["font_mono"]};">{_escape(lang.upper())}</span>'
+            f'</div>'
+            f'<pre style="margin:0; font-family:{RT["font_mono"]}; font-size:{RT["font_size_mono"]};'
+            f' line-height:1.5; color:{RT["text"]}; white-space:pre-wrap;">'
+            f'<code>{_escape(code_content)}</code></pre>'
             f'</div>'
         )
 
@@ -511,8 +523,8 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
     def replace_math_block(match):
         formula = match.group(1).strip()
         return (
-            f'<div style="background-color:#0E1420; border:1px solid #00FF9D; border-radius:6px; padding:8px 16px; margin:12px 0; text-align:center;">'
-            f'<span style="color:#00FF9D; font-family:Cambria Math, Georgia, serif; font-size:14px; font-style:italic;">{_escape(formula)}</span>'
+            f'<div style="background-color:{RT["surface_raised"]}; border-left:3px solid {RT["accent_alt"]}; border-radius:{RT["radius"]}; padding:10px 18px; margin:{RT["block_margin"]} 0; text-align:center;">'
+            f'<span style="color:{RT["accent_alt"]}; font-family:Cambria Math, Georgia, serif; font-size:15px; font-style:italic;">{_escape(formula)}</span>'
             f'</div>'
         )
 
@@ -550,29 +562,29 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
 
     text = '\n'.join(processed_lines)
 
-    # 7. Headers with Cyber Styling
-    text = re.sub(r'^#\s+(.+)$', r'<h1 style="color:#00F0FF; font-size:20px; font-weight:bold; border-bottom:1px solid #1F2B42; padding-bottom:6px; margin-top:16px; margin-bottom:10px;">\1</h1>', text, flags=re.MULTILINE)
-    text = re.sub(r'^##\s+(.+)$', r'<h2 style="color:#00FF9D; font-size:16px; font-weight:bold; border-bottom:1px solid #141C2C; padding-bottom:4px; margin-top:14px; margin-bottom:8px;">\1</h2>', text, flags=re.MULTILINE)
-    text = re.sub(r'^###\s+(.+)$', r'<h3 style="color:#F0F6FC; font-size:14px; font-weight:bold; margin-top:12px; margin-bottom:6px;">\1</h3>', text, flags=re.MULTILINE)
-    text = re.sub(r'^####\s+(.+)$', r'<h4 style="color:#8B949E; font-size:12px; font-weight:bold; margin-top:10px; margin-bottom:4px;">\1</h4>', text, flags=re.MULTILINE)
+    # 7. Başlık hiyerarşisi: renk yerine boyut/ağırlık farkı, üstte nefes payı.
+    text = re.sub(r'^#\s+(.+)$', rf'<h1 style="color:{RT["text"]}; font-size:22px; font-weight:600; border-bottom:1px solid {RT["divider"]}; padding-bottom:8px; margin-top:22px; margin-bottom:12px;">\1</h1>', text, flags=re.MULTILINE)
+    text = re.sub(r'^##\s+(.+)$', rf'<h2 style="color:{RT["text"]}; font-size:18px; font-weight:600; margin-top:20px; margin-bottom:8px;">\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^###\s+(.+)$', rf'<h3 style="color:{RT["accent"]}; font-size:15px; font-weight:600; margin-top:16px; margin-bottom:6px;">\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^####\s+(.+)$', rf'<h4 style="color:{RT["text_dim"]}; font-size:13px; font-weight:600; letter-spacing:0.4px; margin-top:14px; margin-bottom:4px;">\1</h4>', text, flags=re.MULTILINE)
 
-    # 8. Blockquotes
-    text = re.sub(r'^>\s*(.+)$', r'<blockquote style="border-left:3px solid #00F0FF; background-color:#0E1420; padding:6px 12px; margin:8px 0; color:#CBD5E1; font-style:italic;">\1</blockquote>', text, flags=re.MULTILINE)
+    # 8. Blockquotes: dolgu yok, yalnızca sol şerit.
+    text = re.sub(r'^>\s*(.+)$', rf'<blockquote style="border-left:3px solid {RT["accent"]}; padding:4px 0 4px 14px; margin:10px 0; color:{RT["text_dim"]};">\1</blockquote>', text, flags=re.MULTILINE)
 
     # 9. Horizontal rules
-    text = re.sub(r'^(?:---|\*\*\*|___)$', r'<hr style="border:none; border-top:1px solid #1F2B42; margin:14px 0;" />', text, flags=re.MULTILINE)
+    text = re.sub(r'^(?:---|\*\*\*|___)$', rf'<hr style="border:none; border-top:1px solid {RT["divider_soft"]}; margin:18px 0;" />', text, flags=re.MULTILINE)
 
     # 10. Bold, Italic, Inline Code
-    text = re.sub(r'\*\*(.+?)\*\*', r'<b style="color:#F0F6FC;">\1</b>', text)
-    text = re.sub(r'\*(.+?)\*', r'<i style="color:#CBD5E1;">\1</i>', text)
-    text = re.sub(r'`([^`]+)`', r'<code style="background-color:#05070A; color:#00F0FF; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; font-family:Consolas, monospace; font-size:11px;">\1</code>', text)
+    text = re.sub(r'\*\*(.+?)\*\*', rf'<b style="color:{RT["text"]};">\1</b>', text)
+    text = re.sub(r'\*(.+?)\*', rf'<i style="color:{RT["text_body"]};">\1</i>', text)
+    text = re.sub(r'`([^`]+)`', rf'<code style="background-color:{RT["surface_soft"]}; color:{RT["accent"]}; border-radius:4px; padding:1px 6px; font-family:{RT["font_mono"]}; font-size:{RT["font_size_small"]};">\1</code>', text)
 
     # 11. Images: ![Alt](url_or_path)
     def resolve_image(match):
         alt = match.group(1)
         src = match.group(2).strip()
         if src.startswith(("http://", "https://", "data:")):
-            return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #1F2B42; border-radius:6px;" /></div>'
+            return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #22314A; border-radius:8px;" /></div>'
         try:
             img_path = Path(src)
             if not img_path.is_absolute() and base_dir:
@@ -583,18 +595,22 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
                 src = img_path.as_uri()
         except Exception:
             pass
-        return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #1F2B42; border-radius:6px;" /></div>'
+        return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #22314A; border-radius:8px;" /></div>'
 
     text = re.sub(r'!\[(.*?)\]\((.*?)\)', resolve_image, text)
 
-    # 12. Links: [Label](url)
-    text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" style="color:#00F0FF; text-decoration:none; font-weight:bold;">\1</a>', text)
+    # 12. Links: [Label](url) — pil biçiminde, gövde metninden ayrışır.
+    text = re.sub(
+        r'\[(.*?)\]\((.*?)\)',
+        rf'<a href="\2" style="color:{RT["accent"]}; background-color:{RT["accent_soft"]}; border-radius:10px; padding:1px 8px; text-decoration:none; font-weight:600;">\1</a>',
+        text,
+    )
 
-    # 13. Bullet lists
-    text = re.sub(r'^\s*[-*+]\s+(.+)$', r'<li style="color:#CBD5E1; margin:3px 0;">\1</li>', text, flags=re.MULTILINE)
+    # 13. Bullet lists (madde işaretleri hizalı, satır aralığı nefesli)
+    text = re.sub(rf'^\s*[-*+]\s+(.+)$', rf'<li style="color:{RT["text_body"]}; margin:5px 0; line-height:{RT["line_height"]};">\1</li>', text, flags=re.MULTILINE)
 
     # Wrap adjacent <li> in <ul>
-    text = re.sub(r'(<li[^>]*>.*?</li>(?:\s*<li[^>]*>.*?</li>)*)', r'<ul style="margin:6px 0; padding-left:20px;">\1</ul>', text, flags=re.DOTALL)
+    text = re.sub(r'(<li[^>]*>.*?</li>(?:\s*<li[^>]*>.*?</li>)*)', r'<ul style="margin:8px 0; padding-left:22px;">\1</ul>', text, flags=re.DOTALL)
 
     # 14. Paragraph line breaks (preserving existing HTML blocks)
     paragraphs = text.split('\n\n')
@@ -609,32 +625,44 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
             formatted_paras.append(p_strip)
         else:
             p_clean = p_strip.replace('\n', '<br/>')
-            formatted_paras.append(f'<p style="margin:8px 0; line-height:1.6; color:#CBD5E1;">{p_clean}</p>')
+            formatted_paras.append(
+                f'<p style="margin:10px 0; line-height:{RT["line_height"]}; font-size:{RT["font_size_body"]}; color:{RT["text_body"]};">{p_clean}</p>'
+            )
 
     body_html = '\n'.join(formatted_paras)
     if metadata_banner_html:
         body_html = metadata_banner_html + '\n' + body_html
+    return body_html
 
-    # Complete Cyber HTML document with scrollbar and font styling
+
+def render_markdown_fragment(markdown_text: str, base_dir: Optional[Path] = None) -> str:
+    """
+    Markdown'ı GÖMÜLEBİLİR bir HTML parçasına dönüştürür (belge sarmalayıcısı yok).
+
+    Sohbet balonları bunu kullanır. Eskiden balonların içine tam bir
+    <html><body style="background-color:..."> belgesi gömülüyordu; Qt zengin
+    metin motoru iç gövdenin arka planını boyadığı için mesajların arkasında
+    siyah bloklar oluşuyordu. Rapor okuyucusu ise tam belgeyi kullanır.
+    """
+    if not markdown_text:
+        return f'<div style="color:{RT["text_dim"]};">Henüz içerik yok.</div>'
+    return _render_markdown_body(markdown_text, base_dir=base_dir)
+
+
+def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None) -> str:
+    """Markdown'ı, ortak okuma CSS'i gömülü eksiksiz bir HTML belgesine dönüştürür."""
+    if not markdown_text:
+        return (
+            f"<html><body style='background-color:{RT['surface_base']};"
+            f" color:{RT['text_dim']};'>Henüz içerik yok.</body></html>"
+        )
+    body_html = _render_markdown_body(markdown_text, base_dir=base_dir)
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8"/>
 <style>
-    body {{
-        background-color: {CYBER_THEME['bg_surface']};
-        color: {CYBER_THEME['text_primary']};
-        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-        font-size: 13px;
-        line-height: 1.6;
-        padding: 12px 16px;
-    }}
-    a {{ color: #00F0FF; text-decoration: none; }}
-    a:hover {{ text-decoration: underline; color: #00FF9D; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
-    th, td {{ border: 1px solid #1F2B42; padding: 6px 10px; text-align: left; }}
-    th {{ background-color: #141C2C; color: #00F0FF; font-weight: bold; }}
-    tr:nth-child(even) {{ background-color: #0E1420; }}
+{reading_css()}
 </style>
 </head>
 <body>
@@ -643,24 +671,92 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
 </html>"""
 
 
+def build_chat_bubble_html(sender: str, text: str, is_system: bool = False) -> str:
+    """
+    Sohbet mesajı için tek kaynaklı HTML üretir (Chat modu + Zen sohbet paneli).
+
+    Ağır balon yok: kullanıcı ve asistan yalnızca sol renk şeridi ve etiket ile
+    ayrışır; asistan gövdesi markdown parçası olarak işlenir.
+    """
+    if is_system:
+        return (
+            f"<div style='margin:10px 0; text-align:center;'>"
+            f"<span style='background-color:{RT['surface_raised']}; color:{RT['text_dim']};"
+            f" border-radius:12px; padding:4px 14px; font-size:{RT['font_size_small']};'>"
+            f"{text}</span></div>"
+        )
+
+    is_user = sender in ("Siz", "Sen")
+    stripe = RT["accent_alt"] if is_user else RT["accent"]
+    label = "SİZ" if is_user else "ENTROPY AI"
+    body = text if is_user else _render_markdown_body(text)
+    # Kullanıcı mesajı yüzeyden bir kademe yükseltilir; asistan mesajı arka planla
+    # aynı kalır. Kenarlık/dolgu yığmadan iki taraf ayırt edilir.
+    surface = f" background-color:{RT['surface_raised']};" if is_user else ""
+    return (
+        f"<div style='margin:0 0 14px 0; padding:8px 12px 8px 14px;{surface}"
+        f" border-left:3px solid {stripe}; border-radius:{RT['radius_small']};'>"
+        f"<div style='color:{stripe}; font-size:10px; font-weight:600; letter-spacing:1px;"
+        f" margin-bottom:4px;'>{label}</div>"
+        f"<div style='color:{RT['text_body']}; font-size:{RT['font_size_body']};"
+        f" line-height:{RT['line_height']};'>{body}</div>"
+        f"</div>"
+    )
+
+
 def _build_table_html(rows: List[List[str]]) -> str:
-    """Build a styled dark cyber table from rows."""
+    """
+    Modern, okunaklı tablo: hücre dolgusu yok; ince ayırıcı çizgiler,
+    vurgulu başlık satırı, hafif zebra ve sayısal sütunlarda sağa hizalama.
+    """
     if not rows:
         return ""
     header_row = rows[0]
     data_rows = rows[1:]
 
-    html_parts = ['<table style="border-collapse:collapse; width:100%; margin:12px 0; border:1px solid #1F2B42; border-radius:4px;">']
+    def _is_numeric(value: str) -> bool:
+        v = value.strip().replace("%", "").replace(",", ".").replace(" ", "")
+        v = v.lstrip("+-$₺€£").rstrip("$₺€£")
+        if not v:
+            return False
+        try:
+            float(v)
+            return True
+        except ValueError:
+            return False
+
+    # Sütun sayısal mı: veri satırlarının çoğunluğuna bakılır.
+    col_count = max([len(header_row)] + [len(r) for r in data_rows]) if data_rows else len(header_row)
+    numeric_cols = set()
+    for c in range(col_count):
+        values = [r[c] for r in data_rows if c < len(r) and r[c].strip()]
+        if values and sum(1 for v in values if _is_numeric(v)) >= max(1, len(values) * 0.6):
+            numeric_cols.add(c)
+
+    html_parts = [
+        f'<table style="border-collapse:collapse; width:100%; margin:{RT["block_margin"]} 0;">'
+    ]
     html_parts.append('<thead><tr>')
-    for col in header_row:
-        html_parts.append(f'<th style="background-color:#141C2C; color:#00F0FF; padding:6px 10px; border:1px solid #1F2B42; font-size:12px;">{_escape(col)}</th>')
+    for idx, col in enumerate(header_row):
+        align = "right" if idx in numeric_cols else "left"
+        html_parts.append(
+            f'<th style="color:{RT["accent"]}; padding:9px 12px; text-align:{align};'
+            f' border-bottom:2px solid {RT["divider"]}; font-size:{RT["font_size_small"]};'
+            f' font-weight:600; letter-spacing:0.3px;">{_escape(col)}</th>'
+        )
     html_parts.append('</tr></thead><tbody>')
 
     for r_idx, r in enumerate(data_rows):
-        bg = "#0E1420" if r_idx % 2 == 0 else "#080B10"
-        html_parts.append(f'<tr style="background-color:{bg};">')
-        for col in r:
-            html_parts.append(f'<td style="padding:6px 10px; border:1px solid #1F2B42; color:#CBD5E1; font-size:12px;">{_escape(col)}</td>')
+        # Zebra: siyah dolgu değil, yüzeyden yalnızca bir kademe fark.
+        row_style = f' style="background-color:{RT["surface_raised"]};"' if r_idx % 2 == 1 else ""
+        html_parts.append(f'<tr{row_style}>')
+        for c_idx, col in enumerate(r):
+            align = "right" if c_idx in numeric_cols else "left"
+            html_parts.append(
+                f'<td style="padding:8px 12px; text-align:{align};'
+                f' border-bottom:1px solid {RT["divider_soft"]}; color:{RT["text_body"]};'
+                f' font-size:{RT["font_size_small"]};">{_escape(col)}</td>'
+            )
         html_parts.append('</tr>')
 
     html_parts.append('</tbody></table>')

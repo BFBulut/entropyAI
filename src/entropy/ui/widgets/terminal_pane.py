@@ -1,13 +1,13 @@
 """Split Terminal Pane widget for real-time stdout/stderr streaming."""
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont, QTextBlockFormat, QTextCursor
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 )
 
 from entropy.core.event_bus import bus
-from entropy.ui.themes.cyber_theme import CYBER_THEME
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS
 
 class TerminalPaneWidget(QFrame):
     """Real-time streaming agent terminal (enforcing RULE: agent-ui-routing)."""
@@ -22,7 +22,10 @@ class TerminalPaneWidget(QFrame):
         # Header bar
         self.header_layout = QHBoxLayout()
         self.title_label = QLabel(f"<b>[>_] {title}</b>")
-        self.title_label.setStyleSheet(f"color: {CYBER_THEME['accent_cyan']}; font-family: 'Consolas';")
+        self.title_label.setStyleSheet(
+            f"color: {READING_TOKENS['accent']}; font-family: {READING_TOKENS['font_mono']};"
+            " font-size: 12px; letter-spacing: 0.5px;"
+        )
         self.header_layout.addWidget(self.title_label)
 
         self.header_layout.addStretch()
@@ -37,15 +40,29 @@ class TerminalPaneWidget(QFrame):
         # Text output area
         self.text_area = QTextEdit()
         self.text_area.setReadOnly(True)
-        self.text_area.setFont(QFont("Consolas", 10))
+        # Okunabilirlik: daha büyük punto ve satır aralığı. QTextEdit stil
+        # sayfası line-height'i uygulamadığı için aralık blok biçimiyle verilir.
+        mono = QFont("Cascadia Mono", 11)
+        if not mono.exactMatch():
+            mono = QFont("Consolas", 11)
+        self.text_area.setFont(mono)
         self.text_area.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {CYBER_THEME['bg_terminal']};
-                color: #A9B7C6;
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 4px;
+                background-color: {READING_TOKENS['surface_base']};
+                color: {READING_TOKENS['text_body']};
+                border: 1px solid {READING_TOKENS['divider_soft']};
+                border-radius: 8px;
+                padding: 10px 12px;
+                selection-background-color: {READING_TOKENS['accent_soft']};
             }}
         """)
+        _block_fmt = QTextBlockFormat()
+        _block_fmt.setLineHeight(140, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        _cursor = self.text_area.textCursor()
+        _cursor.select(QTextCursor.SelectionType.Document)
+        _cursor.mergeBlockFormat(_block_fmt)
+        self.text_area.setTextCursor(_cursor)
+        self._block_format = _block_fmt
         self.layout.addWidget(self.text_area)
 
         # Connect to Event Bus
@@ -53,9 +70,14 @@ class TerminalPaneWidget(QFrame):
 
     @Slot(str)
     def append_text(self, text: str):
-        self.text_area.moveCursor(QTextCursor.MoveOperation.End)
-        self.text_area.insertPlainText(text)
-        self.text_area.moveCursor(QTextCursor.MoveOperation.End)
+        cursor = self.text_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        # Satir araligi bicimi yeni bloklara da uygulanir.
+        if getattr(self, "_block_format", None) is not None:
+            cursor.setBlockFormat(self._block_format)
+        cursor.insertText(text)
+        self.text_area.setTextCursor(cursor)
+        self.text_area.ensureCursorVisible()
 
     def append_output(self, text: str):
         self.append_text(text)

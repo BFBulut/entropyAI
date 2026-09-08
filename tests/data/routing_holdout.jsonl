@@ -1,0 +1,38 @@
+// Bağımsız tutma kümesi (holdout) — yönlendirme ayarı bu küme üzerinde YAPILMAZ.
+// Kaynak: Obsidian kasasındaki finans raporlarının başlıkları/ilk paragrafları
+// (Entropy/Projects/EntropiAI/Reports/*.md, Faz 55-59 kantitatif finans serisi),
+// depo kökündeki denetim raporları (atatp/sahol/enjsa_financial_audit.md) ve
+// görev defterindeki görev adları. .entropy/chat_history.json'dan HİÇBİR örnek
+// alınmadı: routing_eval.jsonl'ın büyük bölümü oradan türediği için, sohbet
+// mesajları kullanılsaydı ayar yaptığımız kümeyle bağımlı bir örneklem olurdu.
+// Kontrol etiketleri (finans dışı 8 örnek) yanlış pozitif ölçmek için var.
+{"id": "hold-01", "prompt": "Black-Litterman ile portfoy agirliklarini Bayesyen dengeleyip kuresel dagilimi yeniden kur", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-02", "prompt": "Cochrane-Piazzesi tahvil risk primini vadeli oranlardan tahmin edebilir misin", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-03", "prompt": "Litterman-Scheinkman faiz PCA ile egri seviye egim ve kelebek ayristirmasi yap", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-04", "prompt": "Myers APV yontemiyle sermaye yapisini degerle ve Roll elestirisini tartis", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-05", "prompt": "Barra cok faktorlu risk modeliyle capraz kesitsel risk butcelemesi kur", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-06", "prompt": "Brinson-Fachler nitelendirmesiyle sektor tahsisi ve hisse secimi katkisini ayir", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-07", "prompt": "Henriksson-Merton testiyle fon yoneticisinin piyasa zamanlamasi becerisini olc", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-08", "prompt": "Hull-White iki faktorlu modelle faiz egrisi bukulmesini kalibre et", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-09", "prompt": "Carhart 4 faktor momentum modelini kurup kazananlar eksi kaybedenler faktorunu hesapla", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-10", "prompt": "Arbitraj fiyatlama teorisiyle cok faktorlu beklenen getiriyi tahmin et", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-11", "prompt": "Ho-Lee arbitrajsiz faiz egrisi agacini kur ve tahvil fiyatla", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-12", "prompt": "Treynor-Black aktif portfoy optimizasyonuyla alfa agirliklarini cikar", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-13", "prompt": "Fama-French bes faktor modelinde karlilik ve yatirim faktorleri HML yi gereksiz kiliyor mu", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-14", "prompt": "Ohlson O-Score lojitiyle sirketin iflas ve finansal sikinti olasiligini hesapla", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-15", "prompt": "Shiller CAPE ve fazla getiri verimiyle piyasanin pahali olup olmadigini degerlendir", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-16", "prompt": "Damodaran yaklasimiyla agirlikli ortalama sermaye maliyetini ve ulke risk primini hesapla", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-17", "prompt": "BEKK-GARCH ile cok degiskenli oynaklik ve kovaryans dinamigini tahmin et", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-18", "prompt": "Lo-MacKinlay varyans orani testiyle piyasa etkinligini sina", "expected": "financial-auditor", "source": "vault-report"}
+{"id": "hold-19", "prompt": "ATP Yazilim icin piyasa degeri ve ceyreklik konsolide tablolar uzerinden derinlemesine denetim yap", "expected": "financial-auditor", "source": "repo-audit"}
+{"id": "hold-20", "prompt": "Enerjisa nin duzenlenmis varlik tabani uzerinden serbest nakit akimi projeksiyonu cikar", "expected": "financial-auditor", "source": "repo-audit"}
+{"id": "hold-21", "prompt": "Sirketin temettu verimi ve hisse basina karini rakip carpanlariyla karsilastir", "expected": "financial-auditor", "source": "repo-audit"}
+{"id": "hold-22", "prompt": "Halka arz sonrasi fiyat oynakligini borsa endeksine gore betasiyla olc", "expected": "financial-auditor", "source": "repo-audit"}
+{"id": "hold-23", "prompt": "Harness ve AgentDesk mimarisinde orkestrator ajanin alt ajanlara gorev dagitimini kur", "expected": "autonomous-agent", "source": "vault-report", "note": "kontrol"}
+{"id": "hold-24", "prompt": "A2A protokoluyle ofisler arasi ajan mesajlasmasini ve denetim agacini tasarla", "expected": "autonomous-agent", "source": "vault-report", "note": "kontrol"}
+{"id": "hold-25", "prompt": "CanivoPets sitesinin medya ajansi denetimini yap ve buyume onerileri cikar", "expected": "media-agency-soldier", "source": "vault-report", "note": "kontrol"}
+{"id": "hold-26", "prompt": "Marka icin reklam kampanyasi ve donusum orani optimizasyonu plani hazirla", "expected": "media-agency-soldier", "source": "vault-report", "note": "kontrol"}
+{"id": "hold-27", "prompt": "Bu arastirma raporunu yonetim kuruluna sunum destesi olarak hazirla", "expected": "slide-deck-architect", "source": "vault-report", "note": "kontrol"}
+{"id": "hold-28", "prompt": "gunluk notlari guncelle", "expected": null, "source": "synthetic", "note": "kontrol: yetenek sizmamali"}
+{"id": "hold-29", "prompt": "bu dosyayi yeniden adlandirir misin", "expected": null, "source": "synthetic", "note": "kontrol: yetenek sizmamali"}
+{"id": "hold-30", "prompt": "dun ne yapmistik hatirlatir misin", "expected": null, "source": "synthetic", "note": "kontrol: yetenek sizmamali"}

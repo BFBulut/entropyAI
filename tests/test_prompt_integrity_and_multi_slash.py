@@ -320,7 +320,11 @@ def test_chat_input_field_multi_slash_sequential_selection(qapp):
     input_field.show()
 
     # 1. User types "/" -> popup opens
+    # Öneriler 150 ms gecikmeyle hesaplanır (tuş başına dizin taramasını önlemek
+    # için); test gecikmeyi beklemek yerine zamanlayıcıyı elle tetikler.
     input_field.setText("/")
+    assert input_field._suggest_timer.isActive(), "öneri zamanlayıcısı kurulmadı"
+    input_field._update_suggestions()
     assert input_field.popup.isVisible()
 
     # 2. Simulate multi-selection signal from popup: ["/boost", "/plan", "/learn"]

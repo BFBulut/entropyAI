@@ -5,7 +5,7 @@ import re
 import json
 import math
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Tuple
+from typing import Optional, Dict, List, Any, Set, Tuple
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QComboBox
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -19,20 +19,167 @@ from entropy.skills.manager import SkillManager
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
-# Bir dala bağlı rapor sayısı bu eşiği aşınca raporlar tek bir küme düğümüne
-# katlanır (bkz. build_unified_graph içindeki kümeleme geçişi).
-REPORT_CLUSTER_MIN = 10
+# Rapor kümesi açma/kapama düğümleri kaldırıldı (2026-09-08): "87 rapor" halkası
+# tıklandığında görünüm baştan kuruluyor, kullanıcı yerini kaybediyordu. Artık
+# bütün yapraklar her zaman küçük noktalar olarak görünür; kalabalık, kümeleme
+# yerine benzerlik kenarları + topluluk renklendirmesiyle okunur kılınır.
 
-# Kümelenebilen yaprak grupları ve küme etiketleri ("62 not", "30 anı").
-LEAF_CLUSTER_LABELS = {
-    "Reports": "rapor",
-    "obsidian": "not",
-    "semantic": "anı",
-    "episodic": "anı",
-    "procedural": "yordam",
-    "DailyNotes": "günlük",
-    "mcp-tool": "araç",
+# Yaprak düğümler arasında kurulan k-NN benzerlik kenarları. Kosinüs eşiği
+# altındaki çiftler bağlanmaz; k komşu, düğüm başına üst sınırdır.
+SIMILARITY_K = 4
+SIMILARITY_MIN = 0.34
+# Benzerlik hesabına giren yaprak grupları (dal/hub düğümleri hariç).
+SIMILARITY_GROUPS = {"Reports", "obsidian", "semantic", "episodic", "procedural", "DailyNotes"}
+
+# Başlıklarda ayırt edici olmayan sözcükler.
+SIMILARITY_STOPWORDS = {
+    "rapor", "report", "analiz", "analysis", "icin", "için", "ile", "ve", "the", "and",
+    "faz", "phase", "2026", "2025", "notlar", "notes", "final", "yeni", "guncel",
 }
+
+
+def _similarity_tokens(name: str) -> List[str]:
+    """Başlıktan ayırt edici belirteçler; deterministik ve dile duyarsız."""
+    slug = normalize_slug(name)
+    out = []
+    for tok in slug.split("-"):
+        if len(tok) < 4 or tok in SIMILARITY_STOPWORDS or tok.isdigit():
+            continue
+        out.append(tok)
+    return out
+
+
+def build_similarity_links(
+    leaf_nodes: List[Dict[str, Any]],
+    k: int = SIMILARITY_K,
+    threshold: float = SIMILARITY_MIN,
+) -> List[Dict[str, Any]]:
+    """
+    Yaprak düğümler arasında TF-IDF kosinüs benzerliğine dayalı k-NN kenarları.
+
+    Ters indeks kullanılır: yalnızca en az bir belirteci paylaşan çiftler
+    karşılaştırılır, bu yüzden maliyet O(N²) değil paylaşılan belirteç sayısıyla
+    orantılıdır (900 raporda ölçülen: ~40 ms).
+    """
+    docs: List[Tuple[str, Dict[str, float]]] = []
+    postings: Dict[str, List[int]] = {}
+    raw: List[List[str]] = []
+    for n in leaf_nodes:
+        toks = _similarity_tokens(n.get("name", ""))
+        raw.append(toks)
+    df: Dict[str, int] = {}
+    for toks in raw:
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    total_docs = max(1, len(raw))
+    for i, toks in enumerate(raw):
+        vec: Dict[str, float] = {}
+        for t in set(toks):
+            # Her belgede geçen bir belirteç (ör. "entropiai") ayırt edici değil.
+            idf = math.log(total_docs / (1.0 + df.get(t, 1)))
+            if idf <= 0:
+                continue
+            vec[t] = idf
+        norm = math.sqrt(sum(v * v for v in vec.values()))
+        if norm <= 0:
+            docs.append((leaf_nodes[i]["id"], {}))
+            continue
+        vec = {t: v / norm for t, v in vec.items()}
+        docs.append((leaf_nodes[i]["id"], vec))
+        for t in vec:
+            postings.setdefault(t, []).append(i)
+
+    links: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for i, (nid, vec) in enumerate(docs):
+        if not vec:
+            continue
+        scores: Dict[int, float] = {}
+        for t, w in vec.items():
+            plist = postings.get(t, ())
+            # Çok yaygın belirteçler (yüzlerce belge) hem ayırt edici değil hem
+            # de karşılaştırma sayısını patlatır; atlanır.
+            if len(plist) > 60:
+                continue
+            for j in plist:
+                if j == i:
+                    continue
+                other = docs[j][1].get(t)
+                if other:
+                    scores[j] = scores.get(j, 0.0) + w * other
+        best = sorted(
+            ((s, j) for j, s in scores.items() if s >= threshold),
+            key=lambda p: (-p[0], docs[p[1]][0]),
+        )[:k]
+        for score, j in best:
+            a, b = sorted((nid, docs[j][0]))
+            if (a, b) in seen:
+                continue
+            seen.add((a, b))
+            links.append({
+                "source": a,
+                "target": b,
+                "is_similarity_link": True,
+                "weight": round(min(1.0, score), 3),
+            })
+    return links
+
+
+def assign_communities(
+    nodes: List[Dict[str, Any]],
+    links: List[Dict[str, Any]],
+    rounds: int = 8,
+) -> Dict[str, int]:
+    """
+    Etiket yayılımı ile topluluk tespiti (networkx'siz, deterministik).
+
+    Louvain modülerlik optimizasyonu daha iyi bölütler verir ama networkx bağımlılığı
+    ve ~O(m log n) maliyeti getirir; burada amaç renk tonu üretmek olduğu için
+    ağırlıklı etiket yayılımı yeterli. Düğümler kimliğe göre sıralı gezildiğinden
+    sonuç her çalıştırmada aynıdır.
+    """
+    adj: Dict[str, List[Tuple[str, float]]] = {}
+    ids = {n["id"] for n in nodes}
+    for l in links:
+        if l.get("is_catalog_link"):
+            continue
+        s, t = l.get("source"), l.get("target")
+        if s not in ids or t not in ids:
+            continue
+        w = 2.5 * float(l.get("weight", 1.0)) if l.get("is_similarity_link") else (
+            0.6 if l.get("is_tree_link") else 1.0
+        )
+        adj.setdefault(s, []).append((t, w))
+        adj.setdefault(t, []).append((s, w))
+
+    label: Dict[str, str] = {n["id"]: n["id"] for n in nodes}
+    order = sorted(ids)
+    for _ in range(rounds):
+        changed = False
+        for nid in order:
+            neigh = adj.get(nid)
+            if not neigh:
+                continue
+            tally: Dict[str, float] = {}
+            for other, w in neigh:
+                lab = label[other]
+                tally[lab] = tally.get(lab, 0.0) + w
+            best = min(tally.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+            if best != label[nid]:
+                label[nid] = best
+                changed = True
+        if not changed:
+            break
+
+    # Etiketleri küçük tamsayılara indirger (renk tonu için).
+    index: Dict[str, int] = {}
+    out: Dict[str, int] = {}
+    for nid in order:
+        lab = label[nid]
+        if lab not in index:
+            index[lab] = len(index)
+        out[nid] = index[lab]
+    return out
 
 # Deterministic keywords for virtual taxonomy classification
 FINANCIAL_KEYWORDS = [
@@ -370,7 +517,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
     <div id="controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
         <button class="ctrl-btn" onclick="zoomOut()" title="Uzaklaştır">-</button>
-        <button class="ctrl-btn" onclick="fitToView()" title="Görünümü Sığdır / Sıfırla">⟲</button>
+        <button class="ctrl-btn" onclick="resetView()" title="Görünümü Sığdır / Sıfırla">⟲</button>
     </div>
     <div id="infoBox"></div>
     <canvas id="canvas"></canvas>
@@ -444,32 +591,15 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'DailyNotes': true
         };
 
-        // Katlanmış rapor kümeleri: tıklanınca açılır. Kapalı bir kümenin
-        // çocukları fizik, çizim, kenar ve hover döngülerinin hepsinden çıkar.
-        const expandedClusters = new Set();
-
+        // Rapor kümesi açma/kapama düğümü YOKTUR. Tüm yapraklar her zaman
+        // görünür; tıklama yalnızca seçim yapar, yerleşimi yeniden kurmaz.
         function isNodeVisible(n) {
             if (!n) return false;
-            if (n.group === 'report-cluster') {
-                if (!isCategoryActive(n.leaf_group || 'Reports')) return false;
-            } else if (!isCategoryActive(n.group)) return false;
-            if (n.cluster_of && !expandedClusters.has(n.cluster_of)) return false;
-            return true;
-        }
-
-        function toggleCluster(node) {
-            if (!node || node.group !== 'report-cluster') return false;
-            if (expandedClusters.has(node.id)) expandedClusters.delete(node.id);
-            else expandedClusters.add(node.id);
-            // Küme açılınca yapraklar kümenin kendi sektöründe halkalara açılır:
-            // düzen aynı kuralla yeniden kurulur.
-            relayoutAndFit(0.32);
-            return true;
+            return isCategoryActive(n.group);
         }
 
         function isCategoryActive(group) {
             if (!group) return true;
-            if (group === 'report-cluster') return activeCategories['Reports'] !== false;
             if (group === 'subbranch') {
                 if (activeCategories['skill'] === false) return false;
             }
@@ -531,20 +661,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let isIsolated = false;
         function setIsolationMode(val) {
             isIsolated = !!val;
-            settledFitDone = false;
             userAdjustedView = false;
-            alpha = 0.30;
-            relayoutAndFit(0.30);
+            relayoutAndFit(1.0, true);
         }
 
         function setScope(newScope) {
             // Odak değişince aynı radyal kural seçili dal için uygulanır:
             // kapsam dışı düğümler düzenden çıkar, seçili dal tüm çemberi kaplar.
             currentScope = newScope;
-            settledFitDone = false;
             userAdjustedView = false;
-            alpha = 0.30;
-            relayoutAndFit(0.30);
+            relayoutAndFit(1.0, true);
         }
 
         let isRendering = false;
@@ -559,8 +685,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const newState = !activeCategories[cat];
             activeCategories[cat] = newState;
             el.classList.toggle('dimmed', !newState);
-            // Kategori kapanınca boşalan sektörler kalan dallara dağıtılır.
-            relayoutAndFit(0.30);
+            // Kategori kapanınca kalan düğümler boşluğu organik olarak doldurur;
+            // görünüm sıçramasın diye yeniden sığdırma yapılmaz.
+            relayoutAndFit(0.5, false);
         }
 
         function updateDimensions() {
@@ -599,7 +726,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'episodic': '#FFB300',
             'procedural': '#58A6FF',
             'Reports': '#FF0055',
-            'report-cluster': '#FF3D7F',
             'DailyNotes': '#E3B341',
             'obsidian': '#BC8CFF'
         };
@@ -608,6 +734,78 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             return colors[group] || '#79C0FF';
         }
 
+        // Topluluk tonu: etiket yayılımıyla bulunan topluluklar altın açı ile
+        // ayrık renk tonlarına eşlenir. Yalnızca hale/benzerlik kenarı boyanır;
+        // düğümün çekirdek rengi grup rengidir (efsane geçerli kalsın).
+        function communityTint(n, a) {
+            const c = (typeof n.community === 'number') ? n.community : 0;
+            const hue = (c * 137.508) % 360;
+            return 'hsla(' + hue.toFixed(1) + ', 72%, 62%, ' + a + ')';
+        }
+
+        // ⟲ düğmesi: kullanıcı görünümü elle değiştirmiş olsa da sıfırlar.
+        function resetView() {
+            userAdjustedView = false;
+            fitToView();
+        }
+
+        // ---- Organik kuvvet yerleşimi (çevrimdışı d3-force eşleniği) ----
+        //
+        // Eski radyal sektör motoru kaldırıldı: her düğümü önceden hesaplanmış bir
+        // açı/halka noktasına yapıştırdığı için grafik "yapay" görünüyordu. Yerine
+        // Obsidian graph view'ün de kullandığı kuvvet yönelimli yaklaşım geldi:
+        //
+        //   * yay (link):     bağ türüne göre farklı hedef uzunluk ve sertlik
+        //   * itme (charge):  Barnes-Hut dörtlü ağacı ile O(n log n)
+        //   * çakışma:        tek tip ızgara üzerinden O(n)
+        //   * merkeze çekim:  kopuk bileşenler uzaya savrulmasın diye çok zayıf
+        //
+        // Konumlar tohumlu bir sözde-rastgele dizinden üretilir; gerçek rastgelelik
+        // hiçbir yerde kullanılmaz, yani her açılışta aynı yerleşim çıkar. Benzetim
+        // durulunca (alpha < alphaMin) tamamen durur ve kare çizilmez.
+
+        function hashSeed(str) {
+            let h = 2166136261 >>> 0;
+            for (let i = 0; i < str.length; i++) {
+                h ^= str.charCodeAt(i);
+                h = Math.imul(h, 16777619) >>> 0;
+            }
+            return h >>> 0;
+        }
+
+        function mulberry32(a) {
+            return function () {
+                a |= 0; a = (a + 0x6D2B79F5) | 0;
+                let t = Math.imul(a ^ (a >>> 15), 1 | a);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+
+        // Bağ türüne göre yay parametreleri. Ağaç bağı zayıftır (hiyerarşi
+        // görünsün ama yerleşimi dikte etmesin), wikilink orta, gömme/başlık
+        // benzerliği en güçlüsüdür: benzer raporlar birbirine yapışır.
+        const LINK_KINDS = {
+            tree: { distance: 120, strength: 0.10 },
+            wikilink: { distance: 95, strength: 0.22 },
+            similarity: { distance: 46, strength: 0.55 }
+        };
+
+        function linkKind(l) {
+            if (l.is_similarity_link) return 'similarity';
+            if (l.is_tree_link) return 'tree';
+            return 'wikilink';
+        }
+
+        const CHARGE = -230;         // Düğüm başına itme katsayısı
+        const THETA2 = 0.81;         // Barnes-Hut (0.9^2)
+        const CENTER_PULL = 0.010;   // Merkeze çok zayıf çekim
+        const VELOCITY_DECAY = 0.42;
+
+        let simLinks = [];           // Fizikte kullanılan (görünür) kenarlar
+        let simNodes = [];           // Fizikte kullanılan (görünür) düğümler
+        let simDirty = true;
+
         let positionsInitialized = false;
         function initNodePositions() {
             if (positionsInitialized) return;
@@ -615,259 +813,234 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const cy = height / 2;
 
             nodes.forEach(n => {
-                if (n.x !== undefined && n.y !== undefined) {
-                    n.relX = n.x;
-                    n.relY = n.y;
+                n.vx = 0;
+                n.vy = 0;
+                if (n.group === 'ego') {
+                    n.x = cx; n.y = cy;
+                    return;
+                }
+                if (typeof n.x === 'number' && typeof n.y === 'number' && (n.x !== 0 || n.y !== 0)) {
+                    // Python tarafı deterministik bir tohum konumu üretir; kuvvet
+                    // benzetimi bunu organik yerleşime dönüştürür.
                     n.x = cx + n.x;
                     n.y = cy + n.y;
-                } else if (n.group === 'ego') {
-                    n.relX = 0;
-                    n.relY = 0;
-                    n.x = cx;
-                    n.y = cy;
                 } else {
-                    const ang = Math.random() * Math.PI * 2;
-                    const r = 90 + Math.random() * 120;
-                    n.relX = Math.cos(ang) * r;
-                    n.relY = Math.sin(ang) * r;
-                    n.x = cx + n.relX;
-                    n.y = cy + n.relY;
+                    const h = hashSeed(n.id);
+                    const rnd = mulberry32(h);
+                    const ang = rnd() * Math.PI * 2;
+                    const r = 140 + rnd() * 420;
+                    n.x = cx + Math.cos(ang) * r;
+                    n.y = cy + Math.sin(ang) * r;
                 }
+                // Tohumlu, deterministik mikro sarsıntı: tam üst üste binen
+                // düğümler itme kuvvetinde sıfıra bölünmesin.
+                const j = mulberry32(hashSeed(n.id + '|j'));
+                n.x += (j() - 0.5) * 1.5;
+                n.y += (j() - 0.5) * 1.5;
             });
 
-            // Compute ideal spring link lengths from initial layout
             links.forEach(l => {
                 l.sourceNode = nodeMap.get(l.source);
                 l.targetNode = nodeMap.get(l.target);
-                if (l.sourceNode && l.targetNode) {
-                    const dx = l.targetNode.x - l.sourceNode.x;
-                    const dy = l.targetNode.y - l.sourceNode.y;
-                    l.targetLen = Math.sqrt(dx * dx + dy * dy) || 60;
-                }
             });
 
             positionsInitialized = true;
         }
 
-        // ---- Deterministik "tidy" radyal ağaç düzeni ----
-        // Yerleşimi burası belirler; fizik yalnızca artakalan çakışmayı çözer.
-        // Her dal, altındaki yaprak sayısıyla orantılı bir açısal sektör alır;
-        // alt dallar bu sektörü kendi ağırlıklarına göre böler; düğümler
-        // derinliğe karşılık gelen yarıçap halkalarına oturur. Kardeş sektörler
-        // ayrık olduğundan ağaç kenarları kesişmez ve ilk kare zaten düzenlidir.
-        const ROOT_ID = 'ego-entropy-core';
-        // Ana dalların saat yönünde sırası (KB → K → KD → D → GD → GB):
-        // eski çeyrek yerleşimi (projeler KB, yetenekler KD, MCP GD, bilişsel GB) korunur.
-        const TOP_ORDER = {
-            'hub-projects': 0,
-            'subhub-skill-financial-auditor': 1,
-            'hub-skills': 2,
-            'subhub-skill-autonomous-agent': 3,
-            'hub-mcp': 4,
-            'hub-cognitive': 5
-        };
-        const GROUP_ORDER = {
-            'hub': 0, 'project': 1, 'skill': 2, 'mcp': 3, 'subbranch': 4,
-            'semantic': 5, 'episodic': 5, 'procedural': 5,
-            'report-cluster': 6, 'mcp-tool': 7, 'Reports': 8, 'obsidian': 9, 'DailyNotes': 10
-        };
-        const LAYOUT_START_ANGLE = -Math.PI * 0.75;
-        const LEAF_ARC = 46.0;          // İki komşu yaprak arasındaki en küçük yay (px)
-        const MIN_OUTER_R = 620.0;
-        const MAX_OUTER_R = 4200.0;
-        const HIDDEN_RING_R0 = 40.0;
-        const HIDDEN_RING_GAP = 26.0;
-
-        function layoutSortKey(n) {
-            if (TOP_ORDER[n.id] !== undefined) return 'A' + TOP_ORDER[n.id];
-            const g = (GROUP_ORDER[n.group] !== undefined) ? GROUP_ORDER[n.group] : 9;
-            return 'B' + (10 + g) + '|' + (n.name || n.id);
-        }
-
-        function relayoutGraph() {
-            const cx = width / 2;
-            const cy = height / 2;
-            const root = nodeMap.get(ROOT_ID);
-            if (!root) return;
-
-            // 1. Düzene girecek küme: görünür + kapsam içi (çekirdek her zaman).
-            const included = [];
+        // Görünür düğüm/kenar kümesini ve yay katsayılarını tazeler.
+        // d3-force'taki gibi yay sertliği düğüm derecesine göre normalize edilir:
+        // 300 çocuklu bir hub, tek bir yaprak tarafından savrulmaz.
+        function rebuildSimulation() {
+            simNodes = [];
             const inSet = new Set();
             for (let i = 0; i < nodes.length; i++) {
                 const n = nodes[i];
-                if (n.id === ROOT_ID || (isNodeVisible(n) && isNodeInScope(n))) {
-                    included.push(n);
-                    inSet.add(n.id);
-                }
+                if (!isNodeVisible(n)) continue;
+                if (!isNodeInScope(n) && (isIsolated || currentScope !== 'all')) continue;
+                simNodes.push(n);
+                inSet.add(n.id);
+                n._charge = CHARGE * ((n.val || 12) / 12);
             }
 
-            // 2. Ebeveyn çözümü: kapsam dışı ebeveynler atlanır, açık kümenin
-            //    çocukları küme düğümüne bağlanır.
-            const childMap = new Map();
-            for (let i = 0; i < included.length; i++) {
-                const n = included[i];
-                if (n === root) continue;
-                let p;
-                if (n.cluster_of && expandedClusters.has(n.cluster_of) && inSet.has(n.cluster_of)) {
-                    p = n.cluster_of;
-                } else {
-                    p = n.parent_hub;
-                    let guard = 0;
-                    while (p && !inSet.has(p) && guard++ < 16) {
-                        const pn = nodeMap.get(p);
-                        p = pn ? pn.parent_hub : null;
-                    }
-                    if (!p || !inSet.has(p)) p = ROOT_ID;
-                }
-                if (p === n.id) p = ROOT_ID;
-                let arr = childMap.get(p);
-                if (!arr) { arr = []; childMap.set(p, arr); }
-                arr.push(n);
-            }
-            childMap.forEach(function (arr) {
-                arr.sort(function (a, b) {
-                    const ka = layoutSortKey(a), kb = layoutSortKey(b);
-                    return ka < kb ? -1 : (ka > kb ? 1 : 0);
-                });
-            });
-
-            // 3. Düzey sırası (BFS) ve derinlik.
-            const order = [root];
-            const seen = new Set([root.id]);
-            root._depth = 0;
-            for (let i = 0; i < order.length; i++) {
-                const kids = childMap.get(order[i].id) || [];
-                for (let k = 0; k < kids.length; k++) {
-                    const c = kids[k];
-                    if (seen.has(c.id)) continue;
-                    seen.add(c.id);
-                    c._depth = order[i]._depth + 1;
-                    order.push(c);
-                }
-            }
-            let maxDepth = 1;
-            for (let i = 0; i < order.length; i++) {
-                if (order[i]._depth > maxDepth) maxDepth = order[i]._depth;
-            }
-            const ringFrac = function (d) {
-                return (maxDepth <= 1) ? 1.0 : (0.32 + 0.68 * (d - 1) / (maxDepth - 1));
-            };
-
-            // 4. Ağırlık: yaprak ağırlığı 1/ringFrac(derinlik) → yaprağın ekrandaki
-            //    yay uzunluğu derinliğinden bağımsız olarak eşit çıkar.
-            for (let i = order.length - 1; i >= 0; i--) {
-                const n = order[i];
-                const kids = childMap.get(n.id);
-                if (!kids || kids.length === 0) {
-                    n._w = 1.0 / Math.max(0.15, ringFrac(n._depth));
-                } else {
-                    let s = 0;
-                    for (let k = 0; k < kids.length; k++) s += kids[k]._w;
-                    n._w = s;
-                }
-            }
-
-            const totalW = Math.max(1e-6, root._w);
-            const outerR = Math.max(MIN_OUTER_R, Math.min(MAX_OUTER_R, LEAF_ARC * totalW / (2 * Math.PI)));
-
-            // 5. Sektör paylaştırma + halka yarıçapı.
-            root._a0 = LAYOUT_START_ANGLE;
-            root._a1 = LAYOUT_START_ANGLE + 2 * Math.PI;
-            root._ang = 0;
-            root.relX = 0; root.relY = 0;
-            root.x = cx; root.y = cy;
-
-            for (let i = 0; i < order.length; i++) {
-                const n = order[i];
-                const kids = childMap.get(n.id);
-                if (!kids || kids.length === 0) continue;
-                const span = n._a1 - n._a0;
-                let a = n._a0;
-                for (let k = 0; k < kids.length; k++) {
-                    const c = kids[k];
-                    const w = span * (c._w / Math.max(1e-6, n._w));
-                    c._a0 = a;
-                    c._a1 = a + w;
-                    a += w;
-                    const ang = (c._a0 + c._a1) * 0.5;
-                    const r = ringFrac(c._depth) * outerR;
-                    c._ang = ang;
-                    c.relX = Math.cos(ang) * r;
-                    c.relY = Math.sin(ang) * r;
-                    c.x = cx + c.relX;
-                    c.y = cy + c.relY;
-                }
-            }
-
-            // 6. Katlanmış küme içindeki yapraklar: kümenin çevresinde küçük
-            //    halkalarda bekler; küme açılınca gerçek sektörlerine geçerler.
-            const hiddenCount = new Map();
-            for (let i = 0; i < nodes.length; i++) {
-                const n = nodes[i];
-                if (inSet.has(n.id)) continue;
-                let anchor = n.cluster_of ? nodeMap.get(n.cluster_of) : null;
-                if (!anchor || !inSet.has(anchor.id)) {
-                    let p = n.parent_hub;
-                    let guard = 0;
-                    while (p && !inSet.has(p) && guard++ < 16) {
-                        const pn = nodeMap.get(p);
-                        p = pn ? pn.parent_hub : null;
-                    }
-                    anchor = (p && inSet.has(p)) ? nodeMap.get(p) : root;
-                }
-                const idx = hiddenCount.get(anchor.id) || 0;
-                hiddenCount.set(anchor.id, idx + 1);
-                let ring = 0;
-                let rest = idx;
-                let cap = 4;
-                for (let g = 0; g < 200; g++) {
-                    const rr0 = HIDDEN_RING_R0 + ring * HIDDEN_RING_GAP;
-                    cap = Math.max(4, Math.floor((2 * Math.PI * rr0) / HIDDEN_RING_GAP));
-                    if (rest < cap) break;
-                    rest -= cap;
-                    ring++;
-                }
-                const rr = HIDDEN_RING_R0 + ring * HIDDEN_RING_GAP;
-                const base = (anchor._ang !== undefined) ? anchor._ang : 0;
-                const ang = base + (rest / cap) * 2 * Math.PI;
-                n.relX = (anchor.relX || 0) + Math.cos(ang) * rr;
-                n.relY = (anchor.relY || 0) + Math.sin(ang) * rr;
-                n.x = cx + n.relX;
-                n.y = cy + n.relY;
-            }
-
-            // 7. Yay kuvveti hedef uzunlukları yeni düzene göre tazelenir.
+            const degree = new Map();
+            const cand = [];
             for (let i = 0; i < links.length; i++) {
                 const l = links[i];
-                if (!l.sourceNode || !l.targetNode) continue;
-                const dx = l.targetNode.x - l.sourceNode.x;
-                const dy = l.targetNode.y - l.sourceNode.y;
-                l.targetLen = Math.sqrt(dx * dx + dy * dy) || 60;
+                if (l.is_catalog_link) continue;
+                const s = l.sourceNode, t = l.targetNode;
+                if (!s || !t || s === t) continue;
+                if (!inSet.has(s.id) || !inSet.has(t.id)) continue;
+                degree.set(s.id, (degree.get(s.id) || 0) + 1);
+                degree.set(t.id, (degree.get(t.id) || 0) + 1);
+                cand.push(l);
+            }
+            simLinks = cand;
+            for (let i = 0; i < simLinks.length; i++) {
+                const l = simLinks[i];
+                const kind = LINK_KINDS[linkKind(l)];
+                const w = (l.is_similarity_link && typeof l.weight === 'number') ? Math.max(0.3, l.weight) : 1;
+                const ds = degree.get(l.sourceNode.id) || 1;
+                const dt = degree.get(l.targetNode.id) || 1;
+                l._k = (kind.strength * w) / Math.min(ds, dt);
+                l._len = kind.distance + (l.sourceNode.val || 12) + (l.targetNode.val || 12);
+                l._bias = ds / (ds + dt);
+            }
+            simDirty = false;
+        }
+
+        // ---- Barnes-Hut dörtlü ağacı ----
+        function buildQuadtree(list) {
+            if (list.length === 0) return null;
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (p.x < x0) x0 = p.x;
+                if (p.x > x1) x1 = p.x;
+                if (p.y < y0) y0 = p.y;
+                if (p.y > y1) y1 = p.y;
+            }
+            const w = Math.max(x1 - x0, y1 - y0, 1);
+            return subdivide(list, x0, y0, x0 + w, y0 + w, 0);
+        }
+
+        function subdivide(pts, x0, y0, x1, y1, depth) {
+            let q = 0, sx = 0, sy = 0, wsum = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                const c = Math.abs(p._charge || 1);
+                q += (p._charge || 0);
+                sx += p.x * c; sy += p.y * c; wsum += c;
+            }
+            const node = {
+                x0: x0, y0: y0, x1: x1, y1: y1,
+                q: q,
+                cx: wsum > 0 ? sx / wsum : (x0 + x1) / 2,
+                cy: wsum > 0 ? sy / wsum : (y0 + y1) / 2,
+                kids: null, pts: null
+            };
+            if (pts.length <= 2 || depth >= 18 || (x1 - x0) < 1) {
+                node.pts = pts;
+                return node;
+            }
+            const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+            const b = [[], [], [], []];
+            for (let i = 0; i < pts.length; i++) {
+                const p = pts[i];
+                b[(p.x >= mx ? 1 : 0) + (p.y >= my ? 2 : 0)].push(p);
+            }
+            node.kids = [
+                b[0].length ? subdivide(b[0], x0, y0, mx, my, depth + 1) : null,
+                b[1].length ? subdivide(b[1], mx, y0, x1, my, depth + 1) : null,
+                b[2].length ? subdivide(b[2], x0, my, mx, y1, depth + 1) : null,
+                b[3].length ? subdivide(b[3], mx, my, x1, y1, depth + 1) : null
+            ];
+            return node;
+        }
+
+        function applyCharge(node, p, k) {
+            if (!node) return;
+            const dx = node.cx - p.x;
+            const dy = node.cy - p.y;
+            let d2 = dx * dx + dy * dy;
+            const w = node.x1 - node.x0;
+            if (node.kids && (w * w) < THETA2 * d2) {
+                if (d2 < 25) d2 = 25;
+                const f = node.q * k / d2;
+                p.vx += dx * f;
+                p.vy += dy * f;
+                return;
+            }
+            if (node.kids) {
+                applyCharge(node.kids[0], p, k);
+                applyCharge(node.kids[1], p, k);
+                applyCharge(node.kids[2], p, k);
+                applyCharge(node.kids[3], p, k);
+                return;
+            }
+            const list = node.pts;
+            for (let i = 0; i < list.length; i++) {
+                const o = list[i];
+                if (o === p) continue;
+                const ddx = o.x - p.x, ddy = o.y - p.y;
+                let dd = ddx * ddx + ddy * ddy;
+                if (dd < 25) dd = 25;
+                const f = (o._charge || 0) * k / dd;
+                p.vx += ddx * f;
+                p.vy += ddy * f;
             }
         }
 
-        // Görünürlük/kapsam değişimlerinde düzeni yeniden kur, sonra sığdır.
-        function relayoutAndFit(alphaKick) {
+        // ---- Izgara tabanlı çakışma çözümü (O(n)) ----
+        function resolveCollisions(list) {
+            let maxR = 12;
+            for (let i = 0; i < list.length; i++) {
+                const r = (list[i].val || 12) + 2;
+                if (r > maxR) maxR = r;
+            }
+            const cell = maxR * 2;
+            const grid = new Map();
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                const gx = Math.floor(p.x / cell), gy = Math.floor(p.y / cell);
+                const key = gx + ',' + gy;
+                let b = grid.get(key);
+                if (!b) { b = []; grid.set(key, b); }
+                b.push(p);
+            }
+            grid.forEach((bucket, key) => {
+                const parts = key.split(',');
+                const gx = parseInt(parts[0], 10), gy = parseInt(parts[1], 10);
+                for (let ox = 0; ox <= 1; ox++) {
+                    for (let oy = (ox === 0 ? 0 : -1); oy <= 1; oy++) {
+                        const other = (ox === 0 && oy === 0) ? bucket : grid.get((gx + ox) + ',' + (gy + oy));
+                        if (!other) continue;
+                        for (let i = 0; i < bucket.length; i++) {
+                            const a = bucket[i];
+                            const jStart = (other === bucket) ? i + 1 : 0;
+                            for (let j = jStart; j < other.length; j++) {
+                                const b2 = other[j];
+                                if (a === b2) continue;
+                                let dx = b2.x - a.x, dy = b2.y - a.y;
+                                let d = Math.sqrt(dx * dx + dy * dy);
+                                const rmin = (a.val || 12) + (b2.val || 12) + 3;
+                                if (d >= rmin) continue;
+                                if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+                                const push = ((rmin - d) / d) * 0.5;
+                                const px = dx * push, py = dy * push;
+                                if (a.group !== 'ego' && a !== draggedNode) { a.x -= px; a.y -= py; }
+                                if (b2.group !== 'ego' && b2 !== draggedNode) { b2.x += px; b2.y += py; }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Görünürlük/kapsam değişimlerinde benzetim yeniden ısıtılır. Yerleşim
+        // sıfırdan kurulmaz: düğümler bulundukları yerden organik olarak akar.
+        function relayoutGraph() {
+            simDirty = true;
+            rebuildSimulation();
+        }
+
+        // refit=false ise görünüm kullanıcının bıraktığı yerde kalır: sığdırma
+        // yalnızca yüklemede, Odak değişiminde ve kullanıcı ⟲ düğmesine bastığında
+        // yapılır (kategori açıp kapatmak ekranı zıplatmasın).
+        function relayoutAndFit(alphaKick, refit) {
             relayoutGraph();
-            alpha = Math.max(alpha, alphaKick || 0.28);
-            settledFitDone = false;
-            if (!userAdjustedView) fitToView();
+            alpha = Math.max(alpha, alphaKick || 0.6);
+            settledFitDone = !refit;
             requestRender();
         }
 
-        let alpha = 0.30;
-        const alphaMin = 0.003;
-        const alphaDecay = 0.09;
-
-        // Büyük kümelerde itme hesabı karelere yayılır; her kovanın hangi satırdan
-        // devam edeceği burada tutulur (bkz. tickPhysics adım 3B).
-        const bucketCursors = new Map();
+        let alpha = 1.0;
+        const alphaMin = 0.008;
+        const alphaDecay = 0.020;
 
         function tickPhysics() {
             if (isPanning) return;
-            if (alpha < alphaMin && !draggedNode) {
-                return;
-            }
+            if (alpha < alphaMin && !draggedNode) return;
+            if (simDirty) rebuildSimulation();
 
             const cx = width / 2;
             const cy = height / 2;
@@ -876,167 +1049,57 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (egoNode && egoNode !== draggedNode) {
                 egoNode.x = cx;
                 egoNode.y = cy;
+                egoNode.vx = 0;
+                egoNode.vy = 0;
             }
 
-            // 1. Radial & Directional Restitution: pull nodes toward their designated radial ray and distance
-            nodes.forEach(n => {
-                if (n.group === 'ego' || n === draggedNode) return;
-                if (!isNodeVisible(n)) return;
+            const list = simNodes;
+            if (list.length === 0) { alpha *= (1 - alphaDecay); return; }
 
-                const idealX = cx + (n.relX || 0);
-                const idealY = cy + (n.relY || 0);
-
-                const dx = idealX - n.x;
-                const dy = idealY - n.y;
-
-                // Restitüsyon: düğüm kendi sektör noktasına güçlü biçimde geri çekilir.
-                // Düzen zaten deterministik olduğu için bu kuvvet baskın olmalı;
-                // itme yalnızca kalan üst üste binmeyi ayırır.
-                const k = (n.group === 'Reports' || n.group === 'obsidian' || n.group === 'DailyNotes') ? 0.20 : 0.26;
-                n.x += dx * k * alpha;
-                n.y += dy * k * alpha;
-            });
-
-            // 2. Spring Link Tension: Balanced physical spring force for active hierarchy links
-            links.forEach(l => {
-                if (l.is_catalog_link) return; // Zero physical spring force for catalogs
-
-                const s = l.sourceNode;
-                const t = l.targetNode;
-                if (!s || !t) return;
-                if (!isNodeVisible(s) || !isNodeVisible(t)) return;
-
-                const dx = t.x - s.x;
-                const dy = t.y - s.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                const targetLen = l.targetLen || 100;
-                const force = Math.max(-5, Math.min(5, (dist - targetLen) * 0.025 * alpha));
-
-                if (t.group !== 'ego' && t !== draggedNode) {
-                    t.x -= (dx / dist) * force * 0.5;
-                    t.y -= (dy / dist) * force * 0.5;
-                }
-                if (s.group !== 'ego' && s !== draggedNode) {
-                    s.x += (dx / dist) * force * 0.5;
-                    s.y += (dy / dist) * force * 0.5;
-                }
-            });
-
-            // 3. Cluster Bucket Spatial Partitioning (O(K^2) per cluster instead of O(N^2))
-            const isCentroid = (g) => g === 'ego' || g === 'hub' || g === 'project' || g === 'skill' || g === 'mcp' || g === 'subbranch';
-            const centroidNodes = [];
-            const clusterBuckets = new Map();
-
-            for (let i = 0; i < nodes.length; i++) {
-                const n = nodes[i];
-                if (!isNodeVisible(n)) continue;
-                if (isCentroid(n.group)) {
-                    centroidNodes.push(n);
-                }
-                const bKey = n.parent_hub || 'root';
-                let bList = clusterBuckets.get(bKey);
-                if (!bList) {
-                    bList = [];
-                    clusterBuckets.set(bKey, bList);
-                }
-                bList.push(n);
+            // 1. Yaylar (link force) — d3'teki gibi konum üzerinden, iki uca bias'lı.
+            for (let i = 0; i < simLinks.length; i++) {
+                const l = simLinks[i];
+                const s = l.sourceNode, t = l.targetNode;
+                let dx = (t.x + t.vx) - (s.x + s.vx);
+                let dy = (t.y + t.vy) - (s.y + s.vy);
+                let d = Math.sqrt(dx * dx + dy * dy);
+                if (d < 0.01) { dx = 0.5; dy = 0.5; d = 0.71; }
+                const f = ((d - l._len) / d) * alpha * l._k;
+                const fx = dx * f, fy = dy * f;
+                if (t.group !== 'ego' && t !== draggedNode) { t.vx -= fx * l._bias; t.vy -= fy * l._bias; }
+                if (s.group !== 'ego' && s !== draggedNode) { s.vx += fx * (1 - l._bias); s.vy += fy * (1 - l._bias); }
             }
 
-            // 3A. Mutual Repulsion between Centroids (branches stay well-separated)
-            for (let i = 0; i < centroidNodes.length; i++) {
-                const a = centroidNodes[i];
-                for (let j = i + 1; j < centroidNodes.length; j++) {
-                    const b = centroidNodes[j];
-                    let dx = b.x - a.x;
-                    let dy = b.y - a.y;
-                    let dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist < 0.01) {
-                        dx = (Math.random() - 0.5) * 2;
-                        dy = (Math.random() - 0.5) * 2;
-                        dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    }
-                    const rA = a.val || 16;
-                    const rB = b.val || 16;
-                    // Kısa menzilli: sektörler zaten ayrık, yalnızca gerçek
-                    // üst üste binme ayrıştırılır (eski 48 px'lik uzun menzil
-                    // düzeni bozup dalları savuruyordu).
-                    const minDist = rA + rB + 10;
-                    if (dist < minDist) {
-                        const overlap = (minDist - dist) / dist;
-                        let pushX = dx * overlap * 0.25 * Math.min(1.0, alpha + 0.3);
-                        let pushY = dy * overlap * 0.25 * Math.min(1.0, alpha + 0.3);
-                        const maxPush = 5.0;
-                        const pushLen = Math.sqrt(pushX * pushX + pushY * pushY);
-                        if (pushLen > maxPush) {
-                            pushX = (pushX / pushLen) * maxPush;
-                            pushY = (pushY / pushLen) * maxPush;
-                        }
-                        if (a.group !== 'ego' && a !== draggedNode) { a.x -= pushX; a.y -= pushY; }
-                        if (b.group !== 'ego' && b !== draggedNode) { b.x += pushX; b.y += pushY; }
-                    }
-                }
+            // 2. Karşılıklı itme (Barnes-Hut): 1000 düğümde ~10 bin işlem/kare.
+            const tree = buildQuadtree(list);
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (p.group === 'ego' || p === draggedNode) continue;
+                applyCharge(tree, p, alpha);
             }
 
-            // 3B. Intra-cluster repulsion: sibling nodes only repel each other within their bucket.
-            //
-            // Bu adım kova başına O(K^2)'dir. Gerçek veride en büyük kovalar 130-185
-            // düğüm taşıyor ve toplam ~43.000 çift/kare ediyor; 60 fps'te bu saniyede
-            // ~2,6 milyon mesafe hesabı demek ve arayüzün kasmasının ana nedeni buydu.
-            //
-            // Düğümler zaten radyal olarak yerleştirildiği (adım 1) ve yalnızca
-            // üst üste binmeyi ayırmak için itmeye ihtiyaç duyduğu için, büyük
-            // kovalarda her kare yalnızca kayan bir pencere işlenir. Pencere her
-            // karede ilerlediğinden birkaç kare içinde tüm çiftler yine taranır,
-            // ancak kare başına iş sabit bir tavanın altında kalır.
-            const MAX_PAIRS_PER_BUCKET = 1200;
-            clusterBuckets.forEach((bucketNodes, bucketKey) => {
-                const len = bucketNodes.length;
-                if (len < 2) return;
+            // 3. Merkeze zayıf çekim: benzerlik kenarı olmayan yapraklar sonsuza gitmesin.
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (p.group === 'ego' || p === draggedNode) continue;
+                p.vx += (cx - p.x) * CENTER_PULL * alpha;
+                p.vy += (cy - p.y) * CENTER_PULL * alpha;
+            }
 
-                let iStart = 0;
-                let iEnd = len;
-                if ((len * (len - 1)) / 2 > MAX_PAIRS_PER_BUCKET) {
-                    // Kare başına işlenecek satır sayısı (yaklaşık sabit iş yükü)
-                    const rows = Math.max(2, Math.ceil(MAX_PAIRS_PER_BUCKET / len));
-                    const offset = bucketCursors.get(bucketKey) || 0;
-                    iStart = offset % len;
-                    iEnd = iStart + rows;
-                    bucketCursors.set(bucketKey, (iStart + rows) % len);
-                }
+            // 4. Konum güncellemesi (Verlet, hız sönümlü).
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (p.group === 'ego' || p === draggedNode) { p.vx = 0; p.vy = 0; continue; }
+                p.vx *= (1 - VELOCITY_DECAY);
+                p.vy *= (1 - VELOCITY_DECAY);
+                if (p.vx > 40) p.vx = 40; else if (p.vx < -40) p.vx = -40;
+                if (p.vy > 40) p.vy = 40; else if (p.vy < -40) p.vy = -40;
+                p.x += p.vx;
+                p.y += p.vy;
+            }
 
-                for (let ii = iStart; ii < iEnd; ii++) {
-                    const i = ii % len;
-                    const a = bucketNodes[i];
-                    for (let j = i + 1; j < len; j++) {
-                        const b = bucketNodes[j];
-                        let dx = b.x - a.x;
-                        let dy = b.y - a.y;
-                        let dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist < 0.01) {
-                            dx = (Math.random() - 0.5) * 2;
-                            dy = (Math.random() - 0.5) * 2;
-                            dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                        }
-                        const rA = a.val || 12;
-                        const rB = b.val || 12;
-                        const minDist = rA + rB + 4;
-                        if (dist < minDist) {
-                            const overlap = (minDist - dist) / dist;
-                            let pushX = dx * overlap * 0.35 * Math.min(1.0, alpha + 0.3);
-                            let pushY = dy * overlap * 0.35 * Math.min(1.0, alpha + 0.3);
-                            const maxPush = 5.0;
-                            const pushLen = Math.sqrt(pushX * pushX + pushY * pushY);
-                            if (pushLen > maxPush) {
-                                pushX = (pushX / pushLen) * maxPush;
-                                pushY = (pushY / pushLen) * maxPush;
-                            }
-                            if (a.group !== 'ego' && a !== draggedNode) { a.x -= pushX; a.y -= pushY; }
-                            if (b.group !== 'ego' && b !== draggedNode) { b.x += pushX; b.y += pushY; }
-                        }
-                    }
-                }
-            });
+            // 5. Çakışma: düğümler üst üste binmesin (etiket okunurluğu için şart).
+            resolveCollisions(list);
 
             alpha *= (1 - alphaDecay);
         }
@@ -1082,12 +1145,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 panStartY = e.clientY - panY;
                 canvas.style.cursor = 'grabbing';
                 userAdjustedView = true;
-                requestRender();
-                return;
-            }
-
-            if (hoveredNode && hoveredNode.group === 'report-cluster' && e.button === 0) {
-                toggleCluster(hoveredNode);
                 requestRender();
                 return;
             }
@@ -1278,8 +1335,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const treeLinks = [];      // Ana dal/gövde kenarları: hafif eğri
             const leafLinks = [];      // Yaprak kenarları: düz ve ince
             const semanticLinks = [];
+            const similarityLinks = [];   // Yakınlık (k-NN) kenarları: her zaman soluk çizilir
             // Gövde = çekirdekten çıkan ya da bir dal/küme düğümüne giden kenar.
-            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1, 'report-cluster': 1 };
+            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1 };
 
             links.forEach(l => {
                 if (l.is_catalog_link) return; // Completely hide catalog index spiderwebs!
@@ -1299,7 +1357,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                         bgLinks.push(l);
                     }
                 } else if (s !== hoveredNode && t !== hoveredNode) {
-                    if (l.is_tree_link) {
+                    if (l.is_similarity_link) {
+                        similarityLinks.push(l);
+                    } else if (l.is_tree_link) {
                         if (TRUNK_TARGETS[t.group] || s.group === 'ego') treeLinks.push(l);
                         else leafLinks.push(l);
                     } else if (zoom >= 1.35) {
@@ -1339,6 +1399,20 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     drawCurvedLink(l.sourceNode, l.targetNode, 0.08);
                 }
                 ctx.stroke();
+            }
+
+            // Yakınlık kenarları: benzer raporları birbirine bağlayan kısa, soluk
+            // çizgiler. Topluluk tonuyla boyanır; grafiğin "organik doku"su budur.
+            if (similarityLinks.length > 0) {
+                ctx.lineWidth = 0.7;
+                for (let i = 0; i < similarityLinks.length; i++) {
+                    const l = similarityLinks[i];
+                    ctx.strokeStyle = communityTint(l.sourceNode, 0.22);
+                    ctx.beginPath();
+                    ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
+                    ctx.lineTo(l.targetNode.x, l.targetNode.y);
+                    ctx.stroke();
+                }
             }
 
             // Semantic Cross-References (Genuine Wikilinks between reports) - Soft Violet Dashes
@@ -1413,7 +1487,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const inScope = isNodeInScope(n);
                 if (!inScope && isIsolated && currentScope !== 'all') return;
 
-                const color = getNodeColor(n.group === 'report-cluster' ? (n.leaf_group || 'Reports') : n.group);
+                const color = getNodeColor(n.group);
                 const isHovered = (n === hoveredNode);
                 // Uzaklaşınca düğümler toz tanesine dönüyordu: ekranda en az ~3 px kalsın.
                 const r = Math.max((n.val || 12) * (isHovered ? 1.3 : 1.0), 3 / Math.max(zoom, 0.05));
@@ -1434,9 +1508,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     ctx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2);
                     ctx.fill();
                 } else {
-                    ctx.fillStyle = color + '22';
+                    // Hale topluluk tonunda: aynı topluluğun düğümleri gözle
+                    // ayırt edilebilir bir doku oluşturur.
+                    ctx.fillStyle = communityTint(n, 0.20);
                     ctx.beginPath();
-                    ctx.arc(n.x, n.y, r * 1.4, 0, Math.PI * 2);
+                    ctx.arc(n.x, n.y, r * 1.5, 0, Math.PI * 2);
                     ctx.fill();
                 }
 
@@ -1452,30 +1528,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Küme düğümü: ince halka + rapor sayısı; açıksa halka kesikli.
-                if (n.group === 'report-cluster') {
-                    const open = expandedClusters.has(n.id);
-                    ctx.save();
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 2;
-                    if (open) ctx.setLineDash([4, 3]);
-                    ctx.beginPath();
-                    ctx.arc(n.x, n.y, r * 1.55, 0, Math.PI * 2);
-                    ctx.stroke();
-                    ctx.restore();
-                    ctx.fillStyle = '#F0F6FC';
-                    ctx.font = `bold ${Math.max(9, Math.round(r * 0.75 * Math.max(zoom, 0.6)))}px 'Segoe UI', sans-serif`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(String(n.count || ''), n.x, n.y);
-                    ctx.textAlign = 'left';
-                    ctx.textBaseline = 'alphabetic';
-                }
-
                 // Pill Label: Level of Detail (LOD) - Hubs & Subbranches visible by default, leaves visible when hovered or zoomed
                 const lvl = (n.group === 'ego') ? 0
                     : (n.group === 'hub' || n.group === 'project' || n.group === 'skill') ? 1
-                    : (n.group === 'subbranch' || n.group === 'report-cluster') ? 2 : 3;
+                    : (n.group === 'subbranch') ? 2 : 3;
                 // Etiketler ekran ölçeğinde çizilir (aşağıda); bu yüzden hangi düzeyin
                 // hangi yakınlıkta görüneceği burada ayarlanır, boyut hep okunur kalır.
                 const labelZoomFloor = [0, 0, 0.7, 1.35][lvl];
@@ -1491,7 +1547,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     // Tek yazı ailesi, monospace karışımı yok; pil etiketler aynı yükseklikte.
                     const level = (n.group === 'ego') ? 0
                         : (n.group === 'hub' || n.group === 'project' || n.group === 'skill') ? 1
-                        : (n.group === 'subbranch' || n.group === 'report-cluster') ? 2 : 3;
+                        : (n.group === 'subbranch') ? 2 : 3;
                     const isHeader = level <= 2;
                     const fontSize = [13, 11.5, 10.5, 10][level];
                     const weight = level === 0 ? '700' : (level === 1 ? '600' : (level === 2 ? '600' : '400'));
@@ -1565,17 +1621,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         updateDimensions();
         initNodePositions();
-        // İlk kare zaten düzenli: düzen fizik çalışmadan önce kurulur ve sığdırılır.
         relayoutGraph();
         fitToView();
-        alpha = 0.30;
+        alpha = 1.0;
+        settledFitDone = false;
         requestRender();
 
         setTimeout(() => {
             updateDimensions();
             relayoutGraph();
             fitToView();
-            alpha = 0.20;
             requestRender();
         }, 120);
     </script>
@@ -2335,52 +2390,6 @@ class KnowledgeGraphWidget(QFrame):
             })
             links.append({"source": effective_parent, "target": o_id, "is_tree_link": True})
 
-        # Rapor kümeleme: aynı dala bağlı çok sayıda rapor, tek tek nokta yerine
-        # sayılı bir küme düğümüne katlanır. 600 raporun her biri ayrı düğüm
-        # olarak çizildiğinde grafik okunmaz hâle geliyor ve fizik döngüsü
-        # (kova başına O(K²)) kare başına on binlerce çift hesaplıyordu. Küme
-        # düğümüne tıklanınca dal açılır; rapor düğümleri veri olarak korunur
-        # (kapsam filtreleri ve testler onları görmeye devam eder).
-        # Kümeleme yalnızca raporlara değil tüm yaprak gruplarına uygulanır: aynı
-        # dala bağlı 62 Obsidian notu ya da 30 semantik anı da rapor yelpazesi
-        # kadar kalabalık. Küme, yaprak türüne göre renklenir ve adlanır.
-        leaf_children: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-        for n in nodes:
-            grp = n.get("group")
-            if grp in LEAF_CLUSTER_LABELS and n.get("parent_hub"):
-                leaf_children.setdefault((grp, n["parent_hub"]), []).append(n)
-        node_by_id = {n["id"]: n for n in nodes}
-        for (grp, parent_id), children in leaf_children.items():
-            if len(children) < REPORT_CLUSTER_MIN:
-                continue
-            parent_node = node_by_id.get(parent_id)
-            if parent_node is None:
-                continue
-            cluster_id = f"cluster-{grp}-{parent_id}"
-            label = LEAF_CLUSTER_LABELS[grp]
-            px, py = parent_node.get("x", 0.0), parent_node.get("y", 0.0)
-            ang = math.atan2(py, px) if (px or py) else 0.0
-            # Aynı ebeveynin farklı türdeki kümeleri üst üste binmesin
-            offset = 70.0 + 26.0 * sum(1 for (g2, p2) in leaf_children if p2 == parent_id and g2 < grp)
-            nodes.append({
-                "id": cluster_id,
-                "name": f"{len(children)} {label}",
-                "group": "report-cluster",
-                "leaf_group": grp,
-                "cluster": children[0].get("cluster"),
-                "cluster_group": children[0].get("cluster_group"),
-                "parent_hub": parent_id,
-                "skill_hub": children[0].get("skill_hub"),
-                "info": f"{len(children)} {label} — açmak/kapamak için tıklayın",
-                "val": 20 + min(14, len(children) // 20),
-                "count": len(children),
-                "x": px + offset * math.cos(ang),
-                "y": py + offset * math.sin(ang),
-            })
-            links.append({"source": parent_id, "target": cluster_id, "is_tree_link": True})
-            for child in children:
-                child["cluster_of"] = cluster_id
-
         # Add wikilinks from Obsidian notes (decoupled if catalog)
         for link in obsidian_data["links"]:
             is_cat = link.get("is_catalog_link", False)
@@ -2426,11 +2435,14 @@ class KnowledgeGraphWidget(QFrame):
         # Düğümler x'e göre sıralanıp yalnızca x farkı olası en büyük çakışma
         # mesafesinden küçük olan çiftler denetlenir (süpürme-budama). Atlanan
         # çiftler tanım gereği çakışamaz, sonuç aynı kalır.
-        # Budama sayesinde tur maliyeti düştüğü için tur sayısı yükseltildi:
-        # çakışma kalmayınca zaten erken çıkılır.
+        # Bu geçiş artık yalnızca TOHUM konumlarını düzeltir: son yerleşimi kuvvet
+        # benzetimindeki çakışma çözümü belirler. 900 raporluk bir arşivde 60 tur
+        # 5,4 saniye sürüyordu (ölçüldü) ve grafik her yenilendiğinde arayüz
+        # donuyordu; büyük arşivlerde tur sayısı düşürüldü.
         max_val = max((n.get("val", 12) for n in nodes), default=12)
         prune_dx = 2.0 * (2.0 * max_val + 3.0)
-        for _ in range(60):
+        relax_rounds = 60 if len(nodes) <= 300 else 6
+        for _ in range(relax_rounds):
             overlap_found = False
             order = sorted(nodes, key=lambda n: n.get("x", 0.0))
             for i in range(len(order)):
@@ -2461,9 +2473,24 @@ class KnowledgeGraphWidget(QFrame):
             if not overlap_found:
                 break
 
+        # Yakınlık kenarları: raporlar birbirine ağaçtaki yerine göre değil,
+        # içeriklerinin benzerliğine göre de çekilsin. Bu kenarlar ağaç kenarı
+        # değildir (is_similarity_link), fizik motorunda en güçlü yaydır.
+        leaf_nodes = [n for n in nodes if n.get("group") in SIMILARITY_GROUPS]
+        sim_links = build_similarity_links(leaf_nodes)
+        links.extend(sim_links)
+
+        # Topluluklar: renk tonu/hale için. Ağaç + benzerlik kenarları üzerinde
+        # ağırlıklı etiket yayılımı.
+        communities = assign_communities(nodes, links)
+        for n in nodes:
+            n["community"] = communities.get(n["id"], 0)
+
         return {
             "nodes": nodes,
             "links": links,
+            "similarity_links": len(sim_links),
+            "communities": len(set(communities.values())),
             "known_projects": known_projects,
             "registered_skills": registered_skills
         }

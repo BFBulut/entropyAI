@@ -174,3 +174,89 @@ class EntropyConfig(BaseModel):
 
 config = EntropyConfig()
 config.load_settings()
+
+
+# ---------------------------------------------------------------------------
+# Sohbet geçmişi: tek kaynak
+#
+# Geçmişi hem köprü hem de iki arayüz modu okuyordu; her biri kendi dosya
+# okuma/yazma mantığını taşıyordu ve "+ Yeni Sohbet" dosyayı geri dönüşsüz
+# siliyordu. Okuma/yazma/arşivleme burada tek yerde toplandı. Fonksiyonlar
+# CHAT_HISTORY_FILE'ı çağrı anında modül genelinden okur; testler bu değişkeni
+# monkeypatch ile geçici bir dosyaya yönlendirdiğinde arşiv de onunla taşınır.
+# ---------------------------------------------------------------------------
+
+# Karşılama amaçlı, kullanıcıya ait olmayan tohum mesajlar; geçmişte gösterilmez.
+CHAT_HISTORY_SEED_PROMPTS = ("Merhaba, bu proje nedir?", "Hello")
+
+
+def chat_archive_dir() -> Path:
+    """Arşivlenen sohbetlerin klasörü (geçmiş dosyasının yanında)."""
+    return CHAT_HISTORY_FILE.parent / "chat_archive"
+
+
+def load_chat_history() -> List[dict]:
+    """Diskteki sohbet geçmişini okur; tohum mesajları ayıklar."""
+    try:
+        if not CHAT_HISTORY_FILE.exists():
+            return []
+        raw = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return []
+        return [
+            m for m in raw
+            if isinstance(m, dict)
+            and str(m.get("content", "")).strip() not in CHAT_HISTORY_SEED_PROMPTS
+        ]
+    except Exception:
+        return []
+
+
+def save_chat_history(history: List[dict]) -> None:
+    """Sohbet geçmişini diske yazar."""
+    try:
+        CHAT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CHAT_HISTORY_FILE.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def chat_history_signature() -> tuple:
+    """Geçmiş dosyasının (değişiklik zamanı, boyut) imzası; ucuz bayatlık kontrolü."""
+    try:
+        st = CHAT_HISTORY_FILE.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except Exception:
+        return (0, 0)
+
+
+def archive_chat_history() -> Optional[Path]:
+    """
+    Mevcut sohbeti arşive taşır ve arşiv dosyasının yolunu döndürür.
+
+    "+ Yeni Sohbet" eskiden chat_history.json'u siliyordu; kullanıcı geçmişini
+    geri getirmenin yolu yoktu. Artık silme yerine taşıma yapılır.
+    """
+    from datetime import datetime
+
+    history = load_chat_history()
+    if not history:
+        try:
+            CHAT_HISTORY_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None
+    try:
+        target_dir = chat_archive_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        target = target_dir / f"{stamp}.json"
+        target.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        CHAT_HISTORY_FILE.unlink(missing_ok=True)
+        return target
+    except Exception:
+        return None

@@ -269,6 +269,28 @@ class TaskLedger:
                 conn.commit()
                 return cur.rowcount or 0
 
+    def cancel_active(self, reason: str = "Uygulama kapandı; görev yarıda kesildi.") -> int:
+        """
+        Çalışan/bekleyen tüm satırları CANCELLED yapar; sayısını döndürür.
+
+        `mark_orphans_failed`'in kapanış ikizi. Fark kasıtlı: açılışta yetim
+        bulmak bir arızadır (FAILED), kapanışta görevi biz kestiğimiz için bu
+        bir arıza değil iptaldir (CANCELLED). İkisi ayrılmazsa kullanıcı her
+        normal kapatmadan sonra panelde kırmızı "başarısız" satırlar görüyordu.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._lock:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE tasks SET status = ?, completed_at = ?, error = ?
+                    WHERE status IN (?, ?)
+                    """,
+                    (TaskStatus.CANCELLED.value, now, reason, TaskStatus.RUNNING.value, TaskStatus.PENDING.value),
+                )
+                conn.commit()
+                return cur.rowcount or 0
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a task record by ID."""
         with self._lock:

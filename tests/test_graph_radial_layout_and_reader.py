@@ -1,4 +1,4 @@
-"""Radyal tidy grafik düzeni ve yenilenen rapor okuyucusu için testler."""
+"""Organik kuvvet grafiği düzeni ve yenilenen rapor okuyucusu için testler."""
 
 import json
 import shutil
@@ -48,37 +48,10 @@ let clearTimeout = () => {};
 """
 
 MEASURE_TAIL = """
-function segInt(a, b, c, d) {
-  const d1 = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
-  const d2 = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
-  const d3 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-  const d4 = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
-  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
-}
-function drawnTreeLinks() {
-  const out = [];
-  links.forEach(l => {
-    if (l.is_catalog_link || !l.is_tree_link) return;
-    const s = l.sourceNode, t = l.targetNode;
-    if (!s || !t) return;
-    if (!isNodeVisible(s) || !isNodeVisible(t)) return;
-    if (!isNodeInScope(s) || !isNodeInScope(t)) return;
-    out.push(l);
-  });
-  return out;
-}
-function countCrossings() {
-  const ls = drawnTreeLinks();
-  let n = 0;
-  for (let i = 0; i < ls.length; i++) {
-    for (let j = i + 1; j < ls.length; j++) {
-      const a = ls[i], b = ls[j];
-      if (a.sourceNode === b.sourceNode || a.sourceNode === b.targetNode ||
-          a.targetNode === b.sourceNode || a.targetNode === b.targetNode) continue;
-      if (segInt(a.sourceNode, a.targetNode, b.sourceNode, b.targetNode)) n++;
-    }
-  }
-  return { crossings: n, links: ls.length };
+function settle(limit) {
+  let frames = 0;
+  while (frames < (limit || 3000)) { render(); frames++; if (alpha < alphaMin && !draggedNode) break; }
+  return frames;
 }
 function offscreen() {
   let off = 0, vis = 0;
@@ -90,41 +63,65 @@ function offscreen() {
   });
   return { off: off, vis: vis };
 }
+function overlapCount() {
+  const v = nodes.filter(n => isNodeVisible(n) && isNodeInScope(n));
+  let c = 0;
+  for (let i = 0; i < v.length; i++) {
+    for (let j = i + 1; j < v.length; j++) {
+      const d = Math.hypot(v[j].x - v[i].x, v[j].y - v[i].y);
+      if (d < (v[i].val || 12) + (v[j].val || 12) - 1) c++;
+    }
+  }
+  return c;
+}
+function meanDistances() {
+  let simSum = 0, simN = 0;
+  links.forEach(l => {
+    if (!l.is_similarity_link || !l.sourceNode || !l.targetNode) return;
+    simSum += Math.hypot(l.targetNode.x - l.sourceNode.x, l.targetNode.y - l.sourceNode.y);
+    simN++;
+  });
+  const v = nodes.filter(n => isNodeVisible(n) && n.group === 'Reports');
+  let rndSum = 0, rndN = 0;
+  for (let i = 0; i < v.length; i += 3) {
+    for (let j = i + 1; j < v.length; j += 5) {
+      rndSum += Math.hypot(v[j].x - v[i].x, v[j].y - v[i].y);
+      rndN++;
+    }
+  }
+  return { sim: simN ? simSum / simN : -1, rand: rndN ? rndSum / rndN : -1, simLinks: simN };
+}
+
 const res = {};
+const t0 = Date.now();
+res.settleFrames = settle();
+res.settleMs = Date.now() - t0;
 fitToView();
-res.frame1 = countCrossings();
-res.frame1_off = offscreen();
-let frames = 0;
-while (frames < 1000) { render(); frames++; if (alpha < alphaMin && !draggedNode) break; }
-res.settleFrames = frames;
-fitToView();
-res.settled = countCrossings();
 res.settled_off = offscreen();
+res.overlaps = overlapCount();
+res.dist = meanDistances();
+res.positions = nodes.map(n => [n.id, Math.round(n.x * 100) / 100, Math.round(n.y * 100) / 100]);
 
-// Kümeleri aç: yapraklar kümenin sektöründe açılmalı, kesişme oluşmamalı.
-nodes.forEach(n => { if (n.group === 'report-cluster') expandedClusters.add(n.id); });
-relayoutGraph();
-for (let i = 0; i < 400; i++) { render(); if (alpha < alphaMin) break; }
-fitToView();
-res.expanded = countCrossings();
-res.expanded_off = offscreen();
+// Durulmuş benzetimin kare maliyeti (fps tavanı için).
+alpha = 0.5;
+const t1 = Date.now();
+for (let i = 0; i < 40; i++) { alpha = 0.5; tickPhysics(); }
+res.tickMs = (Date.now() - t1) / 40;
 
-// Kapsam değişimi aynı kuralı seçili dala uygular.
-expandedClusters.clear();
+// Odak değişimi aynı motoru seçili dala uygular.
 setScope('all_cognitive');
-for (let i = 0; i < 400; i++) { render(); if (alpha < alphaMin) break; }
+settle();
 fitToView();
-res.scoped = countCrossings();
 res.scoped_off = offscreen();
 
 let nan = 0, oob = 0;
-nodes.forEach(n => { if (isNaN(n.x) || isNaN(n.y)) nan++; if (Math.abs(n.x) > 5000 || Math.abs(n.y) > 5000) oob++; });
+nodes.forEach(n => { if (isNaN(n.x) || isNaN(n.y)) nan++; if (Math.abs(n.x) > 40000 || Math.abs(n.y) > 40000) oob++; });
 res.nan = nan; res.oob = oob;
 console.log(JSON.stringify(res));
 """
 
 
-def _run_layout_measurement(tmp_path, graph_data) -> dict:
+def _run_layout_measurement(tmp_path, graph_data, name="layout_measure.js") -> dict:
     """Grafiği Node.js'te çalıştırıp düzen ölçümlerini döndürür."""
     nodes_json = json.dumps(graph_data["nodes"], ensure_ascii=False).replace("</", "<\\/")
     links_json = json.dumps(graph_data["links"], ensure_ascii=False).replace("</", "<\\/")
@@ -136,57 +133,122 @@ def _run_layout_measurement(tmp_path, graph_data) -> dict:
         .replace("__ACTIVE_PROJECT_SLUG__", "entropiai")
     )
     js = html[html.find("<script>") + len("<script>"):html.find("</script>")]
-    script = tmp_path / "layout_measure.js"
+    script = tmp_path / name
     script.write_text(NODE_HARNESS + js + MEASURE_TAIL, encoding="utf-8")
     node_bin = shutil.which("node")
-    result = subprocess.run([node_bin, str(script)], capture_output=True, text=True)
+    result = subprocess.run(
+        [node_bin, str(script)], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     assert result.returncode == 0, f"Node hata verdi: {result.stderr}"
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def test_radial_layout_engine_present_in_template():
-    """Düzen motoru ve kenar ayrımı şablonda bulunmalı."""
-    assert "function relayoutGraph()" in GRAPH_HTML_TEMPLATE
-    assert "relayoutAndFit" in GRAPH_HTML_TEMPLATE
-    assert "LAYOUT_START_ANGLE" in GRAPH_HTML_TEMPLATE
-    # Yaprak kenarları düz, gövde kenarları eğri çizilir
-    assert "leafLinks" in GRAPH_HTML_TEMPLATE
-    assert "TRUNK_TARGETS" in GRAPH_HTML_TEMPLATE
-    # Kapsam ve küme değişiminde aynı kural yeniden uygulanır
-    assert "relayoutAndFit(0.30);" in GRAPH_HTML_TEMPLATE
+def test_force_layout_engine_present_and_clusters_removed():
+    """Radyal sektör motoru ve rapor kümesi düğümleri kaldırılmış olmalı."""
+    # Kuvvet motoru: Barnes-Hut itme + bağ türüne göre yay + çakışma ızgarası
+    assert "function buildQuadtree" in GRAPH_HTML_TEMPLATE
+    assert "function applyCharge" in GRAPH_HTML_TEMPLATE
+    assert "function resolveCollisions" in GRAPH_HTML_TEMPLATE
+    assert "LINK_KINDS" in GRAPH_HTML_TEMPLATE
+    assert "similarity" in GRAPH_HTML_TEMPLATE
+    # Deterministik tohum: Math.random yok
+    assert "mulberry32" in GRAPH_HTML_TEMPLATE
+    assert "Math.random" not in GRAPH_HTML_TEMPLATE
+    # Radyal sektör motoru gitti
+    assert "LAYOUT_START_ANGLE" not in GRAPH_HTML_TEMPLATE
+    assert "LEAF_ARC" not in GRAPH_HTML_TEMPLATE
+    # Küme açma/kapama mekanizması gitti
+    assert "expandedClusters" not in GRAPH_HTML_TEMPLATE
+    assert "toggleCluster" not in GRAPH_HTML_TEMPLATE
+    assert "report-cluster" not in GRAPH_HTML_TEMPLATE
+    # Topluluk tonu ve yakınlık kenarları çiziliyor
+    assert "communityTint" in GRAPH_HTML_TEMPLATE
+    assert "similarityLinks" in GRAPH_HTML_TEMPLATE
 
 
-@pytest.mark.parametrize("report_count", [30])
-def test_radial_layout_has_no_edge_crossings_and_no_offscreen(qapp, tmp_path, report_count):
-    """Gerçekçi veride ağaç kenarları kesişmemeli, sığdırma sonrası ekran dışı düğüm kalmamalı."""
+def test_graph_has_no_cluster_toggle_nodes(qapp, tmp_path):
+    """Grafik verisinde '87 rapor' türü küme düğümü ve cluster_of bağı olmamalı."""
+    vm = ObsidianVaultManager(vault_path=tmp_path)
+    for i in range(40):
+        vm.save_research_report(f"Kume_Testi_{i}", f"# Rapor {i}", tags=["autonomous-agent"])
+    widget = KnowledgeGraphWidget(vault_manager=vm)
+    graph = widget.build_unified_graph()
+    widget.close()
+
+    assert not [n for n in graph["nodes"] if n.get("group") == "report-cluster"]
+    assert not [n for n in graph["nodes"] if n.get("cluster_of")]
+    reports = [n for n in graph["nodes"] if n.get("group") == "Reports"]
+    assert len(reports) == 40, "tüm raporlar tek tek düğüm olarak durmalı"
+    assert all("community" in n for n in graph["nodes"])
+    assert graph["similarity_links"] > 0, "benzerlik kenarları üretilmeli"
+
+
+def test_similarity_links_pull_related_reports_together(qapp, tmp_path):
+    """Benzer başlıklı raporlar aynı kümeye çekilmeli (yakınlık kenarları)."""
+    vm = ObsidianVaultManager(vault_path=tmp_path)
+    topics = [
+        "SABR volatilite yuzeyi kalibrasyonu",
+        "CLO tranche kredi riski",
+        "Otonom ajan harness mimarisi",
+        "Obsidian exocortex bellek katmani",
+    ]
+    for i in range(48):
+        topic = topics[i % len(topics)]
+        vm.save_research_report(f"{topic} Faz{i}", f"# {topic}\n\nicerik", tags=["autonomous-agent"])
+    widget = KnowledgeGraphWidget(vault_manager=vm)
+    graph = widget.build_unified_graph()
+    widget.close()
+
+    reports = {n["id"]: n["name"] for n in graph["nodes"] if n.get("group") == "Reports"}
+    sim = [
+        l for l in graph["links"]
+        if l.get("is_similarity_link") and l["source"] in reports and l["target"] in reports
+    ]
+    assert sim, "benzerlik kenarı üretilmedi"
+    names = reports
+    # Bağlanan çiftler aynı konuyu paylaşmalı
+    same_topic = 0
+    for l in sim:
+        a, b = names.get(l["source"], ""), names.get(l["target"], "")
+        if any(t.split()[0].lower() in a.lower() and t.split()[0].lower() in b.lower() for t in topics):
+            same_topic += 1
+    assert same_topic / len(sim) > 0.85, f"benzerlik kenarlarının çoğu aynı konuda olmalı: {same_topic}/{len(sim)}"
+
+
+@pytest.mark.parametrize("report_count", [60])
+def test_organic_layout_settles_deterministically_without_overlap(qapp, tmp_path, report_count):
+    """Kuvvet yerleşimi: deterministik, çakışmasız, ekran dışı düğümsüz ve akıcı."""
     if not shutil.which("node"):
         pytest.skip("Node.js kurulu değil")
 
     vm = ObsidianVaultManager(vault_path=tmp_path)
+    topics = ["SABR volatilite", "CLO kredi riski", "Otonom ajan harness", "Obsidian bellek"]
     for i in range(report_count):
         tag = "autonomous-agent" if i % 2 == 0 else "financial-auditor"
-        vm.save_research_report(f"Layout_Report_{i}", f"# Rapor {i}", tags=[tag])
+        vm.save_research_report(f"{topics[i % 4]} Faz{i}", f"# Rapor {i}", tags=[tag])
 
     widget = KnowledgeGraphWidget(vault_manager=vm)
     graph = widget.build_unified_graph()
-    res = _run_layout_measurement(tmp_path, graph)
     widget.close()
 
-    assert res["nan"] == 0
-    assert res["oob"] == 0
-    # 1. İlk kare zaten düzenli (fizik durulmasını beklemez)
-    assert res["frame1"]["crossings"] == 0, f"İlk karede kesişme: {res['frame1']}"
-    assert res["frame1_off"]["off"] == 0
-    # 2. Durulduktan sonra da düzen korunur ve hızlı durulur
-    assert res["settled"]["crossings"] == 0, f"Durulunca kesişme: {res['settled']}"
+    res = _run_layout_measurement(tmp_path, graph)
+    again = _run_layout_measurement(tmp_path, graph, name="layout_measure_2.js")
+
+    assert res["nan"] == 0 and res["oob"] == 0
+    # 1. Benzetim sınırlı sayıda karede durulur ve donar
+    assert res["settleFrames"] <= 400, f"durulma çok uzun: {res['settleFrames']} kare"
+    # 2. Durulunca düğümler üst üste binmez
+    assert res["overlaps"] == 0, f"{res['overlaps']} çakışan çift"
+    # 3. Sığdırma sonrası ekran dışı düğüm kalmaz (odak değişiminde de)
     assert res["settled_off"]["off"] == 0
-    assert res["settleFrames"] <= 80, f"Durulma çok uzun: {res['settleFrames']} kare"
-    # 3. Küme açılınca yapraklar kümenin sektöründe açılır, kesişme oluşmaz
-    assert res["expanded"]["crossings"] == 0, f"Küme açıkken kesişme: {res['expanded']}"
-    assert res["expanded_off"]["off"] == 0
-    # 4. Odak değişince aynı kural seçili dala uygulanır
-    assert res["scoped"]["crossings"] == 0, f"Kapsam değişiminde kesişme: {res['scoped']}"
     assert res["scoped_off"]["off"] == 0
+    # 4. Aynı veri her açılışta aynı yerleşimi verir (tohumlu, Math.random yok)
+    assert res["positions"] == again["positions"], "yerleşim deterministik değil"
+    # 5. Benzer raporlar birbirine belirgin biçimde yakın
+    assert res["dist"]["simLinks"] > 0
+    assert res["dist"]["sim"] < res["dist"]["rand"] * 0.5, res["dist"]
+    # 6. Kare maliyeti 30 fps bütçesinin (33 ms) çok altında
+    assert res["tickMs"] < 20, f"kare başına {res['tickMs']} ms"
 
 
 def test_read_report_meta_parses_frontmatter(tmp_path):

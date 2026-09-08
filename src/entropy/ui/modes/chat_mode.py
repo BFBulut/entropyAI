@@ -5,21 +5,26 @@ import json
 from pathlib import Path
 import re
 from typing import List, Optional
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QKeyEvent, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QPushButton, QScrollArea, QTabWidget, QTextBrowser, QVBoxLayout, QWidget
 )
 
+import sys as _sys
+import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
+# entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
+# gecmisi yardimcilari icin gercek modul gerekiyor.
+config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.skills.manager import SkillManager
-from entropy.ui.themes.cyber_theme import CYBER_THEME, STYLESHEET
-from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
-from entropy.core.slash_commands import SlashCommandRegistry
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET
+from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html, render_markdown_to_html
+from entropy.core.slash_commands import SlashCommandRegistry, invalidate_command_cache
 from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.widgets.notification_pill import NotificationPillWidget
 from entropy.ui.widgets.slash_command_popup import SlashCommandPopupWidget
@@ -37,12 +42,31 @@ class ChatInputField(QLineEdit):
         self.textChanged.connect(self._on_text_changed)
         self._updating_from_popup = False
 
+        # Öneri gecikmesi: katalog taraması her tuşta değil, yazma durunca çalışır.
+        # Hızlı yazarken tuş başına yapılan iş yalnızca zamanlayıcıyı yeniden
+        # kurmak; katalog işi 150 ms sessizlikten sonra tek sefer yapılır.
+        self._suggest_timer = QTimer(self)
+        self._suggest_timer.setSingleShot(True)
+        self._suggest_timer.setInterval(150)
+        self._suggest_timer.timeout.connect(self._update_suggestions)
+        self._pending_token: str = ""
+        self._pending_prev_cmds: List[str] = []
+
+        # Yetenek/MCP kataloğu değişince önbellek geçersiz kılınır; alıcı bu
+        # QObject'in slotu (lambda değil), bağlantı bu iş parçacığına kuyruklanır.
+        bus.skills_updated.connect(self._on_command_catalog_changed)
+        bus.mcp_servers_updated.connect(self._on_command_catalog_changed)
+
+    @Slot()
+    def _on_command_catalog_changed(self):
+        invalidate_command_cache()
+
     def _get_active_project_dir(self) -> Optional[Path]:
         if hasattr(self.parent_chat, "bridge") and self.parent_chat.bridge:
             return getattr(self.parent_chat.bridge, "active_project_dir", None)
-        if hasattr(self.parent_chat, "active_project_dir"):
-            return getattr(self.parent_chat.active_project_dir, None)
-        return None
+        # Hata düzeltmesi: getattr(obj, None) TypeError atıyordu (nitelik adı
+        # dizge olmalı); köprüsüz ebeveynlerde her tuşta istisna üretiyordu.
+        return getattr(self.parent_chat, "active_project_dir", None)
 
     def _extract_non_command_suffix(self, text: str) -> str:
         tokens = text.split()
@@ -55,6 +79,7 @@ class ChatInputField(QLineEdit):
         return " ".join(non_cmd_tokens)
 
     def _on_text_changed(self, text: str):
+        """Tuş başına yalnızca ucuz metin ayrıştırması; ağır iş gecikmeye alınır."""
         if self._updating_from_popup:
             return
 
@@ -65,18 +90,30 @@ class ChatInputField(QLineEdit):
 
         # Check if the active token being typed is a single slash command (not a unix file path)
         if active_token.startswith("/") and active_token.count("/") == 1:
-            p_dir = self._get_active_project_dir()
-            matches = self.registry.filter_commands(active_token, project_dir=p_dir)
-            if matches:
-                # Pre-selected commands are any previous slash commands before the active token
-                prev_cmds = [
-                    t for t in tokens[:-1]
-                    if t.startswith("/") and t.count("/") == 1 and re.match(r"^/[a-zA-Z0-9_\-:]+$", t)
-                ]
-                self.popup.set_commands(matches, preselected=prev_cmds)
-                self.popup.show_at_input(self)
-            else:
-                self.popup.hide()
+            self._pending_token = active_token
+            # Pre-selected commands are any previous slash commands before the active token
+            self._pending_prev_cmds = [
+                t for t in tokens[:-1]
+                if t.startswith("/") and t.count("/") == 1 and re.match(r"^/[a-zA-Z0-9_\-:]+$", t)
+            ]
+            self._suggest_timer.start()
+        else:
+            self._pending_token = ""
+            self._suggest_timer.stop()
+            self.popup.hide()
+
+    @Slot()
+    def _update_suggestions(self):
+        """Gecikme dolunca komut önerilerini hesaplar ve açılır listeyi tazeler."""
+        token = self._pending_token
+        if not token:
+            self.popup.hide()
+            return
+        p_dir = self._get_active_project_dir()
+        matches = self.registry.filter_commands(token, project_dir=p_dir)
+        if matches:
+            self.popup.set_commands(matches, preselected=self._pending_prev_cmds)
+            self.popup.show_at_input(self)
         else:
             self.popup.hide()
 
@@ -138,13 +175,23 @@ class ChatInputField(QLineEdit):
         super().moveEvent(event)
 
     def hideEvent(self, event):
-        if hasattr(self, "popup"):
-            self.popup.hide()
+        # Kapanış sırasında C++ tarafı önce yok edilebiliyor; RuntimeError'ı
+        # yutmazsak Qt çıkışta atexit izi basıyor.
+        try:
+            if hasattr(self, "popup"):
+                self.popup.hide()
+        except RuntimeError:
+            pass
         super().hideEvent(event)
 
     def closeEvent(self, event):
         if hasattr(self, "popup"):
             self.popup.close()
+        for sig in (bus.skills_updated, bus.mcp_servers_updated):
+            try:
+                sig.disconnect(self._on_command_catalog_changed)
+            except Exception:
+                pass
         super().closeEvent(event)
 
 
@@ -364,13 +411,13 @@ class ChatModeWindow(QMainWindow):
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
-                background-color: {CYBER_THEME['bg_surface']};
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 6px;
-                padding: 12px;
-                color: {CYBER_THEME['text_primary']};
-                font-size: 13px;
-                line-height: 1.5;
+                background-color: {RT['surface_base']};
+                border: 1px solid {RT['divider_soft']};
+                border-radius: 10px;
+                padding: 14px 16px;
+                color: {RT['text_body']};
+                font-family: {RT['font_body']};
+                font-size: {RT['font_size_body']};
             }}
         """)
         self.layout.addWidget(self.chat_browser)
@@ -452,6 +499,9 @@ class ChatModeWindow(QMainWindow):
         bus.task_triggered.connect(self._on_task_triggered)
         bus.task_completed.connect(self._on_task_completed)
         bus.distill_progress.connect(self._on_distill_progress)
+        # Sohbet gecmisi tek kaynak: her iki mod ayni dosyayi dinler.
+        bus.chat_history_updated.connect(self._on_chat_history_updated)
+        bus.chat_history_cleared.connect(self._on_chat_history_cleared)
 
     # --------------------------------------------------- durum rozeti (Zen eşdeğeri)
 
@@ -756,26 +806,63 @@ class ChatModeWindow(QMainWindow):
         self.toggle_term_btn.setText("▼ Terminali Kapat" if is_vis else ">_ Terminal")
 
     def _on_new_chat(self):
-        self.bridge.reset_conversation()
+        """Sohbeti yalnızca burada, kullanıcının açık isteğiyle sıfırlar (arşivleyerek)."""
+        self.bridge.reset_conversation()  # arşivler + bus.chat_history_cleared yayar
+
+    @Slot()
+    def _on_chat_history_cleared(self):
+        """Sohbet arşivlendi: ekranı temizle (hangi pencerede basıldığı fark etmez)."""
         self.chat_browser.clear()
-        self._append_message("Entropy AI", "Yeni sohbet oturumu başlatıldı. Nasıl yardımcı olabilirim?", is_system=True)
+        self._history_signature = config_module.chat_history_signature()
+        self._append_message(
+            "Entropy AI",
+            "Yeni sohbet oturumu başlatıldı. Önceki sohbet arşive alındı.",
+            is_system=True,
+        )
+
+    @Slot()
+    def _on_chat_history_updated(self):
+        """
+        Diske yeni tur yazıldı.
+
+        Pencere görünürse akış zaten ekrana yazıldı; yalnızca imza tazelenir.
+        Gizliyse imza eski bırakılır ki bir sonraki gösterimde yeniden yüklensin.
+        """
+        if self.isVisible():
+            self._history_signature = config_module.chat_history_signature()
 
     def _load_chat_history(self):
-        """Restore conversation history from disk upon opening."""
-        from entropy.core.config import CHAT_HISTORY_FILE
-        if CHAT_HISTORY_FILE.exists():
-            try:
-                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
-                for msg in history:
-                    content = msg.get("content", "").strip()
-                    if content in ["Merhaba, bu proje nedir?", "Hello"]:
-                        continue
-                    sender = "Siz" if msg.get("role") == "user" else "Entropy AI"
-                    self._append_message(sender, content)
-            except Exception:
-                pass
+        """Sohbet görünümünü diskteki tek kaynaktan bütünüyle yeniden kurar."""
+        self.chat_browser.clear()
+        for msg in config_module.load_chat_history():
+            content = str(msg.get("content", "")).strip()
+            if not content:
+                continue
+            sender = "Siz" if msg.get("role") == "user" else "Entropy AI"
+            self._append_message(sender, content)
+        self._history_signature = config_module.chat_history_signature()
         if self.chat_browser.toPlainText().strip() == "":
             self._append_message("Entropy AI", "Sistem aktif. Size nasıl yardımcı olabilirim?", is_system=True)
+
+    def _reload_chat_history_if_stale(self):
+        """
+        Pencere yeniden gösterildiğinde geçmiş bayatsa yeniden yükler.
+
+        Mod değişiminde pencereler yok edilmiyor, yalnızca gizleniyordu; her mod
+        geçmişi bir kez (kuruluşta) okuduğu için diğer modda yazılan turlar
+        görünmüyor, kullanıcıya "sohbet silinmiş" gibi geliyordu.
+        """
+        if getattr(self.bridge, "is_running", False) or getattr(self, "_streaming_active", False):
+            return  # akış sürerken yeniden kurma: yarım yanıt silinmesin
+        if config_module.chat_history_signature() != getattr(self, "_history_signature", None):
+            self._load_chat_history()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            self._reload_chat_history_if_stale()
+        except Exception:
+            pass
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):
@@ -946,32 +1033,8 @@ class ChatModeWindow(QMainWindow):
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _append_message(self, sender: str, text: str, is_system: bool = False):
-        if is_system:
-            html = (
-                f"<div style='margin: 8px 0; text-align: center;'>"
-                f"<span style='background-color: #0E1420; color: #8B949E; border: 1px solid #1F2B42; "
-                f"border-radius: 12px; padding: 3px 12px; font-size: 11px;'>"
-                f"ℹ️ {text}"
-                f"</span></div>"
-            )
-        elif sender in ("Siz", "Sen"):
-            html = (
-                f"<div style='margin-bottom: 10px; padding: 8px 12px; background-color: #141C2C; "
-                f"border: 1px solid #1F2B42; border-left: 3px solid #00FF9D; border-radius: 6px;'>"
-                f"<div style='color: #00FF9D; font-size: 11px; font-weight: bold; margin-bottom: 3px;'>👤 Siz:</div>"
-                f"<div style='color: #F0F6FC; font-size: 13px; line-height: 1.4;'>{text}</div>"
-                f"</div>"
-            )
-        else:
-            formatted_body = render_markdown_to_html(text)
-            html = (
-                f"<div style='margin-bottom: 10px; padding: 10px 12px; background-color: #0E1420; "
-                f"border: 1px solid #1F2B42; border-left: 3px solid #00F0FF; border-radius: 6px;'>"
-                f"<div style='color: #00F0FF; font-size: 11px; font-weight: bold; margin-bottom: 4px;'>🤖 Entropy AI:</div>"
-                f"<div style='color: #F0F6FC; font-size: 13px; line-height: 1.4;'>{formatted_body}</div>"
-                f"</div>"
-            )
-        self.chat_browser.append(html)
+        """Sohbet balonu üretir (Zen paneliyle aynı tasarım sistemi)."""
+        self.chat_browser.append(build_chat_bubble_html(sender, text, is_system=is_system))
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def closeEvent(self, event):
@@ -989,6 +1052,8 @@ class ChatModeWindow(QMainWindow):
             (bus.task_triggered, self._on_task_triggered),
             (bus.task_completed, self._on_task_completed),
             (bus.distill_progress, self._on_distill_progress),
+            (bus.chat_history_updated, self._on_chat_history_updated),
+            (bus.chat_history_cleared, self._on_chat_history_cleared),
         ]
         for sig, slot in signals:
             try:

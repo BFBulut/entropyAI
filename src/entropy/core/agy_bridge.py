@@ -8,12 +8,18 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Callable, List, Dict, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
 from entropy.core.event_bus import bus
+import sys as _sys
+import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
+# entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
+# gecmisi yardimcilari icin gercek modul gerekiyor.
+config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config, CHAT_HISTORY_FILE
 from entropy.core.task_ledger import task_ledger, TaskStatus
 from entropy.core.project_lock import project_lock_manager
@@ -194,6 +200,13 @@ class AgyProcessBridge(QObject):
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
         self._is_running: bool = False
+        # Kapanış bayrağı: shutdown() sonrası hiçbir yeni agy süreci başlamamalı.
+        # Aksi hâlde aboutToQuit ile süreç sonu arasında sıraya girmiş bir görev
+        # tam da öldürdüğümüz ağacın yerine yenisini doğurur.
+        self._shutting_down: bool = False
+        # Kapanışta beklenecek yan iş parçacıkları (RAG ısıtma/indeksleme gibi).
+        # Yalnızca zayıf takip: hepsi daemon, join yalnızca bütçe elverdiğince.
+        self._side_threads: List[threading.Thread] = []
         self._prompt_queue: List[Tuple[str, Optional[List[str]], str]] = []
         self._lock = threading.Lock()
         # Süreç durumundan (self._lock) ayrı bir kilit: sohbet geçmişi ve token
@@ -203,16 +216,9 @@ class AgyProcessBridge(QObject):
         # plan görevi aynı anda bittiğinde biri diğerinin katkısını siler.
         self._state_lock = threading.Lock()
 
-        # Load persisted conversation history if available
-        if CHAT_HISTORY_FILE.exists():
-            try:
-                raw_history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
-                self.conversation_history = [
-                    m for m in raw_history
-                    if m.get("content", "").strip() not in ["Merhaba, bu proje nedir?", "Hello"]
-                ]
-            except Exception:
-                self.conversation_history = []
+        # Sohbet geçmişi tek kaynaktan (config yardımcıları) yüklenir; arayüz
+        # modları da aynı fonksiyonu kullanır, böylece köprü ve ekranlar ayrışmaz.
+        self.conversation_history = config_module.load_chat_history()
 
 
     def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
@@ -284,12 +290,10 @@ class AgyProcessBridge(QObject):
         config.last_cumulative_usage = dict(self.last_cumulative_usage)
         config.save_settings()
 
+        # Eski sohbet silinmez, arşive taşınır: kullanıcı yanlışlıkla "+ Yeni
+        # Sohbet"e bastığında geçmişi .entropy/chat_archive/<zaman>.json'da kalır.
+        self.last_archived_chat = config_module.archive_chat_history()
         self.conversation_history = []
-        if CHAT_HISTORY_FILE.exists():
-            try:
-                CHAT_HISTORY_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
 
         self.total_tokens_used = 0
         self.latest_input_tokens = 0
@@ -301,7 +305,14 @@ class AgyProcessBridge(QObject):
         self.session_turn_count = 0
         self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
-        bus.terminal_output_received.emit("\n[Entropy Core] Yeni diyalog oturumu başlatıldı. (Kalıcı bilişsel hafıza ve bilgi grafiği korunuyor)\n")
+        arch_note = f" Önceki sohbet arşive alındı: {self.last_archived_chat}" if self.last_archived_chat else ""
+        bus.terminal_output_received.emit(
+            "\n[Entropy Core] Yeni diyalog oturumu başlatıldı. "
+            f"(Kalıcı bilişsel hafıza ve bilgi grafiği korunuyor){arch_note}\n"
+        )
+        # Açık pencerelerin hepsi temizlensin: geçmiş yalnızca burada, kullanıcının
+        # bilinçli isteğiyle sıfırlanır.
+        bus.chat_history_cleared.emit()
 
     def set_model(self, model_name: str):
         """Update active model dynamically and persist to configuration."""
@@ -384,6 +395,56 @@ class AgyProcessBridge(QObject):
             pass
         return skill, float(confidence)
 
+    # Bu eşiğin altında seçilen yetenek "zayıf karar" sayılır. 0,6 keyfi değil:
+    # score_skill_for_prompt seçilen kararları 0,5–1,0 aralığına yerleştirir, yani
+    # 0,6 seçilmiş ama eşiğin hemen üstünde kalmış ilk beşte birlik dilimdir.
+    LOW_CONFIDENCE_THRESHOLD = 0.6
+
+    def low_confidence_manifest_note(self, target_skill) -> str:
+        """
+        Zayıf yönlendirme kararında kataloğa eklenecek tek satırlık uyarı.
+
+        Neden: yönlendirici yanılıp yeteneği yine de zorladığında model, sanki
+        kullanıcı o yeteneği açıkça istemiş gibi davranıyor ve alakasız bir
+        yordamı uyguluyordu. Kararın zayıf olduğunu söylemek modele yeteneği
+        yok sayma iznini açıkça verir. Karar güçlüyse (veya yetenek yoksa) hiç
+        satır eklenmez: her turda enjekte edilen bir metin, gereksizken token
+        yakar ve güçlü kararları da sulandırır.
+        """
+        if target_skill is None:
+            return ""
+        if float(self.last_skill_confidence) >= self.LOW_CONFIDENCE_THRESHOLD:
+            return ""
+        return (
+            f"> Not: yetenek seçimi düşük güvenli "
+            f"({float(self.last_skill_confidence):.2f}); gerekiyorsa yeteneksiz yanıtla."
+        )
+
+    def last_decision_summary(self) -> Dict[str, object]:
+        """
+        Son yönlendirme kararının tek noktadan özeti (arayüz tüketimi için).
+
+        `/skills` gibi yerel komutlar ile rozet aynı sayıyı göstersin diye karar,
+        güven ve "zayıf mı" yargısı burada birleştirilir; eşik kopyalanırsa
+        arayüz ile prompt'a düşen not zamanla ayrışır.
+        """
+        conf = float(self.last_skill_confidence)
+        skill = self.last_active_skill
+        if not skill:
+            label = "yetenek yok"
+        elif conf < self.LOW_CONFIDENCE_THRESHOLD:
+            label = "zayıf eşleşme"
+        else:
+            label = "güçlü eşleşme"
+        return {
+            "skill": skill,
+            "confidence": round(conf, 4),
+            "low_confidence": bool(skill) and conf < self.LOW_CONFIDENCE_THRESHOLD,
+            "label": label,
+            "text": (f"Son karar: {skill} (güven {conf:.2f}, {label})"
+                     if skill else f"Son karar: yetenek yok (güven {conf:.2f})"),
+        }
+
     def get_cognitive_context(self, prompt: str, target_skill=None, token_budget: int = None) -> str:
         """
         Ajana enjekte edilecek bilişsel bağlamı üretir.
@@ -436,6 +497,9 @@ class AgyProcessBridge(QObject):
             sm = SkillManager(project_dir=self.active_project_dir)
             manifest = sm.get_skills_manifest(active_skill=target_skill.name if target_skill else None)
             if manifest:
+                note = self.low_confidence_manifest_note(target_skill)
+                if note:
+                    manifest = f"{manifest}\n{note}"
                 parts.append(manifest)
         except Exception:
             pass
@@ -490,7 +554,12 @@ class AgyProcessBridge(QObject):
             except Exception:
                 pass
 
-        threading.Thread(target=_bg_index, daemon=True).start()
+        warm = threading.Thread(target=_bg_index, name="entropy-rag-warmup", daemon=True)
+        with self._lock:
+            # Bitmiş iş parçacıklarını biriktirme; liste kapanışta gezilecek.
+            self._side_threads = [t for t in self._side_threads if t.is_alive()]
+            self._side_threads.append(warm)
+        warm.start()
 
 
     def detect_model_from_text(self, text: str) -> Optional[str]:
@@ -601,10 +670,14 @@ class AgyProcessBridge(QObject):
                 self.conversation_history.append({"role": "user", "content": user_prompt})
                 self.conversation_history.append({"role": "assistant", "content": assistant_resp})
                 snapshot = list(self.conversation_history)
-            CHAT_HISTORY_FILE.write_text(
-                json.dumps(snapshot, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
+            config_module.save_chat_history(snapshot)
+            # Diğer moddaki pencere de aynı turu görebilsin diye haber verilir.
+            # Sinyal işçi iş parçacığından atılıyor; alıcılar kuyruklu bağlantı ile
+            # ana iş parçacığında çalışır (alıcı QObject slotu).
+            try:
+                bus.chat_history_updated.emit()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -679,6 +752,11 @@ class AgyProcessBridge(QObject):
         ürünlerin rapor arşivini kirletmemesi ve sonraki damıtmaya kaynak olarak
         geri dönmemesi için.
         """
+        with self._lock:
+            if self._shutting_down:
+                # Kapanış başladıktan sonra gelen görev sessizce reddedilir;
+                # başlatılsaydı öksüz bir agy ağacı olarak geride kalırdı.
+                return
         thread = threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result, save_report, agent),
@@ -790,7 +868,14 @@ class AgyProcessBridge(QObject):
                 )
                 stdin_writer = self._feed_stdin(proc, stdin_payload)
                 with self._lock:
-                    self._background_processes[task_id] = proc
+                    # Popen ile kayıt arasındaki yarış: kapanış tam bu aralıkta
+                    # başladıysa süreç defterde olmadığı için öldürülmezdi.
+                    late = self._shutting_down
+                    if not late:
+                        self._background_processes[task_id] = proc
+                if late:
+                    self._kill_tree(proc, wait_budget=1.0)
+                    raise RuntimeError("Uygulama kapanıyor; görev başlatılmadı.")
 
                 readline_fn = getattr(proc.stdout, "readline", None)
                 stdout_stream = iter(readline_fn, '') if callable(readline_fn) else iter(proc.stdout)
@@ -960,9 +1045,12 @@ class AgyProcessBridge(QObject):
             # Record in SQLite Task Ledger
             if success:
                 task_ledger.record_task_success(task_id=task_id, summary=full_text[:300], usage=task_usage or None)
-            else:
+            elif not self._shutting_down:
                 err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
                 task_ledger.record_task_failure(task_id=task_id, error=err_detail)
+            # Kapanışta süreci biz öldürdük: işçi burada "başarısız" yazsaydı
+            # shutdown()'ın koyduğu CANCELLED'ın üstüne biner ve kullanıcı her
+            # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
 
             # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
             if on_result is not None:
@@ -1039,7 +1127,7 @@ class AgyProcessBridge(QObject):
         except Exception as outer_err:
             try:
                 task_rec = task_ledger.get_task(task_id)
-                if task_rec and task_rec.get("status") == TaskStatus.RUNNING.value:
+                if (not self._shutting_down) and task_rec and task_rec.get("status") == TaskStatus.RUNNING.value:
                     task_ledger.record_task_failure(task_id=task_id, error=str(outer_err))
             except Exception:
                 pass
@@ -1764,3 +1852,122 @@ class AgyProcessBridge(QObject):
                     pass
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Kapanış
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _kill_tree(proc, wait_budget: float) -> None:
+        """Süreci ve TÜM çocuklarını öldürür (Windows'ta taskkill /T)."""
+        try:
+            if proc.poll() is not None:
+                return
+        except Exception:
+            return
+        try:
+            pid = proc.pid
+            if sys.platform == "win32" or os.name == "nt":
+                # /T şart: agy kendi altında language_server ve MCP süreçleri
+                # açıyor. Yalnız ebeveyni öldürmek onları öksüz bırakır ve
+                # uygulama kapandıktan sonra da CPU/port tutmaya devam ederler.
+                subprocess.run(
+                    f"taskkill /F /T /PID {pid}",
+                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                proc.terminate()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=max(0.0, wait_budget))
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def shutdown(self, timeout: float = 3.0) -> Dict[str, int]:
+        """
+        Uygulama kapanırken köprüyü düzenli biçimde söndürür.
+
+        Neden: tepsiden çıkış, son pencerenin kapatılması ve tek kopya devri
+        yollarının üçü de süreci sonlandırıyordu ama çalışan agy süreçlerine
+        hiç dokunmuyordu. Sonuç: arka plan görevi (damıtma, konsolidasyon,
+        zamanlanmış araştırma) ve altındaki language_server ağacı öksüz kalıp
+        çalışmayı sürdürüyor, ledger'daki satır sonsuza dek RUNNING kalıyordu;
+        bir sonraki açılışta `mark_orphans_failed` bunları "başarısız" diye
+        işaretliyor, kullanıcı ise hiç istemediği bir hata görüyordu.
+
+        Sırayla: yeni iş kabulünü kapat -> tüm süreç ağaçlarını taskkill /T ile
+        indir -> RUNNING/PENDING ledger satırlarını CANCELLED yap -> yetenek
+        izleyicisini ve yan iş parçacıklarını (RAG ısıtma vb.) durdur.
+
+        Toplam bekleme `timeout` saniyeyi aşmaz: bu metot arayüz iş
+        parçacığından (aboutToQuit) çağrılır, uzaması kapanışı dondurur.
+        Yeniden çağrı güvenlidir.
+
+        Döndürdüğü sayaç: {"processes": öldürülen süreç, "tasks": iptal edilen
+        ledger satırı, "threads": beklenen yan iş parçacığı}.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._lock:
+            if self._shutting_down:
+                return {"processes": 0, "tasks": 0, "threads": 0}
+            self._shutting_down = True
+            procs = list(self._background_processes.items())
+            self._background_processes.clear()
+            current = self._current_process
+            self._current_process = None
+            self._is_running = False
+            self._prompt_queue.clear()
+            side_threads = list(self._side_threads)
+            self._side_threads.clear()
+
+        killed = 0
+        for _task_id, proc in procs:
+            try:
+                alive = proc.poll() is None
+            except Exception:
+                alive = False
+            self._kill_tree(proc, wait_budget=max(0.0, deadline - time.monotonic()))
+            killed += int(alive)
+        if current is not None:
+            try:
+                alive = current.poll() is None
+            except Exception:
+                alive = False
+            self._kill_tree(current, wait_budget=max(0.0, deadline - time.monotonic()))
+            killed += int(alive)
+
+        cancelled = 0
+        try:
+            # Modül düzeyindeki task_ledger kullanılır, yerel import edilmez:
+            # entropy.core paketi `from .task_ledger import task_ledger` yaptığı
+            # için `entropy.core.task_ledger` adı modülü değil TaskLedger
+            # örneğini gösteriyor; yerel import testlerde (ve ileride başka bir
+            # yalıtımda) yanlış nesneyi çözerdi.
+            cancelled = task_ledger.cancel_active("Uygulama kapandı; görev yarıda kesildi.")
+        except Exception:
+            pass
+
+        try:
+            from entropy.skills.manager import stop_skill_watcher
+
+            stop_skill_watcher()
+        except Exception:
+            pass
+
+        joined = 0
+        for t in side_threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                if t.is_alive():
+                    t.join(timeout=remaining)
+                joined += 1
+            except Exception:
+                pass
+
+        return {"processes": killed, "tasks": cancelled, "threads": joined}

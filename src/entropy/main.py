@@ -119,6 +119,25 @@ def main():
     ui_manager.switch_mode(initial_mode)
     guard.activated.connect(ui_manager.bring_to_front)
 
+    # Kapanış kancası: tepsiden çıkış, son pencerenin kapatılması ve tek kopya
+    # devri yollarının hepsi burada birleşir. Kanca olmadan çalışan agy süreçleri
+    # (ve altlarındaki language_server ağacı) öksüz kalıyor, ledger satırları
+    # sonsuza dek RUNNING görünüyordu. Bütçe 3 sn: kapanış donmamalı.
+    def _on_quit():
+        try:
+            stats = bridge.shutdown(timeout=3.0)
+            if stats.get("processes") or stats.get("tasks"):
+                print(f"[{config.app_name}] Kapanış: {stats['processes']} süreç sonlandırıldı, "
+                      f"{stats['tasks']} görev iptal edildi.")
+        except Exception as e:
+            print(f"[{config.app_name}] Kapanış temizliği hatası: {e}")
+        try:
+            scheduler.stop()
+        except Exception:
+            pass
+
+    app.aboutToQuit.connect(_on_quit)
+
     print(f"[{config.app_name}] Started in {initial_mode.upper()} mode.")
     return app.exec()
 

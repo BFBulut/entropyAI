@@ -167,12 +167,16 @@ def test_chat_input_field_autocomplete(qapp):
     assert not input_field.popup.isVisible()
 
     # User types "/"
+    # Oneriler 150 ms gecikmeyle hesaplanir (tus basina dizin taramasini onlemek
+    # icin); test gecikmeyi beklemek yerine zamanlayiciyi elle tetikler.
     input_field.setText("/")
+    input_field._update_suggestions()
     assert input_field.popup.isVisible()
     assert input_field.popup.list_widget.count() > 0
 
     # User types "/boo"
     input_field.setText("/boo")
+    input_field._update_suggestions()
     assert input_field.popup.isVisible()
     assert input_field.popup.list_widget.count() >= 1
 
@@ -190,6 +194,7 @@ def test_chat_input_field_autocomplete(qapp):
 
     # Escape key hides popup
     input_field.setText("/lea")
+    input_field._update_suggestions()
     assert input_field.popup.isVisible()
     esc_event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
     input_field.keyPressEvent(esc_event)

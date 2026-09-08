@@ -20,7 +20,12 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from entropy.core.event_bus import bus
-from entropy.memory.distiller import MAX_SOURCES_PER_PASS, PlaybookDistiller, _ACTIVE_TASKS
+from entropy.memory.distiller import (
+    MAX_SOURCES_PER_PASS,
+    PlaybookDistiller,
+    _ACTIVE_TASKS,
+    _REFRESH_CURSOR,
+)
 from entropy.memory.playbook import PlaybookStore, SkillReportIndex
 
 
@@ -52,8 +57,10 @@ _PROC = "## Calisma Adimlari\n1. Tara.\n2. Karsilastir.\n\n## Kontrol\n- Dogrula
 @pytest.fixture(autouse=True)
 def _clean_active():
     _ACTIVE_TASKS.clear()
+    _REFRESH_CURSOR.clear()
     yield
     _ACTIVE_TASKS.clear()
+    _REFRESH_CURSOR.clear()
 
 
 def test_second_start_for_same_skill_is_refused_while_running(tmp_path):
@@ -73,7 +80,8 @@ def test_second_start_for_same_skill_is_refused_while_running(tmp_path):
     assert third and not third.get("already_running")
 
 
-def test_refresh_pass_keeps_counter_at_total_and_does_not_chain(tmp_path):
+def test_refresh_chain_covers_all_reports_and_counter_never_drops(tmp_path):
+    """Tazeleme tüm arşivi kapsar: 24/29 -> 29/29; sayaç toplamdan düşmez."""
     n = MAX_SOURCES_PER_PASS + 5
     store = _store(tmp_path, "demo", n)
     d = PlaybookDistiller(store=store)
@@ -89,23 +97,63 @@ def test_refresh_pass_keeps_counter_at_total_and_does_not_chain(tmp_path):
     calls_before = len(bridge.calls)
 
     got = []
-
-    def _collect(name, done, total):
-        got.append((name, done, total))
-
-    bus.distill_progress.connect(_collect)
+    lines = []
+    bus.distill_progress.connect(lambda name, done, total: got.append((name, done, total)))
+    bus.terminal_output_received.connect(lambda t: lines.append(t))
     try:
         started = d.run_via_bridge(bridge, "demo")
-        assert started["batch_start"] == n - MAX_SOURCES_PER_PASS
-        assert "tazeleme" in bridge.calls[-1]["task_name"]
+        assert started["refresh"] is True
+        assert started["batch_start"] == 0
+        assert f"tazeleme {MAX_SOURCES_PER_PASS}/{n}" in bridge.calls[-1]["task_name"]
         assert got and got[-1][1] == n, "tazeleme başlarken sayaç 0'a düşmemeli"
-        bridge.complete_last(_PROC + "\n\n## Ek\n- Tazelendi.")
+        # 1. tur biter, zincir kendiliğinden 2. turu açar (kalan 5 rapor).
+        bridge.complete_last(_PROC + "\n\n## Ek\n- Tazeleme A.")
+        assert len(bridge.calls) == calls_before + 2, "tazeleme zinciri sürmeli"
+        assert f"tazeleme {n}/{n}" in bridge.calls[-1]["task_name"]
+        bridge.complete_last(_PROC + "\n\n## Ek\n- Tazeleme B.")
     finally:
-        bus.distill_progress.disconnect(_collect)
+        bus.distill_progress.disconnect()
+        bus.terminal_output_received.disconnect()
 
-    pb = store.load("demo")
-    assert pb.processed_count == n, "tazeleme sonrası sayaç toplamda kalmalı"
-    assert len(bridge.calls) == calls_before + 1, "tazeleme tek turdur, zincirlenmez"
+    assert min(g[1] for g in got) == n, "tazeleme boyunca sayaç toplamda kalmalı"
+    assert store.load("demo").processed_count == n
+    assert len(bridge.calls) == calls_before + 2, "arşiv bitince yeni tur açılmamalı"
+    assert any(f"tazeleme tamamlandı ({n}/{n})" in t for t in lines)
+
+
+def test_small_archive_refresh_stays_single_pass(tmp_path):
+    """Tur boyutuna sığan arşivde tazeleme tek turdur ve zincirlenmez."""
+    n = MAX_SOURCES_PER_PASS - 4
+    store = _store(tmp_path, "mini", n)
+    d = PlaybookDistiller(store=store)
+    bridge = _FakeBridge()
+    d.run_via_bridge(bridge, "mini")
+    bridge.complete_last(_PROC)
+    assert store.load("mini").processed_count == n
+    calls_before = len(bridge.calls)
+
+    started = d.run_via_bridge(bridge, "mini")
+    assert started["refresh"] is True and started["sources"] == n
+    assert f"tazeleme {n}/{n}" in bridge.calls[-1]["task_name"]
+    bridge.complete_last(_PROC + "\n\n## Ek\n- Tek tur.")
+    assert len(bridge.calls) == calls_before + 1
+
+
+def test_plan_estimates_full_refresh_cost(tmp_path):
+    """Tazelemede plan() maliyeti 0 değil, tüm arşivin zincir maliyetidir."""
+    n = MAX_SOURCES_PER_PASS + 5
+    store = _store(tmp_path, "demo", n)
+    d = PlaybookDistiller(store=store)
+    bridge = _FakeBridge()
+    d.run_via_bridge(bridge, "demo")
+    bridge.complete_last(_PROC)
+    bridge.complete_last(_PROC + "\n\n## Ek\n- Devam.")
+
+    plan = d.plan("demo")
+    assert plan["refresh"] is True
+    assert plan["sources_this_pass"] == MAX_SOURCES_PER_PASS
+    assert plan["estimated_total_passes"] == 2
+    assert plan["estimated_total_tokens"] > 0
 
 
 def test_new_report_appended_continues_from_processed_count(tmp_path):

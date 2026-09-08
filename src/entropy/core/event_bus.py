@@ -25,6 +25,12 @@ class EntropyEventBus(QObject):
     # Project Context
     project_changed = Signal(str)        # absolute project directory path
 
+    # Sohbet geçmişi: tek kaynak diskteki dosya. Bir tur kaydedildiğinde ya da
+    # sohbet arşivlenip sıfırlandığında tüm pencereler (Zen, Chat) aynı içeriği
+    # gösterebilsin diye haber verilir. Alıcılar QObject slotudur; lambda değil.
+    chat_history_updated = Signal()      # diske yeni tur yazıldı
+    chat_history_cleared = Signal()      # sohbet arşivlendi, ekranlar temizlensin
+
     # Tool Execution & Permissions
     tool_approval_requested = Signal(str, str, str)  # tool_name, args_summary, tool_id
     tool_approval_responded = Signal(str, bool)     # tool_id, approved

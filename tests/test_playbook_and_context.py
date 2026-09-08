@@ -222,11 +222,13 @@ def test_multi_pass_distillation_continues_and_refines(tmp_path, monkeypatch):
     pb = d.complete(p3, "## Adimlar\n1-3 birlesik.")
     assert pb.version == 3 and pb.processed_count == 7
     assert store.status("demo")["state"] == "guncel"
-    # Her şey işlenmişken açık istek tek turluk bir tazelemedir: en yeni grup,
-    # mevcut yordamla birlikte; sayaç toplamda kalır (0'a dönmez, zincirlenmez).
+    # Her şey işlenmişken açık istek bir tazelemedir: arşiv baştan taranır,
+    # mevcut yordamla birlikte; sayaç toplamda kalır (0'a dönmez).
+    # Tur boyutu 3 olduğu için tazeleme üç turluk bir zincirdir.
     p4 = d.prepare("demo")
     assert p4["refresh"] is True and "MEVCUT YORDAM" in p4["prompt"]
-    assert p4["batch_start"] == 4 and len(p4["sources"]) == 3 and p4["processed_after"] == 7
+    assert p4["batch_start"] == 0 and len(p4["sources"]) == 3 and p4["processed_after"] == 7
+    assert p4["refresh_end"] == 3 and p4["refresh_total"] == 7
     pb4 = d.complete(p4, "## Adimlar\n1-3 birlesik.\n4. Tazelendi.")
     assert pb4.processed_count == 7 and store.status("demo")["state"] == "guncel"
     assert d.plan("demo")["should_run"] is False, "otomatik listede görünmemeli"

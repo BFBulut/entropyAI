@@ -13,6 +13,11 @@ from PySide6.QtWidgets import (
     QTextBrowser, QVBoxLayout, QWidget
 )
 
+import sys as _sys
+import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
+# entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
+# gecmisi yardimcilari icin gercek modul gerekiyor.
+config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
@@ -20,7 +25,7 @@ from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.core.slash_commands import SlashCommandRegistry
 from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.modes.chat_mode import ChatInputField
-from entropy.ui.themes.cyber_theme import CYBER_THEME, STYLESHEET
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
 from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
@@ -145,7 +150,7 @@ class ZenModeWindow(QMainWindow):
                 color: #080B10;
             }
         """)
-        btn_new_chat.clicked.connect(self.bridge.reset_conversation)
+        btn_new_chat.clicked.connect(self._on_new_chat)
         h_layout.addWidget(btn_new_chat)
 
         # Mode Switch Buttons
@@ -314,13 +319,13 @@ class ZenModeWindow(QMainWindow):
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
-                background-color: {CYBER_THEME['bg_surface']};
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 6px;
-                padding: 10px;
-                color: {CYBER_THEME['text_primary']};
-                font-size: 13px;
-                line-height: 1.5;
+                background-color: {RT['surface_base']};
+                border: 1px solid {RT['divider_soft']};
+                border-radius: 10px;
+                padding: 14px 16px;
+                color: {RT['text_body']};
+                font-family: {RT['font_body']};
+                font-size: {RT['font_size_body']};
             }}
         """)
         chat_layout.addWidget(self.chat_browser)
@@ -382,26 +387,18 @@ class ZenModeWindow(QMainWindow):
 
     def _load_persisted_session_to_terminal(self):
         """Restore full conversation history to the terminal pane on launch."""
-        from entropy.core.config import CHAT_HISTORY_FILE
-        if CHAT_HISTORY_FILE.exists():
-            try:
-                import json
-                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
-                filtered_history = [
-                    turn for turn in history
-                    if turn.get("content", "").strip() not in ["Merhaba, bu proje nedir?", "Hello"]
-                ]
-                if filtered_history:
-                    cid = f" (Oturum ID: {self.bridge.current_conversation_id[:8]}...)" if self.bridge.current_conversation_id else ""
-                    self.terminal_pane.append_output(f"════════════════ [AKTİF SOHBET GEÇMİŞİ YÜKLENDİ{cid} - {len(filtered_history)} Mesaj] ════════════════\n")
-                    for turn in filtered_history:
-                        role = "SİZ" if turn.get("role") == "user" else f"ENTROPY CORE [{self.bridge.selected_model}]"
-                        content = turn.get("content", "").strip()
-                        self.terminal_pane.append_output(f"\n▶ [{role}]:\n{content}\n")
-                    self.terminal_pane.append_output("\n════════════════ [CANLI ÇIKTI AKIŞI BAŞLATILDI] ════════════════\n\n")
-
-            except Exception:
-                pass
+        try:
+            filtered_history = config_module.load_chat_history()
+            if filtered_history:
+                cid = f" (Oturum ID: {self.bridge.current_conversation_id[:8]}...)" if self.bridge.current_conversation_id else ""
+                self.terminal_pane.append_output(f"════════════════ [AKTİF SOHBET GEÇMİŞİ YÜKLENDİ{cid} - {len(filtered_history)} Mesaj] ════════════════\n")
+                for turn in filtered_history:
+                    role = "SİZ" if turn.get("role") == "user" else f"ENTROPY CORE [{self.bridge.selected_model}]"
+                    content = turn.get("content", "").strip()
+                    self.terminal_pane.append_output(f"\n▶ [{role}]:\n{content}\n")
+                self.terminal_pane.append_output("\n════════════════ [CANLI ÇIKTI AKIŞI BAŞLATILDI] ════════════════\n\n")
+        except Exception:
+            pass
 
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
@@ -416,6 +413,9 @@ class ZenModeWindow(QMainWindow):
         bus.cognitive_memory_updated.connect(self._update_telemetry_badges)
         bus.skills_updated.connect(self._update_telemetry_badges)
         bus.project_changed.connect(self._on_project_changed)
+        # Sohbet gecmisi tek kaynak: Chat modu ile ayni dosyayi dinler.
+        bus.chat_history_updated.connect(self._on_chat_history_updated)
+        bus.chat_history_cleared.connect(self._on_chat_history_cleared)
         self._update_telemetry_badges()
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
@@ -907,56 +907,62 @@ class ZenModeWindow(QMainWindow):
         self.attachment_bar.setVisible(False)
 
     def _append_chat_message(self, sender: str, text: str, is_system: bool = False):
-        if is_system:
-            html_msg = (
-                f"<div style='margin: 6px 0; text-align: center;'>"
-                f"<span style='background-color: #0E1420; color: #8B949E; border: 1px solid #1F2B42; "
-                f"border-radius: 12px; padding: 2px 10px; font-size: 10px;'>"
-                f"ℹ️ {text}"
-                f"</span></div>"
-            )
-        elif sender in ("Siz", "Sen"):
-            html_msg = (
-                f"<div style='margin-bottom: 8px; padding: 6px 10px; background-color: #141C2C; "
-                f"border: 1px solid #1F2B42; border-left: 3px solid #00FF9D; border-radius: 5px;'>"
-                f"<div style='color: #00FF9D; font-size: 10px; font-weight: bold; margin-bottom: 2px;'>👤 Siz:</div>"
-                f"<div style='color: #F0F6FC; font-size: 12px; line-height: 1.3;'>{text}</div>"
-                f"</div>"
-            )
-        else:
-            from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
-            formatted_body = render_markdown_to_html(text)
-            html_msg = (
-                f"<div style='margin-bottom: 8px; padding: 8px 10px; background-color: #0E1420; "
-                f"border: 1px solid #1F2B42; border-left: 3px solid #00F0FF; border-radius: 5px;'>"
-                f"<div style='color: #00F0FF; font-size: 10px; font-weight: bold; margin-bottom: 3px;'>🤖 Entropy AI:</div>"
-                f"<div style='color: #F0F6FC; font-size: 12px; line-height: 1.3;'>{formatted_body}</div>"
-                f"</div>"
-            )
-        self.chat_browser.append(html_msg)
+        """Sohbet balonu uretir (Chat modu ile ayni tasarim sistemi, tek kaynak)."""
+        from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html
+        self.chat_browser.append(build_chat_bubble_html(sender, text, is_system=is_system))
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_new_chat(self):
-        self.bridge.reset_conversation()
+        """Sohbeti yalnızca burada, kullanıcının açık isteğiyle sıfırlar (arşivleyerek)."""
+        self.bridge.reset_conversation()  # arşivler + bus.chat_history_cleared yayar
+
+    @Slot()
+    def _on_chat_history_cleared(self):
+        """Sohbet arşivlendi: ekranı ve terminali temizle."""
         self.chat_browser.clear()
-        self.terminal_pane.clear_output()
-        self._append_chat_message("Entropy AI", "Yeni sohbet oturumu başlatıldı. Nasıl yardımcı olabilirim?", is_system=True)
+        try:
+            self.terminal_pane.clear_output()
+        except Exception:
+            pass
+        self._history_signature = config_module.chat_history_signature()
+        self._append_chat_message(
+            "Entropy AI",
+            "Yeni sohbet oturumu başlatıldı. Önceki sohbet arşive alındı.",
+            is_system=True,
+        )
+
+    @Slot()
+    def _on_chat_history_updated(self):
+        """Diske yeni tur yazıldı; pencere görünürse akış zaten ekranda, imzayı tazele."""
+        if self.isVisible():
+            self._history_signature = config_module.chat_history_signature()
 
     def _load_chat_history(self):
-        from entropy.core.config import CHAT_HISTORY_FILE
-        if CHAT_HISTORY_FILE.exists():
-            try:
-                history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
-                for msg in history:
-                    content = msg.get("content", "").strip()
-                    if content in ["Merhaba, bu proje nedir?", "Hello"]:
-                        continue
-                    sender = "Siz" if msg.get("role") == "user" else "Entropy AI"
-                    self._append_chat_message(sender, content)
-            except Exception:
-                pass
+        """Sohbet görünümünü diskteki tek kaynaktan bütünüyle yeniden kurar."""
+        self.chat_browser.clear()
+        for msg in config_module.load_chat_history():
+            content = str(msg.get("content", "")).strip()
+            if not content:
+                continue
+            sender = "Siz" if msg.get("role") == "user" else "Entropy AI"
+            self._append_chat_message(sender, content)
+        self._history_signature = config_module.chat_history_signature()
         if self.chat_browser.toPlainText().strip() == "":
             self._append_chat_message("Entropy AI", "Zen Çalışma Alanı aktif. Size nasıl yardımcı olabilirim?", is_system=True)
+
+    def _reload_chat_history_if_stale(self):
+        """Pencere yeniden gösterildiğinde geçmiş bayatsa (diğer modda yazılmışsa) yeniden yükler."""
+        if getattr(self.bridge, "is_running", False) or getattr(self, "_streaming_active", False):
+            return
+        if config_module.chat_history_signature() != getattr(self, "_history_signature", None):
+            self._load_chat_history()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            self._reload_chat_history_if_stale()
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         signals = [
@@ -972,6 +978,8 @@ class ZenModeWindow(QMainWindow):
             (bus.cognitive_memory_updated, self._update_telemetry_badges),
             (bus.skills_updated, self._update_telemetry_badges),
             (bus.project_changed, self._on_project_changed),
+            (bus.chat_history_updated, self._on_chat_history_updated),
+            (bus.chat_history_cleared, self._on_chat_history_cleared),
         ]
         for sig, slot in signals:
             try:

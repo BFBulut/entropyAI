@@ -112,6 +112,27 @@ _CANCELLED: set = set()
 _ACTIVE_TASKS: Dict[str, str] = {}
 _RETRIES: Dict[str, int] = {}
 
+# Tazeleme turlarında arşivin neresinde kalındığı. Disk sayacı tazelemede zaten
+# toplamda durduğundan (aksi hâlde rozet geri düşerdi) ilerleme buradan izlenir.
+# Zincir arşivin sonuna varınca kayıt silinir: bir sonraki tazeleme baştan başlar.
+_REFRESH_CURSOR: Dict[str, int] = {}
+
+
+def refresh_cursor(skill_name: str, total: int) -> int:
+    """Tazeleme zincirinin bu yetenekte kaldığı yer (0 ≤ imleç < toplam)."""
+    cur = _REFRESH_CURSOR.get(skill_name, 0)
+    if cur < 0 or cur >= total:
+        return 0
+    return cur
+
+
+def refresh_batch_bounds(cursor: int, total: int, per_pass: int) -> tuple:
+    """Tazeleme turunun [başlangıç, bitiş) sınırları; küçük kuyruk bu tura katılır."""
+    end = min(cursor + per_pass, total)
+    if 0 < total - end <= per_pass // 6:
+        end = total
+    return cursor, end
+
 
 # agy'nin damıtma için kullandığı alt ajan. Ajan tanımları çalışma dizinine göre
 # keşfedilir (.agents/agents/<ad>/agent.md); arka plan görevi etkin proje dizininde
@@ -182,8 +203,29 @@ class PlaybookDistiller:
                 return False
         return False
 
+    @staticmethod
+    def advance_refresh(prepared: Dict[str, Any]) -> None:
+        """Tazeleme imlecini bu turun sonuna taşır; arşiv bitince kaydı siler."""
+        if not prepared or not prepared.get("refresh"):
+            return
+        skill = prepared.get("skill")
+        end = int(prepared.get("refresh_end") or 0)
+        total = int(prepared.get("refresh_total") or 0)
+        if end >= total:
+            _REFRESH_CURSOR.pop(skill, None)
+        else:
+            _REFRESH_CURSOR[skill] = end
+
+    @staticmethod
+    def refresh_remaining(prepared: Dict[str, Any]) -> int:
+        """Tazeleme zincirinde bu turdan sonra kalan rapor sayısı."""
+        if not prepared or not prepared.get("refresh"):
+            return 0
+        return max(0, int(prepared.get("refresh_total") or 0) - int(prepared.get("refresh_end") or 0))
+
     def _skip_batch(self, skill_name: str, prepared: Dict[str, Any]) -> int:
         """Reddedilen grubu işlenmiş sayıp ilerler; mevcut yordam değişmez."""
+        self.advance_refresh(prepared)
         pb = self.store.load(skill_name)
         if pb is None:
             return 0
@@ -227,18 +269,34 @@ class PlaybookDistiller:
             duplicates = sum(len(v) for v in followers.values())
             unprocessed = reps
 
-        end = min(per_pass, len(unprocessed))
-        if 0 < len(unprocessed) - end <= per_pass // 6:
-            end = len(unprocessed)
-        batch = unprocessed[:end]
-
         pb = self.store.load(skill_name)
+        # Tazeleme: işlenmemiş kaynak yok ama kullanıcı yine de damıtmak isterse
+        # tüm arşiv zincirlenerek yeniden okunur. Maliyet tahmini bunu saymazsa
+        # 104 raporluk bir tazeleme "0 token" görünüyordu.
+        refresh = bool(sources) and not unprocessed
+        if refresh:
+            cursor = refresh_cursor(skill_name, len(sources))
+            r_start, r_end = refresh_batch_bounds(cursor, len(sources), per_pass)
+            batch = sources[r_start:r_end]
+            remaining = len(sources) - cursor
+        else:
+            r_start = r_end = 0
+            end = min(per_pass, len(unprocessed))
+            if 0 < len(unprocessed) - end <= per_pass // 6:
+                end = len(unprocessed)
+            batch = unprocessed[:end]
+            remaining = len(unprocessed)
+
         # Her tur mevcut yordamı da taşır; henüz yordam yoksa zincirin ilerleyen
         # turlarında oluşacağı varsayılır (tavanın yarısı, gerçekçi bir orta değer).
         procedure_tokens = estimate_tokens(pb.procedure) if pb else (PLAYBOOK_MAX_CHARS // (2 * CHARS_PER_TOKEN))
-        cost = estimate_chain_cost(len(unprocessed), per_pass, excerpt_chars, procedure_tokens)
+        cost = estimate_chain_cost(remaining, per_pass, excerpt_chars, procedure_tokens)
 
         return {
+            "refresh": refresh,
+            "refresh_start": r_start,
+            "refresh_end": r_end,
+            "refresh_total": len(sources) if refresh else 0,
             **status,
             "sources_total": len(sources),
             "sources_this_pass": len(batch),
@@ -317,10 +375,19 @@ class PlaybookDistiller:
         # birlikte verilir, işlenen sayısı toplamda kalır. (Önceden sayaç 0'a dönüp
         # tüm arşiv beş turda yeniden okunuyordu — hem kafa karıştırıcı hem pahalı.)
         refresh = not unprocessed
+        r_start = r_end = 0
         if refresh:
-            batch = sources[-per_pass:]
-            start = len(sources) - len(batch)
+            # Tazeleme artık tek tur değil: arşivin tamamı imleç ilerledikçe
+            # turlara bölünür ("tazeleme 64/104 → 104/104"). Tek tur olduğunda
+            # kullanıcı 104 raporun 64'ünde "tamamlandı" görüyordu.
+            cursor = refresh_cursor(skill_name, len(sources))
+            r_start, r_end = refresh_batch_bounds(cursor, len(sources), per_pass)
+            batch = sources[r_start:r_end]
+            start = r_start
         else:
+            # Yeni rapor geldiğinde sıradan tur çalışır; yarım kalmış tazeleme
+            # imleci burada temizlenir ki sonraki tazeleme baştan başlasın.
+            _REFRESH_CURSOR.pop(skill_name, None)
             end = per_pass
             # Küçük bir kuyruk (ör. 123 raporda son 3) tek başına tur olunca model
             # yalnızca o birkaç raporun özetini döndürüyor, çıktı mevcut yordamdan
@@ -359,6 +426,9 @@ class PlaybookDistiller:
             "processed_names": processed_names,
             "processed_entries": {p.name: self.store.content_sha(p) for p in processed_paths},
             "refresh": refresh,
+            "refresh_start": r_start,
+            "refresh_end": r_end,
+            "refresh_total": len(sources) if refresh else 0,
             "compact": compact,
             "excerpt_chars": shape["excerpt_chars"],
             "duplicates_skipped": sum(len(followers.get(p.name, ())) for p in batch),
@@ -382,6 +452,8 @@ class PlaybookDistiller:
         entries = prepared.get("processed_entries")
         if pb is not None and entries is not None:
             self.store.save_processed(prepared["skill"], dict(entries))
+        if pb is not None:
+            self.advance_refresh(prepared)
         return pb
 
     # -- köprü ile uçtan uca --------------------------------------------
@@ -460,7 +532,8 @@ class PlaybookDistiller:
 
         task_id = f"distill-{skill_name}-{int(__import__('time').time())}"
         if refresh:
-            task_name = f"Yordam Damıtma: {skill_name} [tazeleme {len(prepared['sources'])}/{total}]"
+            # Etiket kümülatif: "tazeleme 64/104" → "tazeleme 104/104".
+            task_name = f"Yordam Damıtma: {skill_name} [tazeleme {prepared['refresh_end']}/{total}]"
         else:
             task_name = f"Yordam Damıtma: {skill_name} [{prepared['batch_start']}→{prepared['processed_after']}/{total}]"
 
@@ -498,7 +571,15 @@ class PlaybookDistiller:
                     # atlandığında sayaç turuncu kalıyordu).
                     bus.playbook_updated.emit(skill_name)
                     bus.distill_progress.emit(skill_name, skipped, total_n)
-                    if skipped < total_n and skill_name not in _CANCELLED:
+                    # Tazelemede disk sayacı zaten toplamdadır; zincirin sürüp
+                    # sürmeyeceğine tazeleme imleci karar verir.
+                    if self.refresh_remaining(prepared) > 0 and skill_name not in _CANCELLED:
+                        bus.terminal_output_received.emit(
+                            f"[Damıtma] '{skill_name}' tazeleme grubu atlandı "
+                            f"({prepared['refresh_end']}/{total_n}); zincir sürüyor.\n"
+                        )
+                        self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
+                    elif skipped < total_n and skill_name not in _CANCELLED:
                         bus.terminal_output_received.emit(
                             f"[Damıtma] '{skill_name}' grup atlandı ({skipped}/{total_n}); zincir sürüyor.\n"
                         )
@@ -520,11 +601,28 @@ class PlaybookDistiller:
             bus.playbook_updated.emit(skill_name)
             bus.distill_progress.emit(skill_name, pb.processed_count, pb.source_count)
 
-            if auto_continue and pb.processed_count < pb.source_count and skill_name not in _CANCELLED:
-                bus.terminal_output_received.emit(
-                    f"[Damıtma] '{skill_name}' sıradaki tur başlatılıyor "
-                    f"({pb.processed_count}/{pb.source_count}). Durdurmak için: /distill stop {skill_name}\n"
-                )
+            refresh_left = self.refresh_remaining(prepared)
+            if refresh:
+                r_end = prepared["refresh_end"]
+                r_total = prepared["refresh_total"]
+                if refresh_left > 0:
+                    bus.terminal_output_received.emit(
+                        f"[Damıtma] '{skill_name}' tazeleme {r_end}/{r_total}; sıradaki tur başlatılıyor. "
+                        f"Durdurmak için: /distill stop {skill_name}\n"
+                    )
+                else:
+                    bus.terminal_output_received.emit(
+                        f"[Damıtma] '{skill_name}' tazeleme tamamlandı ({r_total}/{r_total}).\n"
+                    )
+
+            if auto_continue and skill_name not in _CANCELLED and (
+                refresh_left > 0 or pb.processed_count < pb.source_count
+            ):
+                if not refresh:
+                    bus.terminal_output_received.emit(
+                        f"[Damıtma] '{skill_name}' sıradaki tur başlatılıyor "
+                        f"({pb.processed_count}/{pb.source_count}). Durdurmak için: /distill stop {skill_name}\n"
+                    )
                 self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
 
         _ACTIVE_TASKS[skill_name] = task_id
@@ -550,6 +648,9 @@ class PlaybookDistiller:
             "batch_start": prepared["batch_start"],
             "prompt_tokens": prepared["prompt_tokens"],
             "auto_continue": auto_continue,
+            "refresh": refresh,
+            "refresh_end": prepared["refresh_end"],
+            "refresh_total": prepared["refresh_total"],
         }
 
     # -- toplu ----------------------------------------------------------

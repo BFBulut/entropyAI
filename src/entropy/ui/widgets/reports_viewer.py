@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.ui.themes.cyber_theme import CYBER_THEME
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -528,16 +528,16 @@ class ReportsViewerWidget(QFrame):
         self.meta_panel = QLabel("")
         self.meta_panel.setWordWrap(True)
         self.meta_panel.setTextFormat(Qt.TextFormat.RichText)
-        self.meta_panel.setStyleSheet("""
-            QLabel {
-                background-color: #0E1420;
-                border: 1px solid #1F2B42;
-                border-left: 3px solid #00F0FF;
-                border-radius: 4px;
-                padding: 6px 10px;
-                color: #C9D1D9;
-                font-size: 11px;
-            }
+        self.meta_panel.setStyleSheet(f"""
+            QLabel {{
+                background-color: {RT['surface_raised']};
+                border: none;
+                border-left: 3px solid {RT['accent']};
+                border-radius: {RT['radius_small']};
+                padding: 8px 12px;
+                color: {RT['text_dim']};
+                font-size: {RT['font_size_small']};
+            }}
         """)
         self.meta_panel.setVisible(False)
         right_layout.addWidget(self.meta_panel)
@@ -546,16 +546,17 @@ class ReportsViewerWidget(QFrame):
         self.content_browser = QTextBrowser()
         self.content_browser.setMinimumWidth(200)
         self.content_browser.setOpenExternalLinks(True)
+        # Rapor okuma yuzeyi: sohbet balonlariyla ayni tasarim belirtecleri.
         self.content_browser.setStyleSheet(f"""
             QTextBrowser {{
-                background-color: {CYBER_THEME['bg_surface']};
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 6px;
-                color: {CYBER_THEME['text_primary']};
-                padding: 16px 20px;
-                font-size: 14px;
-                line-height: 1.6;
-                font-family: 'Segoe UI', -apple-system, sans-serif;
+                background-color: {RT['surface_base']};
+                border: 1px solid {RT['divider_soft']};
+                border-radius: 10px;
+                color: {RT['text_body']};
+                padding: 18px 22px;
+                font-size: {RT['font_size_body']};
+                font-family: {RT['font_body']};
+                selection-background-color: {RT['accent_soft']};
             }}
         """)
         right_layout.addWidget(self.content_browser)

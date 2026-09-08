@@ -1,8 +1,10 @@
 """Dynamic Slash Commands Registry and Discovery Engine for Antigravity & Entropy AI."""
 
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 @dataclass
 class SlashCommand:
@@ -450,6 +452,34 @@ def get_dynamic_tool_commands() -> List[SlashCommand]:
 
     return commands
 
+# ---------------------------------------------------------------------------
+# Komut kataloğu önbelleği
+#
+# get_all_commands her çağrıda tüm yetenek dizinlerini tarayıp her SKILL.md'yi
+# ayrıştırıyordu. Giriş kutusunda "/" ile başlayan her tuş vuruşu bu taramayı
+# ana iş parçacığında tetikliyordu; ölçüm: tuş başına 65–223 ms (medyan 96 ms).
+# Katalog nadiren değişir, bu yüzden kısa ömürlü bir önbellekte tutulur ve
+# yetenek/MCP kataloğu değiştiğinde (bus.skills_updated, bus.mcp_servers_updated)
+# arayüz tarafından açıkça geçersiz kılınır.
+# ---------------------------------------------------------------------------
+
+COMMAND_CACHE_TTL_SECONDS = 30.0
+_COMMAND_CACHE: Dict[str, Tuple[float, List["SlashCommand"]]] = {}
+_COMMAND_CACHE_LOCK = threading.Lock()
+
+
+def invalidate_command_cache() -> None:
+    """Komut kataloğu önbelleğini boşaltır (yetenek/MCP değişiminde çağrılır)."""
+    with _COMMAND_CACHE_LOCK:
+        _COMMAND_CACHE.clear()
+
+
+def command_cache_stats() -> Dict[str, int]:
+    """Testler ve tanılama için önbellek durumu."""
+    with _COMMAND_CACHE_LOCK:
+        return {"entries": len(_COMMAND_CACHE)}
+
+
 class SlashCommandRegistry:
     """Registry that aggregates and dynamically queries builtin, skill, MCP, and tool commands."""
 
@@ -457,7 +487,26 @@ class SlashCommandRegistry:
         self.mcp_manager = mcp_manager
 
     def get_all_commands(self, project_dir: Optional[Path] = None) -> List[SlashCommand]:
-        """Fetch all commands with fresh real-time dynamic resolution and name deduplication."""
+        """
+        Tüm komutları döndürür; sonuç kısa süre önbelleklenir.
+
+        Önbellek anahtarı proje dizini: farklı projelerde farklı yetenek kümesi
+        bulunur. TTL dolduğunda ya da katalog geçersiz kılındığında yeniden taranır.
+        """
+        cache_key = str(project_dir or "")
+        now = time.monotonic()
+        with _COMMAND_CACHE_LOCK:
+            hit = _COMMAND_CACHE.get(cache_key)
+            if hit and (now - hit[0]) < COMMAND_CACHE_TTL_SECONDS:
+                return list(hit[1])
+
+        fresh = self._discover_all_commands(project_dir)
+        with _COMMAND_CACHE_LOCK:
+            _COMMAND_CACHE[cache_key] = (time.monotonic(), fresh)
+        return list(fresh)
+
+    def _discover_all_commands(self, project_dir: Optional[Path] = None) -> List[SlashCommand]:
+        """Diski/MCP'yi gerçekten tarayan asıl keşif (önbelleksiz)."""
         all_cmds: List[SlashCommand] = []
         seen_names: Set[str] = set()
 
