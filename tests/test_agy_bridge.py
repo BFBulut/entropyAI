@@ -456,7 +456,7 @@ def test_chat_mode_turn_started_auto_expands_terminal(qapp):
     chat.close()
 
 
-def test_tasks_widget_auto_detects_coding_intent(tmp_path):
+def test_tasks_widget_auto_detects_coding_intent(qapp, tmp_path):
     """Verify tasks widget automatically detects coding intent when prompt contains 'geliştir'."""
     from entropy.scheduler.cron_engine import TaskScheduler
     from entropy.ui.widgets.tasks_widget import TasksWidget
@@ -585,7 +585,7 @@ def test_decoupled_thought_and_text_delta_streaming(bridge, monkeypatch):
     assert any("Proje dosyaları oluşturuluyor..." in c for c in emitted_chat)
 
 
-def test_tasks_widget_extracts_project_path_from_prompt(tmp_path):
+def test_tasks_widget_extracts_project_path_from_prompt(qapp, tmp_path):
     """Verify tasks widget automatically extracts project_path from task prompt."""
     from entropy.scheduler.cron_engine import TaskScheduler
     from entropy.ui.widgets.tasks_widget import TasksWidget

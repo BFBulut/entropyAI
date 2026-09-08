@@ -1,9 +1,11 @@
-"""MCP Server Management Drawer Widget with Add Server dialog."""
+"""MCP Server Management Drawer Widget with add / edit / remove dialogs."""
+
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QButtonGroup, QCheckBox, QDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
     QRadioButton, QScrollArea, QVBoxLayout, QWidget
 )
 
@@ -11,35 +13,66 @@ from entropy.core.event_bus import bus
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
-class AddMCPServerDialog(QDialog):
-    """Dialog to register a new MCP server via 'agy mcp add'."""
+DIALOG_STYLE = """
+    QDialog {
+        background-color: #0E1420;
+        color: #F0F6FC;
+    }
+    QLabel { color: #F0F6FC; font-size: 12px; }
+    QLineEdit, QPlainTextEdit {
+        background-color: #05070A;
+        border: 1px solid #1F2B42;
+        border-radius: 4px;
+        padding: 6px;
+        color: #F0F6FC;
+    }
+    QPushButton {
+        background-color: #141C2C;
+        color: #00F0FF;
+        border: 1px solid #1F2B42;
+        border-radius: 4px;
+        padding: 6px 12px;
+    }
+    QPushButton:hover { border-color: #00F0FF; }
+    QRadioButton { color: #F0F6FC; }
+"""
 
-    def __init__(self, parent=None):
+
+def parse_env_text(text: str) -> Dict[str, str]:
+    """`KEY=VALUE` satırlarını ortam değişkeni sözlüğüne çevirir."""
+    env: Dict[str, str] = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            env[key] = value.strip()
+    return env
+
+
+def format_env_dict(env: Optional[Dict[str, str]]) -> str:
+    if not env:
+        return ""
+    return "\n".join(f"{k}={v}" for k, v in env.items())
+
+
+class MCPServerDialog(QDialog):
+    """
+    MCP sunucusu ekleme ve düzenleme formu.
+
+    Alanlar doğrudan mcp_config.json şemasına karşılık gelir: stdio sunucuda
+    command + args + env, http sunucuda serverUrl. Düzenleme kipinde mevcut
+    değerler doldurulur; ad değiştirilirse kayıt yeni adla taşınır.
+    """
+
+    def __init__(self, parent=None, server: Optional[Dict] = None):
         super().__init__(parent)
-        self.setWindowTitle("Yeni MCP Sunucusu Ekle")
-        self.setFixedWidth(420)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0E1420;
-                color: #F0F6FC;
-            }
-            QLabel { color: #F0F6FC; font-size: 12px; }
-            QLineEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px;
-                color: #F0F6FC;
-            }
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px 12px;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
+        self.existing = server or None
+        self.setWindowTitle("MCP Sunucusunu Düzenle" if server else "Yeni MCP Sunucusu Ekle")
+        self.setMinimumWidth(460)
+        self.setStyleSheet(DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -66,7 +99,24 @@ class AddMCPServerDialog(QDialog):
         self.target_input.setPlaceholderText("Örn: npx -y @modelcontextprotocol/server-github")
         form.addRow("Komut / URL:", self.target_input)
 
+        self.args_input = QLineEdit()
+        self.args_input.setPlaceholderText("Boşlukla ayrılmış ek argümanlar (isteğe bağlı)")
+        form.addRow("Ek Argümanlar:", self.args_input)
+
+        self.env_input = QPlainTextEdit()
+        self.env_input.setPlaceholderText("KEY=VALUE (her satıra bir tane)")
+        self.env_input.setFixedHeight(70)
+        form.addRow("Ortam (env):", self.env_input)
+
         layout.addLayout(form)
+
+        hint = QLabel(
+            "<span style='color:#8B949E; font-size:10px;'>Kayıt agy'nin "
+            "<code>~/.gemini/config/mcp_config.json</code> dosyasına yazılır; "
+            "bir sonraki ajan turunda etkin olur.</span>"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         # Action buttons
         btn_box = QHBoxLayout()
@@ -76,27 +126,51 @@ class AddMCPServerDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
 
-        save_btn = QPushButton("Sunucuyu Ekle")
+        save_btn = QPushButton("Kaydet" if server else "Sunucuyu Ekle")
         save_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
         save_btn.clicked.connect(self._on_save)
         btn_box.addWidget(save_btn)
 
         layout.addLayout(btn_box)
 
+        if server:
+            self._prefill(server)
+
+    def _prefill(self, server: Dict) -> None:
+        self.name_input.setText(server.get("name", ""))
+        if server.get("type") == "http" or server.get("url"):
+            self.radio_http.setChecked(True)
+            self.target_input.setText(server.get("url") or server.get("target", ""))
+        else:
+            self.radio_stdio.setChecked(True)
+            command = server.get("command") or ""
+            args = server.get("args") or []
+            self.target_input.setText(" ".join([command] + list(args)).strip() or server.get("target", ""))
+        self.env_input.setPlainText(format_env_dict(server.get("env")))
+
     def _on_save(self):
-        name = self.name_input.text().strip()
-        target = self.target_input.text().strip()
-        if not name or not target:
+        if not self.name_input.text().strip() or not self.target_input.text().strip():
             QMessageBox.warning(self, "Eksik Bilgi", "Lütfen sunucu adını ve komut/URL bilgisini doldurun.")
             return
         self.accept()
 
     def get_data(self):
+        """(ad, tip, komut/url) — geriye dönük uyumlu üçlü."""
         s_type = "stdio" if self.radio_stdio.isChecked() else "http"
         return self.name_input.text().strip(), s_type, self.target_input.text().strip()
 
+    def get_extra(self):
+        """(argümanlar, env) — formun genişletilmiş alanları."""
+        args: List[str] = [a for a in self.args_input.text().split() if a]
+        return args, parse_env_text(self.env_input.toPlainText())
+
+
+# Geriye dönük ad (dışarıdan içe aktaran kod kırılmasın).
+AddMCPServerDialog = MCPServerDialog
+
+
 class MCPDrawerWidget(QFrame):
-    """Visual dock to inspect, toggle, and register Model Context Protocol servers."""
+    """Visual dock to inspect, toggle, edit, and register Model Context Protocol servers."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -182,7 +256,30 @@ class MCPDrawerWidget(QFrame):
         scroll_area.setWidget(container)
         self.layout.addWidget(scroll_area)
 
+        # Yapılandırma başka bir yerden (ör. otonom görev) değişirse liste tazelensin.
+        bus.mcp_servers_updated.connect(self.refresh_servers)
+
         self.refresh_servers()
+
+    def _small_button(self, text: str, color: str, bg: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFixedHeight(26)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {color};
+                border: 1px solid {color};
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {color};
+                color: #080B10;
+            }}
+        """)
+        return btn
 
     def refresh_servers(self):
         while self.servers_layout.count():
@@ -190,7 +287,7 @@ class MCPDrawerWidget(QFrame):
             if item.widget():
                 item.widget().deleteLater()
 
-        servers = self.mcp_manager.list_servers()
+        servers = self.mcp_manager.list_servers(force_refresh=True)
         for s in servers:
             card = QFrame()
             card.setStyleSheet("""
@@ -236,24 +333,13 @@ class MCPDrawerWidget(QFrame):
             cb.toggled.connect(lambda checked, s_name=s["name"], box=cb: self._on_toggle(s_name, checked, box))
             card_layout.addWidget(cb)
 
+            # Edit server button
+            edit_btn = self._small_button("✏️ Düzenle", "#00F0FF", "#141C2C")
+            edit_btn.clicked.connect(lambda _, s_name=s["name"]: self._open_edit_dialog(s_name))
+            card_layout.addWidget(edit_btn)
+
             # Remove server button
-            del_btn = QPushButton("🗑️ Kaldır")
-            del_btn.setFixedHeight(26)
-            del_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #261418;
-                    color: #FF4D4D;
-                    border: 1px solid #FF4D4D;
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #FF4D4D;
-                    color: #080B10;
-                }
-            """)
+            del_btn = self._small_button("🗑️ Kaldır", "#FF4D4D", "#261418")
             del_btn.clicked.connect(lambda _, s_name=s["name"]: self._on_remove_server(s_name))
             card_layout.addWidget(del_btn)
 
@@ -277,20 +363,64 @@ class MCPDrawerWidget(QFrame):
                 QMessageBox.warning(self, "Hata", f"'{server_name}' sunucusu kaldırılırken bir sorun oluştu.")
 
     def _on_toggle(self, server_name: str, enabled: bool, box: QCheckBox):
-        if enabled:
-            ok = self.mcp_manager.enable_server(server_name)
-            self.refresh_servers()
+        ok = self.mcp_manager.toggle_server(server_name, enabled)
+        if ok:
+            durum = "etkinleştirildi" if enabled else "pasife alındı"
+            bus.terminal_output_received.emit(f"[MCP Hub] '{server_name}' sunucusu {durum}.\n")
         else:
-            ok = self.mcp_manager.disable_server(server_name)
-            self.refresh_servers()
+            QMessageBox.warning(
+                self, "Hata",
+                f"'{server_name}' sunucusunun durumu değiştirilemedi (yapılandırma dosyası yazılamadı)."
+            )
+        self.refresh_servers()
 
     def _open_add_dialog(self):
-        dialog = AddMCPServerDialog(self)
+        dialog = MCPServerDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             name, s_type, target = dialog.get_data()
-            success = self.mcp_manager.add_server(name, s_type, target)
+            args, env = dialog.get_extra()
+            try:
+                success = self.mcp_manager.add_server(name, s_type, target, args=args, env=env)
+            except ValueError as e:
+                QMessageBox.critical(self, "Geçersiz Yapılandırma", str(e))
+                return
             if success:
                 QMessageBox.information(self, "Başarılı", f"'{name}' MCP sunucusu başarıyla eklendi!")
                 self.refresh_servers()
             else:
                 QMessageBox.critical(self, "Hata", f"'{name}' MCP sunucusu eklenirken bir hata oluştu.")
+
+    def _open_edit_dialog(self, server_name: str):
+        server = self.mcp_manager.get_server(server_name)
+        if not server:
+            QMessageBox.warning(self, "Bulunamadı", f"'{server_name}' sunucusu yapılandırmada bulunamadı.")
+            return
+        dialog = MCPServerDialog(self, server=server)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_name, s_type, target = dialog.get_data()
+        args, env = dialog.get_extra()
+        try:
+            success = self.mcp_manager.update_server(
+                server_name,
+                server_type=s_type,
+                command_or_url=target,
+                args=args,
+                env=env,
+                new_name=new_name,
+            )
+        except ValueError as e:
+            QMessageBox.critical(self, "Geçersiz Yapılandırma", str(e))
+            return
+        if success:
+            bus.terminal_output_received.emit(f"[MCP Hub] '{new_name}' sunucusu güncellendi.\n")
+            self.refresh_servers()
+        else:
+            QMessageBox.critical(self, "Hata", f"'{server_name}' güncellenemedi.")
+
+    def closeEvent(self, event):
+        try:
+            bus.mcp_servers_updated.disconnect(self.refresh_servers)
+        except (RuntimeError, TypeError):
+            pass
+        super().closeEvent(event)

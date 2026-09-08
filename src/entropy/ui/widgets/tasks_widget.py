@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import extract_windows_paths
+from entropy.core.task_ledger import task_ledger
 from entropy.scheduler.cron_engine import TaskScheduler, ScheduledTask
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
@@ -66,6 +67,28 @@ class TasksWidget(QFrame):
         """)
         add_btn.clicked.connect(self._show_add_dialog)
         header.addWidget(add_btn)
+
+        # Kayıt defteri (tasks_ledger.db) temizliği: bitmiş görev satırlarını siler.
+        self.clear_ledger_btn = QPushButton("🧹 Kayıt Defteri")
+        self.clear_ledger_btn.setFixedHeight(24)
+        self.clear_ledger_btn.setToolTip("Kayıt defterindeki bitmiş görev kayıtlarını (başarılı/hatalı/iptal) temizle")
+        self.clear_ledger_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #FFB300;
+                border: 1px solid #FFB300;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #FFB300;
+                color: #080B10;
+            }
+        """)
+        self.clear_ledger_btn.clicked.connect(self._on_clear_ledger)
+        header.addWidget(self.clear_ledger_btn)
 
         refresh_btn = QPushButton("Yenile")
         refresh_btn.setFixedHeight(24)
@@ -139,6 +162,7 @@ class TasksWidget(QFrame):
     def refresh_tasks(self):
         """Populate the task list with modern custom cybernetic row widgets."""
         self.list_widget.clear()
+        running_ids = self.running_task_ids()
 
         for t_id, task in self.scheduler.tasks.items():
             item = QListWidgetItem()
@@ -172,8 +196,11 @@ class TasksWidget(QFrame):
             info_layout.setContentsMargins(0, 0, 0, 0)
             info_layout.setSpacing(2)
 
+            is_running = t_id in running_ids
             title_color = "#00F0FF" if task.enabled else "#8B949E"
             status_badge = "<span style='color:#00FF9D; font-size:10px; font-weight:bold;'>● AKTİF</span>" if task.enabled else "<span style='color:#8B949E; font-size:10px;'>○ PASİF</span>"
+            if is_running:
+                status_badge += " <span style='color:#FFB300; font-size:10px; font-weight:bold;'>▶ ÇALIŞIYOR</span>"
             name_lbl = QLabel(f"<b style='color:{title_color}; font-size:12px;'>{task.name}</b> &nbsp; {status_badge}")
             name_lbl.setStyleSheet("background: transparent; border: none;")
 
@@ -208,6 +235,53 @@ class TasksWidget(QFrame):
             run_btn.clicked.connect(lambda _, t=task: self._run_task_now(t))
             row_layout.addWidget(run_btn)
 
+            # Stop button: yalnızca görev arka planda sürerken etkin
+            stop_btn = QPushButton("⏹ Durdur")
+            stop_btn.setObjectName(f"task_stop_{t_id}")
+            stop_btn.setFixedHeight(26)
+            stop_btn.setToolTip("Süren arka plan görevini iptal et")
+            stop_btn.setEnabled(is_running)
+            stop_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2A1F0A;
+                    color: #FFB300;
+                    border: 1px solid #FFB300;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #FFB300;
+                    color: #080B10;
+                }
+                QPushButton:disabled {
+                    color: #3A4556;
+                    border-color: #1F2B42;
+                    background-color: #0E1420;
+                }
+            """)
+            stop_btn.clicked.connect(lambda _, tid=t_id, tname=task.name: self._on_cancel_task(tid, tname))
+            row_layout.addWidget(stop_btn)
+
+            # Edit button: ad / periyot / talimat düzenleme
+            edit_btn = QPushButton("✏️")
+            edit_btn.setObjectName(f"task_edit_{t_id}")
+            edit_btn.setFixedSize(28, 26)
+            edit_btn.setToolTip("Zamanlanmış görevi düzenle (ad, periyot, talimat)")
+            edit_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #141C2C;
+                    color: #00F0FF;
+                    border: 1px solid #1F2B42;
+                    border-radius: 4px;
+                    font-size: 11px;
+                }
+                QPushButton:hover { border-color: #00F0FF; }
+            """)
+            edit_btn.clicked.connect(lambda _, t=task: self._show_edit_dialog(t))
+            row_layout.addWidget(edit_btn)
+
             # Delete button
             del_btn = QPushButton("🗑️ Sil")
             del_btn.setFixedHeight(26)
@@ -232,17 +306,92 @@ class TasksWidget(QFrame):
             self.list_widget.addItem(item)
             self.list_widget.setItemWidget(item, row_widget)
 
-    def _on_delete_task(self, task_id: str, task_name: str):
-        reply = QMessageBox.question(
-            self,
-            "Görevi Sil",
-            f"'{task_name}' görevini listeden kaldırmak istediğinizden emin misiniz?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    def running_task_ids(self) -> set:
+        """Kayıt defterine göre şu anda süren (RUNNING/PENDING) görev kimlikleri."""
+        try:
+            return {r.get("task_id") for r in task_ledger.get_active_tasks()}
+        except Exception:
+            return set()
+
+    def _on_cancel_task(self, task_id: str, task_name: str, confirm: bool = True):
+        """Süren arka plan görevini iptal eder (tek onay kutusu)."""
+        if confirm:
+            reply = QMessageBox.question(
+                self,
+                "Görevi Durdur",
+                f"'{task_name}' görevi arka planda sürüyor.\n"
+                "Süreç ağacı sonlandırılacak ve kayıt defterine İPTAL yazılacak.\n\nDurdurulsun mu?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+
+        if self.bridge is not None and hasattr(self.bridge, "terminate_background_task"):
+            try:
+                self.bridge.terminate_background_task(task_id)
+            except Exception as e:
+                bus.terminal_output_received.emit(f"[Task Scheduler Hata] Görev durdurulamadı: {e}\n")
+        try:
+            task_ledger.record_task_cancelled(task_id, reason="Kullanıcı görev panelinden durdurdu.", task_name=task_name)
+        except Exception:
+            pass
+        bus.terminal_output_received.emit(f"[Task Scheduler] '{task_name}' görevi kullanıcı tarafından durduruldu.\n")
+        bus.task_completed.emit(task_id, False)
+        self.refresh_tasks()
+        return True
+
+    def _on_delete_task(self, task_id: str, task_name: str, confirm: bool = True):
+        """Görevi zamanlayıcıdan ve kayıt defterinden kaldırır (tek onay kutusu)."""
+        was_running = task_id in self.running_task_ids()
+        if confirm:
+            detail = (
+                "Görev şu anda çalışıyor; önce süreç durdurulacak.\n" if was_running else ""
+            )
+            reply = QMessageBox.question(
+                self,
+                "Görevi Sil",
+                f"'{task_name}' görevi kalıcı olarak kaldırılacak.\n"
+                f"{detail}Zamanlayıcı kaydı ve kayıt defterindeki (tasks_ledger.db) geçmişi silinecek.\n\nDevam edilsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return False
+
+        if was_running:
+            self._on_cancel_task(task_id, task_name, confirm=False)
+        self.scheduler.remove_task(task_id)
+        try:
+            task_ledger.delete_task(task_id)
+        except Exception:
+            pass
+        bus.terminal_output_received.emit(
+            f"[Task Scheduler] '{task_name}' görevi ve kayıt defteri geçmişi silindi.\n"
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.scheduler.remove_task(task_id)
-            bus.terminal_output_received.emit(f"[Task Scheduler] '{task_name}' görevi başarıyla silindi.\n")
-            self.refresh_tasks()
+        self.refresh_tasks()
+        return True
+
+    def _on_clear_ledger(self, confirm: bool = True):
+        """Kayıt defterindeki bitmiş görev satırlarını temizler (tek onay kutusu)."""
+        if confirm:
+            reply = QMessageBox.question(
+                self,
+                "Kayıt Defterini Temizle",
+                "Kayıt defterindeki bitmiş (başarılı/hatalı/iptal) görev kayıtları silinecek.\n"
+                "Süren görevler etkilenmez.\n\nDevam edilsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return 0
+        try:
+            removed = task_ledger.clear_finished()
+        except Exception:
+            removed = 0
+        bus.terminal_output_received.emit(f"[Task Scheduler] Kayıt defterinden {removed} bitmiş görev kaydı silindi.\n")
+        self.refresh_tasks()
+        return removed
 
     def _on_toggle_task(self, task: ScheduledTask, enabled: bool):
         task.enabled = enabled
@@ -385,16 +534,54 @@ class TasksWidget(QFrame):
 
     @Slot(str, str)
     def _on_task_triggered(self, task_id: str, task_name: str):
-        pass
+        # Görev başlarken satırı tazele: "▶ ÇALIŞIYOR" rozeti ve Durdur düğmesi açılır.
+        # Sinyal işçi iş parçacığından gelse de alıcı bir QObject slotu olduğu için
+        # Qt bunu ana iş parçacığına kuyruklar.
+        self.refresh_tasks()
 
     @Slot(str, bool)
     def _on_task_completed(self, task_id: str, success: bool):
         self.refresh_tasks()
 
     def _show_add_dialog(self):
-        """Dialog to schedule a new recurring task."""
+        """Yeni zamanlanmış görev ekleme kutusu."""
+        return self._show_task_dialog(None)
+
+    def _show_edit_dialog(self, task: ScheduledTask):
+        """Var olan zamanlanmış görevi düzenleme kutusu."""
+        return self._show_task_dialog(task)
+
+    def apply_task_edit(
+        self,
+        task: ScheduledTask,
+        name: str,
+        prompt: str,
+        interval_type: str,
+        interval_value: int,
+        task_type: str = "analiz",
+        project_path: Optional[str] = None,
+    ) -> ScheduledTask:
+        """Görev alanlarını günceller, sonraki çalışma zamanını tazeler ve kaydeder."""
+        task.name = name or task.name
+        task.prompt = prompt
+        task.interval_type = interval_type
+        task.interval_value = interval_value
+        task.task_type = task_type
+        task.project_path = project_path
+        if task.enabled:
+            task.next_run = self.scheduler.compute_next_run(
+                task.interval_type, task.interval_value, task.day_of_week, from_time=time.time()
+            )
+        self.scheduler._save_tasks()
+        bus.terminal_output_received.emit(f"[Task Scheduler] '{task.name}' görevi güncellendi.\n")
+        self.refresh_tasks()
+        return task
+
+    def _show_task_dialog(self, task: Optional[ScheduledTask] = None):
+        """Görev ekleme/düzenleme kutusu; task verilirse alanlar dolu gelir."""
+        is_edit = task is not None
         dialog = QDialog(self)
-        dialog.setWindowTitle("Yeni Otonom Görev Ekle")
+        dialog.setWindowTitle("Otonom Görevi Düzenle" if is_edit else "Yeni Otonom Görev Ekle")
         dialog.setFixedWidth(400)
         dialog.setStyleSheet("background-color: #0E1420; color: #F0F6FC;")
 
@@ -431,6 +618,23 @@ class TasksWidget(QFrame):
         val_input.setValue(30)
         d_layout.addWidget(val_input)
 
+        # Düzenleme kipinde mevcut değerlerle doldur
+        if is_edit:
+            name_input.setText(task.name)
+            prompt_input.setText(task.prompt or "")
+            proj_input.setText(getattr(task, "project_path", None) or "")
+            t_idx = task_type_combo.findText(getattr(task, "task_type", "analiz"))
+            if t_idx >= 0:
+                task_type_combo.setCurrentIndex(t_idx)
+            i_idx = type_combo.findText(task.interval_type)
+            if i_idx >= 0:
+                type_combo.setCurrentIndex(i_idx)
+            else:
+                type_combo.addItem(task.interval_type)
+                type_combo.setCurrentText(task.interval_type)
+            val_input.setRange(0, 1440)
+            val_input.setValue(int(task.interval_value or 0))
+
         btn_box = QHBoxLayout()
         ok_btn = QPushButton("Kaydet")
         ok_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
@@ -450,6 +654,18 @@ class TasksWidget(QFrame):
                     proj_val = str(extracted[0])
             if selected_type == "analiz" and any(k in prompt.lower() for k in ["projeyi geliştir", "kodla", "dosya oluştur", "uygula", "geliştir", "build", "develop"]):
                 selected_type = "kodlama"
+            if is_edit:
+                self.apply_task_edit(
+                    task,
+                    name=name,
+                    prompt=prompt,
+                    interval_type=type_combo.currentText(),
+                    interval_value=val_input.value(),
+                    task_type=selected_type,
+                    project_path=proj_val,
+                )
+                dialog.accept()
+                return
             self.scheduler.schedule_task(
                 task_id=t_id,
                 name=name,

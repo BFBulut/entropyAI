@@ -14,6 +14,8 @@ class FloatingModeWidget(QWidget):
         super().__init__(parent)
         self.is_pinned_on_top = True
         self._drag_pos = QPoint()
+        self._press_global = QPoint()
+        self._was_dragged = False
 
         # Frameless, translucent window
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.SubWindow
@@ -34,12 +36,29 @@ class FloatingModeWidget(QWidget):
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_global = event.globalPosition().toPoint()
+            self._was_dragged = False
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if event.buttons() == Qt.MouseButton.LeftButton:
+            self._was_dragged = True
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Sürüklemeden ayırt edilen tek tık: mod menüsünü açar."""
+        if event.button() == Qt.MouseButton.LeftButton and not self._was_dragged:
+            self.show_mode_menu(event.globalPosition().toPoint())
+            event.accept()
+            return
+        self._was_dragged = False
+        super().mouseReleaseEvent(event)
+
+    def show_mode_menu(self, global_pos):
+        """Çekirdeğin mod menüsünü gösterir (görselleştirici ile ortak menü)."""
+        menu = self.visualizer.build_mode_menu()
+        menu.exec(global_pos)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         """Double-clicking the core summons Chat Mode."""

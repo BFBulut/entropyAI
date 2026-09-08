@@ -261,7 +261,11 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
             f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(p['skill'])}</td>"
             f"<td style='padding:2px 10px 2px 0;'>{p['distilled_from']}/{p['sources_total']} işlendi</td>"
             f"<td style='padding:2px 10px 2px 0;'>bu turda {p['sources_this_pass']}</td>"
-            f"<td style='padding:2px 0;color:#8B949E;'>~{p['estimated_prompt_tokens']:,} token/tur</td></tr>"
+            f"<td style='padding:2px 10px 2px 0;color:#8B949E;'>~{p['estimated_prompt_tokens']:,} token/tur</td>"
+            # Asıl fatura tek tur değil, zincirin tamamı: tur sayısı × tur boyutu.
+            f"<td style='padding:2px 0;color:#FFA657;'>toplam ~{p['estimated_total_tokens']:,} token "
+            f"({p['estimated_total_passes']} tur"
+            f"{', ' + str(p['duplicates_skipped']) + ' kopya elendi' if p.get('duplicates_skipped') else ''})</td></tr>"
             for p in pending
         )
         return (

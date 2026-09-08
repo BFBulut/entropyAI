@@ -54,6 +54,12 @@ def main():
     if orphaned:
         print(f"[{config.app_name}] Önceki oturumdan yarım kalan {orphaned} görev kapatıldı.")
 
+    # Yetenek dizinleri canlı izlenir: internetten indirilen ya da başka bir CLI
+    # tarafından yazılan bir SKILL.md, uygulama yeniden başlatılmadan panelde ve
+    # `/` komut listesinde belirsin (bus.skills_updated).
+    from entropy.skills.manager import start_skill_watcher
+    start_skill_watcher(project_dir=bridge.active_project_dir)
+
     scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):

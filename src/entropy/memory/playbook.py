@@ -59,6 +59,26 @@ PLAYBOOK_MAX_CHARS = 9000
 # karakter okunur; tamamı değil, çünkü amaç yordam çıkarmak, içeriği kopyalamak değil.
 DISTILL_EXCERPT_CHARS = 2500
 
+# Büyük arşivlerde rapor başına okunan karakter. Ham ön ek yerine yordam taşıyan
+# bloklar seçildiği için daha az karakter aynı sinyali taşır; böylece bir tura
+# aynı prompt boyutuyla çok daha fazla rapor sığar ve tur sayısı düşer.
+# Ölçüm (2026-09-08, gerçek kasa): raporların %98'i zaten markdown-yapılı olduğu
+# için "yalnızca yapısal blokları al" tek başına hiçbir tasarruf üretmiyor
+# (%98 of mevcut); tasarruf blok SEÇİMİNDEN ve tavanın düşmesinden geliyor.
+PROCEDURAL_EXCERPT_CHARS = 900
+
+# Yakın-kopya eşiği: iki raporun 5'li sözcük parmakları arasındaki kapsama oranı
+# (küçük kümeye göre) bu değeri aşarsa ikincisi temsilciye bağlanır ve okunmaz.
+# Ölçüm: autonomous-agent 513 rapor → 297 temsilci (%42 eleme); financial-auditor
+# 104 → 100 (%4). Yani eleme, gerçekten tekrar eden arşivlerde işe yarıyor.
+NEAR_DUPLICATE_CONTAINMENT = 0.5
+
+# Parmak izi çıkarılırken raporun ilk bu kadar karakteri okunur; bir raporun
+# kimliği baş kısmında belirir ve tüm arşivi tam okumak kümeleme maliyetini
+# gereksiz büyütür.
+_SIGNATURE_CHARS = 6000
+_SHINGLE_SIZE = 5
+
 # Playbook kaç yeni rapordan sonra bayatlamış sayılır.
 STALENESS_REPORT_DELTA = 10
 
@@ -508,11 +528,272 @@ def _strip_frontmatter(text: str) -> str:
     return (m.group(1) if m else text).strip()
 
 
+# ---------------------------------------------------------------------------
+# Yordam taşıyan alıntı seçimi
+# ---------------------------------------------------------------------------
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+# Yordam sinyali taşıyan sözcükler. Bir blokta geçiyorsa o blok "bu iş nasıl
+# yapılır" bilgisi taşıyor demektir; olgu tabloları ve anlatı paragrafları değil.
+_PROCEDURAL_TERMS = (
+    "adım", "adim", "yöntem", "yontem", "kontrol", "tuzak", "ölçüt", "olcut",
+    "kural", "süreç", "surec", "aşama", "asama", "kriter", "doğrula", "dogrula",
+    "önce", "sonra", "eşik", "esik", "checklist", "step", "method", "process",
+    "pitfall", "criteria", "workflow", "verify", "rule", "threshold",
+)
+
+# Yapısal blok: başlık, numaralı adım ya da madde imi ile başlayan blok.
+_STRUCTURAL_RE = re.compile(r"^\s*(#{1,4}\s|\d+[\.\)]\s|[-*+]\s)")
+# Olgu yığını: tablo satırı ya da ağırlıklı olarak sayı/bağlantı içeren blok.
+_TABLE_RE = re.compile(r"(?m)^\s*\|")
+_URL_RE = re.compile(r"https?://")
+
+
+def _words(text: str) -> List[str]:
+    return [w.lower() for w in _WORD_RE.findall(text or "") if len(w) > 2]
+
+
+def _shingles(text: str, n: int = _SHINGLE_SIZE) -> Set[int]:
+    """Metnin n'li sözcük parmak izi kümesi; yakın-kopya ve yenilik ölçümü için."""
+    ws = _words(text)
+    if len(ws) < n:
+        return set()
+    return {hash(tuple(ws[i : i + n])) for i in range(len(ws) - n + 1)}
+
+
+def procedural_excerpt(body: str, max_chars: int, known_shingles: Optional[Set[int]] = None) -> str:
+    """
+    Rapordan yordam taşıyan blokları seçer; ham ön ek yerine bunlar gönderilir.
+
+    Ham ilk N karakter, çoğu raporda başlık tekrarı ve giriş anlatısıdır. Burada
+    bloklar puanlanır: başlık ve numaralı adımlar artı, yordam sözcükleri artı,
+    tablo/bağlantı yığınları eksi. `known_shingles` verilirse (mevcut yordamın
+    parmak izi) zaten bilinen içerik puan kaybeder — turun bütçesi yeni bilgiye
+    ayrılır.
+
+    Bloklar puana göre seçilir ama belge sırasında yazılır; sıra bozulursa
+    adımların birbirini izlediği bilgisi kaybolur.
+    """
+    if not body:
+        return ""
+    if len(body) <= max_chars:
+        return body
+
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", body) if b.strip()]
+    if not blocks:
+        return body[:max_chars]
+
+    scored: List[Tuple[float, int]] = []
+    for idx, blk in enumerate(blocks):
+        low = blk.lower()
+        score = 0.0
+        if _STRUCTURAL_RE.match(blk):
+            score += 3.0
+        # Gövdesiz başlık (yalnızca "## 1. Giriş") alıntıda yer kaplar, yordam
+        # taşımaz: yapısal puanı geri alınır.
+        if "\n" not in blk and blk.lstrip().startswith("#"):
+            score -= 3.0
+        score += min(6.0, 2.0 * sum(1 for t in _PROCEDURAL_TERMS if t in low))
+        if _TABLE_RE.search(blk):
+            score -= 3.0
+        if len(_URL_RE.findall(blk)) >= 3:
+            score -= 2.0
+        digits = sum(1 for c in blk if c.isdigit())
+        if len(blk) > 80 and digits / len(blk) > 0.25:
+            score -= 2.0
+        if known_shingles:
+            sh = _shingles(blk)
+            if sh:
+                novelty = len(sh - known_shingles) / len(sh)
+                score += 2.0 * novelty - 1.0
+        # Belge başındaki blok küçük bir öncelik alır: bağlamı o kurar.
+        if idx == 0:
+            score += 1.0
+        scored.append((score, idx))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    chosen: Set[int] = set()
+    used = 0
+    for score, idx in scored:
+        if score <= 0 and chosen:
+            break
+        blk = blocks[idx]
+        if used + len(blk) > max_chars:
+            if chosen:
+                continue
+            blk = blk[:max_chars]
+        chosen.add(idx)
+        used += len(blk)
+        if used >= max_chars:
+            break
+
+    if not chosen:
+        return body[:max_chars]
+
+    out: List[str] = []
+    total = 0
+    for idx in sorted(chosen):
+        blk = blocks[idx]
+        if total + len(blk) > max_chars:
+            blk = blk[: max(0, max_chars - total)]
+        if not blk:
+            break
+        out.append(blk)
+        total += len(blk)
+    return "\n\n".join(out).strip()
+
+
+# Parmak izi önbelleği: aynı zincirde her tur tüm işlenmemiş kümeyi yeniden
+# kümelendiriyor; dosya değişmediyse yeniden okumanın anlamı yok.
+_SIG_CACHE: Dict[Tuple[str, int, int], Set[int]] = {}
+
+
+def _cached_signature(path: Path) -> Set[int]:
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    cached = _SIG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    body = _strip_frontmatter(path.read_text(encoding="utf-8", errors="ignore"))
+    sig = _shingles(body[:_SIGNATURE_CHARS])
+    if len(_SIG_CACHE) > 4000:
+        _SIG_CACHE.clear()
+    _SIG_CACHE[key] = sig
+    return sig
+
+
+def select_representatives(
+    paths: List[Path],
+    threshold: float = NEAR_DUPLICATE_CONTAINMENT,
+) -> Tuple[List[Path], Dict[str, List[str]]]:
+    """
+    Yakın-kopya raporları tek temsilciye indirir.
+
+    Aynı işin tekrarlanan koşumları arşive neredeyse aynı raporu birden çok kez
+    yazıyor; hepsini damıtmak aynı yordamı defalarca okumak demek. Burada 5'li
+    sözcük parmak izleri üzerinden kapsama oranı ölçülür ve eşiği aşan rapor,
+    daha önce görülmüş temsilciye bağlanır.
+
+    Döndürür: (temsilciler, {temsilci adı: [bağlı rapor adları]}). Bağlı raporlar
+    okunmaz ama işlenmiş sayılır; aksi hâlde zincir hiç bitmez.
+
+    Parmak izi çıkarılamayan (çok kısa) raporlar her zaman temsilci kalır: eleme
+    ancak gerçekten ölçülebilen benzerlikte yapılır.
+    """
+    reps: List[Path] = []
+    rep_sigs: List[Set[int]] = []
+    followers: Dict[str, List[str]] = {}
+
+    for p in paths:
+        try:
+            sig = _cached_signature(p)
+        except OSError:
+            reps.append(p)
+            rep_sigs.append(set())
+            continue
+        if not sig:
+            reps.append(p)
+            rep_sigs.append(sig)
+            continue
+        match = -1
+        for i, rsig in enumerate(rep_sigs):
+            if not rsig:
+                continue
+            inter = len(sig & rsig)
+            if inter and inter / min(len(sig), len(rsig)) >= threshold:
+                match = i
+                break
+        if match >= 0:
+            followers.setdefault(reps[match].name, []).append(p.name)
+        else:
+            reps.append(p)
+            rep_sigs.append(sig)
+
+    return reps, followers
+
+
+# ---------------------------------------------------------------------------
+# Playbook kalite ölçütü
+# ---------------------------------------------------------------------------
+
+# İstenen beş başlıktan dördü kararı taşır: adımlar olmadan yordam yoktur,
+# ölçüt olmadan karar verilemez, tuzaklar tekrarlanan hataları önler, çıktı
+# biçimi sonucun kullanılabilir olmasını sağlar. "Ne Zaman Kullanılır" bunlara
+# göre süs olduğu için kapsam hesabına girmez.
+QUALITY_SECTIONS: Dict[str, Tuple[str, ...]] = {
+    "steps": ("adım", "adim", "step", "workflow", "prosedür", "prosedur"),
+    "criteria": ("ölçüt", "olcut", "criteria", "karar", "eşik", "esik", "kriter"),
+    "pitfalls": ("tuzak", "pitfall", "hata", "risk"),
+    "output": ("çıktı", "cikti", "output", "biçim", "bicim", "rapor biçimi"),
+}
+
+_STEP_LINE_RE = re.compile(r"(?m)^\s*(?:\d+[\.\)]\s+|[-*+]\s+)\S")
+
+
+def playbook_quality(procedure: str) -> Dict[str, Any]:
+    """
+    Bir yordamın ölçülebilir kalitesi.
+
+    Uzunluk tek başına kalite değildir: 9000 karakterlik tekrar eden bir metin,
+    3000 karakterlik dört bölümlü bir yordamdan kötüdür. Bu yüzden dört ölçü
+    birleştirilir:
+
+      - bölüm kapsamı  : dört zorunlu başlıktan kaçı var (en ağırlıklı)
+      - adım sayısı    : numaralı/madde imli satırlar (12'de doyar)
+      - tekrar oranı   : 5'li sözcük parmaklarının ne kadarı yinelenmiş
+      - uzunluk yeterliliği: 4000 karakterde doyar
+
+    Döndürülen `score` 0-1 arasıdır ve DegenerateDistillation korumasında
+    kullanılır.
+    """
+    text = (procedure or "").strip()
+    headings = [h.strip().lower() for h in re.findall(r"(?m)^#{2,4}\s+(.+)$", text)]
+    found = {
+        key: any(any(t in h for t in terms) for h in headings)
+        for key, terms in QUALITY_SECTIONS.items()
+    }
+    coverage = sum(1 for v in found.values() if v) / len(QUALITY_SECTIONS)
+
+    step_count = len(_STEP_LINE_RE.findall(text))
+
+    ws = _words(text)
+    if len(ws) >= _SHINGLE_SIZE:
+        grams = [tuple(ws[i : i + _SHINGLE_SIZE]) for i in range(len(ws) - _SHINGLE_SIZE + 1)]
+        repetition = 1.0 - (len(set(grams)) / len(grams))
+    else:
+        repetition = 0.0
+
+    chars = len(text)
+    length_fit = min(1.0, chars / 4000.0)
+
+    score = (
+        0.50 * coverage
+        + 0.20 * min(1.0, step_count / 12.0)
+        + 0.20 * (1.0 - repetition)
+        + 0.10 * length_fit
+    )
+
+    return {
+        "coverage": round(coverage, 3),
+        "sections": {k: bool(v) for k, v in found.items()},
+        "missing": [k for k, v in found.items() if not v],
+        "step_count": step_count,
+        "repetition": round(repetition, 3),
+        "chars": chars,
+        "tokens": estimate_tokens(text),
+        "score": round(score, 3),
+    }
+
+
 def build_distillation_prompt(
     skill: str,
     sources: List[Path],
     description: str = "",
     existing_procedure: str = "",
+    excerpt_chars: int = DISTILL_EXCERPT_CHARS,
+    procedural: bool = False,
 ) -> str:
     """
     Raporlardan yordam çıkarması için AGY'ye verilecek prompt'u üretir.
@@ -523,7 +804,13 @@ def build_distillation_prompt(
     existing_procedure verilirse (ikinci ve sonraki turlar) model sıfırdan
     yazmaz; mevcut yordamı yeni raporlarla birleştirip zenginleştirir. Böylece
     111 raporluk bir arşiv 24'lük turlarla, her turda bilgi kaybetmeden işlenir.
+
+    procedural=True verilirse alıntı ham ön ek değil, yordam taşıyan bloklardan
+    seçilir ve mevcut yordamda zaten geçen içerik puan kaybeder. Büyük arşivlerde
+    böylece rapor başına ~3 kat az karakterle aynı sinyal taşınır; tur başına
+    daha çok rapor sığar, tur sayısı ve toplam maliyet düşer.
     """
+    known = _shingles(existing_procedure) if (procedural and existing_procedure.strip()) else None
     chunks: List[str] = []
     for p in sources:
         try:
@@ -532,7 +819,10 @@ def build_distillation_prompt(
             continue
         if not body:
             continue
-        chunks.append(f"### Kaynak: {p.stem}\n{body[:DISTILL_EXCERPT_CHARS]}")
+        excerpt = procedural_excerpt(body, excerpt_chars, known) if procedural else body[:excerpt_chars]
+        if not excerpt:
+            continue
+        chunks.append(f"### Kaynak: {p.stem}\n{excerpt}")
 
     joined = "\n\n".join(chunks)
     desc_line = f"\nYeteneğin tanımı: {description}\n" if description else ""
@@ -637,11 +927,23 @@ def ingest_distilled(
             and new_sections < max(2, old_sections // 2)
             and len(procedure) < 0.8 * len(existing.procedure)
         )
-        if too_short or lost_structure:
+        # Uzunluk ve başlık sayısı kaba ölçülerdir: 9000 karakterlik tekrar eden
+        # bir metin ikisini de geçer. Olgun bir yordam (dört zorunlu başlıktan
+        # en az üçü) varsa karar kalite ölçütüne bırakılır; bölüm kaybeden ve
+        # puanı belirgin düşen çıktı, uzun olsa bile reddedilir.
+        old_q = playbook_quality(existing.procedure)
+        new_q = playbook_quality(procedure)
+        quality_regression = (
+            old_q["coverage"] >= 0.75
+            and new_q["coverage"] < old_q["coverage"]
+            and new_q["score"] < 0.75 * old_q["score"]
+        )
+        if too_short or lost_structure or quality_regression:
             raise DegenerateDistillation(
                 f"'{skill}' için damıtma çıktısı reddedildi: {len(procedure)} karakter / "
-                f"{new_sections} bölüm (mevcut {len(existing.procedure)} karakter / {old_sections} bölüm). "
-                "Mevcut yordam korundu."
+                f"{new_sections} bölüm / kalite {new_q['score']} "
+                f"(mevcut {len(existing.procedure)} karakter / {old_sections} bölüm / "
+                f"kalite {old_q['score']}). Mevcut yordam korundu."
             )
 
     pb = SkillPlaybook(

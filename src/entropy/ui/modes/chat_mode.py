@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QKeyEvent, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QPushButton, QScrollArea, QTextBrowser, QVBoxLayout, QWidget
+    QPushButton, QScrollArea, QTabWidget, QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -236,6 +236,17 @@ class ChatModeWindow(QMainWindow):
         self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
         h_layout.addWidget(self.tokens_badge)
 
+        # Durum rozeti: Zen'deki çekirdek durum etiketiyle aynı bus sinyaline bağlı.
+        # Arka plan görevi / damıtma haberleri de buraya düşer, böylece Chat modunda
+        # da "arkada ne çalışıyor?" sorusu yanıtsız kalmaz.
+        self.state_badge = QLabel("🟢 HAZIR")
+        self.state_badge.setToolTip("Entropy AI çekirdek durumu")
+        self.state_badge.setStyleSheet(
+            "color:#00FF9D; background:#05070A; border:1px solid #1F2B42; border-radius:4px;"
+            " padding:2px 8px; font-size:10px; font-weight:bold;"
+        )
+        h_layout.addWidget(self.state_badge)
+
         btn_new_chat = QPushButton("+ Yeni")
         btn_new_chat.setFixedHeight(24)
         btn_new_chat.setStyleSheet("background-color:#141C2C; color:#00F0FF; border:1px solid #00F0FF; font-weight:bold;")
@@ -261,6 +272,25 @@ class ChatModeWindow(QMainWindow):
         """)
         btn_reports.clicked.connect(self._open_reports_window)
         h_layout.addWidget(btn_reports)
+
+        # Görev & yetenek paneli açma düğmesi (Zen'deki sekmelerin kompakt karşılığı)
+        self.panel_btn = QPushButton("🧩 Panel")
+        self.panel_btn.setFixedHeight(24)
+        self.panel_btn.setToolTip("Görevler ve Yetenekler panelini aç/kapat")
+        self.panel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover { border-color: #00F0FF; }
+        """)
+        self.panel_btn.clicked.connect(self.toggle_side_panel)
+        h_layout.addWidget(self.panel_btn)
 
         btn_zen = QPushButton("Zen Mode")
         btn_zen.setFixedHeight(24)
@@ -346,6 +376,19 @@ class ChatModeWindow(QMainWindow):
         self.layout.addWidget(self.chat_browser)
         self._load_chat_history()
 
+        # 2b. Görev & Yetenek paneli için yer tutucu (içerik ilk açılışta kurulur;
+        # ağır widget'lar sohbet açılışını yavaşlatmasın diye tembel yükleniyor).
+        self.side_panel_container = QWidget()
+        self.side_panel_container.setVisible(False)
+        self.side_panel_layout = QVBoxLayout(self.side_panel_container)
+        self.side_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.side_panel_layout.setSpacing(0)
+        self.side_panel: Optional[QTabWidget] = None
+        self._side_panel_open = False
+        self.tasks_widget = None
+        self.skills_widget = None
+        self.layout.addWidget(self.side_panel_container)
+
         # 3. Staged image preview thumbnail bar
         self.attachment_bar = QFrame()
         self.attachment_bar.setVisible(False)
@@ -404,9 +447,84 @@ class ChatModeWindow(QMainWindow):
         bus.task_notification.connect(self._on_task_notification)
         bus.project_changed.connect(self._on_project_changed)
         bus.skills_updated.connect(self._populate_skills_combo)
+        # Zen ile aynı bus sinyalleri: durum, arka plan görevi ve damıtma ilerlemesi
+        bus.core_state_changed.connect(self._update_state_badge)
+        bus.task_triggered.connect(self._on_task_triggered)
+        bus.task_completed.connect(self._on_task_completed)
+        bus.distill_progress.connect(self._on_distill_progress)
+
+    # --------------------------------------------------- durum rozeti (Zen eşdeğeri)
+
+    @Slot(str)
+    def _update_state_badge(self, state: str):
+        """Çekirdek durumunu başlıktaki rozete yansıtır (Zen'deki core_status_lbl karşılığı)."""
+        mapping = {
+            "thinking": ("🔵 DÜŞÜNÜYOR", "#00F0FF"),
+            "executing": ("🟡 YÜRÜTÜLÜYOR", "#FFB300"),
+            "error": ("🔴 HATA", "#FF4D4D"),
+            "idle": ("🟢 HAZIR", "#00FF9D"),
+        }
+        text, color = mapping.get(state, mapping["idle"])
+        self.state_badge.setText(text)
+        self.state_badge.setStyleSheet(
+            f"color:{color}; background:#05070A; border:1px solid #1F2B42; border-radius:4px;"
+            " padding:2px 8px; font-size:10px; font-weight:bold;"
+        )
+
+    @Slot(str, str)
+    def _on_task_triggered(self, task_id: str, task_name: str):
+        self.state_badge.setText(f"⏰ GÖREV: {task_name[:18]}")
+        self.state_badge.setToolTip(f"Arka plan görevi çalışıyor: {task_name} ({task_id})")
+
+    @Slot(str, bool)
+    def _on_task_completed(self, task_id: str, success: bool):
+        self.state_badge.setText("🟢 HAZIR" if success else "🔴 GÖREV HATASI")
+        self.state_badge.setToolTip("Entropy AI çekirdek durumu")
+
+    @Slot(str, int, int)
+    def _on_distill_progress(self, skill_name: str, done: int, total: int):
+        self.state_badge.setText(f"📘 DAMITMA {done}/{total}")
+        self.state_badge.setToolTip(f"'{skill_name}' için yordam damıtma sürüyor: {done}/{total} rapor")
+
+    # ------------------------------------------------ görev & yetenek paneli
+
+    def ensure_side_panel(self) -> QTabWidget:
+        """Görev ve yetenek sekmelerini (tembel) kurar ve döndürür."""
+        if self.side_panel is None:
+            from entropy.ui.widgets.skills_widget import SkillsWidget
+            from entropy.ui.widgets.tasks_widget import TasksWidget
+
+            self.side_panel = QTabWidget()
+            self.side_panel.setMaximumHeight(280)
+            self.tasks_widget = TasksWidget(parent=self, bridge=self.bridge)
+            self.skills_widget = SkillsWidget(bridge=self.bridge)
+            self.side_panel.addTab(self.tasks_widget, "⏰ Görevler")
+            self.side_panel.addTab(self.skills_widget, "🎯 Yetenekler")
+            self.side_panel_layout.addWidget(self.side_panel)
+        return self.side_panel
+
+    def toggle_side_panel(self):
+        """Paneli açar/kapatır; ilk açılışta sekmeleri kurar.
+
+        Durum açık bir bayrakla tutulur: pencere gizliyken (mod değişimi) alt
+        widget'ların isVisible() değeri her zaman False döner ve düğme kilitlenirdi.
+        """
+        will_show = not self._side_panel_open
+        self._side_panel_open = will_show
+        if will_show:
+            self.ensure_side_panel()
+        self.side_panel_container.setVisible(will_show)
+        self.panel_btn.setText("▼ Paneli Kapat" if will_show else "🧩 Panel")
+        return will_show
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
-        """Add a stackable notification pill to the chat mode window."""
+        """Add a stackable notification pill to the chat mode window (yinelenenler elenir)."""
+        for i in range(self.notification_stack_layout.count()):
+            item = self.notification_stack_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if isinstance(widget, NotificationPillWidget):
+                if getattr(widget, "path_or_content", None) == path_or_content:
+                    return
         self.notification_scroll.setVisible(True)
         pill = NotificationPillWidget(
             title=title,
@@ -443,6 +561,8 @@ class ChatModeWindow(QMainWindow):
 
         self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
         self.report_bar.setVisible(True)
+        # Zen ile aynı davranış: rapor da yığılabilir bir bildirim pili üretir.
+        self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
             f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
@@ -865,11 +985,20 @@ class ChatModeWindow(QMainWindow):
             (bus.task_notification, self._on_task_notification),
             (bus.project_changed, self._on_project_changed),
             (bus.skills_updated, self._populate_skills_combo),
+            (bus.core_state_changed, self._update_state_badge),
+            (bus.task_triggered, self._on_task_triggered),
+            (bus.task_completed, self._on_task_completed),
+            (bus.distill_progress, self._on_distill_progress),
         ]
         for sig, slot in signals:
             try:
                 sig.disconnect(slot)
             except Exception:
                 pass
+
+        # Panel çocukları bilerek kapatılmaz: TasksWidget.closeEvent tekil
+        # zamanlayıcıyı durdurur; Chat penceresi kapanınca Zen'in arka plan
+        # görevleri de sessizce dururdu. Pencere yok edilirken Qt bu widget'ların
+        # bus bağlantılarını zaten koparır.
         super().closeEvent(event)
 

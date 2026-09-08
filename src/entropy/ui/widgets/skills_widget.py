@@ -170,6 +170,96 @@ class DownloadSkillDialog(QDialog):
     def get_data(self):
         return self.url_input.text().strip(), self.name_input.text().strip() or None
 
+class SkillEditorDialog(QDialog):
+    """SKILL.md dosyasını uygulama içinde düzenleyen basit editör."""
+
+    def __init__(self, skill_path: Path, skill_name: str = "", parent=None):
+        super().__init__(parent)
+        self.skill_path = Path(skill_path)
+        self.setWindowTitle(f"Yetenek Düzenle: {skill_name or self.skill_path.name}")
+        self.resize(720, 560)
+        self.setStyleSheet("""
+            QDialog { background-color: #0E1420; color: #F0F6FC; }
+            QLabel { color: #8B949E; font-size: 11px; }
+            QTextEdit {
+                background-color: #05070A;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 8px;
+                color: #F0F6FC;
+                font-family: 'Consolas', 'Courier New';
+                font-size: 12px;
+            }
+            QPushButton {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 6px 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { border-color: #00F0FF; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        path_lbl = QLabel(str(self.skill_path))
+        path_lbl.setWordWrap(True)
+        layout.addWidget(path_lbl)
+
+        self.editor = QTextEdit()
+        try:
+            self.editor.setPlainText(self.skill_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self.editor.setPlainText(f"# Dosya okunamadı: {e}")
+        layout.addWidget(self.editor)
+
+        btn_box = QHBoxLayout()
+        self.system_btn = QPushButton("🖊️ Sistem Editöründe Aç")
+        self.system_btn.clicked.connect(self.open_in_system_editor)
+        btn_box.addWidget(self.system_btn)
+        btn_box.addStretch()
+
+        cancel_btn = QPushButton("İptal")
+        cancel_btn.clicked.connect(self.reject)
+        btn_box.addWidget(cancel_btn)
+
+        self.save_btn = QPushButton("Kaydet")
+        self.save_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        self.save_btn.clicked.connect(self._on_save)
+        btn_box.addWidget(self.save_btn)
+
+        layout.addLayout(btn_box)
+
+    def open_in_system_editor(self) -> bool:
+        """SKILL.md'yi işletim sisteminin varsayılan editöründe açar."""
+        if not self.skill_path.exists():
+            return False
+        try:
+            if os.name == "nt":
+                os.startfile(str(self.skill_path))
+            else:
+                subprocess.run(["xdg-open", str(self.skill_path)])
+            return True
+        except Exception:
+            return False
+
+    def save(self) -> bool:
+        """Editördeki içeriği diske yazar ve yetenek kataloğunu tazeler."""
+        try:
+            self.skill_path.write_text(self.editor.toPlainText(), encoding="utf-8")
+        except Exception as e:
+            QMessageBox.critical(self, "Kaydedilemedi", f"SKILL.md yazılamadı: {e}")
+            return False
+        bus.skills_updated.emit()
+        return True
+
+    def _on_save(self):
+        if self.save():
+            self.accept()
+
+
 class SkillsWidget(QFrame):
     """Visual dock to browse, toggle, download, and manage AI Skills."""
 
@@ -434,8 +524,18 @@ class SkillsWidget(QFrame):
                 counter.setStyleSheet(f"color:{pb_color}; font-size:10px; font-weight:bold; background:transparent; border:none; min-width:44px;")
                 card_layout.addWidget(counter)
 
+            # Edit button: SKILL.md'yi uygulama içi editörde açar
+            edit_btn = QPushButton("✏️")
+            edit_btn.setObjectName(f"skill_edit_{s.name}")
+            edit_btn.setFixedSize(26, 26)
+            edit_btn.setToolTip("SKILL.md dosyasını düzenle (uygulama içi editör / sistem editörü)")
+            edit_btn.setStyleSheet("background-color:#141C2C; color:#00F0FF; border:1px solid #1F2B42; border-radius:4px;")
+            edit_btn.clicked.connect(lambda _, s_name=s.name, s_path=s.path: self._on_edit_skill(s_name, s_path))
+            card_layout.addWidget(edit_btn)
+
             # Open folder button
             folder_btn = QPushButton("📂")
+            folder_btn.setObjectName(f"skill_folder_{s.name}")
             folder_btn.setFixedSize(26, 26)
             folder_btn.setToolTip("Yetenek Klasörünü Aç")
             folder_btn.setStyleSheet("background-color:#141C2C; color:#F0F6FC; border:1px solid #1F2B42; border-radius:4px;")
@@ -530,6 +630,19 @@ class SkillsWidget(QFrame):
         if reply == QMessageBox.StandardButton.Yes:
             self.skill_manager.delete_skill(skill_name)
             self.refresh_skills()
+
+    def _on_edit_skill(self, skill_name: str, skill_path: str):
+        """SKILL.md'yi uygulama içi editörde açar; dosya yoksa klasörü açar."""
+        path = Path(skill_path)
+        if path.is_dir():
+            path = path / "SKILL.md"
+        if not path.exists():
+            QMessageBox.warning(self, "Dosya Yok", f"'{skill_name}' için SKILL.md bulunamadı:\n{path}")
+            return None
+        dlg = SkillEditorDialog(path, skill_name, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_skills()
+        return dlg
 
     def _open_folder(self, folder_path: Path):
         if folder_path.exists():

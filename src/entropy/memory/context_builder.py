@@ -178,12 +178,159 @@ class CognitiveContextBuilder:
     # tuzaklar, çıktı biçimi) her zaman tam girer.
     _PLAYBOOK_TRIM_LAST = ("çalışma adımları", "calisma adimlari")
 
+    # Sorguya göre bölüm seçiminde, alakasız bölümlerin özetine ayrılabilecek
+    # azami pay. Kalan bütçe her zaman ilgili bölümlerin tam metnine gider;
+    # yoksa 9000 karakterlik bir playbook'ta 1500 token yalnızca başlıklara giderdi.
+    _DIGEST_BUDGET_RATIO = 0.4
+    # Sorguya göre tam metin verilecek azami bölüm sayısı.
+    _RELEVANT_SECTION_LIMIT = 2
+
+    # Türkçe eklemeli bir dil: "tuzaklara" alt dizge olarak "Tuzaklar" başlığında
+    # geçmez. Bu yüzden eşleşme sözcük gövdesi (ilk 5 harf) üzerinden yapılır.
+    _STEM_LEN = 5
+    # Her sorguda geçen, hiçbir bölümü ayırt etmeyen sözcükler.
+    _QUERY_STOPWORDS = frozenset(
+        {
+            "hangi", "nasil", "nasıl", "neler", "nedir", "için", "icin", "olan", "daha",
+            "sonra", "önce", "once", "gibi", "kadar", "bana", "bunu", "şunu", "sunu",
+            "lazim", "lazım", "gerek", "yapmam", "etmem", "misin", "musun", "what",
+            "which", "should", "there", "about",
+        }
+    )
+
+    # Kullanıcı "adim" yazıyor, playbook "Adımları" diyor: Türkçe aksanları
+    # katlanmazsa hiçbir bölüm eşleşmiyor (ölçüldü: hedef bölüm seçilemiyordu).
+    _FOLD = str.maketrans("ıİşŞğĞüÜöÖçÇâÂîÎûÛ", "iisSgGuUoOcCaAiIuU")
+
     @classmethod
-    def _fit_playbook(cls, procedure: str, budget: int) -> str:
+    def _fold(cls, text: str) -> str:
+        return text.translate(cls._FOLD).lower()
+
+    @classmethod
+    def _query_stems(cls, query: str) -> List[str]:
+        out: List[str] = []
+        for w in re.findall(r"\w+", cls._fold(query or "")):
+            if len(w) < 3 or w in cls._QUERY_STOPWORDS:
+                continue
+            stem = w[: cls._STEM_LEN]
+            if stem not in out:
+                out.append(stem)
+        return out
+
+    @classmethod
+    def _section_score(cls, section: str, stems: List[str]) -> int:
+        words = re.findall(r"\w+", cls._fold(section))
+        if not words:
+            return 0
+        # Başlık iki kez sayılır: bölümün konusunu en iyi o anlatır.
+        head_words = re.findall(r"\w+", cls._fold(section.splitlines()[0]))
+        score = 0
+        for stem in stems:
+            score += sum(1 for w in words if w.startswith(stem))
+            score += 2 * sum(1 for w in head_words if w.startswith(stem))
+        return score
+
+    @staticmethod
+    def _section_digest(section: str) -> str:
+        """Bölümün başlığı ve ilk maddesi; 'burada şu var' bilgisini token'sız taşır."""
+        lines = [ln for ln in section.splitlines() if ln.strip()]
+        if not lines:
+            return ""
+        head = lines[0].rstrip()
+        for ln in lines[1:]:
+            body = ln.strip()
+            if body:
+                return f"{head}\n{body}"
+        return head
+
+    @classmethod
+    def _fit_playbook_by_query(cls, procedure: str, budget: int, query: str) -> Optional[str]:
+        """
+        Sorguyla ilgili bölümleri tam, diğerlerini başlık + ilk madde olarak verir.
+
+        Playbook diskte 9000 karaktere kadar büyüyor, bütçe ise 1500 token
+        (~6000 karakter). Sabit öncelikle kırpmak, sorusu tuzaklarla ilgili olan
+        bir turda adımları tam, tuzakları yarım vermek anlamına geliyordu.
+        Sorgu terimi taşımayan bölüm tamamen düşmez; başlığı kalır ki ajan
+        neyin var olduğunu bilsin.
+
+        Sorgu bir bölümle eşleşmiyorsa None döner ve sabit öncelikli yola dönülür.
+        """
+        stems = cls._query_stems(query)
+        if not stems:
+            return None
+
+        # Alt başlıklar da ayrı seçilebilir: gerçek playbook'larda "Çalışma
+        # Adımları" altında beş '###' bloğu var ve sorgu çoğu zaman yalnızca
+        # birini ilgilendiriyor. Sabit öncelikli yol yalnızca '##' ile böler.
+        sections = [s for s in re.split(r"(?m)^(?=#{2,3} )", procedure.strip()) if s.strip()]
+        if len(sections) <= 1:
+            return None
+
+        scored = [(cls._section_score(sec, stems), idx) for idx, sec in enumerate(sections)]
+        if not any(sc > 0 for sc, _ in scored):
+            return None
+
+        ranked = sorted(scored, key=lambda x: (-x[0], x[1]))
+        relevant = {idx for sc, idx in ranked[: cls._RELEVANT_SECTION_LIMIT] if sc > 0}
+
+        parts: Dict[int, str] = {}
+        remaining = budget
+        digest_cap = int(budget * cls._DIGEST_BUDGET_RATIO)
+        digest_used = 0
+        for idx, sec in enumerate(sections):
+            if idx in relevant:
+                continue
+            digest = cls._section_digest(sec)
+            cost = estimate_tokens(digest)
+            if not digest.strip() or digest_used + cost > digest_cap or cost > remaining:
+                continue
+            parts[idx] = digest
+            digest_used += cost
+            remaining -= cost
+
+        for _sc, idx in ranked:
+            if idx not in relevant or remaining <= 0:
+                continue
+            text = _truncate_to_tokens(sections[idx].rstrip(), remaining)
+            if not text.strip():
+                continue
+            parts[idx] = text.rstrip()
+            remaining -= estimate_tokens(text)
+
+        # Artan bütçe boşa gitmez: ilgili bölümler tam girdikten sonra kalan pay,
+        # özete indirilmiş bölümlere puan sırasıyla geri verilir. Bu olmadan
+        # kısa bir hedef bölüm bütçenin çoğunu kullanılmadan bırakıyordu
+        # (financial-auditor: 1455 token yerine 120).
+        for _sc, idx in ranked:
+            if remaining <= 0:
+                break
+            if idx in relevant:
+                continue
+            current = parts.get(idx, "")
+            gain = remaining + estimate_tokens(current)
+            text = _truncate_to_tokens(sections[idx].rstrip(), gain)
+            if estimate_tokens(text) <= estimate_tokens(current):
+                continue
+            remaining -= estimate_tokens(text) - estimate_tokens(current)
+            parts[idx] = text.rstrip()
+
+        body = "\n\n".join(parts[i] for i in sorted(parts) if parts[i].strip())
+        # Bölüm bölüm sayılan token'lar birleştirme ayraçlarını saymaz; son kırpma
+        # bütçenin gerçekten aşılmamasını garanti eder.
+        return _truncate_to_tokens(body, budget) or None
+
+    @classmethod
+    def _fit_playbook(cls, procedure: str, budget: int, query: str = "") -> str:
         parts = re.split(r"(?m)^(?=## )", procedure.strip())
         sections = [p for p in parts if p.strip()]
         if len(sections) <= 1:
             return _truncate_to_tokens(procedure.strip(), budget)
+
+        if query and query.strip():
+            by_query = cls._fit_playbook_by_query(procedure, budget, query)
+            if by_query:
+                return by_query
 
         def is_steps(sec: str) -> bool:
             head = sec.splitlines()[0].lower().lstrip("# ").strip()
@@ -206,11 +353,11 @@ class CognitiveContextBuilder:
                 break
         return "\n\n".join(out)
 
-    def _playbook_section(self, skill_name: str, budget: int) -> Optional[ContextSection]:
+    def _playbook_section(self, skill_name: str, budget: int, query: str = "") -> Optional[ContextSection]:
         pb = self.playbooks.load(skill_name)
         if not pb or not pb.procedure.strip():
             return None
-        body = self._fit_playbook(pb.procedure, budget)
+        body = self._fit_playbook(pb.procedure, budget, query)
         coverage = f"{pb.processed_count}/{pb.source_count}" if pb.processed_count < pb.source_count else f"{pb.source_count}"
         return ContextSection(
             title=f"📘 {skill_name} — Öğrenilmiş Çalışma Yordamı ({coverage} rapordan damıtıldı)",
@@ -484,7 +631,7 @@ class CognitiveContextBuilder:
         # olduğu için sonra gelir; bütçe daralırsa ilk kırpılacak olan odur.
         plan = [
             ("playbook", min(BUDGET_PLAYBOOK, remaining),
-             lambda b: self._playbook_section(skill_name, b) if skill_name else None),
+             lambda b: self._playbook_section(skill_name, b, query) if skill_name else None),
             ("project", min(BUDGET_PROJECT, remaining),
              lambda b: self._project_section(project_dir, b)),
             ("recall", min(BUDGET_RECALL, remaining),

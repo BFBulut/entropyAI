@@ -9,6 +9,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Slot
+
 from entropy.core.config import APP_ROOT, config
 from entropy.core.event_bus import bus
 
@@ -23,6 +25,49 @@ MAX_ARCHIVE_MEMBERS = 2000                   # arşivdeki azami dosya sayısı
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024         # açılmış toplam boyut tavanı
 
 
+# --- Evrensel yetenek keşfi -------------------------------------------------
+#
+# SKILL.md tek bir standarttır (YAML ön bilgisi + markdown gövde) ama her CLI
+# onu başka bir dizinde arar. İnternetten indirilen bir yeteneğin "bütün
+# CLI'ların gördüğü" yerde durması için hepsinin köklerini tek katalogda
+# birleştiriyoruz. Aşağıdaki yollar yerel kurulumdan ve agy.EXE içindeki
+# belge dizgelerinden doğrulandı:
+#   - Antigravity/agy : "<workspace>/.agents/skills/<name>/" ve
+#                       "~/.gemini/config/skills/<name>/"; çalışma alanı kökü
+#                       .agents | _agents | .agent | _agent olabiliyor.
+#   - Claude Code     : ".claude/skills/", "~/.claude/skills/"
+#   - agent-skills    : ".agents/skills/", "~/.agents/skills/"
+#   - Gemini CLI      : ".gemini/skills/", "~/.gemini/skills/"
+#   - Cursor          : ".cursor/skills/"
+PROJECT_SKILL_SUBDIRS = (
+    ("skills",),
+    (".agents", "skills"),
+    ("_agents", "skills"),
+    (".agent", "skills"),
+    ("_agent", "skills"),
+    (".claude", "skills"),
+    (".gemini", "skills"),
+    (".cursor", "skills"),
+    (".entropy", "skills"),
+)
+
+USER_SKILL_SUBDIRS = (
+    (".entropy", "skills"),
+    (".agents", "skills"),
+    (".claude", "skills"),
+    (".gemini", "skills"),
+    (".gemini", "config", "skills"),
+    (".gemini", "antigravity", "builtin", "skills"),
+    (".gemini", "antigravity-cli", "builtin", "skills"),
+    (".cursor", "skills"),
+)
+
+# İçe aktarılan yeteneğin yazıldığı proje-içi kök. .agents/skills seçildi çünkü
+# agy çalışma alanı yeteneklerini oradan, agent-skills standardı da aynı yerden
+# okur; yani indirilen dosya hem Entropy'de hem de CLI'da anında görünür.
+IMPORT_SUBDIR = (".agents", "skills")
+
+
 def discover_skill_dirs(project_dir: Optional[Path] = None) -> List[Path]:
     """
     Yeteneklerin aranacağı tüm dizinleri, öncelik sırasıyla döndürür.
@@ -34,7 +79,9 @@ def discover_skill_dirs(project_dir: Optional[Path] = None) -> List[Path]:
     yetenek `/` ile seçilebiliyor ama panelde hiç görünmüyordu.
 
     Sıra önceliktir: aynı ada sahip yetenekte listede önce gelen kazanır
-    (proje > uygulama kökü > kullanıcı > yerleşik).
+    (proje kökü > kullanıcı dizinleri > uygulama içi skills/). Uygulamayla
+    gelen yerleşik yetenekler en sona alındı: kullanıcının kendi indirdiği
+    aynı adlı sürüm, paketle gelen kopyayı ezebilmeli.
     """
     dirs: List[Path] = []
 
@@ -42,33 +89,30 @@ def discover_skill_dirs(project_dir: Optional[Path] = None) -> List[Path]:
         if p and p.is_dir() and p not in dirs:
             dirs.append(p)
 
-    # 1. Aktif proje
-    if project_dir:
-        p_dir = Path(project_dir)
-        _add(p_dir / "skills")
-        _add(p_dir / ".agents" / "skills")
-        _add(p_dir / "_agents" / "skills")
+    def _add_project_root(root) -> None:
+        if not root:
+            return
+        try:
+            base = Path(root)
+        except (TypeError, ValueError):
+            return
+        for parts in PROJECT_SKILL_SUBDIRS:
+            _add(base.joinpath(*parts))
 
-    # 2. Uygulama kökü / yapılandırılmış varsayılan proje
-    _add(GLOBAL_SKILLS_DIR)
-    if config.default_project_path:
-        dp = Path(config.default_project_path)
-        _add(dp / "skills")
-        _add(dp / ".agents" / "skills")
+    # 1. Proje kökleri: aktif proje, yapılandırılmış varsayılan proje, çalışma dizini
+    _add_project_root(project_dir)
+    _add_project_root(config.default_project_path)
+    _add_project_root(Path.cwd())
 
-    # 3. Çalışma dizini
-    cwd = Path.cwd()
-    _add(cwd / "skills")
-    _add(cwd / ".agents" / "skills")
-
-    # 4. Kullanıcı ve Antigravity yerleşik yetenekleri
+    # 2. Kullanıcı geneli kökler (tüm CLI'ların ev dizini yerleşimleri)
     home = Path.home()
-    _add(home / ".entropy" / "skills")
-    _add(home / ".gemini" / "skills")
-    _add(home / ".gemini" / "antigravity" / "builtin" / "skills")
-    _add(home / ".gemini" / "antigravity-cli" / "builtin" / "skills")
+    for parts in USER_SKILL_SUBDIRS:
+        _add(home.joinpath(*parts))
 
-    # 5. Gemini eklenti yetenekleri
+    # 3. Gemini/Antigravity eklenti yetenekleri
+    #    (Claude eklenti pazar yeri bilerek taranmıyor: ~/.claude/plugins/marketplaces
+    #     altında kurulmamış onlarca eklentinin yeteneği duruyor; kurulu olanlar zaten
+    #     ~/.claude/skills içine düşüyor.)
     plugins_root = home / ".gemini" / "config" / "plugins"
     if plugins_root.is_dir():
         try:
@@ -81,6 +125,9 @@ def discover_skill_dirs(project_dir: Optional[Path] = None) -> List[Path]:
                     _add(sub)
         except OSError:
             pass
+
+    # 4. Uygulamayla gelen yerleşik yetenekler (en düşük öncelik)
+    _add(GLOBAL_SKILLS_DIR)
 
     return dirs
 
@@ -218,6 +265,25 @@ class SkillManager:
         except Exception:
             pass
         self._enabled_cache: Dict[str, bool] = self._load_state()
+
+    def import_base_dir(self) -> Path:
+        """
+        İçe aktarılan / oluşturulan yeteneğin yazılacağı kök dizin.
+
+        Yalıtılmış bir kök verildiyse (testler, izole çalışma alanı) yalnızca
+        orası kullanılır — yoksa test dosyaları kullanıcının gerçek dizinlerine
+        sızardı. Aksi hâlde aktif projenin `.agents/skills` dizinine yazılır:
+        SKILL.md oraya düştüğü anda hem Entropy paneli hem agy hem de
+        agent-skills uyumlu diğer CLI'lar yeteneği görür.
+        """
+        if self._isolated_root is not None:
+            return self._isolated_root
+        for root in (self._project_dir, config.default_project_path):
+            if root:
+                return Path(root).joinpath(*IMPORT_SUBDIR)
+        if self.project_skills_dir:
+            return self.project_skills_dir
+        return self.global_skills_dir or self.root_skills_dir or GLOBAL_SKILLS_DIR
 
     def _load_state(self) -> Dict[str, bool]:
         if self.state_file.exists():
@@ -380,7 +446,7 @@ class SkillManager:
     ) -> SkillDefinition:
         """Create a new skill folder with SKILL.md and optional executable scripts."""
         clean_name = sanitize_skill_name(name, fallback="custom-skill")
-        base_dir = self.project_skills_dir or self.root_skills_dir or self.global_skills_dir or GLOBAL_SKILLS_DIR
+        base_dir = self.import_base_dir()
         base_dir.mkdir(parents=True, exist_ok=True)
         skill_dir = base_dir / clean_name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -577,7 +643,7 @@ class SkillManager:
                 pass
             name = custom_name or fm_name or skill_file.parent.name
             clean_name = sanitize_skill_name(name)
-            target_base = self.project_skills_dir or self.root_skills_dir or self.global_skills_dir or GLOBAL_SKILLS_DIR
+            target_base = self.import_base_dir()
             target_dir = target_base / clean_name
             shutil.copytree(skill_file.parent, target_dir, dirs_exist_ok=True)
             bus.skills_updated.emit()
@@ -590,7 +656,7 @@ class SkillManager:
         
         name = custom_name or root_dir.name or "custom-tool"
         clean_name = sanitize_skill_name(name, fallback="custom-tool")
-        target_base = self.project_skills_dir or self.root_skills_dir or self.global_skills_dir or GLOBAL_SKILLS_DIR
+        target_base = self.import_base_dir()
         target_dir = target_base / clean_name
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -971,6 +1037,145 @@ class SkillManager:
             "Gereken yetenek yoksa, SKILL.md ve Python scripti oluşturarak kendinize yeni bir yetenek kazandırabilirsiniz."
         )
         return "\n".join(lines)
+
+
+class SkillWatcher(QObject):
+    """
+    Yetenek dizinlerini canlı izler ve değişimde `bus.skills_updated` yayar.
+
+    İnternetten indirilen ya da başka bir CLI tarafından yazılan bir SKILL.md,
+    uygulamayı yeniden başlatmadan görünmeli. İki katmanlı çalışır:
+      1. QFileSystemWatcher — keşfedilen her yetenek kökü ve onun birinci
+         seviye alt dizinleri izlenir; dosya sistemi olayı anında tetikler.
+      2. Hafif yoklama (varsayılan 5 sn) — henüz var olmayan bir kök sonradan
+         oluşturulduğunda (izleyici yok olan yolu izleyemez) ya da olayın
+         düştüğü ağ/senkron sürücülerde yedek olarak çalışır.
+
+    Yoklama diski yormaz: yalnızca keşfedilen köklerin bir seviyesindeki
+    SKILL.md dosyalarının (yol, mtime) imzası karşılaştırılır.
+    """
+
+    def __init__(self, project_dir: Optional[Path] = None, poll_interval_ms: int = 5000, parent=None):
+        super().__init__(parent)
+        self._project_dir: Optional[Path] = Path(project_dir) if project_dir else None
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_watcher.directoryChanged.connect(self._schedule_check)
+        self._fs_watcher.fileChanged.connect(self._schedule_check)
+
+        # Toplu kopyalamalarda (zip açma, git checkout) onlarca olay art arda
+        # gelir; borç biriktirmemek için tek bir gecikmeli kontrole indirilir.
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(400)
+        self._debounce.timeout.connect(self._check_now)
+
+        self._poll = QTimer(self)
+        self._poll.setInterval(max(1000, int(poll_interval_ms)))
+        self._poll.timeout.connect(self._check_now)
+
+        self._signature = self._compute_signature()
+
+    # -- kamu API'si ---------------------------------------------------------
+    def start(self) -> "SkillWatcher":
+        self._sync_watch_paths()
+        self._poll.start()
+        try:
+            bus.project_changed.connect(self.set_project_dir)
+        except Exception:
+            pass
+        return self
+
+    def stop(self) -> None:
+        self._poll.stop()
+        self._debounce.stop()
+        paths = self._fs_watcher.directories() + self._fs_watcher.files()
+        if paths:
+            self._fs_watcher.removePaths(paths)
+        try:
+            bus.project_changed.disconnect(self.set_project_dir)
+        except Exception:
+            pass
+
+    @Slot(str)
+    def set_project_dir(self, project_dir) -> None:
+        self._project_dir = Path(project_dir) if project_dir else None
+        self._sync_watch_paths()
+        self._schedule_check()
+
+    def watched_dirs(self) -> List[str]:
+        return list(self._fs_watcher.directories())
+
+    # -- iç işleyiş ----------------------------------------------------------
+    def _skill_roots(self) -> List[Path]:
+        try:
+            return discover_skill_dirs(self._project_dir)
+        except Exception:
+            return []
+
+    def _compute_signature(self):
+        sig = []
+        for root in self._skill_roots():
+            direct = root / "SKILL.md"
+            candidates = [direct]
+            try:
+                candidates.extend(child / "SKILL.md" for child in root.iterdir() if child.is_dir())
+            except OSError:
+                pass
+            for f in candidates:
+                try:
+                    sig.append((str(f), f.stat().st_mtime_ns))
+                except OSError:
+                    continue
+        return frozenset(sig)
+
+    def _sync_watch_paths(self) -> None:
+        wanted = set()
+        for root in self._skill_roots():
+            wanted.add(str(root))
+            # Kökün üstü de izlenir: `.agents/skills` henüz yokken `.agents`
+            # içine açılan yeni bir klasör de olay üretsin.
+            if root.parent.is_dir():
+                wanted.add(str(root.parent))
+            try:
+                for child in root.iterdir():
+                    if child.is_dir():
+                        wanted.add(str(child))
+            except OSError:
+                pass
+
+        current = set(self._fs_watcher.directories())
+        stale = current - wanted
+        if stale:
+            self._fs_watcher.removePaths(sorted(stale))
+        fresh = wanted - current
+        if fresh:
+            self._fs_watcher.addPaths(sorted(fresh))
+
+    @Slot()
+    def _schedule_check(self, *_args) -> None:
+        self._debounce.start()
+
+    @Slot()
+    def _check_now(self) -> None:
+        self._sync_watch_paths()
+        new_sig = self._compute_signature()
+        if new_sig != self._signature:
+            self._signature = new_sig
+            bus.skills_updated.emit()
+
+
+_skill_watcher: Optional[SkillWatcher] = None
+
+
+def start_skill_watcher(project_dir: Optional[Path] = None, poll_interval_ms: int = 5000) -> SkillWatcher:
+    """Süreç genelinde tek bir yetenek izleyicisi başlatır (yeniden çağrı güvenli)."""
+    global _skill_watcher
+    if _skill_watcher is None:
+        _skill_watcher = SkillWatcher(project_dir=project_dir, poll_interval_ms=poll_interval_ms)
+        _skill_watcher.start()
+    elif project_dir:
+        _skill_watcher.set_project_dir(project_dir)
+    return _skill_watcher
 
 
 def extract_skill_source_from_text(text: str) -> Optional[str]:

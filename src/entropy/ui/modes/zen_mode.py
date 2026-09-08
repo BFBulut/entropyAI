@@ -233,7 +233,8 @@ class ZenModeWindow(QMainWindow):
         center_layout.addWidget(self.notification_scroll)
 
         center_layout.addStretch()
-        self.core_visualizer = CoreVisualizerWidget(base_radius=58)
+        # Zen'de çekirdek sürüklenmez; tıklayınca mod menüsü açılır.
+        self.core_visualizer = CoreVisualizerWidget(base_radius=58, mode_menu_enabled=True)
         self.core_visualizer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         center_layout.addWidget(self.core_visualizer, alignment=Qt.AlignmentFlag.AlignCenter)
 

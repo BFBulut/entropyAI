@@ -434,3 +434,316 @@ def test_context_survives_failing_section(tmp_path):
     ctx = builder.build("soru", skill_name="demo")
     kinds = {s.kind for s in ctx.sections}
     assert "playbook" in kinds, "diğer bölümler yine de kurulmalı"
+
+
+# --------------------------------------------------------------------------
+# Maliyet düşürme: yordam taşıyan alıntı + yakın-kopya eleme
+# --------------------------------------------------------------------------
+
+
+def test_procedural_excerpt_prefers_steps_over_narrative():
+    """Ham ön ek yerine yordam taşıyan bloklar seçilmeli."""
+    from entropy.memory.playbook import procedural_excerpt
+
+    body = (
+        "Bu rapor 2026 yilinda hazirlanmistir ve genel bir girise sahiptir. " * 12
+        + "\n\nAnlatisal ikinci paragraf, hicbir yordam tasimaz. " * 12
+        + "\n\n## Yontem\n1. Once teknik tarama yapilir, adim adim.\n"
+        "2. Sonra kontrol listesi uygulanir.\n3. Tuzak: negatif kelime unutulmaz.\n"
+    )
+    out = procedural_excerpt(body, 400)
+    assert "## Yontem" in out, "yordam blogu secilmeli"
+    assert len(out) <= 400
+    assert "Anlatisal ikinci paragraf" not in out
+
+
+def test_procedural_excerpt_falls_back_to_prefix_when_nothing_scores():
+    from entropy.memory.playbook import procedural_excerpt
+
+    body = "duz metin " * 500
+    out = procedural_excerpt(body, 200)
+    assert out and len(out) <= 200
+
+
+def test_known_content_loses_priority_to_new_content():
+    """Mevcut yordamda zaten geçen blok, yeni bilgi taşıyan bloğa yer bırakmalı."""
+    from entropy.memory.playbook import _shingles, procedural_excerpt
+
+    bilinen = "## Adim\n1. Teknik tarama yapilir ve sonuclar karsilastirilir sirayla.\n"
+    yeni = "## Adim\n1. Rakip backlink profili cikarilir ve bosluk analizi yapilir.\n"
+    body = bilinen + "\n" + yeni
+    out = procedural_excerpt(body, len(yeni) + 5, known_shingles=_shingles(bilinen))
+    assert "backlink" in out
+
+
+def test_near_duplicate_reports_collapse_to_one_representative(tmp_path):
+    from entropy.memory.playbook import select_representatives
+
+    d = tmp_path / "r"
+    d.mkdir()
+    ortak = " ".join(f"teknik seo tarama adimi numara {i} kontrol" for i in range(60))
+    paths = []
+    for i in range(3):
+        p = d / f"kopya{i}.md"
+        p.write_text(ortak + f"\nkucuk fark {i}\n", encoding="utf-8")
+        paths.append(p)
+    farkli = d / "farkli.md"
+    farkli.write_text(
+        " ".join(f"birim ekonomisi marj hesabi kalem {i} butce" for i in range(60)),
+        encoding="utf-8",
+    )
+    paths.append(farkli)
+
+    reps, followers = select_representatives(paths)
+    assert [p.name for p in reps] == ["kopya0.md", "farkli.md"]
+    assert set(followers["kopya0.md"]) == {"kopya1.md", "kopya2.md"}
+
+
+def test_short_reports_are_never_eliminated_as_duplicates(tmp_path):
+    """Parmak izi çıkarılamayan rapor elenmemeli; eleme ancak ölçülebilirse yapılır."""
+    from entropy.memory.playbook import select_representatives
+
+    d = tmp_path / "r"
+    d.mkdir()
+    paths = []
+    for i in range(4):
+        p = d / f"k{i}.md"
+        p.write_text("ab cd\n", encoding="utf-8")
+        paths.append(p)
+    reps, followers = select_representatives(paths)
+    assert len(reps) == 4 and followers == {}
+
+
+def _big_vault(root: Path, skill: str, n: int) -> PlaybookStore:
+    """Birbirinden farklı n rapor: yakın-kopya elemesi devreye girmesin."""
+    rep = root / "Entropy" / "Skills" / skill / "Reports"
+    rep.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        gövde = " ".join(f"konu{i}_terim{j} ozgun icerik satiri" for j in range(120))
+        (rep / f"r{i:03d}.md").write_text(
+            f"---\ntitle: R{i}\n---\n\n## Yontem {i}\n1. Adim {i} uygulanir.\n\n{gövde}\n",
+            encoding="utf-8",
+        )
+    return PlaybookStore(vault_path=root, index=SkillReportIndex(index_path=root / "idx.json"))
+
+
+def test_large_archive_switches_to_compact_passes_and_costs_less(tmp_path):
+    """
+    Büyük arşiv: tur başına daha çok rapor, rapor başına daha kısa yordam alıntısı.
+    Toplam tahmini maliyet klasik şeklin belirgin altında kalmalı.
+    """
+    from entropy.memory.distiller import (
+        COMPACT_EXCERPT_CHARS,
+        COMPACT_MIN_SOURCES,
+        COMPACT_SOURCES_PER_PASS,
+        estimate_chain_cost,
+    )
+    from entropy.memory.playbook import DISTILL_EXCERPT_CHARS
+
+    n = COMPACT_MIN_SOURCES + 8
+    store = _big_vault(tmp_path, "demo", n)
+    d = PlaybookDistiller(store=store)
+
+    plan = d.plan("demo")
+    assert plan["compact"] is True
+    assert plan["sources_per_pass"] == COMPACT_SOURCES_PER_PASS
+    assert plan["excerpt_chars"] == COMPACT_EXCERPT_CHARS
+    assert plan["estimated_total_passes"] >= 1
+    assert plan["estimated_total_tokens"] > 0
+
+    klasik = estimate_chain_cost(n, 24, DISTILL_EXCERPT_CHARS, 1000)
+    assert plan["estimated_total_passes"] < klasik["passes"]
+    assert plan["estimated_total_tokens"] < 0.4 * klasik["tokens"], (
+        f"hedef %40; ölçülen {plan['estimated_total_tokens'] / klasik['tokens']:.0%}"
+    )
+
+    prep = d.prepare("demo")
+    assert prep["compact"] is True
+    assert len(prep["sources"]) == COMPACT_SOURCES_PER_PASS
+    # Alıntılar kısaldı: prompt, klasik şeklin tur boyutunu aşmamalı.
+    assert prep["prompt_tokens"] <= (24 * DISTILL_EXCERPT_CHARS) // 4 + 1000
+
+
+def test_small_archive_behaviour_is_unchanged(tmp_path):
+    """Küçük arşivde şekil ve maliyet aynen korunmalı (regresyon kilidi)."""
+    from entropy.memory.distiller import MAX_SOURCES_PER_PASS
+    from entropy.memory.playbook import DISTILL_EXCERPT_CHARS
+
+    store = _big_vault(tmp_path, "demo", 16)
+    d = PlaybookDistiller(store=store)
+    plan = d.plan("demo")
+    assert plan["compact"] is False
+    assert plan["sources_per_pass"] == MAX_SOURCES_PER_PASS
+    assert plan["excerpt_chars"] == DISTILL_EXCERPT_CHARS
+    assert plan["duplicates_skipped"] == 0
+    assert plan["estimated_total_passes"] == 1
+    assert d.prepare("demo")["compact"] is False
+
+
+def test_duplicates_are_marked_processed_so_chain_terminates(tmp_path):
+    """Okunmayan kopyalar işlenmiş sayılmazsa zincir hiç bitmez."""
+    from entropy.memory.distiller import COMPACT_MIN_SOURCES
+
+    skill = "demo"
+    rep = tmp_path / "Entropy" / "Skills" / skill / "Reports"
+    rep.mkdir(parents=True)
+    n = COMPACT_MIN_SOURCES + 4
+    ortak = " ".join(f"ayni yordam adimi {j} kontrol listesi" for j in range(80))
+    for i in range(n):
+        (rep / f"r{i:03d}.md").write_text(f"## Yontem\n{ortak}\nfark {i}\n", encoding="utf-8")
+    store = PlaybookStore(vault_path=tmp_path, index=SkillReportIndex(index_path=tmp_path / "idx.json"))
+    d = PlaybookDistiller(store=store)
+
+    plan = d.plan(skill)
+    assert plan["duplicates_skipped"] > 0, "neredeyse aynı raporlar elenmeli"
+    assert plan["effective_sources"] < n
+
+    prep = d.prepare(skill)
+    pb = d.complete(prep, "## Çalışma Adımları\n1. Tara.\n\n## Karar Ölçütleri\n- Eşik.")
+    assert pb.processed_count == n, "elenen kopyalar da işlenmiş sayılmalı"
+    assert store.status(skill)["state"] == "guncel"
+
+
+# --------------------------------------------------------------------------
+# Playbook kalite ölçütü
+# --------------------------------------------------------------------------
+
+
+def _rich_playbook() -> str:
+    return (
+        "## Ne Zaman Kullanılır\nDenetim gerektiğinde.\n\n"
+        "## Çalışma Adımları\n1. Tara.\n2. Karşılaştır.\n3. Doğrula.\n\n"
+        "## Karar Ölçütleri\n- Marj %60 üstündeyse ilerle.\n- Aksi hâlde durdur.\n\n"
+        "## Bilinen Tuzaklar\n- Negatif kelime unutulur.\n- Örneklem küçük seçilir.\n\n"
+        "## Çıktı Biçimi\n- Başlık, bulgular, öneriler.\n"
+    )
+
+
+def test_playbook_quality_measures_coverage_steps_and_repetition():
+    from entropy.memory.playbook import playbook_quality
+
+    good = playbook_quality(_rich_playbook())
+    assert good["coverage"] == 1.0
+    assert good["missing"] == []
+    assert good["step_count"] >= 8
+    assert good["repetition"] < 0.2
+    assert good["score"] > 0.6
+
+    tekrar = playbook_quality("## Çalışma Adımları\n" + ("ayni cumle tekrar eder durmadan " * 200))
+    assert tekrar["coverage"] == 0.25
+    assert tekrar["repetition"] > 0.8
+    assert set(tekrar["missing"]) == {"criteria", "pitfalls", "output"}
+    assert tekrar["score"] < good["score"]
+
+
+def test_quality_regression_rejects_long_but_sectionless_output(tmp_path):
+    """
+    Uzunluk ve başlık sayısı kaba ölçüler: uzun ama bölümlerini kaybetmiş bir
+    çıktı ikisini de geçebiliyor. Kalite ölçütü onu reddetmeli.
+    """
+    from entropy.memory.playbook import DegenerateDistillation, playbook_quality
+
+    store = _skill_vault(tmp_path, "demo", 2)
+    d = PlaybookDistiller(store=store)
+    pb = d.run_with_bridge("demo", send_prompt=lambda p: _rich_playbook())
+    assert playbook_quality(pb.procedure)["coverage"] == 1.0
+
+    # Beş başlık, mevcuttan uzun — ama zorunlu bölümlerin hiçbiri yok.
+    kotu = "\n\n".join(f"## Notlar {i}\n" + ("genel gozlem metni " * 40) for i in range(5))
+    assert len(kotu) > len(pb.procedure)
+    with pytest.raises(DegenerateDistillation):
+        d.complete(d.prepare("demo"), kotu)
+    assert store.load("demo").procedure == pb.procedure
+
+    # Bölümleri koruyan, zenginleşmiş çıktı kabul edilmeli.
+    iyi = _rich_playbook() + "\n## Ek Not\n- Yeni bulgu.\n"
+    assert d.complete(d.prepare("demo"), iyi).version == 2
+
+
+def test_immature_playbook_is_not_guarded_by_quality(tmp_path):
+    """Kapsamı düşük bir taslak, kalite kapısını kilitlememeli (zincir ilerlesin)."""
+    store = _skill_vault(tmp_path, "demo", 2)
+    d = PlaybookDistiller(store=store)
+    d.run_with_bridge("demo", send_prompt=lambda p: "## Adimlar\n1. Bir.")
+    pb2 = d.complete(d.prepare("demo"), "## Adimlar\n" + ("uzun metin " * 300))
+    assert pb2 is not None and pb2.version == 2
+
+
+# --------------------------------------------------------------------------
+# Sorguya göre playbook bölüm seçimi
+# --------------------------------------------------------------------------
+
+
+def _wide_playbook() -> str:
+    """Üç bölüm: ikisi uzun, ortadaki 'adımlar'. Sabit öncelik adımları düşürür."""
+    ne_zaman = "## Ne Zaman Kullanılır\n" + "\n".join(f"- denetim notu {i} aciklama" for i in range(60))
+    adimlar = "## Çalışma Adımları\n" + "\n".join(f"{i}. adim metni burada uzun uzun" for i in range(40))
+    cikti = "## Çıktı Biçimi\n" + "\n".join(f"- ciktida yer alacak alan {i}" for i in range(60))
+    return f"{ne_zaman}\n\n{adimlar}\n\n{cikti}\n"
+
+
+def test_query_keeps_relevant_section_whole_and_digests_others(tmp_path):
+    """
+    Sorgu adımlarla ilgiliyse adımlar tam girmeli; ilgisiz bölümler başlık +
+    ilk madde olarak kalmalı (tamamen düşmemeli).
+
+    Sabit öncelik 'Çalışma Adımları'nı en sona bırakıp kırptığı için, tam da
+    adımlar sorulduğunda en kötü bağlamı üretiyordu.
+    """
+    store = _skill_vault(tmp_path, "demo", 1)
+    proc = _wide_playbook()
+    store.save(SkillPlaybook(skill="demo", procedure=proc))
+    b = CognitiveContextBuilder(
+        memory_system=_StubMemory([]), vault_manager=_StubVault(""), playbook_store=store
+    )
+
+    sorgusuz = b._fit_playbook(proc, 600, "")
+    sorgulu = b._fit_playbook(proc, 600, "adim adim ne yapmaliyim")
+
+    assert estimate_tokens(sorgulu) <= 600
+    assert "39. adim metni" in sorgulu, "ilgili bölüm tam girmeli"
+    assert "39. adim metni" not in sorgusuz, "sabit öncelik adımları kırpıyordu"
+    assert "## Çıktı Biçimi" in sorgulu, "ilgisiz bölümün başlığı kalmalı"
+
+
+def test_query_matching_tolerates_turkish_suffixes_and_diacritics(tmp_path):
+    """'adim' yazan kullanıcı 'Çalışma Adımları' bölümünü bulabilmeli."""
+    store = _skill_vault(tmp_path, "demo", 1)
+    proc = _wide_playbook()
+    b = CognitiveContextBuilder(
+        memory_system=_StubMemory([]), vault_manager=_StubVault(""), playbook_store=store
+    )
+    # Sorgu aksansız ve ekli; başlık aksanlı ve farklı ekli.
+    assert "39. adim metni" in b._fit_playbook(proc, 600, "calisma adimlarini anlat")
+    # Alakasız sorgu aynı bölümü seçmemeli.
+    assert "39. adim metni" not in b._fit_playbook(proc, 600, "ciktida hangi alanlar olacak")
+
+
+def test_query_selection_uses_the_whole_budget(tmp_path):
+    """İlgili bölüm kısaysa artan bütçe diğer bölümlere geri verilmeli."""
+    store = _skill_vault(tmp_path, "demo", 1)
+    proc = (
+        "## Karar Ölçütleri\n- Eşik %60.\n\n"
+        "## Çalışma Adımları\n" + "\n".join(f"{i}. uzun adim metni" for i in range(200))
+    )
+    b = CognitiveContextBuilder(
+        memory_system=_StubMemory([]), vault_manager=_StubVault(""), playbook_store=store
+    )
+    out = b._fit_playbook(proc, 400, "karar ölçütü eşik nedir")
+    assert "Eşik %60" in out
+    assert estimate_tokens(out) > 300, "artan bütçe boşa gitmemeli"
+    assert estimate_tokens(out) <= 400
+
+
+def test_query_without_match_falls_back_to_fixed_priority(tmp_path):
+    """Hiçbir bölüm sorguyla eşleşmiyorsa eski davranış korunmalı."""
+    store = _skill_vault(tmp_path, "demo", 1)
+    proc = (
+        "## Çalışma Adımları\n" + "\n".join(f"{i}. adim" for i in range(200)) + "\n\n"
+        "## Karar Ölçütleri\n- Marj %60.\n"
+    )
+    b = CognitiveContextBuilder(
+        memory_system=_StubMemory([]), vault_manager=_StubVault(""), playbook_store=store
+    )
+    out = b._fit_playbook(proc, 200, "zzzz qqqq wwww")
+    assert "Marj %60" in out, "kısa ve kritik bölüm yine korunmalı"

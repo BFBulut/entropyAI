@@ -24,13 +24,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from entropy.memory.playbook import (
+    CHARS_PER_TOKEN,
     DISTILL_EXCERPT_CHARS,
+    PLAYBOOK_MAX_CHARS,
+    PROCEDURAL_EXCERPT_CHARS,
     DegenerateDistillation,
     PlaybookStore,
     SkillPlaybook,
     build_distillation_prompt,
     estimate_tokens,
     ingest_distilled,
+    select_representatives,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,67 @@ logger = logging.getLogger(__name__)
 # Tek damıtma turunda okunacak azami rapor. Daha fazlası bir AGY turuna sığmaz;
 # fazlası varsa raporlar gruplara bölünüp yordam kademeli olarak zenginleştirilir.
 MAX_SOURCES_PER_PASS = 24
+
+# Büyük arşiv modu ("sıkıştırılmış tur"). Rapor başına alıntı ham 2500 karakter
+# yerine yordam taşıyan ~900 karaktere indiğinde, bir tura yaklaşık aynı prompt
+# boyutuyla (64 × 900 ≈ 57 bin karakter ≈ 24 × 2500) üç kat fazla rapor sığar.
+# Maliyet tur sayısı × tur boyutu olduğundan, tur sayısı düşünce her turda
+# yeniden gönderilen mevcut yordamın (~2000 token) toplam yükü de düşer.
+COMPACT_SOURCES_PER_PASS = 64
+COMPACT_EXCERPT_CHARS = PROCEDURAL_EXCERPT_CHARS
+
+# Sıkıştırma bu eşiğin altında açılmaz. Dört klasik tura (4 × 24) sığan bir arşiv
+# zaten ucuzdur; orada ham ve daha uzun alıntı, daha yüksek doğruluk demektir.
+# Küçük arşivlerde davranış bilerek değişmez.
+COMPACT_MIN_SOURCES = 4 * MAX_SOURCES_PER_PASS
+
+# Alıntılar dışında her prompt'ta sabit duran kısım (kurallar, başlık listesi,
+# görev tanımı) — tahmine dahil edilmezse tur sayısı arttıkça hata büyür.
+PROMPT_OVERHEAD_TOKENS = 400
+
+
+def pass_shape(total_sources: int) -> Dict[str, Any]:
+    """Bu arşiv büyüklüğünde tur başına kaç rapor ve rapor başına kaç karakter."""
+    if total_sources >= COMPACT_MIN_SOURCES:
+        return {
+            "compact": True,
+            "per_pass": COMPACT_SOURCES_PER_PASS,
+            "excerpt_chars": COMPACT_EXCERPT_CHARS,
+        }
+    return {
+        "compact": False,
+        "per_pass": MAX_SOURCES_PER_PASS,
+        "excerpt_chars": DISTILL_EXCERPT_CHARS,
+    }
+
+
+def estimate_chain_cost(
+    remaining: int,
+    per_pass: int,
+    excerpt_chars: int,
+    procedure_tokens: int,
+) -> Dict[str, int]:
+    """
+    Zincirin tamamının gerçekçi maliyeti: tur sayısı × tur boyutu.
+
+    Önceki tahmin yalnızca SIRADAKİ turun alıntı boyutunu veriyordu; kullanıcı
+    513 raporluk bir arşivde 15 bin token görüp 20 tur × ~17 bin token ödüyordu.
+    Burada kuyruk birleştirme kuralı da dahil olmak üzere tüm turlar sayılır ve
+    her turda yeniden gönderilen mevcut yordam maliyete eklenir.
+    """
+    passes = 0
+    total = 0
+    left = max(0, remaining)
+    while left > 0:
+        end = min(per_pass, left)
+        if 0 < left - end <= per_pass // 6:
+            end = left
+        passes += 1
+        # +40: her alıntının "### Kaynak: <ad>" başlığı. Sayılmazsa tahmin 64
+        # kaynaklı turlarda ~%6 iyimser çıkıyordu (ölçüldü).
+        total += (end * (excerpt_chars + 40)) // CHARS_PER_TOKEN + procedure_tokens + PROMPT_OVERHEAD_TOKENS
+        left -= end
+    return {"passes": passes, "tokens": total}
 
 
 # Süreç genelinde paylaşılan durdurma/izleme durumu: zincirlenen turlar farklı
@@ -150,14 +215,43 @@ class PlaybookDistiller:
         sources = self.store.source_reports(skill_name)
         done = self._processed(skill_name, sources)
         start = len(done)
-        batch = [p for p in sources if p.name not in done][:MAX_SOURCES_PER_PASS]
+        unprocessed = [p for p in sources if p.name not in done]
+
+        shape = pass_shape(len(sources))
+        per_pass = shape["per_pass"]
+        excerpt_chars = shape["excerpt_chars"]
+
+        duplicates = 0
+        if shape["compact"] and unprocessed:
+            reps, followers = select_representatives(unprocessed)
+            duplicates = sum(len(v) for v in followers.values())
+            unprocessed = reps
+
+        end = min(per_pass, len(unprocessed))
+        if 0 < len(unprocessed) - end <= per_pass // 6:
+            end = len(unprocessed)
+        batch = unprocessed[:end]
+
+        pb = self.store.load(skill_name)
+        # Her tur mevcut yordamı da taşır; henüz yordam yoksa zincirin ilerleyen
+        # turlarında oluşacağı varsayılır (tavanın yarısı, gerçekçi bir orta değer).
+        procedure_tokens = estimate_tokens(pb.procedure) if pb else (PLAYBOOK_MAX_CHARS // (2 * CHARS_PER_TOKEN))
+        cost = estimate_chain_cost(len(unprocessed), per_pass, excerpt_chars, procedure_tokens)
 
         return {
             **status,
             "sources_total": len(sources),
             "sources_this_pass": len(batch),
             "batch_start": start,
-            "estimated_prompt_tokens": estimate_tokens("x" * (len(batch) * DISTILL_EXCERPT_CHARS)),
+            "estimated_prompt_tokens": estimate_tokens("x" * (len(batch) * excerpt_chars)),
+            # Zincirin tamamı: kullanıcı başlamadan önce toplam faturayı görsün.
+            "compact": shape["compact"],
+            "excerpt_chars": excerpt_chars,
+            "sources_per_pass": per_pass,
+            "duplicates_skipped": duplicates,
+            "effective_sources": len(unprocessed),
+            "estimated_total_passes": cost["passes"],
+            "estimated_total_tokens": cost["tokens"],
             "should_run": status["needs_build"] or status["needs_refresh"],
         }
 
@@ -203,6 +297,17 @@ class PlaybookDistiller:
         unprocessed = [p for p in sources if p.name not in done]
         existing = self.store.load(skill_name)
 
+        shape = pass_shape(len(sources))
+        compact = shape["compact"]
+        per_pass = shape["per_pass"]
+
+        # Yakın-kopya eleme: aynı işin tekrarlanan koşumları arşive neredeyse
+        # aynı raporu birden çok kez yazıyor. Temsilci okunur, bağlı olanlar
+        # okunmadan işlenmiş sayılır — yoksa zincir hiç bitmez.
+        followers: Dict[str, List[str]] = {}
+        if compact and unprocessed:
+            unprocessed, followers = select_representatives(unprocessed)
+
         # Tüm kaynaklar işlenmişse açık bir istek "tazeleme" turudur: ilk grup,
         # mevcut yordamla birlikte yeniden verilir ve model onu iyileştirir.
         # Reddetmek yerine bunu yapmak, kullanıcının 📘 / "/distill x" ile bilinçli
@@ -213,31 +318,50 @@ class PlaybookDistiller:
         # tüm arşiv beş turda yeniden okunuyordu — hem kafa karıştırıcı hem pahalı.)
         refresh = not unprocessed
         if refresh:
-            batch = sources[-MAX_SOURCES_PER_PASS:]
+            batch = sources[-per_pass:]
             start = len(sources) - len(batch)
         else:
-            end = MAX_SOURCES_PER_PASS
+            end = per_pass
             # Küçük bir kuyruk (ör. 123 raporda son 3) tek başına tur olunca model
             # yalnızca o birkaç raporun özetini döndürüyor, çıktı mevcut yordamdan
             # kısa kalıp reddediliyordu. Kuyruk küçükse bu tura katılır.
-            if 0 < len(unprocessed) - end <= MAX_SOURCES_PER_PASS // 6:
+            if 0 < len(unprocessed) - end <= per_pass // 6:
                 end = len(unprocessed)
             batch = unprocessed[:end]
 
+        # Bu turda okunan temsilcilere bağlı kopyalar da işlenmiş sayılır.
+        covered = {p.name for p in batch}
+        for p in batch:
+            covered.update(followers.get(p.name, ()))
+
         existing_text = existing.procedure if (existing and (start > 0 or refresh)) else ""
         prompt = build_distillation_prompt(
-            skill_name, batch, description=description, existing_procedure=existing_text
+            skill_name,
+            batch,
+            description=description,
+            existing_procedure=existing_text,
+            excerpt_chars=shape["excerpt_chars"],
+            procedural=compact,
         )
+        if refresh:
+            processed_names = {p.name for p in sources}
+            processed_paths = sources
+        else:
+            processed_names = done | covered
+            processed_paths = [q for q in sources if q.name in processed_names]
         return {
             "skill": skill_name,
             "prompt": prompt,
             "sources": batch,
             "all_sources": sources,
             "batch_start": start,
-            "processed_after": len(sources) if refresh else start + len(batch),
-            "processed_names": (set(p.name for p in sources) if refresh else (done | {p.name for p in batch})),
-            "processed_entries": {p.name: self.store.content_sha(p) for p in (sources if refresh else [q for q in sources if q.name in done] + batch)},
+            "processed_after": len(sources) if refresh else min(len(sources), start + len(covered)),
+            "processed_names": processed_names,
+            "processed_entries": {p.name: self.store.content_sha(p) for p in processed_paths},
             "refresh": refresh,
+            "compact": compact,
+            "excerpt_chars": shape["excerpt_chars"],
+            "duplicates_skipped": sum(len(followers.get(p.name, ())) for p in batch),
             "prompt_tokens": estimate_tokens(prompt),
         }
 

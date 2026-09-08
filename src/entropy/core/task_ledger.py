@@ -297,6 +297,25 @@ class TaskLedger:
                 )
                 return [dict(r) for r in cur.fetchall()]
 
+    def delete_task(self, task_id: str) -> bool:
+        """Tek bir görev kaydını kayıt defterinden siler; silindiyse True döner."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cur = conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+                conn.commit()
+                return (cur.rowcount or 0) > 0
+
+    def clear_finished(self) -> int:
+        """Bitmiş (SUCCESS/FAILED/CANCELLED) kayıtları siler; silinen satır sayısını döner."""
+        with self._lock:
+            with self._get_connection() as conn:
+                cur = conn.execute(
+                    "DELETE FROM tasks WHERE status IN (?, ?, ?)",
+                    (TaskStatus.SUCCESS.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value),
+                )
+                conn.commit()
+                return cur.rowcount or 0
+
     def clear_all(self) -> None:
         """Clear all tasks from the ledger (primarily for testing)."""
         with self._lock:
