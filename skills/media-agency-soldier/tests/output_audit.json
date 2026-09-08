@@ -1,0 +1,355 @@
+{
+  "audit": {
+    "target_url": "skills/media-agency-soldier/tests/sample_store.html",
+    "brand_identity": {
+      "brand_name": "Lumina Skin Lab",
+      "domain": "sample_store.html",
+      "legal_title": "Lumina Kozmetik ve Sağlık Ürünleri Ticaret Anonim Şirketi",
+      "emails": [
+        "destek@luminaskinlab.com"
+      ],
+      "phones": [
+        "+90 212 345 67 89",
+        "+902123456789"
+      ],
+      "whatsapp_numbers": [
+        "905321234567"
+      ],
+      "social_links": {
+        "instagram": "https://instagram.com/luminaskinlab",
+        "facebook": "https://facebook.com/luminaskinlab",
+        "youtube": "https://youtube.com/luminaskinlab"
+      },
+      "physical_address": "Büyükdere Caddesi No: 185",
+      "city": "İstanbul",
+      "country": "Türkiye"
+    },
+    "catalog": {
+      "products": [
+        {
+          "name": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu",
+          "price": 649.9,
+          "currency": "TRY",
+          "category": null,
+          "is_hero": true,
+          "confidence": 0.95
+        },
+        {
+          "name": "Lumina Yoğun Hyaluronik Nemlendirici Krem",
+          "price": 489.0,
+          "currency": "TRY",
+          "category": null,
+          "is_hero": true,
+          "confidence": 0.9
+        },
+        {
+          "name": "Lumina Göz Çevresi Onarıcı Bakım Kremi",
+          "price": 329.5,
+          "currency": "TRY",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.9
+        }
+      ],
+      "total_detected": 3,
+      "currencies_found": [
+        "TRY"
+      ],
+      "hero_products": [
+        {
+          "name": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu",
+          "price": 649.9,
+          "currency": "TRY",
+          "category": null,
+          "is_hero": true,
+          "confidence": 0.95
+        },
+        {
+          "name": "Lumina Yoğun Hyaluronik Nemlendirici Krem",
+          "price": 489.0,
+          "currency": "TRY",
+          "category": null,
+          "is_hero": true,
+          "confidence": 0.9
+        }
+      ],
+      "average_price": 489.47
+    },
+    "competitors": {
+      "industry": "Kozmetik & Kişisel Bakım",
+      "market_segment": "B2C (Doğrudan Tüketici)",
+      "direct_competitors": [
+        "Sephora",
+        "Watsons",
+        "Gratis",
+        "Flormar",
+        "Yves Rocher"
+      ],
+      "indirect_competitors": [
+        "Eczaneler",
+        "Trendyol Kozmetik",
+        "Amazon Kişisel Bakım"
+      ],
+      "swot_signals": {
+        "strengths": [
+          "Özgün ürün ve marka kimliği",
+          "Doğrudan tüketiciye satış (D2C) marj avantajı",
+          "Esnek kampanya uygulama potansiyeli"
+        ],
+        "gaps": [
+          "Pazaryerlerine kıyasla organik arama görünürlüğü rekabeti",
+          "Kullanıcı güveni ve hızlı teslimat beklentisi yönetimi"
+        ]
+      }
+    },
+    "seo": {
+      "title": "Lumina Skin Lab | Doğal Anti-Aging & Cilt Bakım Serumları",
+      "title_length": 57,
+      "title_status": "Optimal (Arama sonuçlarında tam görünür)",
+      "meta_description": "Lumina Skin Lab organik içerikli anti-aging serum ve cilt bakım kremleriyle tanışın. 500 TL üzeri kargo bedava ve hediye fırsatıyla sipariş verin.",
+      "meta_description_length": 146,
+      "meta_description_status": "Optimal (Mükemmel SERP görünümü)",
+      "canonical_url": "https://luminaskinlab.com",
+      "opengraph_tags": {
+        "og:title": "Lumina Skin Lab | Doğal Cilt Bakımı",
+        "og:description": "Klinik onaylı peptit serumlar ve nemlendirici kremler.",
+        "og:image": "https://luminaskinlab.com/assets/og-cover.webp",
+        "og:url": "https://luminaskinlab.com",
+        "og:site_name": "Lumina Skin Lab"
+      },
+      "headings_hierarchy": {
+        "h1": [
+          "Cildinizin Doğal Işıltısını Yeniden Keşfedin"
+        ],
+        "h2": [
+          "Öne Çıkan Cilt Bakım Ürünlerimiz",
+          "Müşteri Yorumları & Değerlendirmeleri"
+        ],
+        "h3": [
+          "Lumina Aydınlatıcı C Vitamini & Peptit Serumu",
+          "Lumina Yoğun Hyaluronik Nemlendirici Krem",
+          "Lumina Göz Çevresi Onarıcı Bakım Kremi"
+        ]
+      },
+      "has_robots_txt": false,
+      "has_sitemap": false,
+      "schema_json_ld_present": true,
+      "schema_types": [
+        "Product"
+      ],
+      "search_intent": "Transactional (Satın Alma Niyeti)",
+      "recommendations": []
+    },
+    "cwv": {
+      "total_html_size_bytes": 4456,
+      "total_images_count": 3,
+      "modern_image_ratio_pct": 100.0,
+      "total_scripts_count": 2,
+      "render_blocking_scripts_count": 0,
+      "total_stylesheets_count": 1,
+      "estimated_lcp_risk": "Düşük (Hızlı ilk boyama potansiyeli)",
+      "estimated_cls_risk": "Düşük (Görseller rezerve edilmiş alanlara sahip)",
+      "estimated_inp_risk": "Düşük (Hafif istemci tarafı kod yapısı)",
+      "cdn_cache_signals": [
+        "cloudflare",
+        "cdn"
+      ],
+      "recommendations": []
+    },
+    "cro_ux": {
+      "cta_buttons": [
+        "Sepete Ekle",
+        "Hemen Keşfet"
+      ],
+      "cta_count": 2,
+      "mobile_viewport_present": true,
+      "forms_count": 0,
+      "checkout_friction_points": [],
+      "social_proof_signals": [
+        "Müşteri Yorumları & Değerlendirmeleri",
+        "Güvenli Ödeme & SSL Rozeti",
+        "İade & Memnuniyet Garantisi"
+      ],
+      "recommendations": []
+    }
+  },
+  "campaigns": {
+    "brand_name": "Lumina Skin Lab",
+    "target_audience_summary": "Lumina Skin Lab için kaliteye önem veren, pratik çözümler arayan ve dijital kanallarda kampanya avantajlarına duyarlı geniş tüketici kitlesi.",
+    "relational_campaigns": [
+      {
+        "campaign_type": "BOGO",
+        "headline": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu Alan Herkese Lumina Göz Çevresi Onarıcı Bakım Kremi Hediye!",
+        "primary_product": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu",
+        "secondary_product": "Lumina Göz Çevresi Onarıcı Bakım Kremi",
+        "discount_mechanism": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu alana Lumina Göz Çevresi Onarıcı Bakım Kremi %100 Ücretsiz",
+        "margin_protection_rationale": "Hediye verilen ürünün (p3) marj maliyeti düşük tutulup ana ürünün (p1) tam liste fiyatından satışı sağlanarak brüt kârlılık korunur.",
+        "expected_aov_lift_pct": 18.5,
+        "call_to_action": "Hediyeni Sepete Ekle"
+      },
+      {
+        "campaign_type": "CROSS_SELL",
+        "headline": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu ile Birlikte Lumina Yoğun Hyaluronik Nemlendirici Krem %10 İndirimli!",
+        "primary_product": "Lumina Aydınlatıcı C Vitamini & Peptit Serumu",
+        "secondary_product": "Lumina Yoğun Hyaluronik Nemlendirici Krem",
+        "discount_mechanism": "Birlikte Alımda Lumina Yoğun Hyaluronik Nemlendirici Krem Ürününde Anında %10 Ek İndirim",
+        "margin_protection_rationale": "Müşterinin sepetini iki ürüne çıkarır. %10 indirim ikinci üründe uygulanır; böylece sepet hacmi (AOV) artarken toplam sipariş kâr marjı negatif etkilenmez.",
+        "expected_aov_lift_pct": 27.0,
+        "call_to_action": "İkili Paketi Avantajla Al"
+      },
+      {
+        "campaign_type": "CART_THRESHOLD",
+        "headline": "690 TL ve Üzeri Alışverişlerde Ücretsiz Kargo + Özel Hediye!",
+        "primary_product": "Tüm Sepet",
+        "secondary_product": "Ücretsiz Hızlı Kargo & Numune Seti",
+        "discount_mechanism": "690 TL sepet eşiğinde kargo bedava ve hediye",
+        "margin_protection_rationale": "Mevcut ortalama sipariş tutarının yaklaşık %40 üzerinde bir eşik (690 TL) belirlenerek kullanıcıların sepete ekstra küçük ürünler eklemesi psikolojik olarak tetiklenir.",
+        "expected_aov_lift_pct": 34.5,
+        "call_to_action": "Sepeti Tamamla ve Kazan"
+      },
+      {
+        "campaign_type": "VIP_MEMBERSHIP",
+        "headline": "Lumina Skin Lab VIP Kulübe Katıl: Her Ay %15 İndirim ve Öncelikli Teslimat!",
+        "primary_product": "Lumina Skin Lab Sadakat & Abonelik Programı",
+        "secondary_product": "VIP Özel İndirimler & Lansman Ayrıcalıkları",
+        "discount_mechanism": "Abonelik veya VIP Üyelikte Sabit %15 İndirim & Ücretsiz Kargo",
+        "margin_protection_rationale": "Müşteri Edinme Maliyeti (CAC) ilk siparişte karşılandıktan sonra, tekrarlayan alımlarla Müşteri Yaşam Boyu Değeri (LTV) maksimize edilir ve pazarlama gideri düşer.",
+        "expected_aov_lift_pct": 42.0,
+        "call_to_action": "VIP Kulübe Şimdi Katıl"
+      }
+    ],
+    "multi_channel_ads": {
+      "google_search": [
+        {
+          "campaign_name": "Lumina Skin Lab | Yüksek Niyetli Arama & Dönüşüm Kampanyası",
+          "headlines": [
+            "Lumina Skin Lab Resmi Web Sitesi",
+            "Lumina Aydınlatıcı C V Özel Fırsat",
+            "Aynı Gün Hızlı Kargo İmkanı"
+          ],
+          "descriptions": [
+            "Lumina Skin Lab kalitesiyle tanışın. Lumina Aydınlatıcı C Vitamini & Peptit Serumu fırsatını hemen yakalayın.",
+            "Orijinal ürün garantisi, güvenli ödeme ve 14 gün koşulsuz iade avantajıyla sipariş verin."
+          ],
+          "target_keywords": [
+            "lumina skin lab satın al",
+            "lumina skin lab fiyatları",
+            "lumina aydınlatıcı c vitamini & peptit serumu indirim",
+            "en iyi lumina aydınlatıcı c vitamini & peptit serumu"
+          ],
+          "negative_keywords": [
+            "ücretsiz indir",
+            "bedava",
+            "crack",
+            "torrent",
+            "iş ilanları",
+            "kariyer",
+            "staj",
+            "şikayet",
+            "ekşi",
+            "ikinci el",
+            "sahibinden"
+          ]
+        },
+        {
+          "campaign_name": "Lumina Skin Lab | Kampanya & Fırsat Arama Grubu",
+          "headlines": [
+            "Lumina Skin Lab Kampanyası",
+            "Sepette Anında İndirim",
+            "Stoklarla Sınırlı Fırsat"
+          ],
+          "descriptions": [
+            "Beklenen kampanya başladı! Lumina Aydınlatıcı C Vitamini  alışverişlerinizde sürpriz hediye avantajı.",
+            "Kaçırılmayacak fırsatları hemen keşfedin. Güvenli alışveriş ve taksit seçenekleri burada."
+          ],
+          "target_keywords": [
+            "lumina skin lab kampanya",
+            "lumina skin lab indirim kodu",
+            "lumina skin lab kupon"
+          ],
+          "negative_keywords": [
+            "nasıl yapılır",
+            "pdf",
+            "hile",
+            "sahte",
+            "çakma",
+            "toptan"
+          ]
+        }
+      ],
+      "meta_instagram": [
+        {
+          "hook": "Hala sıradan çözümlerle vakit mi kaybediyorsunuz? Lumina Skin Lab ile tanışın!",
+          "problem_agitation": "Piyasadaki kalitesiz alternatiflerden, günlerce geciken kargolardan ve beklentiyi karşılamayan sonuçlardan yorulduğunuzu biliyoruz.",
+          "solution_value_prop": "Lumina Skin Lab, üstün kalitesi ve müşteri odaklı güvencesiyle standartları değiştiriyor. Üstelik şu anda Lumina Aydınlatıcı C Vitamini & Peptit Serumu Alan Herkese Lumina Göz Çevresi Onarıcı Bakım Kremi Hediye! fırsatıyla!",
+          "primary_text": "✨ Beklenen yenilik nihayet burada! Lumina Skin Lab ayrıcalığı ile hayatınızı kolaylaştırın.\n\n🔥 ÖZEL KAMPANYA: Lumina Aydınlatıcı C Vitamini & Peptit Serumu Alan Herkese Lumina Göz Çevresi Onarıcı Bakım Kremi Hediye!\n🚚 Hızlı ve Güvenli Teslimat\n🛡️ %100 Orijinal Ürün & Memnuniyet Garantisi\n\nFırsat stoklarla sınırlıdır. Linke tıklayarak avantajlı paketinizi anında ayırtın! 👇",
+          "carousel_cards": [
+            {
+              "card": "1",
+              "title": "1. Lumina Aydınlatıcı C Vita",
+              "description": "En çok tercih edilen amiral ürünümüz.",
+              "badge": "Yıldız Ürün ⭐"
+            },
+            {
+              "card": "2",
+              "title": "2. Tamamlayıcı Avantaj Paketi",
+              "description": "Birlikte alımda sepette ek %10 tasarruf.",
+              "badge": "En Popüler 🏷️"
+            },
+            {
+              "card": "3",
+              "title": "3. VIP Hediye & Hızlı Kargo",
+              "description": "Eşik üzeri siparişlerde anında hediye sürprizi.",
+              "badge": "Fırsat 🎁"
+            }
+          ],
+          "ugc_script": [
+            {
+              "scene_number": 1,
+              "timeframe": "0-3 sn (Kanca)",
+              "visual_direction": "İçerik üreticisi kameraya şaşkın ve heyecanlı bir ifadeyle yaklaşır, elindeki kutuyu gösterir.",
+              "audio_voiceover": "Bunu internette görüp duruyordum, sonunda dayanamayıp sipariş verdim ve...",
+              "on_screen_text": "Hala denemediniz mi?! 😱"
+            },
+            {
+              "scene_number": 2,
+              "timeframe": "3-8 sn (Problem)",
+              "visual_direction": "Kullanıcı eski, hantal yöntemi ya da rakip ürünün yarattığı sıkıntıyı gösterip başını sallar.",
+              "audio_voiceover": "Eski kullandığım ürünler hem çok pahalıydı hem de hiçbir işe yaramıyordu.",
+              "on_screen_text": "Eski dertlere son ❌"
+            },
+            {
+              "scene_number": 3,
+              "timeframe": "8-15 sn (Çözüm / Deneyim)",
+              "visual_direction": "Ürünün kutu açılımı yapılır, dokusu veya kullanımı yakın çekimle estetik şekilde gösterilir.",
+              "audio_voiceover": "Lumina Skin Lab'i ilk kullandığım anda farkı anladım. Kalitesi gerçekten inanılmaz!",
+              "on_screen_text": "Lumina Skin Lab Farkı ✨"
+            },
+            {
+              "scene_number": 4,
+              "timeframe": "15-20 sn (Teklif & CTA)",
+              "visual_direction": "Üretici gülümseyerek ekrandaki linke işaret eder ve hediye ürün fırsatını vurgular.",
+              "audio_voiceover": "Şu anki kampanyayı kaçırmayın, aşağıdaki linke tıklayıp hediyenizi kapın!",
+              "on_screen_text": "Hemen Tıkla & Hediyeni Al 🛍️"
+            }
+          ],
+          "cta_button_text": "Hediyeni Sepete Ekle"
+        }
+      ],
+      "tiktok_reels": [
+        {
+          "three_second_hook": "Eğer 2026'da hala bunu yapıyorsan, büyük hata yapıyorsun! 🛑",
+          "trending_audio_theme": "Tempolu, merak uyandıran 'Suspense beat to Upbeat Drop' geçiş müziği",
+          "visual_action": "Kameraya doğrudan parmak şıklatarak başla, hemen ardından ürünü kadrajın merkezine fırlatır gibi sok.",
+          "direct_offer_and_cta": "Stoklar tükenmeden bio'daki linke tıkla, Lumina Aydınlatıcı C Vitamini  kampanyasını kap!"
+        },
+        {
+          "three_second_hook": "Sadece 1 haftada hayatımı değiştiren o ürün... 👀",
+          "trending_audio_theme": "Samimi lofi arka plan tınısı veya popüler viral konuşma sesi dublajı",
+          "visual_action": "Aynadan selfie veya masaüstü POV açısıyla ürünü günlük hayatta kullanırken çek.",
+          "direct_offer_and_cta": "Hemen profil linkinden sepete ekle, ücretsiz kargo fırsatını kaçırma!"
+        }
+      ]
+    }
+  }
+}

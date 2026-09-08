@@ -1,0 +1,168 @@
+=== test_faz47_finance_models.py ===
+Models:
+1. Vladimir Piterbarg (2010) Multi-Currency Collateralized Discounting & Cheapest-to-Deliver (CTD) Collateral Option
+2. Robert Goldstein, Nengjiu Ju & Hayne Leland (GJL 2001) Dynamic EBIT-Based Capital Structure & Endogenous Default Barrier
+3. Albert S. Kyle (1985) & Kerry Back (1992) Continuous-Time Monopolistic Informed Trading & Information Absorption
+4. Bruno Biais, Pierre Hillion & Chester Spatt (1995) / Christine Parlour (1998) Dynamic LOB Order Choice & Queue Fill Probability Game
+5. Tobias Adrian & Markus K. Brunnermeier (2016) CoVaR, Delta-CoVaR (ΔCoVaR) & Macroprudential Systemic Risk Quantile Regression
+6. Nicolae Gârleanu & Lasse Heje Pedersen (2011) Margin-Based Asset Pricing & The Leverage-Margin Basis Spread
+=== test_faz48_finance_models.py ===
+Models:
+1. Andrei Shleifer & Robert W. Vishny (1997) Limits of Arbitrage & Performance-Based Arbitrage (PBA)
+2. Damir Filipović, Paul Schneider & Josef Teichmann (2016) Polynomial Jump-Diffusion Processes & Exact Moment Matrix-Exponential Pricing Engine
+3. J. Doyne Farmer, Paolo Patelli & Ilija I. Zovko (2005) Zero-Intelligence Order Flow, Limit Order Book Equilibrium & Sublinear Price Impact
+4. Douglas W. Diamond & Philip H. Dybvig (1983) Bank Runs, Liquidity Transformation & Deposit Insurance Game Theory
+5. Tim Bollerslev (1986) / Glosten, Jagannathan & Runkle (GJR 1993) & Daniel B. Nelson (EGARCH 1991) Asymmetric Leverage Volatility & News Impact Engine
+6. John Geanakoplos (2010) The Leverage Cycle, Heterogeneous Beliefs & Endogenous Margin Collateral Spiral
+=== test_faz49_finance_models.py ===
+Models:
+1. Xavier Gabaix (2008, 2012) Variable Rare Disasters, Resilient Equity Premium & Tail Risk Pricing
+2. Markus Brunnermeier & Lasse Heje Pedersen (2009) Market Liquidity & Funding Liquidity Spirals (Margin & Loss Spirals)
+3. Darrell Duffie & Kenneth J. Singleton (1999) Intensity-Based Credit Risk & Hazard Rate CDS Bootstrap Engine
+4. Leif B.G. Andersen & Mark Broadie (2004) / L.C.G. Rogers (2002) Bermudan Option Dual Martingale Upper Bound
+5. Robert Almgren (2003) & Jim Gatheral (2010) Nonlinear Transient Market Impact & No-Dynamic-Arbitrage Execution
+6. Campbell R. Harvey & Akhtar Siddique (2000) / Robert Dittmar (2002) Co-Skewness & Co-Kurtosis Higher-Order Moment CAPM
+=== test_faz50_finance_models.py ===
+Models:
+1. R. Tyrrell Rockafellar & Stanislav Uryasev (2000, 2002) Conditional Value-at-Risk (CVaR) Optimization via Auxiliary Convex Programming & Simplex Projection
+2. Dmitry Kramkov & Walter Schachermayer (1999, 2003) General Incomplete Market Utility Maximization, Asymptotic Elasticity & Dual Supermartingale Deflators
+3. Mark Broadie & Paul Glasserman (1996) / Paul Glasserman (2004) Stochastic Mesh Method for High-Dimensional Bermudan & American Option Pricing
+4. Mark Broadie, Paul Glasserman & Steven G. Kou (1997) Continuity Correction for Discrete Barrier Options (The Shifted Barrier Theorem)
+5. Hans Föllmer & Alexander Schied (2002) Convex & Entropic Risk Measures (Entropic Value-at-Risk / EVaR & Dual Robust Representation)
+6. Paul Embrechts, Claudia Klüppelberg & Thomas Mikosch (1997) / Bruce M. Hill (1975) Extreme Value Theory (EVT), Peak-Over-Threshold (POT) & Generalized Pareto Distribution (GPD)
+=== test_faz51_finance_models.py ===
+Models:
+1. E. Robert Fernholz (2002) & Ioannis Karatzas: Stochastic Portfolio Theory (SPT), Functionally Generated Portfolios (FGP) & Volatility Harvesting
+2. Francis X. Diebold & Kamil Yilmaz (2009, 2012, 2014): Financial Network Connectedness, Generalized Forecast Error Variance Decomposition (GFEVD) & Directional Spillover Index
+3. Jim Gatheral & Antoine Jacquier (2014): Arbitrage-Free SVI (Stochastic Volatility Inspired) Implied Volatility Surface & Durrleman Density Invariants
+4. Darrell Duffie, Damir Filipović & Walter Schachermayer (2003) / Claudio Albanese & David Li (1998): Affine Jump-Diffusion (AJD) Riccati System & Transform Option Pricing
+5. Bruno Dupire (1993, 1994) / Emanuel Derman & Iraj Kani (1994): Local Volatility Surface Calibration & Fokker-Planck Inverse PDE Engine
+6. Hans Gerber & Elias S.W. Shiu (1998): Deficit at Ruin, Discounted Penalty Function & Actuarial-Financial Stopping Time Dynamics
+=== test_faz52_finance_models.py ===
+Models:
+1. Damiano Brigo, Massimo Morini & Andrea Pallavicini (2013) / Jon Gregory (2015): Bilateral Counterparty Credit Risk (BCVA & DVA), Expected Exposure (EPE/ENE) & Wrong-Way Risk (WWR) Coupling
+2. Thomas M. Cover (1991) & David Ordentlich (1996): Universal Portfolios, Online Machine Learning Portfolio Selection & Continuous-Simplex Dirichlet Regret Bounds
+3. CreditRisk+ (Credit Suisse First Boston 1997 / Bluhm, Overbeck & Wagner 2002): Actuarial Portfolio Credit Risk Engine, Sector Factor Default Intensities & Exact Panjer Loss Recursion
+4. David H. Bailey & Marcos Lopez de Prado (2014) / Campbell R. Harvey & Yan Liu (2015): Deflated Sharpe Ratio (DSR), Probabilistic Sharpe Ratio (PSR) & Multiple Testing Backtest Overfitting Correction
+5. Avinash Dixit & Robert Pindyck (1994) / Stewart C. Myers (1977): Real Options Theory, Investment Under Irreversible Uncertainty, Optimal Exercise Boundary & The Smooth Pasting Condition (V'(S*) = 1)
+6. Peter Carr, Keith Ellis & Vishal Gupta (1998) / Emanuel Derman, Deniz Ergener & Iraj Kani (1995): Put-Call Symmetry (PCS), Method of Images & Static Hedging of Exotic Barrier Options
+=== test_faz53_finance_models.py ===
+Models:
+1. Jarrow-Lando-Turnbull (1997) / Jarrow & Turnbull (1995): Markov Credit Rating Migration Matrix,
+2. Philippe Jorion (1996) / Dirk Tasche (1999) / Carsten Hallerbach (2002): Euler Risk Allocation Principle,
+3. Pelsser (2003) / Brotherton-Ratcliffe & Iben (1993) / Patrick Hagan (2003): Constant Maturity Swap (CMS)
+4. Marco Avellaneda & Jeong-Hyun Lee (2010): Statistical Arbitrage in US Equities, PCA Eigenportfolios,
+5. Nicole El Karoui, Shige Peng & Marie-Claire Quenez (1997) / Étienne Pardoux & Shige Peng (1990):
+6. Stephen Figlewski (1989) / Louis Ederington (1979) / Kenneth Kroner & Jahangir Sultan (1993):
+=== test_faz54_finance_models.py ===
+Models:
+1. Robert C. Merton (1969, 1971): Continuous-Time Stochastic Optimal Portfolio Choice & Consumption (HJB Equation)
+2. John C. Cox, Jonathan E. Ingersoll & Stephen A. Ross (CIR 1985): Square-Root Rate Diffusion & Exact ZCB Engine
+3. Olivier Ledoit & Michael Wolf (2012, 2020): Non-Linear Covariance Shrinkage & Marchenko-Pastur De-biasing Engine
+4. Lars Peter Hansen & Ravi Jagannathan (1991): Stochastic Discount Factor (SDF) Volatility Bound & Distance Engine
+5. Omar El Euch & Mathieu Rosenbaum (2019) / Jim Gatheral (2018): Rough Heston Model & Fractional Riccati Engine
+6. Ananth Madhavan, David Richardson & Mark Roomans (MRR 1997): Market Microstructure Bid-Ask Spread Decomposition Engine
+=== test_faz55_finance_models.py ===
+Models:
+1. Lawrence R. Glosten & Paul R. Milgrom (1985): Sequential Trade Microstructure, Bayesian Dealer Learning & Bid-Ask Spread Dynamics
+2. Robert F. Engle & Kenneth F. Kroner (1995): BEKK Multivariate GARCH(1,1), Positive Definite Covariance Dynamics & Dynamic Hedge Ratios
+3. Giovanni Barone-Adesi & Robert E. Whaley (1987): Efficient Analytic Approximation of American Option Values & Optimal Early Exercise Boundary
+4. Hayne E. Leland (1985): Option Replication with Proportional Transaction Costs, Modified Volatility (sigma_hat) & Endogenous Option Spreads
+5. Andrew W. Lo & A. Craig MacKinlay (1988, 1997): Variance Ratio (VR) Specification Test for the Random Walk Hypothesis & Market Efficiency
+6. Lars E.O. Svensson (1994, 1995): Nelson-Siegel-Svensson (NSS) 6-Parameter Extended Term Structure of Interest Rates & Forward Rates
+=== test_faz56_finance_models.py ===
+Models:
+1. Mark Carhart (1997) & Narasimhan Jegadeesh & Sheridan Titman (1993): 4-Factor Momentum Model, OLS Decomposition & GRS F-Test
+2. Stephen A. Ross (1976): Arbitrage Pricing Theory (APT), Spectral Factor Loadings & Factor-Mimicking Portfolios
+3. Mark Rubinstein (1994) & Jens Carsten Jackwerth & Mark Rubinstein (1996): Implied Binomial Tree (IBT) & Non-Parametric Smile Fitting
+4. Charles J. Corrado & Tian-Shahn Su (1996) / Robert A. Jarrow & Andrew Rudd (1982): Skewness & Kurtosis Gram-Charlier Option Engine
+5. Thomas S.Y. Ho & Sang-Bin Lee (1986): Arbitrage-Free Discrete Term Structure Model & Bond Derivatives
+6. Jack L. Treynor & Fischer Black (1973): Active Portfolio Management, Information Ratio & Optimal Capital Allocation
+=== test_faz57_finance_models.py ===
+Models:
+1. John Y. Campbell & Tuomo Vuolteenaho (2004): Bad Beta, Good Beta (Two-Beta ICAPM & VAR News Decomposition)
+2. Barr Rosenberg (1974) & Barra: Fundamental Factor Risk Model, WLS Factor Returns & Active Risk Budgeting (MCAR)
+3. Gary P. Brinson, L. Randolph Hood & Gilbert L. Beebower (1986) & Brinson-Fachler (1985): Portfolio Performance Attribution & Cariño Multi-Period Linking
+4. Roy D. Henriksson & Robert C. Merton (1981) / M. Hashem Pesaran & Allan Timmermann (1995): Market Timing Put Option Regression & Non-Parametric Directional Predictability
+5. John Hull & Alan White (1994): Two-Factor Short Rate Model (Hull-White 2F / G2++) & Correlated Term Structure Twisting
+6. Brad Barber & Terrance Odean (2000, 2001) / Hersh Shefrin & Meir Statman (1985): Behavioral Finance, Disposition Effect (PGR vs PLR) & Overconfidence Penalty
+=== test_faz58_finance_models.py ===
+Models:
+1. Fischer Black & Robert Litterman (1990, 1992): Black-Litterman Global Portfolio Optimization & Bayesian Equilibrium Shrinkage
+2. Daniel Kahneman & Amos Tversky (1992) / Drazen Prelec (1998): Cumulative Prospect Theory (CPT), Rank-Dependent Probability Weighting & Fourfold Pattern of Risk
+3. Robert Litterman & Jose Scheinkman (1991): Yield Curve Principal Component Analysis (Level, Slope, Curvature) & Multi-Point Duration Immunization
+4. John H. Cochrane & Monika Piazzesi (2005): Cochrane-Piazzesi Single-Factor Bond Risk Premia & Tent-Shaped Predictability Engine
+5. Nicholas Barberis, Andrei Shleifer & Robert Vishny (BSV 1998) / Kent Daniel, David Hirshleifer & Avanidhar Subrahmanyam (DHS 1998): Behavioral Sentiment, Underreaction & Overreaction Engine
+6. Stewart Myers (1984) / Merton Miller & Franco Modigliani (1963) / Richard Roll (1977): Corporate Capital Structure APV, Pecking Order Deficit & Roll's Critique Engine
+=== test_faz59_finance_models.py ===
+Models:
+1. Eugene F. Fama & Kenneth R. French (2015, 2016): Five-Factor Asset Pricing Model, Factor Construction & HML Spanning Redundancy Engine
+2. Clifford S. Asness, Andrea Frazzini & Lasse Heje Pedersen (2019): Quality Minus Junk (QMJ), Multi-Dimensional Z-Scoring & Flight-to-Quality Engine
+3. James A. Ohlson (1980): O-Score Conditional Logit Bankruptcy Probability & Financial Distress Engine
+4. William Fung & David A. Hsieh (2001, 2004): Seven-Factor Hedge Fund / CTA Risk Premia & Lookback Straddle Crisis Alpha Engine
+5. Robert J. Shiller (1981, 2000, 2015): Cyclically Adjusted P/E (CAPE), Excess CAPE Yield (ECY) & 10-Year Real Return Decomposition Engine
+6. Aswath Damodaran (2012, 2024): Synthetic Credit Rating, Country Risk Premium (CRP) & Endogenous WACC Optimal Capital Structure Engine
+=== test_faz60_finance_models.py ===
+Models:
+1. Andrea Frazzini & Lasse Heje Pedersen (2014): Betting Against Beta (BAB), Leverage Constraints & Zero-Beta Factor Synthesis Engine
+2. Sanford J. Grossman & Joseph E. Stiglitz (1980): Information Acquisition Equilibrium, Grossman-Stiglitz Paradox & Price Informativeness Engine
+3. Francis A. Longstaff & Eduardo S. Schwartz (2001): Least-Squares Monte Carlo (LSM) American & Bermudan Option Valuation Engine
+4. Robert F. Engle & Simone Manganelli (2004): CAViaR (Conditional Autoregressive Value at Risk), Koenker-Bassett Quantile Loss & Dynamic Quantile (DQ) Test Engine
+5. K. Geert Rouwenhorst (1995): Markov Chain Discretization of Highly Persistent Gaussian AR(1) Processes Engine
+6. Peter Carr & Dilip Madan (1998, 2001) / Emanuel Derman & Iraj Kani (1998): Model-Free Implied Variance, CBOE VIX Log-Contract Replication & Variance Risk Premium Engine
+=== test_faz61_finance_models.py ===
+Models:
+1. Lars Peter Hansen (1982) & Alastair R. Hall (2005): Generalized Method of Moments (GMM), Two-Stage Optimal Weighting Matrix (W* = S^-1), Newey-West (1987) HAC Spectral Covariance & Hansen's J-Test of Overidentifying Restrictions
+2. Robert Novy-Marx (2013): Gross Profitability Premium (GP/A), Orthogonal Quality-Value Synergy & True Economic Profitability Factor Engine
+3. Viral V. Acharya & Lasse Heje Pedersen (2005): Liquidity-Adjusted CAPM (LCAPM), 4-Beta Risk Decomposition (Market Beta, Commonality in Liquidity, Flight-to-Liquidity, Crash Liquidity Dry-up) & Net Illiquidity Return Premium
+4. Rajnish Mehra & Edward C. Prescott (1985) / Robert E. Lucas Jr. (1978): Consumption-Based Capital Asset Pricing Model (CCAPM), Lucas Tree Economy, CRRA Impossibility Bound & The Equity Premium Puzzle Engine
+5. H. Gifford Fong & Oldrich A. Vasicek (1984) / Stephen J. Brown & Philip H. Dybvig (1986): Yield Curve Immunization under Non-Parallel Shifts, M-Square (M^2) Cash Flow Dispersion Minimization & Convexity Risk Engine
+6. Richard C. Grinold (1989), Ronald N. Kahn (2000) & Roger Clarke, Harindra de Silva, Steven Thorley (2002): The Generalized Fundamental Law of Active Management (FLAM), Transfer Coefficient (TC), Information Coefficient (IC), Strategy Breadth (BR) & Alpha Sizing Engine
+=== test_faz62_finance_models.py ===
+Models:
+1. Robert F. Engle (2002): Dynamic Conditional Correlation (DCC-GARCH), Two-Step QMLE Estimation, Time-Varying Covariance Matrix H_t, Dynamic Minimum-Variance Hedge Ratios & Portfolio Allocation
+2. Steven G. Kou (2002): Double Exponential Jump-Diffusion Model (DEJD), Asymmetric Fat-Tailed Jumps, Memoryless Distribution, Implied Volatility Skew & European Option Pricing
+3. Hendrik Bessembinder (2018, 2020): Extreme Wealth Creation Skewness, Compounded Lifetime Return Asymmetry, The Skewness Trap of Individual Stocks & Broad Index Superiority
+4. Robert A. Jarrow & Fan Yu (2001) / David Lando (2004): Default Contagion in Interconnected Credit Networks, Counterparty Hazard Rate Jumps, Exact Joint Survival Probabilities & CDS Spread Cascades
+5. Martin L. Leibowitz & Alfred Weinberger (1982, 1983): Contingent Immunization, Safety Cushion Dynamics, Required Asset Base Floor, Active Risk Leeway & Irreversible Immunization Trigger
+6. William F. Sharpe (1992): Returns-Based Style Analysis (RBSA), Simplex-Constrained Quadratic Programming, Effective Asset Mix Decomposition, Selection Return (Alpha) & Rolling Style Drift
+=== test_faz63_finance_models.py ===
+Models:
+1. Andrew Ang, Joseph Chen & Yuhang Xing (2006): Downside Risk Asset Pricing, Relative Downside Beta vs Upside Beta & LPM
+2. Michael Stutzer (2000): Stutzer Portfolio Performance Index & Large Deviations Relative Entropy
+3. Harry Markowitz (1956) & Marcos Lopez de Prado (2012): Critical Line Algorithm (CLA) Exact Quadratic Programming
+4. Peter Carr & Liuren Wu (2009): Variance Risk Premium (VRP) & Corridor Variance Swaps (CVS)
+5. David Easley, Marcos Lopez de Prado & Maureen O'Hara (2011, 2012): Volume-Synchronized Probability of Toxicity (VPIN)
+6. Ole E. Barndorff-Nielsen & Neil Shephard (2004, 2006): Bipower Variation (BV) & Non-Parametric Jump Detection
+=== test_faz64_finance_models.py ===
+Models:
+1. Michael B. Gordy (2003): Asymptotic Single Risk Factor (ASRF) Model & Basel II/III Credit Capital
+2. Jack L. Treynor & Kay K. Mazuy (1966): Quadratic Market Timing Regression & Gamma Curvature
+3. Fulvio Corsi (2009): Heterogeneous Autoregressive Model of Realized Volatility (HAR-RV & HAR-RV-J)
+4. Tarun Chordia, Richard Roll & Avanidhar Subrahmanyam (2000, 2002): Order Imbalance & Market Liquidity Dynamics
+5. Ivo Welch & Amit Goyal (2008): Out-of-Sample Equity Premium Predictability Benchmark & OOS R^2
+6. Wayne E. Ferson & Campbell R. Harvey (1991, 1993): Conditional Asset Pricing with Dynamic State Betas & Macro Premia
+=== test_faz65_finance_models.py ===
+Models:
+1. Douglas T. Breeden & Robert H. Litzenberger (1978): Risk-Neutral Density (RND) Extraction via Option Butterfly Spreads
+2. Sanford J. Grossman & Merton H. Miller (1988): Determinants of Market Liquidity & Dealer Capital Commitment
+3. Gary Gorton & Andrew Metrick (2012): Securitized Banking Runs & Bilateral Repo Haircut Spirals
+4. George Tauchen & Mark R. Pitts (1983) / Peter K. Clark (1973): Mixture of Distributions Hypothesis (MDH)
+5. Geert Bekaert & Campbell R. Harvey (1995, 1997): Time-Varying Financial Market Integration & Regime-Switching Pricing
+6. Richard Roll (1984) & Kenneth R. French (1980): Roll's Effective Bid-Ask Spread Serial Covariance Estimator
+=== test_faz66_finance_models.py ===
+Models:
+1. J. Michael Harrison & Stanley R. Pliska (1981, 1983) / Delbaen & Schachermayer (1994): FTAP, EMM, Girsanov & Super-Hedging
+2. David Heath, Robert Jarrow & Andrew Morton (HJM 1992): Forward-Rate Term Structure & No-Arbitrage Drift Restriction
+3. Robert E. Lucas Jr. (1978): Lucas Asset Pricing Tree in Pure Exchange Economy & Macro Equity Premium (Nobel 1995)
+4. Roger D. Huang & Hans R. Stoll (1997): Structural Three-Way Bid-Ask Spread Decomposition via Trade Markov Transitions
+5. Michael R. Gibbons, Stephen A. Ross & Jay Shanken (GRS 1989): GRS Finite-Sample F-Test for Portfolio Efficiency
+6. Peter F. Christoffersen (1998) & Paul H. Kupiec (1995): Value-at-Risk (VaR) Backtesting (LR_uc, LR_ind, LR_cc)
+=== test_faz67_finance_models.py ===
+Models:
+1. John Y. Campbell & Robert J. Shiller (1988): Log-Linear Present Value Model & Cash Flow vs Discount Rate Variance Decomposition (Nobel 2013)
+2. Robert F. Stambaugh (1999) & Jonathan Lewellen (2004): Predictive Regression Small-Sample Bias with Persistent Regressors
+3. Hayne E. Leland & Klaus Bjerre Toft (1996): Optimal Capital Structure with Finite-Maturity Debt & Endogenous Bankruptcy
+4. Darrell Duffie & David Lando (2001): Credit Spread Term Structure with Incomplete Accounting Information & Noisy Filtering
+5. Thomas S.Y. Ho & Hans R. Stoll (1981): Optimal Dealer Pricing Under Transactions & Return Uncertainty (Dynamic Inventory Spreads)
+6. Robert F. Engle & Jeffrey R. Russell (1998): Autoregressive Conditional Duration (ACD) Point Process for High-Frequency Ticks
