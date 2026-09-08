@@ -33,11 +33,13 @@ damıtma prompt'unu üretir ve dönen çıktıyı kalıcılaştırır.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -45,6 +47,110 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from entropy.core.config import config
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------
+# Rapor dosyası içerik önbelleği
+# --------------------------------------------------------------------------
+# PlaybookStore.status() her yenilemede aynı raporları üç kez okuyordu: bir kez
+# `skill:` etiketi için baş kısmını, bir kez parmak izi için, bir kez de işlenmiş
+# kümesinin içerik özeti için (104 kaynak x 3 = ~300 dosya okuması, ~98-150 ms).
+# İçerik değişmediyse okumanın anlamı yok; anahtar (yol, boyut, mtime) olduğundan
+# OneDrive mtime'a dokunsa bile sonuç değişmez: yalnızca önbellek ıskalar ve
+# dosya yeniden okunur. Karar ölçütleri (parmak izi, içerik özeti) eskisi gibi
+# içerikten üretilir; mtime hiçbir karara girmez.
+_FILE_FACTS_CACHE: Dict[Tuple[str, int, int], Tuple[int, bytes, str]] = {}
+_FILE_FACTS_LIMIT = 4000
+_HEAD_CHARS = 1200
+
+
+# Tek bir status() çağrısı aynı raporu üç kez soruyor (etiket başı, parmak izi,
+# içerik özeti). Dosya sistemi OneDrive üzerinde olduğu için stat() pahalı;
+# çağrı süresince stat sonuçları hatırlanır. İş parçacığına özel: eşzamanlı
+# çağrılar birbirinin belleğini görmez.
+_STAT_MEMO = threading.local()
+
+
+@contextlib.contextmanager
+def _stat_memo():
+    """Blok süresince path.stat() sonuçlarını hatırlar."""
+    outer = getattr(_STAT_MEMO, "memo", None)
+    if outer is None:
+        _STAT_MEMO.memo = {}
+    try:
+        yield
+    finally:
+        _STAT_MEMO.memo = outer
+
+
+def _stat(path: Path):
+    memo = getattr(_STAT_MEMO, "memo", None)
+    if memo is None:
+        return path.stat()
+    key = str(path)
+    hit = memo.get(key, _MISSING)
+    if hit is _MISSING:
+        try:
+            hit = path.stat()
+        except OSError as exc:
+            hit = exc
+        memo[key] = hit
+    if isinstance(hit, OSError):
+        raise hit
+    return hit
+
+
+_MISSING = object()
+
+# resolve() Windows'ta _getfinalpathname çağırır ve indeksteki her yol için
+# yeniden çalıştırılıyordu (çağrı başına ~246 çözümleme, ~30 ms). Yol->çözülmüş
+# eşlemesi süreç ömrü boyunca sabittir.
+_RESOLVE_CACHE: Dict[str, Optional[Path]] = {}
+
+
+def _resolved(path: Path) -> Optional[Path]:
+    key = str(path)
+    if key in _RESOLVE_CACHE:
+        return _RESOLVE_CACHE[key]
+    try:
+        value = path.resolve()
+    except OSError:
+        value = None
+    if len(_RESOLVE_CACHE) > _FILE_FACTS_LIMIT:
+        _RESOLVE_CACHE.clear()
+    _RESOLVE_CACHE[key] = value
+    return value
+
+
+def _file_facts(path: Path) -> Optional[Tuple[int, bytes, str]]:
+    """(boyut, sha1 özeti, küçük harfli baş kısım); dosya okunamazsa None."""
+    try:
+        st = _stat(path)
+    except OSError:
+        return None
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    cached = _FILE_FACTS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    facts = (
+        len(data),
+        hashlib.sha1(data).digest(),
+        data.decode("utf-8", errors="ignore")[:_HEAD_CHARS].lower(),
+    )
+    if len(_FILE_FACTS_CACHE) > _FILE_FACTS_LIMIT:
+        _FILE_FACTS_CACHE.clear()
+    _FILE_FACTS_CACHE[key] = facts
+    return facts
+
+
+def clear_file_facts_cache() -> None:
+    """Testler ve kasa değişimi için önbellekleri boşaltır."""
+    _FILE_FACTS_CACHE.clear()
+    _RESOLVE_CACHE.clear()
 
 # Karakter/token oranı: Türkçe-İngilizce karışık teknik metinde ~4 karakter ≈ 1 token.
 CHARS_PER_TOKEN = 4
@@ -329,10 +435,10 @@ class PlaybookStore:
             for p in sorted(flat.glob("*.md")):
                 if p in found:
                     continue
-                try:
-                    head = p.read_text(encoding="utf-8", errors="ignore")[:1200].lower()
-                except OSError:
+                facts = _file_facts(p)
+                if facts is None:
                     continue
+                head = facts[2]
                 if needle in head or alt in head:
                     found[p] = None
 
@@ -344,10 +450,8 @@ class PlaybookStore:
             # Eski indeksler PLAYBOOK.md'yi rapor sanmış olabilir; burada da elenir.
             if p.stem.strip().lower() in _NON_REPORT_STEMS:
                 continue
-            try:
-                if vault_root not in p.resolve().parents:
-                    continue
-            except OSError:
+            resolved = _resolved(p)
+            if resolved is None or vault_root not in resolved.parents:
                 continue
             found.setdefault(p, None)
 
@@ -369,7 +473,7 @@ class PlaybookStore:
         # sayacı (kaçıncı rapora kadar okundu) yeni rapor gelince anlamını yitirmez.
         def _order(p: Path):
             try:
-                return (p.stat().st_mtime_ns, p.name.lower())
+                return (_stat(p).st_mtime_ns, p.name.lower())
             except OSError:
                 return (0, p.name.lower())
 
@@ -385,12 +489,11 @@ class PlaybookStore:
         h = hashlib.sha256()
         for p in sorted(paths, key=lambda x: x.name.lower()):
             h.update(p.name.encode("utf-8", errors="ignore"))
-            try:
-                data = p.read_bytes()
-            except OSError:
+            facts = _file_facts(p)
+            if facts is None:
                 continue
-            h.update(str(len(data)).encode("ascii"))
-            h.update(hashlib.sha1(data).digest())
+            h.update(str(facts[0]).encode("ascii"))
+            h.update(facts[1])
         return h.hexdigest()[:16]
 
     # -- işlenmiş rapor kümesi (yan dosya) --------------------------------
@@ -401,10 +504,10 @@ class PlaybookStore:
     @staticmethod
     def content_sha(path: Path) -> str:
         """Raporun içerik özeti; ad aynı kalıp gövdesi değişen rapor yeniden okunsun diye."""
-        try:
-            return hashlib.sha1(path.read_bytes()).hexdigest()[:16]
-        except OSError:
+        facts = _file_facts(path)
+        if facts is None:
             return ""
+        return facts[1].hex()[:16]
 
     def processed_map(self, skill: str) -> Optional[Dict[str, Optional[str]]]:
         """
@@ -478,6 +581,10 @@ class PlaybookStore:
 
     def status(self, skill: str) -> Dict[str, Any]:
         """Playbook'un mevcut durumu: var mı, kaç kaynaktan, bayat mı."""
+        with _stat_memo():
+            return self._status_inner(skill)
+
+    def _status_inner(self, skill: str) -> Dict[str, Any]:
         sources = self.source_reports(skill)
         pb = self.load(skill)
         digest = self.digest_of(sources)

@@ -1,11 +1,34 @@
 """Obsidian Vault integration for Entropy AI exocortex & memory graph."""
 
 import datetime
+import hashlib
+import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from entropy.core.config import config
+from entropy.core.config import STATE_DIR, config
+
+# Kasa grafigi onbellegi.
+# build_knowledge_graph() kasadaki her .md dosyasini iki kez tarayip hepsini
+# okuyordu (865 dosya, ~211 ms). Kasa OneDrive'da oldugu icin okuma pahali.
+# Gecersiz kilma imzasi dosya listesi + boyut + mtime'dan uretilir: bir dosya
+# degistiginde imza degisir, degismediginde tek bir dizin taramasi yeter.
+# ENTROPY_GRAPH_CACHE=0 ile disk onbellegi kapatilir (bellek ici onbellek kalir).
+_GRAPH_CACHE_FILE = STATE_DIR / "cache" / "graph_data.json"
+_GRAPH_CACHE_MAX_VAULTS = 3
+_GRAPH_MEMORY_CACHE: Dict[str, Tuple[str, Dict[str, List[Dict[str, str]]]]] = {}
+
+
+def _graph_disk_cache_enabled() -> bool:
+    raw = (os.environ.get("ENTROPY_GRAPH_CACHE") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def clear_graph_cache() -> None:
+    """Bellek ici kasa grafigi onbellegini bosaltir (testler icin)."""
+    _GRAPH_MEMORY_CACHE.clear()
 
 class ObsidianVaultManager:
     """Manages the local Obsidian markdown vault as Entropy AI's persistent memory."""
@@ -286,17 +309,94 @@ class ObsidianVaultManager:
         moc_file.write_text(moc_content, encoding="utf-8")
         return moc_file
 
+    def _vault_signature(self) -> Tuple[str, List[Path]]:
+        """
+        Kasanin parmak izi ve dosya listesi.
+
+        Tek bir rglob taramasiyla uretilir; hem imza hem de sonraki adimlarin
+        dosya listesi buradan gelir (eskiden iki ayri tarama yapiliyordu).
+        """
+        files = list(self.entropy_dir.rglob("*.md"))
+        h = hashlib.sha1()
+        for file in files:
+            h.update(str(file).encode("utf-8", errors="ignore"))
+            try:
+                st = file.stat()
+                h.update(f"|{st.st_size}|{st.st_mtime_ns}|".encode("ascii"))
+            except OSError:
+                h.update(b"|?|")
+        return h.hexdigest(), files
+
+    def _load_graph_disk_cache(self, signature: str) -> Optional[Dict[str, List[Dict[str, str]]]]:
+        if not _graph_disk_cache_enabled():
+            return None
+        try:
+            payload = json.loads(_GRAPH_CACHE_FILE.read_text(encoding="utf-8"))
+            entry = payload.get(str(self.vault_path))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(entry, dict) or entry.get("signature") != signature:
+            return None
+        nodes, links = entry.get("nodes"), entry.get("links")
+        if not isinstance(nodes, list) or not isinstance(links, list):
+            return None
+        return {"nodes": nodes, "links": links}
+
+    def _save_graph_disk_cache(self, signature: str, data: Dict[str, List[Dict[str, str]]]) -> None:
+        if not _graph_disk_cache_enabled():
+            return
+        try:
+            payload: Dict[str, Any] = {}
+            if _GRAPH_CACHE_FILE.is_file():
+                try:
+                    loaded = json.loads(_GRAPH_CACHE_FILE.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        payload = loaded
+                except ValueError:
+                    payload = {}
+            payload[str(self.vault_path)] = {
+                "signature": signature,
+                "nodes": data["nodes"],
+                "links": data["links"],
+            }
+            # Dosya sinirsiz buyumesin: en son kullanilan birkac kasa tutulur.
+            if len(payload) > _GRAPH_CACHE_MAX_VAULTS:
+                keep = list(payload)[-_GRAPH_CACHE_MAX_VAULTS:]
+                payload = {k: payload[k] for k in keep}
+            _GRAPH_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _GRAPH_CACHE_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(_GRAPH_CACHE_FILE)
+        except OSError:
+            pass
+
     def build_knowledge_graph(self) -> Dict[str, List[Dict[str, str]]]:
         """
         Parse all markdown files in the Entropy folder and extract nodes & links.
         Uses normalized wikilink targets and alias mappings.
+
+        Sonuc, kasa imzasi (dosya listesi + boyut + mtime) degismedigi surece
+        bellekten, surec yeniden basladiginda da diskten okunur; cikti her iki
+        yolda da taramanin urettigiyle ayni olur.
         """
+        signature, files = self._vault_signature()
+        vault_key = str(self.vault_path)
+
+        cached = _GRAPH_MEMORY_CACHE.get(vault_key)
+        if cached is not None and cached[0] == signature:
+            return {"nodes": list(cached[1]["nodes"]), "links": list(cached[1]["links"])}
+
+        from_disk = self._load_graph_disk_cache(signature)
+        if from_disk is not None:
+            _GRAPH_MEMORY_CACHE[vault_key] = (signature, from_disk)
+            return {"nodes": list(from_disk["nodes"]), "links": list(from_disk["links"])}
+
         nodes = []
         links = []
         node_ids: Set[str] = set()
         stem_to_id: Dict[str, str] = {}
 
-        for file in self.entropy_dir.rglob("*.md"):
+        for file in files:
             name = file.stem
             category = file.parent.name
             node_id = f"{category}/{name}"
@@ -311,7 +411,7 @@ class ObsidianVaultManager:
                     "path": str(file)
                 })
 
-        for file in self.entropy_dir.rglob("*.md"):
+        for file in files:
             source_id = stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
             is_heavy_catalog = (file.stem in ["BELLEK_HARITASI", "MEMORY"])
             try:
@@ -331,4 +431,7 @@ class ObsidianVaultManager:
             except Exception:
                 continue
 
-        return {"nodes": nodes, "links": links}
+        data = {"nodes": nodes, "links": links}
+        _GRAPH_MEMORY_CACHE[vault_key] = (signature, data)
+        self._save_graph_disk_cache(signature, data)
+        return {"nodes": list(nodes), "links": list(links)}

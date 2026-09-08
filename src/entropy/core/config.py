@@ -5,7 +5,17 @@ import os
 import sys
 from typing import List, Optional
 from pathlib import Path
-from pydantic import BaseModel, Field
+
+# Pydantic, ilk BaseModel sınıfı tanımlandığında "pydantic" giriş noktası grubuna
+# kayıtlı tüm eklentileri içe aktarır. Bu makinede o grupta logfire var; logfire
+# de requests, asyncio, opentelemetry ve rich zincirini çekiyor. Ölçüm
+# (python -X importtime -c "import entropy.main"): entropy.core.config tek başına
+# 916 ms, bunun ~860 ms'i bu eklenti zinciri. Uygulama pydantic doğrulama
+# eklentisi kullanmadığı için yükleme kapatılıyor — açık ortam değişkeni varsa
+# ona dokunulmaz.
+os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
+
+from pydantic import BaseModel, Field  # noqa: E402
 
 
 def _resolve_app_root() -> Path:
@@ -134,7 +144,12 @@ class EntropyConfig(BaseModel):
                 "last_conversation_id": self.last_conversation_id,
                 "last_cumulative_usage": self.last_cumulative_usage,
             }
-            SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
+            # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
+            # o anda okuyan (ya da yazan) ikinci bir taraf yarım JSON görebiliyordu.
+            tmp_file = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + f".tmp{os.getpid()}")
+            tmp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp_file, SETTINGS_FILE)
         except Exception as e:
             # Sessizce yutulursa kullanıcı ayarlarının hiç kaydedilmediğini fark edemez.
             print(f"[Entropy Config] Ayarlar kaydedilemedi ({SETTINGS_FILE}): {e}", file=sys.stderr)

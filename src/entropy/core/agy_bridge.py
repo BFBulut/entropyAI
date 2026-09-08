@@ -189,11 +189,19 @@ class AgyProcessBridge(QObject):
         # Son turda devreye giren yetenek; "bunu slayt yap" gibi göndermeli takip
         # mesajlarında sınıflandırıcıya öncelik ipucu olarak verilir.
         self.last_active_skill: Optional[str] = None
+        # Son yönlendirme kararının güven puanı (0-1); rozet gösterimi icin.
+        self.last_skill_confidence: float = 0.0
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
         self._is_running: bool = False
         self._prompt_queue: List[Tuple[str, Optional[List[str]], str]] = []
         self._lock = threading.Lock()
+        # Süreç durumundan (self._lock) ayrı bir kilit: sohbet geçmişi ve token
+        # sayaçları işçi iş parçacıklarından güncelleniyor. Aynı kilidi kullanmak
+        # dosya yazımını süreç sonlandırmayla sıraya sokar; ayrı kilit ikisini
+        # bağımsız tutar. Sayaç güncellemesi (x += n) atomik değildir: iki arka
+        # plan görevi aynı anda bittiğinde biri diğerinin katkısını siler.
+        self._state_lock = threading.Lock()
 
         # Load persisted conversation history if available
         if CHAT_HISTORY_FILE.exists():
@@ -229,17 +237,34 @@ class AgyProcessBridge(QObject):
 
     @staticmethod
     def _feed_stdin(proc, payload: Optional[str]):
-        """Yükü sürecin stdin'ine yazıp kapatır; yük yoksa hiçbir şey yapmaz."""
+        """
+        Yükü sürecin stdin'ine ayrı bir iş parçacığından yazıp kapatır.
+
+        Yazım neden bu iş parçacığında yapılmıyor: stdin'e büyük bir yük (uzun
+        prompt + bilişsel bağlam, yüzlerce KB) yazarken boru tamponu dolarsa
+        write() bloke olur. Çağıran ise henüz stdout'u okumaya başlamamıştır;
+        agy bu sırada 64 KB'lık stdout tamponunu doldurursa iki taraf da
+        birbirini bekler ve görev asılı kalır (klasik boru kilitlenmesi).
+        Yazımı arka plana alarak okuma döngüsü hemen başlayabilir.
+        """
         if not payload or getattr(proc, "stdin", None) is None:
             return
-        try:
-            proc.stdin.write(payload)
-            proc.stdin.flush()
-        finally:
+
+        def _writer():
             try:
-                proc.stdin.close()
+                proc.stdin.write(payload)
+                proc.stdin.flush()
             except Exception:
                 pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_writer, name="agy-stdin-writer", daemon=True)
+        t.start()
+        return t
 
     @property
     def is_running(self) -> bool:
@@ -332,14 +357,32 @@ class AgyProcessBridge(QObject):
         Tüm çağrı noktaları (bağlam kurulumu, işçi, arayüz rozeti) buradan geçer;
         böylece son yetenek önceliği ve geçmiş her yerde aynı biçimde uygulanır.
         """
+        return self.score_skill_for_prompt(prompt, sm=sm)[0]
+
+    def score_skill_for_prompt(self, prompt: str, sm=None):
+        """
+        Yetenek kararı ve güven puanı (0–1); `bus.skill_detected` ile de yayınlanır.
+
+        Karar eşiğin altındaysa yetenek None döner ve güven 0,5'in altındadır;
+        arayüz tek sayıya bakarak "yetenek yok" ile "zayıf eşleşme"yi ayırt edebilir.
+        Eski yetenek yöneticileriyle (score_skill_for_prompt'u olmayan) çağrıldığında
+        yalnızca karar döner, güven 0,0 verilir.
+        """
         if sm is None:
             from entropy.skills.manager import SkillManager
             sm = SkillManager(project_dir=getattr(self, "active_project_dir", None))
-        return sm.auto_detect_skill_for_prompt(
-            prompt,
-            last_skill=self.last_active_skill,
-            history=self.recent_user_turns(2),
-        )
+        kwargs = dict(last_skill=self.last_active_skill, history=self.recent_user_turns(2))
+        scorer = getattr(sm, "score_skill_for_prompt", None)
+        if callable(scorer):
+            skill, confidence = scorer(prompt, **kwargs)
+        else:
+            skill, confidence = sm.auto_detect_skill_for_prompt(prompt, **kwargs), 0.0
+        self.last_skill_confidence = float(confidence)
+        try:
+            bus.skill_detected.emit(skill.name if skill else "", float(confidence))
+        except Exception:
+            pass
+        return skill, float(confidence)
 
     def get_cognitive_context(self, prompt: str, target_skill=None, token_budget: int = None) -> str:
         """
@@ -551,10 +594,15 @@ class AgyProcessBridge(QObject):
         """Save conversation turns persistently to disk for app restart continuity."""
         try:
             CHAT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.conversation_history.append({"role": "user", "content": user_prompt})
-            self.conversation_history.append({"role": "assistant", "content": assistant_resp})
+            # Kilit: sohbet turu işçi iş parçacığından ekleniyor, arka plan görevi
+            # aynı anda geçmişi okuyabiliyor (recent_user_turns). Kilitsiz hâlde
+            # iki tur araya girip dosyaya yarım liste yazılabiliyordu.
+            with self._state_lock:
+                self.conversation_history.append({"role": "user", "content": user_prompt})
+                self.conversation_history.append({"role": "assistant", "content": assistant_resp})
+                snapshot = list(self.conversation_history)
             CHAT_HISTORY_FILE.write_text(
-                json.dumps(self.conversation_history, ensure_ascii=False, indent=2),
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
                 encoding="utf-8"
             )
         except Exception:
@@ -719,6 +767,9 @@ class AgyProcessBridge(QObject):
             ret_code = -1
             execution_error = None
             task_usage: Dict[str, int] = {}
+            # Popen'in kendisi hata verirse (agy bulunamadı) finally bloğu yine
+            # çalışır; proc tanımsız kalmasın diye önceden bağlanıyor.
+            proc = None
             try:
                 creationflags = 0
                 if os.name == "nt":
@@ -737,7 +788,7 @@ class AgyProcessBridge(QObject):
                     creationflags=creationflags,
                     cwd=str(project_dir) if project_dir.exists() else None
                 )
-                self._feed_stdin(proc, stdin_payload)
+                stdin_writer = self._feed_stdin(proc, stdin_payload)
                 with self._lock:
                     self._background_processes[task_id] = proc
 
@@ -857,6 +908,10 @@ class AgyProcessBridge(QObject):
                         bus.terminal_output_received.emit(raw_line)
                         full_response_acc.append(raw_line)
 
+                # Yazıcı iş parçacigi normalde okuma bitmeden tamamlanir; yine de
+                # surec beklenmeden once kapandigi dogrulanir.
+                if stdin_writer is not None:
+                    stdin_writer.join(timeout=5.0)
                 proc.stdout.close()
                 ret_code = proc.wait()
 
@@ -889,12 +944,16 @@ class AgyProcessBridge(QObject):
             # Görev maliyeti oturum sayacına eklenir ve rozet yenilenir; ledger'a da
             # yazılır ki damıtma/konsolidasyon gibi işlerin gerçek kotası izlenebilsin.
             if task_usage:
-                self.last_background_usage = dict(task_usage)
-                self.background_total_tokens += task_usage.get("total_tokens", 0)
+                # Eşzamanlı iki arka plan görevi aynı sayacı artırıyor; okuma-
+                # değiştirme-yazma kilitsizken bir görevin tüketimi kaybolabilir.
+                with self._state_lock:
+                    self.last_background_usage = dict(task_usage)
+                    self.background_total_tokens += task_usage.get("total_tokens", 0)
+                    running_total = self.background_total_tokens
                 bus.terminal_output_received.emit(
                     f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
                     f"(girdi {task_usage.get('input_tokens', 0):,} / çıktı {task_usage.get('output_tokens', 0):,}) — "
-                    f"arka plan toplamı {self.background_total_tokens:,}\n"
+                    f"arka plan toplamı {running_total:,}\n"
                 )
                 bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
 
@@ -1324,7 +1383,7 @@ class AgyProcessBridge(QObject):
                 creationflags=creationflags,
                 cwd=str(project_dir) if project_dir.exists() else None
             )
-            self._feed_stdin(self._current_process, stdin_payload)
+            stdin_writer = self._feed_stdin(self._current_process, stdin_payload)
 
             short_prompt = raw_user_prompt.replace("\n", " ")[:65]
             if len(raw_user_prompt) > 65:
@@ -1504,6 +1563,8 @@ class AgyProcessBridge(QObject):
                     bus.token_chunk_received.emit(raw_line)
                     bus.core_pulse_triggered.emit(0.6)
 
+            if stdin_writer is not None:
+                stdin_writer.join(timeout=5.0)
             self._current_process.stdout.close()
             ret_code = self._current_process.wait()
 
@@ -1656,24 +1717,35 @@ class AgyProcessBridge(QObject):
                 next_thread.start()
 
     def terminate_current_process(self):
-        """Cancel the currently active agy execution and its child language_server process tree."""
+        """
+        Cancel the currently active agy execution and its child language_server process tree.
+
+        Kilit yalnızca sürecin alınması ve durumun sıfırlanması için tutulur.
+        taskkill + wait(2s) kilidin içinde çalışırsa: bu metot arayüz iş
+        parçacığından çağrıldığı için pencere saniyelerce donar ve aynı anda
+        işçinin finally bloğu (aynı kilidi isteyen) bekler. terminate_background_task
+        zaten bu deseni kullanıyordu; ikisi artık aynı.
+        """
         with self._lock:
-            if self._current_process and self._is_running:
-                try:
-                    pid = self._current_process.pid
-                    if sys.platform == "win32":
-                        subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        self._current_process.terminate()
-                    try:
-                        self._current_process.wait(timeout=2.0)
-                    except Exception:
-                        pass
-                    bus.terminal_output_received.emit("\n[Entropy AI] İşlem kullanıcı tarafından durduruldu.\n")
-                except Exception:
-                    pass
-                self._is_running = False
-                bus.core_state_changed.emit("idle")
+            proc = self._current_process if self._is_running else None
+            if proc is None:
+                return
+            self._is_running = False
+
+        try:
+            pid = proc.pid
+            if sys.platform == "win32":
+                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except Exception:
+                pass
+            bus.terminal_output_received.emit("\n[Entropy AI] İşlem kullanıcı tarafından durduruldu.\n")
+        except Exception:
+            pass
+        bus.core_state_changed.emit("idle")
 
     def terminate_background_task(self, task_id: str):
         """Cancel an autonomous background task and its child language_server process tree."""

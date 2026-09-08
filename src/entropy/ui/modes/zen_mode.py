@@ -577,8 +577,10 @@ class ZenModeWindow(QMainWindow):
     @Slot(str)
     def _on_node_selected(self, node_id: str):
         """Handle clicking any node in the knowledge graph: opens the rich inspector panel in front of the user."""
-        # Also sync the left reader in background if it's a report
-        self.reports_viewer.open_report_by_path_or_id(node_id)
+        # Rapor düğümüyse okuyucuda aç ve Raporlar sekmesini öne getir.
+        opened = self.reports_viewer.open_report_by_path_or_id(node_id)
+        if opened and hasattr(self, "left_tabs"):
+            self.left_tabs.setCurrentWidget(self.reports_viewer)
 
         # Open dedicated Memory & Context Inspector Panel in front of the user
         from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog

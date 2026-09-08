@@ -40,6 +40,10 @@ class EntropyEventBus(QObject):
     knowledge_graph_updated = Signal()   # reload knowledge graph signal
     cognitive_memory_updated = Signal()  # memory nodes updated
     skills_updated = Signal()            # skills catalog updated
+    # Bir mesaj için yetenek kararı verildi: yetenek adı ("" = yetenek yok) ve
+    # kararın güven puanı (0–1). Arayüz rozeti kararın ne kadar sağlam olduğunu
+    # gösterebilsin diye ayrı sinyal: karar zaten metin akışından önce belli olur.
+    skill_detected = Signal(str, float)  # skill_name veya "", confidence 0.0-1.0
     mcp_servers_updated = Signal()       # mcp_config.json değişti (ekle/düzenle/kaldır/aç-kapa)
     playbook_updated = Signal(str)       # skill_name: damıtılmış yordam kaydedildi/yenilendi
     distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor

@@ -1,9 +1,18 @@
 """Research Reports & Memory Dossiers Viewer for Zen Mode."""
 
+import datetime
+import os
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
-from PySide6.QtCore import Qt, Slot
+from typing import Any, Dict, List
+
+from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
     QTextBrowser, QVBoxLayout, QWidget
 )
@@ -12,6 +21,126 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
+
+FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def read_report_meta(path: Path) -> Dict[str, Any]:
+    """
+    Bir rapor dosyasının başlık/etiket/yetenek/proje/tarih üstverisini okur.
+    Kaynak sırası: YAML ön maddesi → dosya yolu (Skills/<ad>/Reports) → dosya damgası.
+    Dosyanın tamamı okunmaz; ön madde için ilk 4 KB yeter.
+    """
+    meta: Dict[str, Any] = {
+        "path": str(path),
+        "title": path.stem.replace("_", " "),
+        "tags": [],
+        "skill": "",
+        "project": "",
+        "date": "",
+        "modified": "",
+        "folder": path.parent.name,
+    }
+    try:
+        stat = path.stat()
+        meta["modified"] = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+        meta["mtime"] = stat.st_mtime
+    except OSError:
+        meta["mtime"] = 0.0
+
+    parts = path.parts
+    if "Skills" in parts:
+        idx = parts.index("Skills")
+        if len(parts) > idx + 1:
+            meta["skill"] = parts[idx + 1]
+    if "Projects" in parts:
+        idx = parts.index("Projects")
+        if len(parts) > idx + 1:
+            meta["project"] = parts[idx + 1]
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        head = ""
+    head = head.lstrip("﻿")
+    match = FRONTMATTER_RE.match(head)
+    if match:
+        for line in match.group(1).splitlines():
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            key = key.strip().lower()
+            value = value.strip().strip('"').strip("'")
+            if key == "title" and value:
+                meta["title"] = value
+            elif key == "date" and value:
+                meta["date"] = value
+            elif key == "tags" and value:
+                raw = value.strip("[]")
+                tags = [t.strip().strip('"').strip("'") for t in raw.split(",") if t.strip()]
+                meta["tags"] = tags
+                for t in tags:
+                    low = t.lower()
+                    if low.startswith("skill:") and not meta["skill"]:
+                        meta["skill"] = t.split(":", 1)[1].strip()
+                    elif low.startswith("project:") and not meta["project"]:
+                        meta["project"] = t.split(":", 1)[1].strip()
+    if not meta["date"]:
+        meta["date"] = (meta["modified"] or "")[:10]
+    return meta
+
+
+def move_to_trash(path: Path, trash_root: Path = None) -> str:
+    """
+    Dosyayı kalıcı olarak silmeden çöpe gönderir.
+    send2trash varsa işletim sisteminin geri dönüşüm kutusu, yoksa `.trash`
+    alt klasörü kullanılır. Hiçbir durumda unlink çağrılmaz.
+    `.trash` kasa kökünde tutulur; Entropy/ altında olsaydı taşınan raporlar
+    listede ve bilgi grafiğinde yeniden görünürdü.
+    """
+    try:
+        from send2trash import send2trash  # type: ignore
+        send2trash(str(path))
+        return "recycle-bin"
+    except Exception:
+        pass
+    trash_dir = Path(trash_root) if trash_root else (path.parent / ".trash")
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    target = trash_dir / f"{path.stem}_{stamp}{path.suffix}"
+    shutil.move(str(path), str(target))
+    return str(target)
+
+
+def reveal_in_file_manager(path: Path) -> bool:
+    """Dosyanın bulunduğu klasörü işletim sisteminin dosya yöneticisinde açar."""
+    try:
+        if sys.platform.startswith("win"):
+            if path.exists():
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(str(path))])
+            else:
+                os.startfile(str(path.parent))  # type: ignore[attr-defined]
+            return True
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+            return True
+        subprocess.Popen(["xdg-open", str(path.parent)])
+        return True
+    except Exception:
+        return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+
+def obsidian_uri(path: Path, vault_path: Path) -> str:
+    """Rapor için `obsidian://open?vault=...&file=...` bağlantısı üretir."""
+    from urllib.parse import quote
+    try:
+        rel = path.resolve().relative_to(Path(vault_path).resolve())
+        rel_str = str(rel.with_suffix("")).replace("\\", "/")
+    except Exception:
+        rel_str = path.stem
+    return f"obsidian://open?vault={quote(Path(vault_path).name)}&file={quote(rel_str)}"
+
 
 class ReportsViewerWidget(QFrame):
     """Browses and displays agent-generated research reports and Obsidian dossiers."""
@@ -83,8 +212,52 @@ class ReportsViewerWidget(QFrame):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
 
+        # Gruplama ve yetenek/proje filtresi
+        combo_style = """
+            QComboBox {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 10px;
+                font-weight: bold;
+            }
+            QComboBox:hover { border-color: #00F0FF; }
+            QComboBox::drop-down { border: none; width: 16px; }
+            QComboBox QAbstractItemView {
+                background-color: #0E1420;
+                color: #F0F6FC;
+                border: 1px solid #00F0FF;
+                selection-background-color: #1F2B42;
+                selection-color: #00F0FF;
+            }
+        """
+        combo_row = QHBoxLayout()
+        combo_row.setSpacing(4)
+
+        self.group_combo = QComboBox()
+        self.group_combo.setFixedHeight(24)
+        self.group_combo.setToolTip("Rapor listesini yeteneğe ya da tarihe göre grupla")
+        self.group_combo.setStyleSheet(combo_style)
+        self.group_combo.addItem("🎯 Yeteneğe Göre", "skill")
+        self.group_combo.addItem("📅 Tarihe Göre", "date")
+        self.group_combo.addItem("📄 Düz Liste", "flat")
+        self.group_combo.currentIndexChanged.connect(self._rebuild_list)
+        combo_row.addWidget(self.group_combo, 1)
+
+        self.filter_combo = QComboBox()
+        self.filter_combo.setFixedHeight(24)
+        self.filter_combo.setToolTip("Yalnızca seçili yetenek / proje raporlarını göster")
+        self.filter_combo.setStyleSheet(combo_style)
+        self.filter_combo.addItem("Tümü", "")
+        self.filter_combo.currentIndexChanged.connect(self._rebuild_list)
+        combo_row.addWidget(self.filter_combo, 1)
+
+        left_layout.addLayout(combo_row)
+
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Rapor ara...")
+        self.search_input.setPlaceholderText("🔍 Başlık / etiket ara...")
         self.search_input.setStyleSheet("""
             QLineEdit {
                 background-color: #05070A;
@@ -100,6 +273,10 @@ class ReportsViewerWidget(QFrame):
         """)
         self.search_input.textChanged.connect(self._filter_reports)
         left_layout.addWidget(self.search_input)
+
+        self.list_count_lbl = QLabel("")
+        self.list_count_lbl.setStyleSheet("color:#8B949E; font-size:10px; padding:0 2px;")
+        left_layout.addWidget(self.list_count_lbl)
 
         self.list_widget = QListWidget()
         self.list_widget.setMinimumWidth(160)
@@ -229,6 +406,42 @@ class ReportsViewerWidget(QFrame):
         zoom_out_btn.clicked.connect(self._zoom_out_text)
         bar_layout.addWidget(zoom_out_btn)
 
+        self.btn_open_obsidian = QPushButton("🔗 Obsidian")
+        self.btn_open_obsidian.setFixedHeight(22)
+        self.btn_open_obsidian.setToolTip("Seçili raporu Obsidian kasasında aç")
+        self.btn_open_obsidian.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #BC8CFF;
+                border: 1px solid #BC8CFF;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 1px 6px;
+            }
+            QPushButton:hover { background-color: #BC8CFF; color: #080B10; }
+        """)
+        self.btn_open_obsidian.clicked.connect(self._open_in_obsidian)
+        bar_layout.addWidget(self.btn_open_obsidian)
+
+        self.btn_open_folder = QPushButton("📁 Klasör")
+        self.btn_open_folder.setFixedHeight(22)
+        self.btn_open_folder.setToolTip("Raporun bulunduğu klasörü dosya yöneticisinde aç")
+        self.btn_open_folder.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #E3B341;
+                border: 1px solid #1F2B42;
+                border-radius: 3px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 1px 6px;
+            }
+            QPushButton:hover { border-color: #E3B341; color: #E3B341; }
+        """)
+        self.btn_open_folder.clicked.connect(self._open_containing_folder)
+        bar_layout.addWidget(self.btn_open_folder)
+
         copy_btn = QPushButton("📋 Kopyala")
         copy_btn.setFixedHeight(22)
         copy_btn.setToolTip("Rapor Metnini Panoya Kopyala")
@@ -311,6 +524,24 @@ class ReportsViewerWidget(QFrame):
 
         right_layout.addWidget(self.rag_status_bar)
 
+        # Seçili raporun künyesi: başlık, oluşturulma, yetenek/proje, etiketler.
+        self.meta_panel = QLabel("")
+        self.meta_panel.setWordWrap(True)
+        self.meta_panel.setTextFormat(Qt.TextFormat.RichText)
+        self.meta_panel.setStyleSheet("""
+            QLabel {
+                background-color: #0E1420;
+                border: 1px solid #1F2B42;
+                border-left: 3px solid #00F0FF;
+                border-radius: 4px;
+                padding: 6px 10px;
+                color: #C9D1D9;
+                font-size: 11px;
+            }
+        """)
+        self.meta_panel.setVisible(False)
+        right_layout.addWidget(self.meta_panel)
+
         # Right text browser: High-Contrast, Ergonomic Markdown Reader
         self.content_browser = QTextBrowser()
         self.content_browser.setMinimumWidth(200)
@@ -340,6 +571,8 @@ class ReportsViewerWidget(QFrame):
 
         # Auto-refresh on signals
         self.active_project_dir = Path(config.default_project_path)
+        self._entries: List[Dict[str, Any]] = []
+        self._current_path: str = ""
         bus.report_created.connect(self._on_report_created)
         bus.task_notification.connect(self._on_task_notification)
         bus.knowledge_graph_updated.connect(self.refresh_reports)
@@ -385,13 +618,101 @@ class ReportsViewerWidget(QFrame):
             pass
         super().closeEvent(event)
 
-    def _filter_reports(self, query: str):
-        """Filter the list of reports according to search input."""
-        q = query.strip().lower()
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            if item:
-                item.setHidden(bool(q and q not in item.text().lower()))
+    def _filter_reports(self, query: str = ""):
+        """Arama kutusu değişince listeyi yeniden kurar (başlık + etiket + yetenek araması)."""
+        self._rebuild_list()
+
+    def _add_group_header(self, text: str):
+        """Seçilemeyen bir grup başlığı satırı ekler."""
+        header = QListWidgetItem(text)
+        header.setFlags(Qt.ItemFlag.NoItemFlags)
+        header.setData(Qt.ItemDataRole.UserRole, None)
+        header.setData(Qt.ItemDataRole.UserRole + 1, "header")
+        from PySide6.QtGui import QColor, QFont
+        header.setForeground(QColor("#00F0FF"))
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(8)
+        header.setFont(font)
+        self.list_widget.addItem(header)
+
+    def _entry_matches(self, entry: Dict[str, Any], query: str, group_filter: str) -> bool:
+        """Arama metni ve yetenek/proje filtresine göre kaydın görünürlüğü."""
+        if group_filter and entry.get("group_key", "") != group_filter:
+            return False
+        if not query:
+            return True
+        haystack = " ".join([
+            str(entry.get("title", "")),
+            str(entry.get("skill", "")),
+            str(entry.get("project", "")),
+            " ".join(entry.get("tags", []) or []),
+            Path(str(entry.get("path", ""))).name,
+        ]).lower()
+        return query in haystack
+
+    def _rebuild_list(self, *_args):
+        """Kayıtları gruplama/filtre/arama durumuna göre listeye yazar."""
+        query = self.search_input.text().strip().lower()
+        group_filter = self.filter_combo.currentData() or ""
+        mode = self.group_combo.currentData() or "skill"
+
+        prev_path = self._current_path
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
+
+        visible = [e for e in self._entries if self._entry_matches(e, query, group_filter)]
+
+        def add_entry(entry: Dict[str, Any]):
+            item = QListWidgetItem(entry["label"])
+            item.setData(Qt.ItemDataRole.UserRole, entry["path"])
+            tip = [entry.get("title", "")]
+            if entry.get("skill"):
+                tip.append(f"Yetenek: {entry['skill']}")
+            if entry.get("project"):
+                tip.append(f"Proje: {entry['project']}")
+            if entry.get("date"):
+                tip.append(f"Tarih: {entry['date']}")
+            item.setToolTip("\n".join([t for t in tip if t]))
+            self.list_widget.addItem(item)
+
+        if mode == "flat":
+            for entry in visible:
+                add_entry(entry)
+        else:
+            buckets: Dict[str, List[Dict[str, Any]]] = {}
+            for entry in visible:
+                key = entry["group_label"] if mode == "skill" else entry["date_label"]
+                buckets.setdefault(key, []).append(entry)
+            if mode == "skill":
+                keys = sorted(buckets.keys(), key=lambda k: (k.startswith("📌"), k.lower()), reverse=False)
+            else:
+                # Tarih grupları yeniden eskiye
+                keys = sorted(buckets.keys(), key=lambda k: max(e.get("mtime", 0.0) for e in buckets[k]), reverse=True)
+            for key in keys:
+                self._add_group_header(f"{key}  ({len(buckets[key])})")
+                for entry in buckets[key]:
+                    add_entry(entry)
+
+        self.list_widget.blockSignals(False)
+        self.list_count_lbl.setText(f"{len(visible)} / {len(self._entries)} kayıt")
+
+        # Önceki seçim hâlâ listedeyse korunur, değilse ilk rapor seçilir.
+        restored = False
+        if prev_path:
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == prev_path:
+                    self.list_widget.setCurrentItem(item)
+                    restored = True
+                    break
+        if not restored:
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole):
+                    self.list_widget.setCurrentItem(item)
+                    self._on_item_clicked(item)
+                    break
 
     def _zoom_in_text(self):
         """Increase reader typography font size across entire rich document."""
@@ -418,31 +739,24 @@ class ReportsViewerWidget(QFrame):
         )
         if filename:
             p = Path(filename)
-            item = QListWidgetItem(f"📄 {p.name}")
-            item.setData(Qt.ItemDataRole.UserRole, str(p))
-            self.list_widget.insertItem(0, item)
-            self.list_widget.setCurrentItem(item)
-            self._on_item_clicked(item)
+            entry = self._make_entry(p, "📄", forced_group="📂 Dışarıdan Açılan")
+            self._entries.insert(0, entry)
+            if self.filter_combo.findData(entry["group_key"]) < 0:
+                self.filter_combo.addItem(entry["group_label"], entry["group_key"])
+            self._current_path = str(p)
+            self._rebuild_list()
+            self.open_report_by_path_or_id(str(p))
 
     @Slot(str)
     def _on_report_created(self, report_path: str):
         """Immediately display a newly generated report."""
         self.refresh_reports()
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == report_path:
-                self.list_widget.setCurrentItem(item)
-                self._on_item_clicked(item)
-                break
+        self.open_report_by_path_or_id(report_path)
 
     def _distill_current_report(self):
         """Distill the currently selected report into Cognitive Memory and re-index in RAG."""
-        current_item = self.list_widget.currentItem()
-        if not current_item:
-            return
-        path_str = current_item.data(Qt.ItemDataRole.UserRole)
-        p = Path(path_str)
-        if not p.exists():
+        p = self._selected_path()
+        if p is None:
             return
         content = p.read_text(encoding="utf-8", errors="replace")
         
@@ -498,16 +812,19 @@ class ReportsViewerWidget(QFrame):
                 bus.knowledge_graph_updated.emit()
             return
 
+        # Tek onay; dosya kalıcı silinmez, geri dönüşüm kutusuna / .trash'e taşınır.
         reply = QMessageBox.question(
             self,
-            "Raporu / Notu Sil",
-            f"'{p.name}' dosyasını diskten ve bilişsel bellek dizininden kalıcı olarak silmek istediğinizden emin misiniz?",
+            "Raporu / Notu Çöpe Taşı",
+            f"'{p.name}' dosyası geri dönüşüm kutusuna taşınacak ve bilişsel bellek kaydı kaldırılacak.\n"
+            "Dosya kalıcı olarak silinmez, gerekirse geri alabilirsiniz. Devam edilsin mi?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                # 1. Unlink from disk
-                p.unlink()
+                # 1. Çöpe taşı (kalıcı silme yok)
+                trash_root = Path(self.vault_manager.vault_path) / ".trash"
+                destination = move_to_trash(p, trash_root)
 
                 # 2. Remove associated memory node from SQLite
                 try:
@@ -526,40 +843,169 @@ class ReportsViewerWidget(QFrame):
 
                 # 4. Refresh viewer and knowledge graph
                 self.content_browser.clear()
+                self.meta_panel.setVisible(False)
+                self._current_path = ""
                 self.refresh_reports()
                 bus.knowledge_graph_updated.emit()
-                bus.terminal_output_received.emit(f"[Bilişsel Hafıza] '{p.name}' notu diskten ve hafızadan silindi.\n")
+                where = "geri dönüşüm kutusuna" if destination == "recycle-bin" else f"'{destination}' konumuna"
+                bus.terminal_output_received.emit(
+                    f"[Bilişsel Hafıza] '{p.name}' notu {where} taşındı ve hafıza kaydı kaldırıldı.\n"
+                )
 
             except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Dosya silinirken hata oluştu: {e}")
+                QMessageBox.critical(self, "Hata", f"Dosya çöpe taşınırken hata oluştu: {e}")
+
+    def _open_in_obsidian(self):
+        """Seçili raporu Obsidian uygulamasında açar (obsidian:// protokolü)."""
+        p = self._selected_path()
+        if not p:
+            QMessageBox.information(self, "Seçim Yapılmadı", "Önce bir rapor seçin.")
+            return
+        uri = obsidian_uri(p, self.vault_manager.vault_path)
+        opened = QDesktopServices.openUrl(QUrl(uri))
+        if not opened:
+            # Obsidian kurulu değilse dosyayı varsayılan uygulamayla aç
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+        bus.terminal_output_received.emit(f"[📚 Rapor Merkezi] Obsidian'da açılıyor: {p.name}\n")
+
+    def _open_containing_folder(self):
+        """Seçili raporun klasörünü dosya yöneticisinde açar."""
+        p = self._selected_path()
+        if not p:
+            QMessageBox.information(self, "Seçim Yapılmadı", "Önce bir rapor seçin.")
+            return
+        reveal_in_file_manager(p)
+        bus.terminal_output_received.emit(f"[📚 Rapor Merkezi] Klasör açıldı: {p.parent}\n")
+
+    def _selected_path(self):
+        """Seçili liste satırının dosya yolu (grup başlıkları atlanır)."""
+        item = self.list_widget.currentItem()
+        path_str = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not path_str:
+            path_str = self._current_path
+        if not path_str:
+            return None
+        p = Path(path_str)
+        return p if p.exists() else None
 
     def open_report_by_path_or_id(self, path_or_id: str) -> bool:
-        """Find and select a report by path or partial title/id."""
-        clean = path_or_id.replace("o-", "").lower()
+        """
+        Bir raporu yola, grafik düğüm kimliğine (örn. `Reports/Faz_72`) ya da
+        başlığa göre bulup okuyucuda açar. Kayıt arama/filtre yüzünden gizliyse
+        filtreler temizlenip liste yeniden kurulur.
+        """
+        if not path_or_id:
+            return False
+        raw = str(path_or_id).replace("\\", "/")
+        clean = raw.lower()
+        # Grafik düğüm kimliği "Klasör/Başlık" biçimindedir; son parça yeter.
+        stem = Path(clean).stem.lower()
+
+        target = None
+        for entry in self._entries:
+            ep = str(entry.get("path", "")).replace("\\", "/").lower()
+            if ep == clean:
+                target = entry
+                break
+        if target is None:
+            for entry in self._entries:
+                ep = str(entry.get("path", "")).replace("\\", "/").lower()
+                if clean and clean in ep:
+                    target = entry
+                    break
+                if stem and (Path(ep).stem == stem or stem in ep):
+                    target = entry
+                    break
+        if target is None:
+            for entry in self._entries:
+                if stem and stem.replace("_", " ") in str(entry.get("title", "")).lower():
+                    target = entry
+                    break
+        if target is None:
+            return False
+
+        # Hedef gizliyse filtreleri sıfırla
+        query = self.search_input.text().strip().lower()
+        group_filter = self.filter_combo.currentData() or ""
+        if not self._entry_matches(target, query, group_filter):
+            self.search_input.blockSignals(True)
+            self.search_input.clear()
+            self.search_input.blockSignals(False)
+            self.filter_combo.blockSignals(True)
+            self.filter_combo.setCurrentIndex(0)
+            self.filter_combo.blockSignals(False)
+            self._rebuild_list()
+
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
-            item_path = str(item.data(Qt.ItemDataRole.UserRole)).lower()
-            if clean in item_path or Path(clean).stem.lower() in item_path:
+            if item and item.data(Qt.ItemDataRole.UserRole) == target["path"]:
                 self.list_widget.setCurrentItem(item)
+                self.list_widget.scrollToItem(item)
                 self._on_item_clicked(item)
                 return True
         return False
 
+    def _make_entry(self, path: Path, icon: str, forced_group: str = "") -> Dict[str, Any]:
+        """Dosyadan liste kaydı üretir (künye + gruplama anahtarları)."""
+        meta = read_report_meta(path)
+        if forced_group:
+            group_label = forced_group
+            group_key = forced_group
+        elif meta["skill"]:
+            group_label = f"🎯 {meta['skill']}"
+            group_key = f"skill:{meta['skill']}"
+        elif meta["project"]:
+            group_label = f"📁 {meta['project']}"
+            group_key = f"project:{meta['project']}"
+        else:
+            group_label = "🗂️ Genel Raporlar"
+            group_key = "general"
+
+        date_str = str(meta.get("date") or "")[:10]
+        try:
+            d = datetime.date.fromisoformat(date_str)
+            today = datetime.date.today()
+            delta = (today - d).days
+            if delta <= 0:
+                date_label = "📅 Bugün"
+            elif delta == 1:
+                date_label = "📅 Dün"
+            elif delta < 7:
+                date_label = "📅 Bu Hafta"
+            elif delta < 31:
+                date_label = "📅 Bu Ay"
+            else:
+                date_label = f"📅 {d.strftime('%Y-%m')}"
+        except ValueError:
+            date_label = "📅 Tarihsiz"
+
+        meta.update({
+            "label": f"{icon} {meta['title']}",
+            "group_label": group_label,
+            "group_key": group_key,
+            "date_label": date_label,
+        })
+        return meta
+
     def refresh_reports(self):
-        """Reload list of reports from Obsidian Vault and project directories."""
-        self.list_widget.clear()
-        reports = self.vault_manager.list_reports()
+        """Obsidian kasasından ve proje klasörlerinden rapor künyelerini yeniden yükler."""
+        entries: List[Dict[str, Any]] = []
+        seen = set()
 
-        # Also add MEMORY.md to list
+        # Global hafıza dosyası her zaman en üstte kendi grubunda
         if self.vault_manager.memory_file.exists():
-            mem_item = QListWidgetItem("📌 Global Hafıza (MEMORY.md)")
-            mem_item.setData(Qt.ItemDataRole.UserRole, str(self.vault_manager.memory_file))
-            self.list_widget.addItem(mem_item)
+            mem = self._make_entry(self.vault_manager.memory_file, "📌", forced_group="📌 Global Hafıza")
+            mem["label"] = "📌 Global Hafıza (MEMORY.md)"
+            mem["title"] = "Global Hafıza (MEMORY.md)"
+            entries.append(mem)
+            seen.add(str(self.vault_manager.memory_file))
 
-        for rep in reports:
-            item = QListWidgetItem(f"📄 {rep['title']}")
-            item.setData(Qt.ItemDataRole.UserRole, rep["path"])
-            self.list_widget.addItem(item)
+        for rep in self.vault_manager.list_reports():
+            p = Path(rep["path"])
+            if str(p) in seen or not p.exists():
+                continue
+            seen.add(str(p))
+            entries.append(self._make_entry(p, "📄"))
 
         # Also look in project reports/ and docs/
         active_proj = getattr(self, "active_project_dir", None) or config.default_project_path
@@ -567,14 +1013,35 @@ class ReportsViewerWidget(QFrame):
             p_folder = Path(active_proj) / subfolder
             if p_folder.exists():
                 for f in sorted(p_folder.glob("*.md")):
-                    item = QListWidgetItem(f"📑 {f.stem.replace('_', ' ')}")
-                    item.setData(Qt.ItemDataRole.UserRole, str(f))
-                    self.list_widget.addItem(item)
+                    if str(f) in seen:
+                        continue
+                    seen.add(str(f))
+                    entry = self._make_entry(f, "📑")
+                    if entry["group_key"] == "general":
+                        entry["group_label"] = f"📁 {Path(active_proj).name} / {subfolder}"
+                        entry["group_key"] = f"project:{Path(active_proj).name}"
+                    entries.append(entry)
 
-        if self.list_widget.count() > 0:
-            self.list_widget.setCurrentRow(0)
-            self._on_item_clicked(self.list_widget.item(0))
-        else:
+        self._entries = entries
+
+        # Filtre açılır listesini keşfedilen gruplara göre tazele
+        prev_filter = self.filter_combo.currentData()
+        self.filter_combo.blockSignals(True)
+        self.filter_combo.clear()
+        self.filter_combo.addItem("Tümü", "")
+        group_pairs = {}
+        for e in entries:
+            group_pairs.setdefault(e["group_key"], e["group_label"])
+        for key in sorted(group_pairs, key=lambda k: group_pairs[k].lower()):
+            self.filter_combo.addItem(group_pairs[key], key)
+        idx = self.filter_combo.findData(prev_filter)
+        self.filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.filter_combo.blockSignals(False)
+
+        self._rebuild_list()
+
+        if not entries:
+            self.meta_panel.setVisible(False)
             from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
             self.content_browser.setHtml(
                 render_markdown_to_html(
@@ -588,9 +1055,14 @@ class ReportsViewerWidget(QFrame):
     def _read_selected_report(self):
         """Display currently selected report in the right reading pane and ensure pane is visible."""
         current = self.list_widget.currentItem()
-        if not current and self.list_widget.count() > 0:
-            current = self.list_widget.item(0)
-            self.list_widget.setCurrentItem(current)
+        if (not current or not current.data(Qt.ItemDataRole.UserRole)):
+            current = None
+            for i in range(self.list_widget.count()):
+                candidate = self.list_widget.item(i)
+                if candidate and candidate.data(Qt.ItemDataRole.UserRole):
+                    current = candidate
+                    self.list_widget.setCurrentItem(candidate)
+                    break
         if current:
             self._on_item_clicked(current)
             sizes = self.splitter.sizes()
@@ -606,10 +1078,45 @@ class ReportsViewerWidget(QFrame):
                 from entropy.ui.widgets.standalone_report_window import open_standalone_report_window
                 open_standalone_report_window(path_str)
 
+    def _update_meta_panel(self, path: Path):
+        """Okuyucunun üstünde seçili raporun künyesini gösterir."""
+        meta = next((e for e in self._entries if e.get("path") == str(path)), None)
+        if meta is None:
+            meta = read_report_meta(path)
+        chips = []
+        if meta.get("skill"):
+            chips.append(
+                f"<span style='color:#00FF9D;'>🎯 {meta['skill']}</span>"
+            )
+        if meta.get("project"):
+            chips.append(f"<span style='color:#58A6FF;'>📁 {meta['project']}</span>")
+        if meta.get("date"):
+            chips.append(f"<span style='color:#E3B341;'>📅 {meta['date']}</span>")
+        if meta.get("modified"):
+            chips.append(f"<span style='color:#8B949E;'>🕒 {meta['modified']}</span>")
+        tags = [t for t in (meta.get("tags") or []) if not t.lower().startswith(("skill:", "project:"))]
+        tag_html = ""
+        if tags:
+            tag_html = "<br/>" + " ".join(
+                f"<span style='background:#141C2C; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; color:#BC8CFF;'>#{t}</span>"
+                for t in tags[:10]
+            )
+        self.meta_panel.setText(
+            f"<b style='color:#F0F6FC; font-size:12px;'>{meta.get('title', path.stem)}</b><br/>"
+            + " &nbsp;·&nbsp; ".join(chips)
+            + tag_html
+        )
+        self.meta_panel.setToolTip(str(path))
+        self.meta_panel.setVisible(True)
+
     def _on_item_clicked(self, item: QListWidgetItem):
-        path_str = item.data(Qt.ItemDataRole.UserRole)
+        path_str = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not path_str:
+            return  # Grup başlığı satırı
         p = Path(path_str)
         if p.exists():
+            self._current_path = str(p)
+            self._update_meta_panel(p)
             raw = p.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff")
             # Sanitize ANSI escape sequences, control artifacts, and carriage returns
             import re

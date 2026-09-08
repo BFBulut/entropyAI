@@ -7,7 +7,7 @@ import sys
 import urllib.request
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Slot
 
@@ -738,6 +738,18 @@ class SkillManager:
     # bonus uygulanmaz, karar yalnızca sözcüksel kanıta bırakılır.
     _SEMANTIC_MAX_DOMINANT_RATIO = 0.5
     _SEMANTIC_MIN_TOKENS = 3
+    # Göndermeli takipte ("bunu slayt yap") son yeteneğe eklenen öncelik ve
+    # bir yeteneğin seçilmesi için gereken asgari skor. Sınıf özniteliği
+    # olmalarının sebebi ölçülebilirlik: scripts/routing_eval.py bunları
+    # --set ile değiştirip doğruluk farkını raporlayabiliyor.
+    _ANAPHORA_PRIOR = 3.0
+    # Karar eşiği 2.5 → 3.0 (2026-09-08, scripts/routing_eval.py, 75 örnek):
+    # 2.5'te alakasız 11 mesajın 2'si yeteneğe düşüyordu (yanlış pozitif %18,2);
+    # 3.0'da hiçbiri düşmüyor. Doğruluk %77,3 → %78,7, makro F1 0,766 → 0,789.
+    # Izgara aramada en iyi kombinasyon (taban 0,34 / kazanç 15 / tavan 4,0 / eşik
+    # 3,0) %80,0 veriyordu ama üç eşiği birden 75 örneğe göre oynatmak aşırı uydurma
+    # riski taşıdığı için yalnızca tek parametrelik bu değişiklik alındı.
+    _DECISION_THRESHOLD = 3.0
 
     def _skill_vector(self, skill: "SkillDefinition"):
         """
@@ -777,14 +789,18 @@ class SkillManager:
         cache[skill.name] = (key, vec)
         return vec
 
-    def auto_detect_skill_for_prompt(
+    def rank_skills_for_prompt(
         self,
         prompt: str,
         last_skill: Optional[str] = None,
         history: Optional[List[str]] = None,
-    ) -> Optional[SkillDefinition]:
+    ) -> List[Tuple[SkillDefinition, float]]:
         """
-        Kullanıcı mesajı için en uygun etkin yeteneği bulur.
+        Etkin yetenekleri mesaja uygunluk skoruna göre sıralar (yüksekten düşüğe).
+
+        Karar (`auto_detect_skill_for_prompt`) ve güven puanı
+        (`score_skill_for_prompt`) bu tek sıralamadan türer; böylece rozet ile
+        gerçek yönlendirme asla birbirinden ayrışmaz.
 
         Üç sinyal harmanlanır:
           1. Sözcüksel: yetenek adı, alan anahtar kelimeleri, etiketler, açıklama
@@ -838,7 +854,7 @@ class SkillManager:
 
         skills = [s for s in self.list_skills() if s.enabled]
         if not skills:
-            return None
+            return []
 
         # Pre-configured semantic keywords for core skills
         domain_keywords: Dict[str, List[str]] = {
@@ -888,8 +904,7 @@ class SkillManager:
         # uzayındaki asıl çıpasıdır.
         self._domain_keywords_cache = domain_keywords
 
-        best_skill = None
-        best_score = 0.0
+        ranked: List[Tuple[SkillDefinition, float]] = []
 
         for s in skills:
             score = 0.0
@@ -970,13 +985,55 @@ class SkillManager:
             # 3. Göndermeli takipte son yetenek önceliği: açık ve güçlü bir anahtar
             # kelime eşleşmesini ezmeyecek, ama boşlukta ya da eşitlikte kazanacak kadar.
             if is_anaphoric_followup and s.name == last_skill:
-                norm_score += 3.0
+                norm_score += self._ANAPHORA_PRIOR
 
-            if norm_score > best_score:
-                best_score = norm_score
-                best_skill = s
+            ranked.append((s, norm_score))
 
-        return best_skill if best_score >= 2.5 else None
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return ranked
+
+    def auto_detect_skill_for_prompt(
+        self,
+        prompt: str,
+        last_skill: Optional[str] = None,
+        history: Optional[List[str]] = None,
+    ) -> Optional[SkillDefinition]:
+        """Mesaj için seçilen yetenek; eşiğin altındaysa None (yetenek zorlanmaz)."""
+        return self.score_skill_for_prompt(prompt, last_skill=last_skill, history=history)[0]
+
+    def score_skill_for_prompt(
+        self,
+        prompt: str,
+        last_skill: Optional[str] = None,
+        history: Optional[List[str]] = None,
+    ) -> Tuple[Optional[SkillDefinition], float]:
+        """
+        Seçilen yetenek ve kararın güven puanı (0–1).
+
+        Güven iki şeyi birleştirir: skorun karar eşiğine göre gücü ve ikinciyle
+        arasındaki fark. İkisi de gerekli — tek başına yüksek skor iki yeteneğin
+        başa baş olduğu durumu gizler, tek başına fark ise iki zayıf adaydan
+        birinin öne çıkmasını güçlü karar gibi gösterir.
+
+        Ölçek kasıtlı olarak eşikte 0,5'ten kırılır: eşiğin altındaki (yetenek
+        seçilmeyen) durumlar 0–0,5 aralığında kalır, seçilen kararlar 0,5–1,0.
+        Böylece arayüz tek bir sayıya bakarak "yetenek yok" ile "zayıf eşleşme"yi
+        ayırt edebilir.
+        """
+        ranked = self.rank_skills_for_prompt(prompt, last_skill=last_skill, history=history)
+        if not ranked:
+            return None, 0.0
+
+        threshold = float(self._DECISION_THRESHOLD) or 1.0
+        best_skill, best_score = ranked[0]
+        second = ranked[1][1] if len(ranked) > 1 else 0.0
+
+        if best_score < threshold:
+            return None, max(0.0, min(0.5, (best_score / threshold) * 0.5))
+
+        strength = min(1.0, (best_score - threshold) / (2.0 * threshold))
+        margin = min(1.0, max(0.0, best_score - second) / threshold)
+        return best_skill, round(0.5 + 0.25 * strength + 0.25 * margin, 4)
 
     # Katalogda her yeteneğe ayrılan azami açıklama uzunluğu.
     MANIFEST_DESC_CHARS = 130

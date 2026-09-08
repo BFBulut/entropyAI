@@ -461,7 +461,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (!node || node.group !== 'report-cluster') return false;
             if (expandedClusters.has(node.id)) expandedClusters.delete(node.id);
             else expandedClusters.add(node.id);
-            alpha = Math.max(alpha, 0.45);
+            // Küme açılınca yapraklar kümenin kendi sektöründe halkalara açılır:
+            // düzen aynı kuralla yeniden kurulur.
+            relayoutAndFit(0.32);
             return true;
         }
 
@@ -531,18 +533,18 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             isIsolated = !!val;
             settledFitDone = false;
             userAdjustedView = false;
-            alpha = 0.45;
-            fitToView();
-            requestRender();
+            alpha = 0.30;
+            relayoutAndFit(0.30);
         }
 
         function setScope(newScope) {
+            // Odak değişince aynı radyal kural seçili dal için uygulanır:
+            // kapsam dışı düğümler düzenden çıkar, seçili dal tüm çemberi kaplar.
             currentScope = newScope;
             settledFitDone = false;
             userAdjustedView = false;
-            alpha = 0.40;
-            fitToView();
-            requestRender();
+            alpha = 0.30;
+            relayoutAndFit(0.30);
         }
 
         let isRendering = false;
@@ -557,8 +559,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const newState = !activeCategories[cat];
             activeCategories[cat] = newState;
             el.classList.toggle('dimmed', !newState);
-            alpha = 0.45;
-            requestRender();
+            // Kategori kapanınca boşalan sektörler kalan dallara dağıtılır.
+            relayoutAndFit(0.30);
         }
 
         function updateDimensions() {
@@ -578,6 +580,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 resizeTimer = null;
+                relayoutGraph();
                 if (!userAdjustedView) fitToView();
             }, 150);
         });
@@ -646,9 +649,215 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             positionsInitialized = true;
         }
 
-        let alpha = 0.85;
+        // ---- Deterministik "tidy" radyal ağaç düzeni ----
+        // Yerleşimi burası belirler; fizik yalnızca artakalan çakışmayı çözer.
+        // Her dal, altındaki yaprak sayısıyla orantılı bir açısal sektör alır;
+        // alt dallar bu sektörü kendi ağırlıklarına göre böler; düğümler
+        // derinliğe karşılık gelen yarıçap halkalarına oturur. Kardeş sektörler
+        // ayrık olduğundan ağaç kenarları kesişmez ve ilk kare zaten düzenlidir.
+        const ROOT_ID = 'ego-entropy-core';
+        // Ana dalların saat yönünde sırası (KB → K → KD → D → GD → GB):
+        // eski çeyrek yerleşimi (projeler KB, yetenekler KD, MCP GD, bilişsel GB) korunur.
+        const TOP_ORDER = {
+            'hub-projects': 0,
+            'subhub-skill-financial-auditor': 1,
+            'hub-skills': 2,
+            'subhub-skill-autonomous-agent': 3,
+            'hub-mcp': 4,
+            'hub-cognitive': 5
+        };
+        const GROUP_ORDER = {
+            'hub': 0, 'project': 1, 'skill': 2, 'mcp': 3, 'subbranch': 4,
+            'semantic': 5, 'episodic': 5, 'procedural': 5,
+            'report-cluster': 6, 'mcp-tool': 7, 'Reports': 8, 'obsidian': 9, 'DailyNotes': 10
+        };
+        const LAYOUT_START_ANGLE = -Math.PI * 0.75;
+        const LEAF_ARC = 46.0;          // İki komşu yaprak arasındaki en küçük yay (px)
+        const MIN_OUTER_R = 620.0;
+        const MAX_OUTER_R = 4200.0;
+        const HIDDEN_RING_R0 = 40.0;
+        const HIDDEN_RING_GAP = 26.0;
+
+        function layoutSortKey(n) {
+            if (TOP_ORDER[n.id] !== undefined) return 'A' + TOP_ORDER[n.id];
+            const g = (GROUP_ORDER[n.group] !== undefined) ? GROUP_ORDER[n.group] : 9;
+            return 'B' + (10 + g) + '|' + (n.name || n.id);
+        }
+
+        function relayoutGraph() {
+            const cx = width / 2;
+            const cy = height / 2;
+            const root = nodeMap.get(ROOT_ID);
+            if (!root) return;
+
+            // 1. Düzene girecek küme: görünür + kapsam içi (çekirdek her zaman).
+            const included = [];
+            const inSet = new Set();
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                if (n.id === ROOT_ID || (isNodeVisible(n) && isNodeInScope(n))) {
+                    included.push(n);
+                    inSet.add(n.id);
+                }
+            }
+
+            // 2. Ebeveyn çözümü: kapsam dışı ebeveynler atlanır, açık kümenin
+            //    çocukları küme düğümüne bağlanır.
+            const childMap = new Map();
+            for (let i = 0; i < included.length; i++) {
+                const n = included[i];
+                if (n === root) continue;
+                let p;
+                if (n.cluster_of && expandedClusters.has(n.cluster_of) && inSet.has(n.cluster_of)) {
+                    p = n.cluster_of;
+                } else {
+                    p = n.parent_hub;
+                    let guard = 0;
+                    while (p && !inSet.has(p) && guard++ < 16) {
+                        const pn = nodeMap.get(p);
+                        p = pn ? pn.parent_hub : null;
+                    }
+                    if (!p || !inSet.has(p)) p = ROOT_ID;
+                }
+                if (p === n.id) p = ROOT_ID;
+                let arr = childMap.get(p);
+                if (!arr) { arr = []; childMap.set(p, arr); }
+                arr.push(n);
+            }
+            childMap.forEach(function (arr) {
+                arr.sort(function (a, b) {
+                    const ka = layoutSortKey(a), kb = layoutSortKey(b);
+                    return ka < kb ? -1 : (ka > kb ? 1 : 0);
+                });
+            });
+
+            // 3. Düzey sırası (BFS) ve derinlik.
+            const order = [root];
+            const seen = new Set([root.id]);
+            root._depth = 0;
+            for (let i = 0; i < order.length; i++) {
+                const kids = childMap.get(order[i].id) || [];
+                for (let k = 0; k < kids.length; k++) {
+                    const c = kids[k];
+                    if (seen.has(c.id)) continue;
+                    seen.add(c.id);
+                    c._depth = order[i]._depth + 1;
+                    order.push(c);
+                }
+            }
+            let maxDepth = 1;
+            for (let i = 0; i < order.length; i++) {
+                if (order[i]._depth > maxDepth) maxDepth = order[i]._depth;
+            }
+            const ringFrac = function (d) {
+                return (maxDepth <= 1) ? 1.0 : (0.32 + 0.68 * (d - 1) / (maxDepth - 1));
+            };
+
+            // 4. Ağırlık: yaprak ağırlığı 1/ringFrac(derinlik) → yaprağın ekrandaki
+            //    yay uzunluğu derinliğinden bağımsız olarak eşit çıkar.
+            for (let i = order.length - 1; i >= 0; i--) {
+                const n = order[i];
+                const kids = childMap.get(n.id);
+                if (!kids || kids.length === 0) {
+                    n._w = 1.0 / Math.max(0.15, ringFrac(n._depth));
+                } else {
+                    let s = 0;
+                    for (let k = 0; k < kids.length; k++) s += kids[k]._w;
+                    n._w = s;
+                }
+            }
+
+            const totalW = Math.max(1e-6, root._w);
+            const outerR = Math.max(MIN_OUTER_R, Math.min(MAX_OUTER_R, LEAF_ARC * totalW / (2 * Math.PI)));
+
+            // 5. Sektör paylaştırma + halka yarıçapı.
+            root._a0 = LAYOUT_START_ANGLE;
+            root._a1 = LAYOUT_START_ANGLE + 2 * Math.PI;
+            root._ang = 0;
+            root.relX = 0; root.relY = 0;
+            root.x = cx; root.y = cy;
+
+            for (let i = 0; i < order.length; i++) {
+                const n = order[i];
+                const kids = childMap.get(n.id);
+                if (!kids || kids.length === 0) continue;
+                const span = n._a1 - n._a0;
+                let a = n._a0;
+                for (let k = 0; k < kids.length; k++) {
+                    const c = kids[k];
+                    const w = span * (c._w / Math.max(1e-6, n._w));
+                    c._a0 = a;
+                    c._a1 = a + w;
+                    a += w;
+                    const ang = (c._a0 + c._a1) * 0.5;
+                    const r = ringFrac(c._depth) * outerR;
+                    c._ang = ang;
+                    c.relX = Math.cos(ang) * r;
+                    c.relY = Math.sin(ang) * r;
+                    c.x = cx + c.relX;
+                    c.y = cy + c.relY;
+                }
+            }
+
+            // 6. Katlanmış küme içindeki yapraklar: kümenin çevresinde küçük
+            //    halkalarda bekler; küme açılınca gerçek sektörlerine geçerler.
+            const hiddenCount = new Map();
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                if (inSet.has(n.id)) continue;
+                let anchor = n.cluster_of ? nodeMap.get(n.cluster_of) : null;
+                if (!anchor || !inSet.has(anchor.id)) {
+                    let p = n.parent_hub;
+                    let guard = 0;
+                    while (p && !inSet.has(p) && guard++ < 16) {
+                        const pn = nodeMap.get(p);
+                        p = pn ? pn.parent_hub : null;
+                    }
+                    anchor = (p && inSet.has(p)) ? nodeMap.get(p) : root;
+                }
+                const idx = hiddenCount.get(anchor.id) || 0;
+                hiddenCount.set(anchor.id, idx + 1);
+                let ring = 0;
+                let rest = idx;
+                let cap = 4;
+                for (let g = 0; g < 200; g++) {
+                    const rr0 = HIDDEN_RING_R0 + ring * HIDDEN_RING_GAP;
+                    cap = Math.max(4, Math.floor((2 * Math.PI * rr0) / HIDDEN_RING_GAP));
+                    if (rest < cap) break;
+                    rest -= cap;
+                    ring++;
+                }
+                const rr = HIDDEN_RING_R0 + ring * HIDDEN_RING_GAP;
+                const base = (anchor._ang !== undefined) ? anchor._ang : 0;
+                const ang = base + (rest / cap) * 2 * Math.PI;
+                n.relX = (anchor.relX || 0) + Math.cos(ang) * rr;
+                n.relY = (anchor.relY || 0) + Math.sin(ang) * rr;
+                n.x = cx + n.relX;
+                n.y = cy + n.relY;
+            }
+
+            // 7. Yay kuvveti hedef uzunlukları yeni düzene göre tazelenir.
+            for (let i = 0; i < links.length; i++) {
+                const l = links[i];
+                if (!l.sourceNode || !l.targetNode) continue;
+                const dx = l.targetNode.x - l.sourceNode.x;
+                const dy = l.targetNode.y - l.sourceNode.y;
+                l.targetLen = Math.sqrt(dx * dx + dy * dy) || 60;
+            }
+        }
+
+        // Görünürlük/kapsam değişimlerinde düzeni yeniden kur, sonra sığdır.
+        function relayoutAndFit(alphaKick) {
+            relayoutGraph();
+            alpha = Math.max(alpha, alphaKick || 0.28);
+            settledFitDone = false;
+            if (!userAdjustedView) fitToView();
+            requestRender();
+        }
+
+        let alpha = 0.30;
         const alphaMin = 0.003;
-        const alphaDecay = 0.045;
+        const alphaDecay = 0.09;
 
         // Büyük kümelerde itme hesabı karelere yayılır; her kovanın hangi satırdan
         // devam edeceği burada tutulur (bkz. tickPhysics adım 3B).
@@ -680,8 +889,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const dx = idealX - n.x;
                 const dy = idealY - n.y;
 
-                // Restitution pull towards designated radial ray and distance
-                const k = (n.group === 'Reports' || n.group === 'obsidian' || n.group === 'DailyNotes') ? 0.035 : 0.048;
+                // Restitüsyon: düğüm kendi sektör noktasına güçlü biçimde geri çekilir.
+                // Düzen zaten deterministik olduğu için bu kuvvet baskın olmalı;
+                // itme yalnızca kalan üst üste binmeyi ayırır.
+                const k = (n.group === 'Reports' || n.group === 'obsidian' || n.group === 'DailyNotes') ? 0.20 : 0.26;
                 n.x += dx * k * alpha;
                 n.y += dy * k * alpha;
             });
@@ -747,11 +958,14 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     }
                     const rA = a.val || 16;
                     const rB = b.val || 16;
-                    const minDist = rA + rB + 48;
+                    // Kısa menzilli: sektörler zaten ayrık, yalnızca gerçek
+                    // üst üste binme ayrıştırılır (eski 48 px'lik uzun menzil
+                    // düzeni bozup dalları savuruyordu).
+                    const minDist = rA + rB + 10;
                     if (dist < minDist) {
                         const overlap = (minDist - dist) / dist;
-                        let pushX = dx * overlap * 0.40 * Math.min(1.0, alpha + 0.3);
-                        let pushY = dy * overlap * 0.40 * Math.min(1.0, alpha + 0.3);
+                        let pushX = dx * overlap * 0.25 * Math.min(1.0, alpha + 0.3);
+                        let pushY = dy * overlap * 0.25 * Math.min(1.0, alpha + 0.3);
                         const maxPush = 5.0;
                         const pushLen = Math.sqrt(pushX * pushX + pushY * pushY);
                         if (pushLen > maxPush) {
@@ -1061,8 +1275,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
             // 1. Draw Links with Organic Bézier Synapses (Decoupled from Catalog Index Spiderwebs)
             const bgLinks = [];
-            const treeLinks = [];
+            const treeLinks = [];      // Ana dal/gövde kenarları: hafif eğri
+            const leafLinks = [];      // Yaprak kenarları: düz ve ince
             const semanticLinks = [];
+            // Gövde = çekirdekten çıkan ya da bir dal/küme düğümüne giden kenar.
+            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1, 'report-cluster': 1 };
 
             links.forEach(l => {
                 if (l.is_catalog_link) return; // Completely hide catalog index spiderwebs!
@@ -1083,7 +1300,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     }
                 } else if (s !== hoveredNode && t !== hoveredNode) {
                     if (l.is_tree_link) {
-                        treeLinks.push(l);
+                        if (TRUNK_TARGETS[t.group] || s.group === 'ego') treeLinks.push(l);
+                        else leafLinks.push(l);
                     } else if (zoom >= 1.35) {
                         // Anlamsal çapraz bağlantılar (wikilink) detay düzeyidir: ağaç
                         // yapısı okunabilsin diye yalnızca yakınlaşınca ya da üzerine
@@ -1137,14 +1355,28 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
             }
 
-            // Structural Tree Axons (Hierarchy Links) - Luminous Cyan/Blue Curves
+            // Yaprak kenarları: düz, ince — sektör içinde kısa kaldıkları için
+            // eğri gerekmez ve düz çizgi ağacın okunurluğunu artırır.
+            if (leafLinks.length > 0) {
+                ctx.lineWidth = 0.9;
+                ctx.strokeStyle = 'rgba(56, 139, 253, 0.26)';
+                ctx.beginPath();
+                for (let i = 0; i < leafLinks.length; i++) {
+                    const l = leafLinks[i];
+                    ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
+                    ctx.lineTo(l.targetNode.x, l.targetNode.y);
+                }
+                ctx.stroke();
+            }
+
+            // Ana dal (gövde) kenarları: hafif eğri, biraz daha kalın.
             if (treeLinks.length > 0) {
-                ctx.lineWidth = 1.3;
-                ctx.strokeStyle = 'rgba(56, 139, 253, 0.38)';
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = 'rgba(56, 139, 253, 0.44)';
                 ctx.beginPath();
                 for (let i = 0; i < treeLinks.length; i++) {
                     const l = treeLinks[i];
-                    drawCurvedLink(l.sourceNode, l.targetNode, 0.10);
+                    drawCurvedLink(l.sourceNode, l.targetNode, 0.06);
                 }
                 ctx.stroke();
             }
@@ -1333,13 +1565,17 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         updateDimensions();
         initNodePositions();
-        alpha = 0.85;
+        // İlk kare zaten düzenli: düzen fizik çalışmadan önce kurulur ve sığdırılır.
+        relayoutGraph();
+        fitToView();
+        alpha = 0.30;
         requestRender();
 
         setTimeout(() => {
             updateDimensions();
+            relayoutGraph();
             fitToView();
-            alpha = 0.65;
+            alpha = 0.20;
             requestRender();
         }, 120);
     </script>
@@ -2185,13 +2421,25 @@ class KnowledgeGraphWidget(QFrame):
             "ego-entropy-core", "hub-projects", "hub-skills", "hub-mcp", "hub-cognitive",
             "subhub-skill-autonomous-agent", "subhub-skill-financial-auditor"
         }
-        for _ in range(15):
+        # Kaba kuvvet O(N²) tarama 1000 düğümde tur başına ~500 bin çift ediyor ve
+        # 15 tur birkaç saniye sürüyordu; her grafik yenilemesinde arayüz donuyordu.
+        # Düğümler x'e göre sıralanıp yalnızca x farkı olası en büyük çakışma
+        # mesafesinden küçük olan çiftler denetlenir (süpürme-budama). Atlanan
+        # çiftler tanım gereği çakışamaz, sonuç aynı kalır.
+        # Budama sayesinde tur maliyeti düştüğü için tur sayısı yükseltildi:
+        # çakışma kalmayınca zaten erken çıkılır.
+        max_val = max((n.get("val", 12) for n in nodes), default=12)
+        prune_dx = 2.0 * (2.0 * max_val + 3.0)
+        for _ in range(60):
             overlap_found = False
-            for i in range(len(nodes)):
-                for j in range(i + 1, len(nodes)):
-                    a = nodes[i]
-                    b = nodes[j]
+            order = sorted(nodes, key=lambda n: n.get("x", 0.0))
+            for i in range(len(order)):
+                a = order[i]
+                for j in range(i + 1, len(order)):
+                    b = order[j]
                     dx = b["x"] - a["x"]
+                    if dx > prune_dx:
+                        break
                     dy = b["y"] - a["y"]
                     d = math.hypot(dx, dy)
                     r_min = (a.get("val", 12) + b.get("val", 12)) + 3.0

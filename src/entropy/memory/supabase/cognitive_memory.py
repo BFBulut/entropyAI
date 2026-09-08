@@ -3,14 +3,24 @@
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
+import threading
 import time
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from entropy.core.config import config
+
+# numpy sert bir bağımlılık (pyproject) ama yokluğunda bellek modülü tamamen
+# çökmemeli: vektörleştirilmiş geri çağırma kapanır, eski skaler yol çalışır.
+try:
+    import numpy as _np
+except Exception:  # pragma: no cover - numpy kurulu olmayan ortam
+    _np = None
 
 @dataclass
 class CognitiveMemoryNode:
@@ -46,6 +56,9 @@ EMBEDDING_DIM = 384
 # Yedek model: çok dilli model indirilemezse en azından İngilizce içerik çalışsın.
 EMBEDDING_FALLBACK_MODEL = "BAAI/bge-small-en-v1.5"
 
+# Gömme önbelleğinin üst sınırı (metin sayısı). 512 x 384 float ~ 1,5 MB.
+EMBEDDING_CACHE_SIZE = 512
+
 
 class LocalEmbeddingEngine:
     """Zero-API, 100% offline neural embedding engine with fast fallback (T2.1)."""
@@ -53,22 +66,34 @@ class LocalEmbeddingEngine:
     _model = None
     _is_neural = False
     _model_name = ""
+    # Kurulum kilidi: ısıtma iş parçacığı ile ana iş parçacığı aynı anda
+    # get_instance() çağırırsa model iki kez yüklenirdi (~2 sn boşa gider).
+    _init_lock = threading.Lock()
 
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._init_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @classmethod
     def reset_instance(cls):
         """Model değişiminden sonra yeniden kurulum için (testler ve ayar değişikliği)."""
-        cls._instance = None
+        with cls._init_lock:
+            cls._instance = None
 
     def __init__(self):
         self._model = None
         self._is_neural = False
         self._model_name = ""
+        # Gömme önbelleği: sinirsel çıkarım metin başına ~90 ms. Aynı metin
+        # (sorgu, yetenek tanımı, düğüm içeriği) bir oturumda defalarca
+        # gömülüyordu; sonuç aynı metin için birebir aynı olduğundan tutulabilir.
+        # Önbellek örneğe bağlıdır: model değişince reset_instance() ile düşer.
+        self._cache: "OrderedDict[str, List[float]]" = OrderedDict()
+        self._cache_lock = threading.Lock()
         for candidate in (EMBEDDING_MODEL_NAME, EMBEDDING_FALLBACK_MODEL):
             try:
                 from fastembed import TextEmbedding
@@ -86,18 +111,36 @@ class LocalEmbeddingEngine:
         return self._model_name
 
     def embed_text(self, text: str) -> List[float]:
-        """Generate a 384-dimensional dense embedding vector."""
+        """Generate a 384-dimensional dense embedding vector (önbellekli)."""
         if not text or not text.strip():
             return [0.0] * 384
 
+        with self._cache_lock:
+            cached = self._cache.get(text)
+            if cached is not None:
+                self._cache.move_to_end(text)
+                return list(cached)
+
+        vector: Optional[List[float]] = None
         if self._is_neural and self._model is not None:
             try:
                 vecs = list(self._model.embed([text]))
-                return [float(x) for x in vecs[0]]
+                vector = [float(x) for x in vecs[0]]
             except Exception:
-                pass
+                vector = None
+        if vector is None:
+            vector = self._hash_dense_embedding(text, dim=384)
 
-        return self._hash_dense_embedding(text, dim=384)
+        with self._cache_lock:
+            self._cache[text] = vector
+            while len(self._cache) > EMBEDDING_CACHE_SIZE:
+                self._cache.popitem(last=False)
+        return list(vector)
+
+    def cache_stats(self) -> Dict[str, int]:
+        """Önbelleğin doluluğu; ölçüm ve testler için."""
+        with self._cache_lock:
+            return {"entries": len(self._cache), "capacity": EMBEDDING_CACHE_SIZE}
 
     def _hash_dense_embedding(self, text: str, dim: int = 384) -> List[float]:
         """Deterministic dense representation when neural model is unavailable or initializing."""
@@ -114,6 +157,56 @@ class LocalEmbeddingEngine:
         if norm > 0:
             vec = [x / norm for x in vec]
         return vec
+
+_WARMUP_LOCK = threading.Lock()
+_WARMUP_THREAD: Optional[threading.Thread] = None
+
+
+def embedding_warmup_enabled() -> bool:
+    """
+    Gömme motorunun arka planda ısıtılıp ısıtılmayacağı.
+
+    ENTROPY_EMBEDDING_WARMUP=0 (ya da false/no/off) ile kapatılır. Ölçüm alırken
+    ya da modelin hiç yüklenmemesi istendiğinde bayrak kapatılabilir olmalı.
+    """
+    raw = (os.environ.get("ENTROPY_EMBEDDING_WARMUP") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def warm_embedding_engine(blocking: bool = False) -> Optional[threading.Thread]:
+    """
+    fastembed modelini arka plan iş parçacığında yükler (~1,9 sn tek seferlik).
+
+    Ana iş parçacığı bloklanmaz ve Qt'ye hiç dokunulmaz: iş parçacığı yalnızca
+    LocalEmbeddingEngine.get_instance() çağırır, sonucu sınıf değişkenine yazar.
+    İlk gerçek hybrid_recall çağrısı bu yüzden modeli hazır bulur.
+    """
+    global _WARMUP_THREAD
+    if not embedding_warmup_enabled():
+        return None
+    if LocalEmbeddingEngine._instance is not None:
+        return None
+
+    def _run():
+        try:
+            LocalEmbeddingEngine.get_instance()
+        except Exception:
+            # Isıtma en iyi çaba: başarısız olursa ilk çağrı eskisi gibi yükler.
+            pass
+
+    with _WARMUP_LOCK:
+        if _WARMUP_THREAD is not None and _WARMUP_THREAD.is_alive():
+            thread = _WARMUP_THREAD
+        else:
+            thread = threading.Thread(
+                target=_run, name="entropy-embedding-warmup", daemon=True
+            )
+            _WARMUP_THREAD = thread
+            thread.start()
+    if blocking:
+        thread.join()
+    return thread
+
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     """Compute cosine similarity between two dense vectors."""
@@ -144,6 +237,70 @@ def compute_bm25_score(query_tokens: List[str], doc_tokens: List[str], avg_doc_l
             score += tf
     return min(1.0, score / max(1.0, len(query_tokens) * 1.5))
 
+BM25_K1 = 1.2
+BM25_B = 0.75
+BM25_AVG_DOC_LEN = 25.0
+
+_RECALL_COLUMNS = (
+    "id, category, content, importance, created_at, last_accessed, "
+    "access_count, metadata_json, embedding_json, embedding_model"
+)
+
+
+class _RecallIndex:
+    """
+    Hibrit geri çağırmanın bellek içi tarama yapısı.
+
+    Neden var: her sorgu 846 satırı SQLite'tan okuyup her satırın 384 boyutlu
+    gömmesini JSON'dan çözüyor, içeriğini yeniden belirteçliyor ve kosinüsü saf
+    Python döngüsüyle hesaplıyordu (sorgu başına ~214-350 ms). Bu yapının hepsi
+    bir kez kurulur; sorgu yalnızca bir matris çarpımı ve ters indeks araması
+    yapar. Veritabanı imzası (satır sayısı + son erişim + erişim toplamı + aktif
+    model) değişince yapı yeniden kurulur.
+    """
+
+    __slots__ = (
+        "signature", "model", "size",
+        "ids", "categories", "contents", "importances", "created_ats",
+        "last_accesseds", "access_counts", "metadata_jsons", "embeddings",
+        "matrix", "imp_arr", "acc_arr", "last_arr", "doc_lens", "postings",
+    )
+
+    def __init__(self, signature: tuple, model: str):
+        self.signature = signature
+        self.model = model
+        self.size = 0
+        self.ids: List[str] = []
+        self.categories: List[str] = []
+        self.contents: List[str] = []
+        self.importances: List[float] = []
+        self.created_ats: List[float] = []
+        self.last_accesseds: List[float] = []
+        self.access_counts: List[int] = []
+        self.metadata_jsons: List[Optional[str]] = []
+        self.embeddings: List[Optional[List[float]]] = []
+        self.matrix = None            # (n, dim) satırları birim boya indirgenmiş
+        self.imp_arr = None
+        self.acc_arr = None
+        self.last_arr = None
+        self.doc_lens = None
+        self.postings: Dict[str, tuple] = {}
+
+    def node_at(self, i: int) -> "CognitiveMemoryNode":
+        """Önbellekteki alanlardan yeni bir düğüm nesnesi üretir (paylaşılan nesne dönmez)."""
+        return CognitiveMemoryNode(
+            id=self.ids[i],
+            category=self.categories[i],
+            content=self.contents[i],
+            importance=self.importances[i],
+            created_at=self.created_ats[i],
+            last_accessed=self.last_accesseds[i],
+            access_count=self.access_counts[i],
+            metadata=json.loads(self.metadata_jsons[i] or "{}"),
+            embedding=list(self.embeddings[i]) if self.embeddings[i] else None,
+        )
+
+
 class CognitiveMemorySystem:
     """Manages multi-layered cognitive memory with Supabase pgvector and offline SQLite fallback."""
 
@@ -155,8 +312,20 @@ class CognitiveMemorySystem:
         else:
             self.db_path = Path(db_path)
         
+        # Hibrit geri çağırma önbelleği; ilk sorguda kurulur.
+        self._recall_index: Optional[_RecallIndex] = None
+        self._recall_stat_sig: Optional[tuple] = None
+        self._recall_lock = threading.RLock()
+
         self._init_sqlite_db()
         self._seed_ego_identity()
+        # Gömme motoru (~1,9 sn) arka planda yüklenir; bellek sistemi uygulama
+        # açılışında kurulduğu için ısıtma da orada başlamış olur. Ana iş
+        # parçacığı bloklanmaz, Qt'ye dokunulmaz, bayrakla kapatılabilir.
+        try:
+            warm_embedding_engine()
+        except Exception:
+            pass
 
     def _init_sqlite_db(self):
         """Initialize local SQLite persistence schema with embedding vector support (T2.1)."""
@@ -230,6 +399,8 @@ class CognitiveMemorySystem:
                 )
                 conn.commit()
 
+        if updates:
+            self._invalidate_recall_index()
         return {"stale": stale_total, "reembedded": len(updates), "model": active}
 
     def _seed_ego_identity(self):
@@ -295,6 +466,7 @@ class CognitiveMemorySystem:
 
             conn.commit()
 
+        self._invalidate_recall_index()
         self._update_ego_identity()
         return {"cleaned": cleaned_count, "reembedded": reembedded_count}
 
@@ -333,6 +505,7 @@ class CognitiveMemorySystem:
                 active_model
             ))
             conn.commit()
+        self._invalidate_recall_index()
 
     def get_node(self, node_id: str) -> Optional[CognitiveMemoryNode]:
         with sqlite3.connect(self.db_path) as conn:
@@ -426,7 +599,216 @@ class CognitiveMemorySystem:
         T2.2 & T2.3: Recollection Engine with Multi-Criteria Hybrid Scoring & Noise Pruning.
         Score = 0.40 * VectorSim + 0.20 * BM25 + 0.25 * Ebbinghaus + 0.15 * Recency
         Filters out noise where final_score < min_threshold.
+
+        numpy varsa bellek içi indeks üzerinden vektörleştirilmiş yol, yoksa
+        eski satır satır tarama kullanılır; iki yol da aynı sıralamayı üretir.
         """
+        if _np is not None:
+            try:
+                return self._hybrid_recall_indexed(query, top_k, min_threshold)
+            except Exception:
+                # İndeks kurulamazsa geri çağırma tamamen kaybolmasın.
+                self._invalidate_recall_index()
+        return self._hybrid_recall_scalar(query, top_k, min_threshold)
+
+    # -- geri çağırma: bellek içi indeks ---------------------------------
+
+    def _invalidate_recall_index(self) -> None:
+        """Yazma sonrası önbelleği düşürür; süreç içi değişiklikler anında görünür."""
+        with self._recall_lock:
+            self._recall_index = None
+            self._recall_stat_sig = None
+
+    def _recall_signature(self) -> tuple:
+        """
+        Veritabanının ucuz parmak izi: satır sayısı, en son erişim, erişim toplamı
+        ve en yeni kayıt zamanı. Düğüm eklendiğinde, güncellendiğinde (upsert
+        last_accessed ve access_count'u değiştirir) ya da silindiğinde değişir.
+        İçerik değişimi zaten yeni bir kimlik üretir (kimlik = içerik özeti).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(last_accessed), 0.0), "
+                "COALESCE(SUM(access_count), 0), COALESCE(MAX(created_at), 0.0) "
+                "FROM cognitive_nodes"
+            ).fetchone()
+        return tuple(row or (0, 0.0, 0, 0.0))
+
+    def _db_stat_signature(self) -> Optional[tuple]:
+        """Veritabanı dosyasının boyut+mtime imzası; toplam sorgusundan ucuz kısayol."""
+        try:
+            st = self.db_path.stat()
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns)
+
+    def _get_recall_index(self) -> _RecallIndex:
+        """Geçerli indeksi döndürür; imza değiştiyse yeniden kurar."""
+        engine = LocalEmbeddingEngine.get_instance()
+        active_model = engine.model_name or "hash-fallback"
+
+        # Hızlı yol: dosya hiç değişmediyse toplam sorgusu bile çalıştırılmaz.
+        # Süreç içi yazmalar zaten _invalidate_recall_index() ile önbelleği düşürür.
+        stat_sig = self._db_stat_signature()
+        with self._recall_lock:
+            idx = self._recall_index
+            if (
+                idx is not None
+                and idx.model == active_model
+                and stat_sig is not None
+                and stat_sig == self._recall_stat_sig
+            ):
+                return idx
+
+        signature = self._recall_signature()
+        with self._recall_lock:
+            idx = self._recall_index
+            if idx is not None and idx.signature == signature and idx.model == active_model:
+                self._recall_stat_sig = stat_sig
+                return idx
+            idx = self._build_recall_index(engine, active_model, signature)
+            self._recall_index = idx
+            # İndeks kurulurken eksik gömmeler geri yazılmış olabilir; imza
+            # kurulumdan SONRA alınır ki hemen bayatlamış sayılmasın.
+            self._recall_stat_sig = self._db_stat_signature()
+            return idx
+
+    def _build_recall_index(self, engine, active_model: str, signature: tuple) -> _RecallIndex:
+        idx = _RecallIndex(signature, active_model)
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(f"SELECT {_RECALL_COLUMNS} FROM cognitive_nodes").fetchall()
+
+        backfill: List[tuple] = []
+        postings: Dict[str, List[tuple]] = {}
+        doc_lens: List[float] = []
+        vectors: List[Optional[List[float]]] = []
+
+        for i, row in enumerate(rows):
+            idx.ids.append(row[0])
+            idx.categories.append(row[1])
+            content = row[2] or ""
+            idx.contents.append(row[2])
+            idx.importances.append(row[3])
+            idx.created_ats.append(row[4])
+            idx.last_accesseds.append(row[5])
+            idx.access_counts.append(row[6])
+            idx.metadata_jsons.append(row[7])
+
+            embedding = json.loads(row[8]) if row[8] else None
+            row_model = row[9]
+            # Başka bir modelin vektörü farklı bir uzaydadır; kosinüsü sessizce
+            # yanlış çıkar. Eksik ya da modeli uyuşmayan gömmeler burada bir kez
+            # üretilir ve veritabanına geri yazılır (eski davranışın aynısı).
+            if not embedding or row_model != active_model:
+                embedding = engine.embed_text(content)
+                backfill.append((json.dumps(embedding), active_model, row[0]))
+            vectors.append(embedding)
+
+            tokens = re_tokenize(content)
+            doc_lens.append(float(len(tokens)))
+            for tok, cnt in Counter(tokens).items():
+                postings.setdefault(tok, []).append((i, cnt))
+
+        n = len(rows)
+        idx.size = n
+        idx.embeddings = vectors
+
+        matrix = _np.zeros((n, EMBEDDING_DIM), dtype=_np.float64)
+        for i, vec in enumerate(vectors):
+            if not vec or len(vec) != EMBEDDING_DIM:
+                continue  # boyutu tutmayan vektör: eski kodda benzerlik 0 dönerdi
+            arr = _np.asarray(vec, dtype=_np.float64)
+            norm = math.sqrt(float(arr @ arr))
+            if norm > 0.0:
+                matrix[i] = arr / norm
+        idx.matrix = matrix
+
+        idx.imp_arr = _np.asarray(idx.importances, dtype=_np.float64) if n else _np.zeros(0)
+        idx.acc_arr = _np.asarray(idx.access_counts, dtype=_np.float64) if n else _np.zeros(0)
+        idx.last_arr = _np.asarray(idx.last_accesseds, dtype=_np.float64) if n else _np.zeros(0)
+        idx.doc_lens = _np.asarray(doc_lens, dtype=_np.float64) if n else _np.zeros(0)
+        idx.postings = {
+            tok: (_np.asarray([p[0] for p in plist], dtype=_np.intp),
+                  _np.asarray([p[1] for p in plist], dtype=_np.float64))
+            for tok, plist in postings.items()
+        }
+
+        if backfill:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.executemany(
+                        "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ? WHERE id = ?",
+                        backfill,
+                    )
+                    conn.commit()
+            except Exception:
+                pass
+        return idx
+
+    def _hybrid_recall_indexed(
+        self, query: str, top_k: int, min_threshold: float
+    ) -> List[Tuple[CognitiveMemoryNode, float]]:
+        idx = self._get_recall_index()
+        if idx.size == 0:
+            return []
+
+        now = time.time()
+        engine = LocalEmbeddingEngine.get_instance()
+        query_vector = engine.embed_text(query)
+        query_tokens = re_tokenize(query)
+
+        # 1. Yoğun vektör kosinüs benzerliği (ağırlık 0.40)
+        qarr = _np.asarray(query_vector or [], dtype=_np.float64)
+        qnorm = math.sqrt(float(qarr @ qarr)) if qarr.size == EMBEDDING_DIM else 0.0
+        if qnorm > 0.0:
+            raw_sim = _np.clip(idx.matrix @ (qarr / qnorm), 0.0, 1.0)
+        else:
+            raw_sim = _np.zeros(idx.size, dtype=_np.float64)
+        vec_sim = _np.clip((raw_sim - 0.50) / 0.50, 0.0, 1.0)
+
+        # 2. Seyrek sözcüksel BM25 (ağırlık 0.20) — ters indeks üzerinden
+        bm25 = _np.zeros(idx.size, dtype=_np.float64)
+        if query_tokens:
+            for tok in query_tokens:
+                posting = idx.postings.get(tok)
+                if posting is None:
+                    continue
+                positions, counts = posting
+                lengths = idx.doc_lens[positions]
+                denom = counts + BM25_K1 * (
+                    1 - BM25_B + BM25_B * (lengths / max(1.0, BM25_AVG_DOC_LEN))
+                )
+                bm25[positions] += (counts * (BM25_K1 + 1)) / denom
+            bm25 = _np.minimum(1.0, bm25 / max(1.0, len(query_tokens) * 1.5))
+
+        # 3. Ebbinghaus unutma eğrisi (ağırlık 0.25)
+        days = _np.maximum(0.0, (now - idx.last_arr) / 86400.0)
+        stability = 1.0 + _np.log(idx.acc_arr + 1.0)
+        ebbinghaus = _np.clip(idx.imp_arr * _np.exp(-(0.05 * days) / stability), 0.0, 1.0)
+
+        # 4. Tazelik üstel sönümü (ağırlık 0.15)
+        recency = _np.exp(-0.05 * days)
+
+        final = (0.40 * vec_sim) + (0.20 * bm25) + (0.25 * ebbinghaus) + (0.15 * recency)
+
+        # T2.3: hem sözcüksel hem anlamsal alaka düşükse tazelik sızıntısı bastırılır
+        suppress = (bm25 == 0.0) & (vec_sim < 0.35)
+        if suppress.any():
+            final = _np.where(suppress, final * (vec_sim / 0.35), final)
+
+        keep = _np.flatnonzero(final >= min_threshold)
+        if keep.size == 0:
+            return []
+        # Kararlı sıralama: eşit skorlarda satır sırası korunur (eski kod da
+        # kararlı list.sort kullanıyordu).
+        order = keep[_np.argsort(-final[keep], kind="stable")][:max(0, top_k)]
+        return [(idx.node_at(int(i)), float(final[i])) for i in order]
+
+    # -- geri çağırma: eski satır satır tarama (numpy yoksa) ---------------
+
+    def _hybrid_recall_scalar(
+        self, query: str, top_k: int, min_threshold: float
+    ) -> List[Tuple[CognitiveMemoryNode, float]]:
         now = time.time()
         engine = LocalEmbeddingEngine.get_instance()
         active_model = engine.model_name or "hash-fallback"
@@ -611,6 +993,8 @@ class CognitiveMemorySystem:
                     removed = len(junk)
         except Exception:
             pass
+        if removed:
+            self._invalidate_recall_index()
         return removed
 
     def build_consolidation_prompt(self, hours: float = 48.0, max_items: int = 30) -> Optional[str]:
@@ -693,6 +1077,8 @@ class CognitiveMemorySystem:
                 cursor.executemany("DELETE FROM cognitive_nodes WHERE id = ?", [(pid,) for pid in pruned_ids])
                 conn.commit()
 
+        if pruned_ids:
+            self._invalidate_recall_index()
         return len(pruned_ids)
 
 def re_tokenize(text: str) -> List[str]:
