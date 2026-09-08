@@ -65,3 +65,71 @@ def test_tool_sandbox_enforcement(tmp_path):
     outside_file = Path("C:/Windows/System32/drivers/etc/hosts")
     with pytest.raises(PermissionError, match="Sandbox Violation"):
         synthesizer.execute_tool("read_project_file", path=str(outside_file))
+
+
+def _register_mutating(synthesizer):
+    """Tier 2 olarak sınıflanan bir araç kaydeder ve çağrı sayacını döndürür."""
+    calls = []
+    synthesizer.register_python_tool(
+        name="delete_report",
+        description="Delete a generated report",
+        code="def delete_report(name: str): pass",
+        callable_func=lambda name: calls.append(name) or "deleted",
+    )
+    return calls
+
+
+def test_tier2_denied_without_approval_handler(tmp_path):
+    """Onay mercii yokken Tier 2 araç çalıştırılmamalı (fail-closed)."""
+    synthesizer = ToolSynthesizer(sandbox_root=tmp_path)
+    calls = _register_mutating(synthesizer)
+    assert synthesizer.registered_tools["delete_report"].tier == ToolPermissionTier.TIER_2_MUTATING
+
+    target = str(tmp_path / "rapor.md")
+    with pytest.raises(PermissionError, match="Approval Required"):
+        synthesizer.execute_tool("delete_report", name=target)
+    assert calls == []
+
+
+def test_tier2_denied_when_handler_rejects(tmp_path):
+    synthesizer = ToolSynthesizer(sandbox_root=tmp_path)
+    calls = _register_mutating(synthesizer)
+    seen = []
+    synthesizer.set_approval_handler(lambda name, kwargs: seen.append((name, kwargs)) or False)
+
+    target = str(tmp_path / "rapor.md")
+    with pytest.raises(PermissionError, match="Approval Denied"):
+        synthesizer.execute_tool("delete_report", name=target)
+    assert calls == []
+    assert seen == [("delete_report", {"name": target})]
+
+
+def test_tier2_runs_when_handler_approves(tmp_path):
+    synthesizer = ToolSynthesizer(sandbox_root=tmp_path)
+    calls = _register_mutating(synthesizer)
+    synthesizer.set_approval_handler(lambda name, kwargs: True)
+
+    target = str(tmp_path / "rapor.md")
+    res = synthesizer.execute_tool("delete_report", name=target)
+    assert res["status"] == "success"
+    assert calls == [target]
+
+
+def test_sandbox_violation_checked_before_approval(tmp_path):
+    """Sınır dışı çağrı, onay sorulmadan reddedilmeli."""
+    synthesizer = ToolSynthesizer(sandbox_root=tmp_path)
+    synthesizer.register_python_tool(
+        name="write_note",
+        description="Write a note file",
+        code="def write_note(path: str): pass",
+        callable_func=lambda path: "ok",
+    )
+    assert synthesizer.registered_tools["write_note"].tier == ToolPermissionTier.TIER_2_MUTATING
+
+    asked = []
+    synthesizer.set_approval_handler(lambda name, kwargs: asked.append(name) or True)
+
+    with pytest.raises(PermissionError, match="Sandbox Violation"):
+        synthesizer.execute_tool("write_note", path="C:/Windows/System32/drivers/etc/hosts")
+    assert asked == []
+

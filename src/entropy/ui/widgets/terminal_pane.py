@@ -65,3 +65,10 @@ class TerminalPaneWidget(QFrame):
 
     def clear_output(self):
         self.clear_terminal()
+
+    def closeEvent(self, event):
+        try:
+            bus.terminal_output_received.disconnect(self.append_text)
+        except Exception:
+            pass
+        super().closeEvent(event)

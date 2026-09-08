@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextBrowser,
@@ -14,6 +14,32 @@ from entropy.core.event_bus import bus
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem, CognitiveMemoryNode
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 
+
+def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
+    """Parse YAML frontmatter returning (metadata_dict, clean_body)."""
+    cleaned = text.replace('\r\n', '\n').replace('\r', '\n').lstrip()
+    meta: Dict[str, Any] = {}
+    body = cleaned
+    if cleaned.startswith("---"):
+        parts = cleaned.split("---", 2)
+        if len(parts) >= 3:
+            fm_text = parts[1].strip()
+            body = parts[2].strip()
+            for line in fm_text.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k = k.strip().lower()
+                    v = v.strip().strip('"').strip("'")
+                    if k == "tags":
+                        if v.startswith("[") and v.endswith("]"):
+                            meta[k] = [t.strip().strip('"').strip("'") for t in v[1:-1].split(",") if t.strip()]
+                        else:
+                            meta[k] = [v]
+                    else:
+                        meta[k] = v
+    return meta, body
+
+
 class MemoryInspectorDialog(QDialog):
     """Rich interactive modal showing node content, cognitive metrics, and related memories."""
 
@@ -24,7 +50,14 @@ class MemoryInspectorDialog(QDialog):
         self.vault = ObsidianVaultManager()
 
         self.setWindowTitle(f"Hafıza ve Bağlam Denetleyicisi - {node_id}")
-        self.setFixedSize(620, 560)
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowMinMaxButtonsHint |
+            Qt.WindowType.WindowCloseButtonHint
+        )
+        self.resize(780, 620)
+        self.setMinimumSize(560, 440)
+        self.setSizeGripEnabled(True)
         self.setStyleSheet("""
             QDialog {
                 background-color: #080B10;
@@ -60,28 +93,62 @@ class MemoryInspectorDialog(QDialog):
                     if sub.widget():
                         sub.widget().deleteLater()
 
+        if not self.node_id or not self.node_id.strip():
+            self._render_generic_node()
+            return
+
         # 1. Determine node type
         cog_node = self.cog.get_node(self.node_id)
         report_file: Optional[Path] = None
 
         if not cog_node:
-            # Check if it's an Obsidian report
-            clean = self.node_id.replace("o-", "").lower()
-            reports = self.vault.list_reports()
-            for r in reports:
-                if clean in r["title"].lower() or clean in Path(r["path"]).stem.lower():
-                    report_file = Path(r["path"])
-                    break
-            if not report_file and self.vault.memory_file.exists() and "memory" in clean:
+            # Check direct filesystem paths
+            cand = Path(self.node_id)
+            if cand.is_file():
+                report_file = cand
+            else:
+                cand_vault = self.vault.entropy_dir / self.node_id
+                if cand_vault.is_file():
+                    report_file = cand_vault
+                elif cand_vault.with_suffix(".md").is_file():
+                    report_file = cand_vault.with_suffix(".md")
+                else:
+                    cand_rep = self.vault.reports_dir / Path(self.node_id).name
+                    if not cand_rep.name.endswith(".md"):
+                        cand_rep = cand_rep.with_suffix(".md")
+                    if cand_rep.is_file():
+                        report_file = cand_rep
+
+            clean_stem = Path(self.node_id).stem.lower().replace("o-", "").strip()
+            # If not matched directly, search reports
+            if not report_file and clean_stem:
+                reports = self.vault.list_reports()
+                # 1. Exact stem or title match
+                for r in reports:
+                    r_stem = Path(r["path"]).stem.lower()
+                    r_title = r["title"].lower().replace(" ", "_")
+                    if clean_stem == r_stem or clean_stem == r_title:
+                        report_file = Path(r["path"])
+                        break
+
+                # 2. Substring match only if term has substance and is not a generic folder name
+                if not report_file and len(clean_stem) >= 4 and clean_stem not in ["reports", "dailynotes", "entropy"]:
+                    for r in reports:
+                        r_stem = Path(r["path"]).stem.lower()
+                        if clean_stem in r_stem or r_stem in clean_stem:
+                            report_file = Path(r["path"])
+                            break
+
+            if not report_file and self.vault.memory_file.exists() and "memory" in clean_stem:
                 report_file = self.vault.memory_file
 
-            # Also check project reports/
-            if not report_file:
+            # Also check project folders
+            if not report_file and clean_stem and len(clean_stem) >= 4 and clean_stem not in ["reports", "dailynotes", "entropy"]:
                 for subfolder in ["reports", "docs", ".entropy/reports"]:
                     p_folder = config.default_project_path / subfolder
                     if p_folder.exists():
                         for f in p_folder.glob("*.md"):
-                            if clean in f.stem.lower():
+                            if clean_stem in f.stem.lower() or f.stem.lower() in clean_stem:
                                 report_file = f
                                 break
 
@@ -204,24 +271,130 @@ class MemoryInspectorDialog(QDialog):
         self.layout.addLayout(btn_box)
 
     def _render_report_node(self, p: Path):
-        content = p.read_text(encoding="utf-8", errors="replace")
+        self.setWindowTitle(f"Hafıza ve Bağlam Denetleyicisi - {p.stem}")
+        raw = p.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff")
 
-        # Header
-        hdr = QHBoxLayout()
-        title_lbl = QLabel(f"<b style='color:#9D00FF; font-size:14px;'>📄 {p.name}</b>")
-        hdr.addWidget(title_lbl)
-        hdr.addStretch()
-        badge = QLabel("<span style='background:#141C2C; color:#9D00FF; border:1px solid #9D00FF; padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;'>OBSİDİAN DOSYASI</span>")
-        hdr.addWidget(badge)
-        self.layout.addLayout(hdr)
+        meta, body = _parse_frontmatter(raw)
 
-        # Content Box
+        # Sanitize ANSI codes, terminal control artifacts, and carriage returns
+        import re
+        body = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\([a-zA-Z]|\x1b\][^\x07\x1b]*\x07|\x1b.', '', body)
+        body = body.replace('\r\n', '\n').replace('\r', '\n')
+        body = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', body).strip()
+
+        # Modern Header Card with distinct styling and no badge overlapping
+        hdr_frame = QFrame()
+        hdr_frame.setStyleSheet("""
+            QFrame {
+                background-color: #0E1420;
+                border: 1px solid #1F2B42;
+                border-left: 4px solid #BC8CFF;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+        """)
+        hdr_vbox = QVBoxLayout(hdr_frame)
+        hdr_vbox.setContentsMargins(4, 4, 4, 4)
+        hdr_vbox.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        folder_name = p.parent.name if p.parent else "Obsidian"
+        cat_tag = QLabel(f"📂 {folder_name}")
+        cat_tag.setStyleSheet("color: #8B949E; font-size: 11px; font-weight: bold;")
+        top_row.addWidget(cat_tag)
+        top_row.addStretch()
+
+        self.btn_max = QPushButton("⛶ Büyüt")
+        self.btn_max.setFixedHeight(22)
+        self.btn_max.setToolTip("Pencereyi Büyüt / Normal Boyuta Döndür")
+        self.btn_max.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #00F0FF;
+                border: 1px solid #1F2B42;
+                border-radius: 4px;
+                padding: 1px 8px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                border-color: #00F0FF;
+                background-color: #1A263C;
+            }
+        """)
+        self.btn_max.clicked.connect(self._toggle_maximize)
+        top_row.addWidget(self.btn_max)
+
+        badge = QLabel("OBSİDİAN DOSYASI")
+        badge.setStyleSheet("""
+            background-color: #1A1429;
+            color: #BC8CFF;
+            border: 1px solid #9D00FF;
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 10px;
+            font-weight: bold;
+        """)
+        top_row.addWidget(badge)
+        hdr_vbox.addLayout(top_row)
+
+        display_title = meta.get("title") or p.stem.replace("_", " ")
+        title_lbl = QLabel(f"📄 {display_title}")
+        title_lbl.setWordWrap(True)
+        title_lbl.setStyleSheet("color: #BC8CFF; font-size: 14px; font-weight: bold; padding: 2px 0;")
+        hdr_vbox.addWidget(title_lbl)
+
+        # Metadata row
+        meta_items = []
+        if meta.get("date"):
+            meta_items.append(f"📅 {meta['date']}")
+        if meta.get("project"):
+            meta_items.append(f"📁 Proje: {meta['project']}")
+        if meta.get("skill"):
+            meta_items.append(f"🎯 Yetenek: {meta['skill']}")
+
+        if meta_items or meta.get("tags"):
+            meta_row = QHBoxLayout()
+            meta_row.setSpacing(6)
+            for item_text in meta_items:
+                lbl = QLabel(item_text)
+                lbl.setStyleSheet("color: #8B949E; font-size: 10px; font-weight: bold;")
+                meta_row.addWidget(lbl)
+            if meta.get("tags"):
+                tags_list = meta["tags"] if isinstance(meta["tags"], list) else [str(meta["tags"])]
+                for t in tags_list[:4]:
+                    t_str = str(t).strip()
+                    if t_str:
+                        t_lbl = QLabel(f"#{t_str}")
+                        t_lbl.setStyleSheet("background-color: #141C2C; color: #00F0FF; border: 1px solid #1F2B42; border-radius: 3px; padding: 1px 6px; font-size: 10px;")
+                        meta_row.addWidget(t_lbl)
+            meta_row.addStretch()
+            hdr_vbox.addLayout(meta_row)
+
+        self.layout.addWidget(hdr_frame)
+
+        # Content Box - expandable with rich cyber HTML rendering
         self.layout.addWidget(QLabel("<b style='color:#8B949E; font-size:11px;'>Not Özeti ve İçerik:</b>"))
         content_box = QTextBrowser()
-        content_box.setStyleSheet("background-color: #0E1420; border: 1px solid #1F2B42; color: #F0F6FC; padding: 8px; font-size: 12px; border-radius: 4px;")
-        content_box.setFixedHeight(150)
-        content_box.setMarkdown(content[:1500] + ("..." if len(content) > 1500 else ""))
-        self.layout.addWidget(content_box)
+        content_box.setOpenExternalLinks(True)
+        content_box.setStyleSheet("""
+            QTextBrowser {
+                background-color: #0E1420;
+                border: 1px solid #1F2B42;
+                border-radius: 6px;
+                color: #F0F6FC;
+                padding: 12px 16px;
+                font-size: 13px;
+                line-height: 1.6;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
+            }
+        """)
+        content_box.setMinimumHeight(160)
+        from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
+        rendered_html = render_markdown_to_html(body[:5000] + ("..." if len(body) > 5000 else ""), base_dir=p.parent)
+        content_box.setHtml(rendered_html)
+        content_box.verticalScrollBar().setValue(0)
+        self.layout.addWidget(content_box, 1)
 
         # Related Knowledge / Wikilinks & Semantic Nodes
         self.layout.addWidget(QLabel("<b style='color:#00F0FF; font-size:12px;'>🔗 Bu Notla İlişkili Bilgi ve Bağlantılar:</b>"))
@@ -234,7 +407,7 @@ class MemoryInspectorDialog(QDialog):
 
         # 1. Backlinks in text
         import re
-        wikilinks = re.findall(r'\[\[(.*?)\]\]', content)
+        wikilinks = re.findall(r'\[\[(.*?)\]\]', body)
         if wikilinks:
             for wl in set(wikilinks[:5]):
                 target = wl.split("|")[0].strip()
@@ -245,8 +418,8 @@ class MemoryInspectorDialog(QDialog):
 
         # 2. Semantic memories matching report text
         try:
-            paragraphs = [para.strip() for para in content.split("\n\n") if para.strip() and not para.startswith("#")]
-            query_str = paragraphs[0][:150] if paragraphs else content[:100]
+            paragraphs = [para.strip() for para in body.split("\n\n") if para.strip() and not para.startswith("#")]
+            query_str = paragraphs[0][:150] if paragraphs else body[:100]
             recalled = self.cog.hybrid_recall(query_str, limit=3)
             for rel in recalled:
                 btn = QPushButton(f"🧠 [Bilişsel Bellek] {rel.content[:60]}...")
@@ -280,6 +453,17 @@ class MemoryInspectorDialog(QDialog):
         btn_box.addWidget(close_btn)
 
         self.layout.addLayout(btn_box)
+
+    def _toggle_maximize(self):
+        """Toggle maximize/restore state with button text update."""
+        if self.isMaximized():
+            self.showNormal()
+            if hasattr(self, "btn_max"):
+                self.btn_max.setText("⛶ Büyüt")
+        else:
+            self.showMaximized()
+            if hasattr(self, "btn_max"):
+                self.btn_max.setText("🗗 Küçült")
 
     def _render_generic_node(self):
         self.layout.addWidget(QLabel(f"<b style='color:#00F0FF; font-size:14px;'>🌐 Düğüm: {self.node_id}</b>"))
@@ -332,7 +516,9 @@ class MemoryInspectorDialog(QDialog):
             self.accept()
 
     def _open_standalone_report(self, file_path_str: str):
-        from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
-        self.report_win = StandaloneReportWindow()
-        self.report_win.open_report_file(file_path_str)
+        from entropy.ui.widgets.standalone_report_window import open_standalone_report_window
+        from PySide6.QtCore import QTimer
+        # Accept dialog first so the modal loop finishes and releases focus cleanly
         self.accept()
+        # Launch standalone window with slight timer so it acquires foreground reliably
+        QTimer.singleShot(80, lambda: open_standalone_report_window(file_path_str))

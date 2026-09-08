@@ -50,6 +50,7 @@ def test_reports_viewer_widget(qapp, tmp_path):
     assert viewer.list_widget.count() >= 1
     assert viewer.open_report_by_path_or_id("Test Dossier") is True
     assert "Content Dossier" in viewer.content_browser.toPlainText()
+    viewer.close()
 
 def test_floating_mode_widget(qapp):
     widget = FloatingModeWidget()
@@ -106,6 +107,8 @@ def test_ui_manager_mode_switching(qapp):
     assert ui_mgr.chat_window.isVisible()
 
     # Clean up
+    if hasattr(ui_mgr.zen_window, "tasks_widget") and ui_mgr.zen_window.tasks_widget.scheduler:
+        ui_mgr.zen_window.tasks_widget.scheduler.stop()
     ui_mgr.floating_widget.close()
     ui_mgr.zen_window.close()
     ui_mgr.chat_window.close()
@@ -118,6 +121,8 @@ def test_tasks_widget_card_layout(qapp, tmp_path):
     # Verify card size hints
     item = tasks_w.list_widget.item(0)
     assert item.sizeHint().height() >= 58
+    tasks_w.close()
+    scheduler.stop()
 
 def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     bridge = AgyProcessBridge()
@@ -151,7 +156,7 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
 
     # Verify memory badge shows real non-zero count
     assert "Düğüm" in zen.badge_memory.text()
-    assert "0 Düğüm" not in zen.badge_memory.text()
+    assert ": 0 Düğüm" not in zen.badge_memory.text()
 
     # Verify task notification creates a task pill and chat card
     bus.task_notification.emit("task-finans", "Finans Bilgisi Toplama", "c:/finans_raporu.md")
@@ -170,6 +175,8 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     viewer._zoom_out_text()
     viewer._copy_content()
 
+    if hasattr(zen, "tasks_widget") and zen.tasks_widget.scheduler:
+        zen.tasks_widget.scheduler.stop()
     zen.close()
 
 def test_memory_inspector_dialog(qapp, tmp_path):

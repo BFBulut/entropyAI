@@ -152,3 +152,13 @@ class CoreVisualizerWidget(QWidget):
         painter.drawEllipse(center, singularity_r, singularity_r)
 
         painter.end()
+
+    def closeEvent(self, event):
+        if hasattr(self, "timer") and self.timer.isActive():
+            self.timer.stop()
+        try:
+            bus.core_pulse_triggered.disconnect(self.trigger_pulse)
+            bus.core_state_changed.disconnect(self.set_state)
+        except Exception:
+            pass
+        super().closeEvent(event)

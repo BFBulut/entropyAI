@@ -187,11 +187,14 @@ def test_dream_consolidation_and_pruning(temp_cognitive_db):
 
     rules = temp_cognitive_db.dream_and_consolidate()
     assert len(rules) >= 1
-    assert "Konsolide Bilişsel Özet" in rules[0]
+    # Özet, etiket değil gerçek anı içeriği taşımalı: önceki sürüm yalnızca
+    # "N bölümsel etkileşimden damıtıldı" yazıyor ve recall'ı kirletiyordu.
+    assert "vector embeddings" in rules[0] and "Obsidian wikilinks" in rules[0]
+    assert "etkileşimden damıtıldı" not in rules[0]
 
-    # Verify a new semantic memory was created
-    semantic_nodes = temp_cognitive_db.recall("Konsolide Bilişsel Özet")
-    assert any("Konsolide Bilişsel Özet" in n["content"] for n in semantic_nodes)
+    # Verify a new semantic memory was created and is retrievable by its content
+    semantic_nodes = temp_cognitive_db.recall("vector embeddings Obsidian wikilinks")
+    assert any("Günlük bilişsel özet" in n["content"] for n in semantic_nodes)
 
     # T3.3: Pruning test - create an old, low-importance decayed memory
     old_time = time.time() - (35 * 86400.0) # 35 days ago

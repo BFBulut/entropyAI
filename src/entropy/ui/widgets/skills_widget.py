@@ -133,16 +133,16 @@ class DownloadSkillDialog(QDialog):
 
         form = QFormLayout()
         self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("https://raw.githubusercontent.com/.../SKILL.md")
-        form.addRow("Skill URL'si:", self.url_input)
+        self.url_input.setPlaceholderText("https://github.com/owner/repo veya raw SKILL.md bağlantısı")
+        form.addRow("Skill / GitHub URL:", self.url_input)
 
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Opsiyonel özel isim (boş bırakılabilir)")
+        self.name_input.setPlaceholderText("Opsiyonel özel yetenek adı (boş bırakılabilir)")
         form.addRow("Özel İsim:", self.name_input)
 
         layout.addLayout(form)
 
-        info_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>Not: Doğrudan raw SKILL.md bağlantısı giriniz. Dosya otomatik olarak indirilip tescil edilecektir.</span>")
+        info_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>Not: Doğrudan GitHub depo adresi (https://github.com/...), raw SKILL.md veya .zip arşivi bağlantısı girebilirsiniz. Otomatik olarak taranıp sisteme yüklenecektir.</span>")
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)
 
@@ -173,10 +173,13 @@ class DownloadSkillDialog(QDialog):
 class SkillsWidget(QFrame):
     """Visual dock to browse, toggle, download, and manage AI Skills."""
 
-    def __init__(self, parent=None, skill_manager: Optional[SkillManager] = None):
+    def __init__(self, parent=None, skill_manager: Optional[SkillManager] = None, bridge=None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.skill_manager = skill_manager or SkillManager()
+        # Yordam damıtma arka plan görevi olarak köprü üzerinden başlatılır;
+        # köprü verilmezse damıtma düğmesi pasif kalır, panel yine çalışır.
+        self.bridge = bridge
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 8, 10, 8)
@@ -288,6 +291,29 @@ class SkillsWidget(QFrame):
         scroll_area.setWidget(container)
         self.layout.addWidget(scroll_area)
 
+        # Reactive signal updates.
+        # Doğrudan bound method'a bağlanır; `bus` süreç ömrü boyunca yaşayan bir
+        # singleton olduğundan araya lambda konulmamalıdır: lambda'nın QObject
+        # alıcısı olmadığı için widget silindikten sonra da çağrılmaya devam eder
+        # ve "Internal C++ object already deleted" hatası üretir. Bound method'da
+        # ise Qt, alıcı yok edilince bağlantıyı kendiliğinden koparır.
+        bus.skills_updated.connect(self.refresh_skills)
+        bus.project_changed.connect(self._on_project_changed)
+        bus.playbook_updated.connect(self._on_playbook_updated)
+        bus.distill_progress.connect(self._on_distill_progress)
+
+        self.refresh_skills()
+
+    def _on_project_changed(self, new_dir: str):
+        """Update skills directory when project changes without polluting the workspace."""
+        proj_path = Path(new_dir)
+        proj_skills = proj_path / "skills"
+        if proj_skills.exists():
+            self.skill_manager.project_skills_dir = proj_skills
+            self.skill_manager.root_skills_dir = proj_skills
+        else:
+            self.skill_manager.project_skills_dir = None
+            self.skill_manager.root_skills_dir = self.skill_manager.global_skills_dir
         self.refresh_skills()
 
     def refresh_skills(self):
@@ -299,6 +325,21 @@ class SkillsWidget(QFrame):
 
         skills = self.skill_manager.list_skills()
         filter_text = self.search_input.text().strip().lower()
+
+        # Yordam durumları tek geçişte hesaplanır; kart başına tekrar tekrar
+        # kasa taraması yapmamak için. Hata durumunda paneli düşürmez, rozet gri kalır.
+        self._playbook_states = {}
+        try:
+            from entropy.memory.playbook import PlaybookStore
+
+            store = PlaybookStore()
+            for s in skills:
+                try:
+                    self._playbook_states[s.name] = store.status(s.name)
+                except Exception:
+                    self._playbook_states[s.name] = {}
+        except Exception:
+            pass
 
         for s in skills:
             if filter_text and filter_text not in s.name.lower() and filter_text not in s.description.lower():
@@ -349,6 +390,50 @@ class SkillsWidget(QFrame):
             cb.toggled.connect(lambda checked, s_name=s.name: self._on_toggle(s_name, checked))
             card_layout.addWidget(cb)
 
+            # Yordam (playbook) düğmesi: durum rozeti + damıtma tetikleyici.
+            # Renk yordamın durumunu söyler: yeşil güncel, sarı bayat/yok-ama-kaynak-var,
+            # gri kaynak yok. Kullanıcı hangi yeteneğin "öğrendiğini" tek bakışta görür.
+            pb_state = self._playbook_states.get(s.name, {})
+            state = pb_state.get("state", "kaynak-yok")
+            n_src = pb_state.get("source_count", 0)
+            if state == "guncel":
+                pb_color, pb_bg, pb_tip = "#00FF9D", "#0F2A1E", f"Yordam güncel ({pb_state.get('distilled_from', 0)} rapordan)"
+            elif state in ("bayat", "hafif-degisim"):
+                pb_color, pb_bg, pb_tip = "#FFB300", "#2A1F0A", f"Yordam bayat: {n_src} rapor var, yeniden damıtılabilir"
+            elif state == "yok":
+                pb_color, pb_bg, pb_tip = "#FFB300", "#2A1F0A", f"Yordam yok, {n_src} rapor damıtılmayı bekliyor"
+            elif state == "kismi":
+                # Kısmi damıtma (ya da yeni/değişmiş rapor): turuncu; önceden bu durum
+                # "kaynak yok" dalına düşüp gri görünüyor, düğme kapalı sanılıyordu.
+                pb_color, pb_bg, pb_tip = (
+                    "#FFB300", "#2A1F0A",
+                    f"Yordam kısmi: {pb_state.get('distilled_from', 0)}/{n_src} rapor okundu; damıtma kaldığı yerden sürer",
+                )
+            else:
+                pb_color, pb_bg, pb_tip = "#8B949E", "#141C2C", "Kaynak rapor yok; damıtılacak bir şey yok"
+
+            pb_btn = QPushButton("📘")
+            pb_btn.setFixedSize(26, 26)
+            pb_btn.setToolTip(f"{pb_tip}\nTıkla: bu yetenek için yordam damıt (AGY kotası harcar)")
+            pb_btn.setStyleSheet(
+                f"QPushButton {{ background-color:{pb_bg}; color:{pb_color}; border:1px solid {pb_color}; border-radius:4px; }}"
+                f"QPushButton:hover {{ background-color:{pb_color}; color:#080B10; }}"
+                "QPushButton:disabled { color:#3A4556; border-color:#1F2B42; background-color:#0E1420; }"
+            )
+            pb_btn.setEnabled(self.bridge is not None and n_src > 0)
+            pb_btn.clicked.connect(lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc))
+            card_layout.addWidget(pb_btn)
+
+            # İlerleme sayacı: damıtılan/toplam. Yalnızca kaynak varsa gösterilir;
+            # tamamlanınca yeşil, kısmi/bayat iken sarı.
+            if n_src > 0:
+                done = pb_state.get("distilled_from", 0)
+                counter = QLabel(f"{done}/{n_src}")
+                counter.setObjectName(f"distill_counter_{s.name}")
+                counter.setToolTip("Damıtılan rapor / toplam rapor")
+                counter.setStyleSheet(f"color:{pb_color}; font-size:10px; font-weight:bold; background:transparent; border:none; min-width:44px;")
+                card_layout.addWidget(counter)
+
             # Open folder button
             folder_btn = QPushButton("📂")
             folder_btn.setFixedSize(26, 26)
@@ -383,6 +468,53 @@ class SkillsWidget(QFrame):
 
     def _filter_skills(self):
         self.refresh_skills()
+
+    def _on_distill(self, skill_name: str, description: str = ""):
+        """Seçilen yetenek için yordam damıtmayı arka planda başlatır."""
+        if self.bridge is None:
+            QMessageBox.information(self, "Yordam Damıtma", "Damıtma için AGY köprüsü gerekli; bu panel köprüsüz açılmış.")
+            return
+        from entropy.memory.distiller import PlaybookDistiller
+
+        if skill_name in PlaybookDistiller.active_skills():
+            QMessageBox.information(
+                self, "Yordam Damıtma", f"'{skill_name}' için damıtma zaten sürüyor; ikinci zincir açılmadı."
+            )
+            return
+
+        plan = PlaybookDistiller().plan(skill_name)
+        if plan["sources_total"] == 0:
+            QMessageBox.information(self, "Yordam Damıtma", f"'{skill_name}' için kaynak rapor yok.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Yordam Damıtma",
+            f"'{skill_name}' için {plan['sources_this_pass']}/{plan['sources_total']} rapor okunacak "
+            f"(~{plan['estimated_prompt_tokens']:,} token, AGY kotası harcar).\n\n"
+            "Arka planda çalışır; bitince Skills/<yetenek>/PLAYBOOK.md yazılır.\n\nBaşlatılsın mı?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        started = PlaybookDistiller().run_via_bridge(self.bridge, skill_name, description=description or "")
+        if started and not started.get("already_running"):
+            bus.terminal_output_received.emit(
+                f"[Damıtma] '{skill_name}' başlatıldı: {started['sources']} rapor, ~{started['prompt_tokens']:,} token.\n"
+            )
+
+    def _on_playbook_updated(self, _skill_name: str):
+        self.refresh_skills()
+
+    def _on_distill_progress(self, skill_name: str, done: int, total: int):
+        """Tur bittiğinde sayaç tam yenileme beklemeden güncellenir."""
+        counter = self.findChild(QLabel, f"distill_counter_{skill_name}")
+        if counter is not None:
+            counter.setText(f"{done}/{total}")
+            color = "#00FF9D" if done >= total else "#FFB300"
+            counter.setStyleSheet(f"color:{color}; font-size:10px; font-weight:bold; background:transparent; border:none; min-width:44px;")
 
     def _on_toggle(self, skill_name: str, enabled: bool):
         self.skill_manager.toggle_skill(skill_name, enabled)
@@ -424,3 +556,14 @@ class SkillsWidget(QFrame):
                 self.refresh_skills()
             else:
                 QMessageBox.critical(self, "Hata", "Yetenek URL'den indirilemedi. Lütfen bağlantıyı kontrol edin.")
+
+    def closeEvent(self, event):
+        try:
+            bus.skills_updated.disconnect(self.refresh_skills)
+        except Exception:
+            pass
+        try:
+            bus.project_changed.disconnect(self._on_project_changed)
+        except Exception:
+            pass
+        super().closeEvent(event)

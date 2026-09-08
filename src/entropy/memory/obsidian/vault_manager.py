@@ -66,12 +66,67 @@ class ObsidianVaultManager:
             f.write(formatted)
         return daily_file
 
-    def save_research_report(self, title: str, content: str, tags: Optional[List[str]] = None) -> Path:
-        """Save a research dossier in the Reports directory with wikilinks and frontmatter."""
+    def save_research_report(
+        self,
+        title: str,
+        content: str,
+        tags: Optional[Any] = None,
+        project_name: Optional[str] = None,
+        skill_name: Optional[str] = None
+    ) -> Path:
+        """
+        Save a research dossier in the Reports directory with wikilinks, sanitized body and frontmatter.
+        Supports project-scoped and skill-scoped destination folders:
+        - If project_name provided: Entropy/Projects/<project_name>/Reports/<safe_title>.md
+        - If skill_name provided: Entropy/Skills/<skill_name>/Reports/<safe_title>.md
+        - Otherwise fallback: Entropy/Reports/<safe_title>.md
+        """
+        # Handle positional args: (title, content, project_name, skill_name)
+        actual_tags = tags
+        if isinstance(tags, str):
+            if project_name is not None and skill_name is None:
+                # Called as save_research_report(title, content, proj_name, skill_name)
+                skill_name = project_name
+                project_name = tags
+                actual_tags = None
+            elif project_name is None:
+                # Called as save_research_report(title, content, proj_name)
+                project_name = tags
+                actual_tags = None
+        elif tags is not None and not isinstance(tags, (list, tuple, set)):
+            actual_tags = [str(tags)]
+
         safe_title = "".join([c if c.isalnum() or c in " -_" else "_" for c in title]).strip()
-        report_file = self.reports_dir / f"{safe_title}.md"
+        if not safe_title:
+            safe_title = "Arastirma_Raporu"
+
+        clean_proj = "".join([c if c.isalnum() or c in " -_" else "_" for c in project_name]).strip() if project_name else None
+        clean_skill = "".join([c if c.isalnum() or c in " -_" else "_" for c in skill_name]).strip() if skill_name else None
+
+        if clean_proj:
+            target_dir = self.entropy_dir / "Projects" / clean_proj / "Reports"
+        elif clean_skill:
+            target_dir = self.entropy_dir / "Skills" / clean_skill / "Reports"
+        else:
+            target_dir = self.reports_dir
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        report_file = target_dir / f"{safe_title}.md"
         
-        tag_str = ", ".join(tags or ["entropy-ai", "research-report"])
+        # Sanitize ANSI escape codes, terminal control artifacts, carriage returns and BOM
+        import re
+        cleaned_content = content.lstrip("\ufeff")
+        cleaned_content = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\([a-zA-Z]|\x1b\][^\x07\x1b]*\x07|\x1b.', '', cleaned_content)
+        cleaned_content = cleaned_content.replace('\r\n', '\n').replace('\r', '\n')
+        cleaned_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned_content).strip()
+
+        tag_list = list(actual_tags or ["entropy-ai", "research-report"])
+        if clean_proj and f"project:{clean_proj}" not in tag_list:
+            tag_list.append(f"project:{clean_proj}")
+        if clean_skill and f"skill:{clean_skill}" not in tag_list:
+            tag_list.append(f"skill:{clean_skill}")
+
+        tag_str = ", ".join(tag_list)
         frontmatter = (
             f"---\n"
             f"title: \"{title}\"\n"
@@ -80,19 +135,38 @@ class ObsidianVaultManager:
             f"agent: Entropy AI\n"
             f"---\n\n"
         )
-        report_file.write_text(frontmatter + content, encoding="utf-8")
+        report_file.write_text(frontmatter + cleaned_content, encoding="utf-8")
         return report_file
 
-    def list_reports(self) -> List[Dict[str, str]]:
-        """List all research reports available in the vault."""
+    def get_research_reports(self) -> List[Dict[str, str]]:
+        """Recursively collect all research reports across all subfolders (global, project-scoped, skill-scoped)."""
         reports = []
-        for file in sorted(self.reports_dir.glob("*.md"), reverse=True):
+        seen_paths = set()
+
+        candidate_files: List[Path] = []
+        if self.entropy_dir.exists():
+            for p in self.entropy_dir.rglob("*.md"):
+                # Matches files in Reports/, Projects/*/Reports/, Skills/*/Reports/
+                if "Reports" in p.parts:
+                    candidate_files.append(p)
+
+        # Sort by mtime descending
+        candidate_files.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
+
+        for file in candidate_files:
+            if file in seen_paths or not file.is_file():
+                continue
+            seen_paths.add(file)
             reports.append({
                 "title": file.stem.replace("_", " "),
                 "path": str(file),
                 "modified": datetime.datetime.fromtimestamp(file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
             })
         return reports
+
+    def list_reports(self) -> List[Dict[str, str]]:
+        """List all research reports available in the vault across all subfolders."""
+        return self.get_research_reports()
 
     def list_all_notes(self) -> List[Path]:
         """List all markdown notes across all subdirectories of the Obsidian exocortex."""
@@ -239,9 +313,11 @@ class ObsidianVaultManager:
 
         for file in self.entropy_dir.rglob("*.md"):
             source_id = stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
+            is_heavy_catalog = (file.stem in ["BELLEK_HARITASI", "MEMORY"])
             try:
                 content = file.read_text(encoding="utf-8", errors="ignore")
                 extracted = self.extract_wikilinks(content)
+                is_catalog = is_heavy_catalog or (len(extracted) > 25)
                 for item in extracted:
                     target_stem = item["target"]
                     # If target matches an existing note stem, link to its full node_id
@@ -249,7 +325,8 @@ class ObsidianVaultManager:
                     links.append({
                         "source": source_id,
                         "target": target_id,
-                        "alias": item["alias"]
+                        "alias": item["alias"],
+                        "is_catalog_link": is_catalog
                     })
             except Exception:
                 continue

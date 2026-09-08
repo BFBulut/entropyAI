@@ -33,11 +33,26 @@ class CognitiveMemoryNode:
         strength = self.importance * math.exp(- (decay_rate * days_elapsed) / stability)
         return max(0.0, min(1.0, strength))
 
+# Gömme modeli. Çok dilli olması zorunlu: kullanıcı içeriğinin ve sorguların
+# büyük kısmı Türkçe ve önceki İngilizce model (BAAI/bge-small-en-v1.5) Türkçede
+# ayırt edemiyordu. Ölçüm (6 Türkçe yönlendirme sorgusu, medya vs finans):
+#     bge-small-en-v1.5   : 4/6 doğru, sınıflar arası ortalama ayrım 0.041
+#     multilingual-MiniLM : 5/6 doğru, ortalama ayrım 0.179  (4.4x daha geniş)
+# 0.04'lük ayrım gürültü seviyesindedir; hybrid_recall'da vektör ağırlığı 0.40
+# olduğu için skorun bu kısmı Türkçe sorgularda neredeyse rastgele çalışıyordu.
+EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+EMBEDDING_DIM = 384
+
+# Yedek model: çok dilli model indirilemezse en azından İngilizce içerik çalışsın.
+EMBEDDING_FALLBACK_MODEL = "BAAI/bge-small-en-v1.5"
+
+
 class LocalEmbeddingEngine:
     """Zero-API, 100% offline neural embedding engine with fast fallback (T2.1)."""
     _instance = None
     _model = None
     _is_neural = False
+    _model_name = ""
 
     @classmethod
     def get_instance(cls):
@@ -45,15 +60,30 @@ class LocalEmbeddingEngine:
             cls._instance = cls()
         return cls._instance
 
+    @classmethod
+    def reset_instance(cls):
+        """Model değişiminden sonra yeniden kurulum için (testler ve ayar değişikliği)."""
+        cls._instance = None
+
     def __init__(self):
-        try:
-            from fastembed import TextEmbedding
-            # Lightweight 384-dimensional ONNX embedding model (<5ms on CPU)
-            self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-            self._is_neural = True
-        except Exception:
-            self._model = None
-            self._is_neural = False
+        self._model = None
+        self._is_neural = False
+        self._model_name = ""
+        for candidate in (EMBEDDING_MODEL_NAME, EMBEDDING_FALLBACK_MODEL):
+            try:
+                from fastembed import TextEmbedding
+
+                self._model = TextEmbedding(model_name=candidate)
+                self._is_neural = True
+                self._model_name = candidate
+                break
+            except Exception:
+                continue
+
+    @property
+    def model_name(self) -> str:
+        """Aktif modelin adı; boş string sinirsel modelin yüklenemediğini gösterir."""
+        return self._model_name
 
     def embed_text(self, text: str) -> List[float]:
         """Generate a 384-dimensional dense embedding vector."""
@@ -153,7 +183,54 @@ class CognitiveMemorySystem:
             cols = [row[1] for row in cursor.fetchall()]
             if "embedding_json" not in cols:
                 cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_json TEXT")
+            # Gömmenin hangi modelle üretildiği kaydedilir. Farklı modeller farklı
+            # vektör uzayları üretir; karışık uzaylarda kosinüs benzerliği anlamsız
+            # sonuç verir ve bu sessizce olur. Model adı saklanınca eskiyen gömmeler
+            # tespit edilip yeniden üretilebilir.
+            if "embedding_model" not in cols:
+                cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_model TEXT")
             conn.commit()
+
+    def reembed_stale(self, batch_limit: Optional[int] = None) -> Dict[str, int]:
+        """
+        Aktif modelden farklı bir modelle üretilmiş gömmeleri yeniden hesaplar.
+
+        Model değişimi sonrası çağrılır. Yapılmazsa eski ve yeni vektörler aynı
+        havuzda karışır ve benzerlik skorları güvenilmez olur.
+        """
+        engine = LocalEmbeddingEngine.get_instance()
+        active = engine.model_name or "hash-fallback"
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, content FROM cognitive_nodes "
+                "WHERE embedding_model IS NULL OR embedding_model != ?",
+                (active,),
+            )
+            rows = cursor.fetchall()
+
+        stale_total = len(rows)
+        if batch_limit is not None:
+            rows = rows[:batch_limit]
+
+        updates = []
+        for node_id, content in rows:
+            try:
+                updates.append((json.dumps(engine.embed_text(content or "")), active, node_id))
+            except Exception:
+                continue
+
+        if updates:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.executemany(
+                    "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ? WHERE id = ?",
+                    updates,
+                )
+                conn.commit()
+
+        return {"stale": stale_total, "reembedded": len(updates), "model": active}
 
     def _seed_ego_identity(self):
         """Layer 12: Ensure core Ego / Identity persona node exists."""
@@ -207,9 +284,13 @@ class CognitiveMemorySystem:
 
                 # Check if embedding is missing or empty
                 emb = json.loads(emb_json) if emb_json else None
-                if not emb or len(emb) != 384:
-                    new_emb = LocalEmbeddingEngine.get_instance().embed_text(content)
-                    cursor.execute("UPDATE cognitive_nodes SET embedding_json = ? WHERE id = ?", (json.dumps(new_emb), nid))
+                if not emb or len(emb) != EMBEDDING_DIM:
+                    engine = LocalEmbeddingEngine.get_instance()
+                    new_emb = engine.embed_text(content)
+                    cursor.execute(
+                        "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ? WHERE id = ?",
+                        (json.dumps(new_emb), engine.model_name or "hash-fallback", nid),
+                    )
                     reembedded_count += 1
 
             conn.commit()
@@ -222,20 +303,23 @@ class CognitiveMemorySystem:
         return f"{category}-{h}"
 
     def _save_node(self, node: CognitiveMemoryNode):
+        engine = LocalEmbeddingEngine.get_instance()
         if node.embedding is None or len(node.embedding) == 0:
-            node.embedding = LocalEmbeddingEngine.get_instance().embed_text(node.content)
+            node.embedding = engine.embed_text(node.content)
+        active_model = engine.model_name or "hash-fallback"
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     importance = excluded.importance,
                     last_accessed = excluded.last_accessed,
                     access_count = cognitive_nodes.access_count + 1,
                     metadata_json = excluded.metadata_json,
-                    embedding_json = excluded.embedding_json
+                    embedding_json = excluded.embedding_json,
+                    embedding_model = excluded.embedding_model
             """, (
                 node.id,
                 node.category,
@@ -245,7 +329,8 @@ class CognitiveMemorySystem:
                 node.last_accessed,
                 node.access_count,
                 json.dumps(node.metadata or {}),
-                json.dumps(node.embedding or [])
+                json.dumps(node.embedding or []),
+                active_model
             ))
             conn.commit()
 
@@ -343,19 +428,22 @@ class CognitiveMemorySystem:
         Filters out noise where final_score < min_threshold.
         """
         now = time.time()
-        query_vector = LocalEmbeddingEngine.get_instance().embed_text(query)
+        engine = LocalEmbeddingEngine.get_instance()
+        active_model = engine.model_name or "hash-fallback"
+        query_vector = engine.embed_text(query)
         query_tokens = re_tokenize(query)
         results = []
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes")
+            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model FROM cognitive_nodes")
             rows = cursor.fetchall()
 
         nodes_to_update = []
 
         for row in rows:
             embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
+            row_model = row[9] if len(row) > 9 else None
             node = CognitiveMemoryNode(
                 id=row[0],
                 category=row[1],
@@ -369,9 +457,12 @@ class CognitiveMemorySystem:
             )
 
             # 1. Dense Vector Cosine Similarity (Weight: 0.40)
-            if not node.embedding:
-                node.embedding = LocalEmbeddingEngine.get_instance().embed_text(node.content)
-                nodes_to_update.append((json.dumps(node.embedding), node.id))
+            # Başka bir modelle üretilmiş vektör farklı bir uzaydadır; onunla
+            # kosinüs benzerliği hesaplamak sessizce yanlış sonuç verir. Bu yüzden
+            # eksik VEYA modeli uyuşmayan gömmeler burada yeniden üretilir.
+            if not node.embedding or row_model != active_model:
+                node.embedding = engine.embed_text(node.content)
+                nodes_to_update.append((json.dumps(node.embedding), active_model, node.id))
             raw_sim = cosine_similarity(query_vector, node.embedding)
             # Rescale cosine similarity to [0, 1] removing typical dense embedding anisotropy baseline (~0.50)
             vec_sim = max(0.0, min(1.0, (raw_sim - 0.50) / 0.50))
@@ -408,7 +499,10 @@ class CognitiveMemorySystem:
             try:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
-                    cursor.executemany("UPDATE cognitive_nodes SET embedding_json = ? WHERE id = ?", nodes_to_update)
+                    cursor.executemany(
+                        "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ? WHERE id = ?",
+                        nodes_to_update,
+                    )
                     conn.commit()
             except Exception:
                 pass
@@ -458,16 +552,34 @@ class CognitiveMemorySystem:
             )
             rows = cursor.fetchall()
 
+        # Eski sürümün bıraktığı içeriksiz "N etkileşimden damıtıldı" etiketleri
+        # temizlenir: 0.85 önemle kaydedildikleri için recall'da gerçek bilgiyi
+        # bastırıyorlardı.
+        self.purge_placeholder_consolidations()
+
         if len(rows) >= 2:
             date_str = time.strftime('%Y-%m-%d')
-            topics = [r[0][:80] for r in rows[:5]]
-            summary = f"Konsolide Bilişsel Özet ({date_str}): {len(rows)} bölümsel etkileşimden damıtıldı."
+            # Gerçek içerik: son bölümsel anıların gövdeleri, tekrarlar atılarak.
+            # Önceki sürüm yalnızca bir etiket ("N etkileşimden damıtıldı") yazıyordu;
+            # etiket bilgi taşımaz, recall'a girince yer kaplar ve hiçbir soruyu
+            # cevaplamaz. Asıl sentez (AGY ile) zamanlayıcı görevinde yapılır;
+            # bu düğüm o sentez gelmediğinde bile işe yarar bir özettir.
+            seen, items = set(), []
+            for content, _meta, _imp in sorted(rows, key=lambda r: r[2] or 0.0, reverse=True):
+                head = " ".join((content or "").split())[:220]
+                key = head[:60].lower()
+                if head and key not in seen:
+                    seen.add(key)
+                    items.append(head)
+                if len(items) >= 6:
+                    break
+            summary = f"Günlük bilişsel özet ({date_str}), {len(rows)} etkileşim:\n" + "\n".join(f"- {i}" for i in items)
 
             self.record_memory(
                 category="semantic",
                 content=summary,
-                importance=0.85,
-                metadata={"source": "dream_consolidation", "items_clustered": len(rows), "samples": topics}
+                importance=0.6,
+                metadata={"source": "dream_consolidation", "items_clustered": len(rows), "date": date_str}
             )
             synthesized_rules.append(summary)
 
@@ -475,13 +587,72 @@ class CognitiveMemorySystem:
             try:
                 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
-                ovm.append_to_global_memory("Otonom Bilişsel Konsolidasyon (Rüya)", f"{summary}\n- İpuçları: {'; '.join(topics)}")
+                ovm.append_to_global_memory("Otonom Bilişsel Konsolidasyon (Rüya)", summary)
             except Exception:
                 pass
 
         # Also run pruning during dream cycle
         self.prune_decayed_memories()
         return synthesized_rules
+
+    _PLACEHOLDER_RE = re.compile(r"^Konsolide Bilişsel Özet \(\d{4}-\d{2}-\d{2}\): \d+ bölümsel etkileşimden damıtıldı\.?$")
+
+    def purge_placeholder_consolidations(self) -> int:
+        """Eski konsolidasyonun ürettiği, içerik taşımayan etiket düğümlerini siler."""
+        removed = 0
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, content FROM cognitive_nodes WHERE metadata_json LIKE '%dream_consolidation%'")
+                junk = [nid for nid, content in cursor.fetchall() if self._PLACEHOLDER_RE.match((content or "").strip())]
+                if junk:
+                    cursor.executemany("DELETE FROM cognitive_nodes WHERE id = ?", [(j,) for j in junk])
+                    conn.commit()
+                    removed = len(junk)
+        except Exception:
+            pass
+        return removed
+
+    def build_consolidation_prompt(self, hours: float = 48.0, max_items: int = 30) -> Optional[str]:
+        """
+        Son bölümsel anılardan AGY ile gerçek bir sentez çıkarmak için prompt üretir.
+
+        None dönerse sentezlenecek yeterli anı yoktur. Çıktı store_consolidation()
+        ile semantic düğüm olarak kaydedilir.
+        """
+        since = time.time() - hours * 3600.0
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT content FROM cognitive_nodes WHERE category = 'episodic' AND created_at >= ? "
+                "ORDER BY importance DESC, created_at DESC LIMIT ?",
+                (since, max_items),
+            )
+            rows = [r[0] for r in cursor.fetchall() if r[0]]
+        if len(rows) < 2:
+            return None
+        body = "\n".join(f"- {' '.join(r.split())[:400]}" for r in rows)
+        return (
+            "[GÖREV: BİLİŞSEL KONSOLİDASYON]\n\n"
+            f"Aşağıda son {int(hours)} saatin {len(rows)} bölümsel anısı var. Bunlardan kalıcı, "
+            "yeniden kullanılabilir bilgi çıkar: hangi kararlar alındı, hangi tercihler ve kurallar "
+            "ortaya çıktı, neler öğrenildi. Tek seferlik ayrıntıları ve günlük gürültüyü alma.\n"
+            "En fazla 1200 karakter, madde madde, yalnızca gövde metni.\n\n"
+            f"{body}\n"
+        )
+
+    def store_consolidation(self, text: str) -> Optional[CognitiveMemoryNode]:
+        """AGY'den dönen sentezi semantic düğüm olarak kaydeder."""
+        text = (text or "").strip()
+        if len(text) < 40:
+            return None
+        node, _ = self.record_memory(
+            category="semantic",
+            content=f"Konsolide öğrenimler ({time.strftime('%Y-%m-%d')}):\n{text[:1600]}",
+            importance=0.8,
+            metadata={"source": "dream_consolidation_agy", "date": time.strftime('%Y-%m-%d')},
+        )
+        return node
 
     def prune_decayed_memories(self, min_strength: float = 0.10, days_dormant: float = 30.0) -> int:
         """

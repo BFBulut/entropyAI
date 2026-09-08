@@ -95,3 +95,11 @@ class FloatingModeWidget(QWidget):
         self.is_pinned_on_top = not self.is_pinned_on_top
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.is_pinned_on_top)
         self.show()
+
+    def closeEvent(self, event):
+        if hasattr(self, "visualizer") and self.visualizer:
+            try:
+                self.visualizer.close()
+            except Exception:
+                pass
+        super().closeEvent(event)

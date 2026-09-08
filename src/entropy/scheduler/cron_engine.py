@@ -21,6 +21,8 @@ class ScheduledTask:
     enabled: bool = True
     last_run: Optional[float] = None
     next_run: Optional[float] = None
+    task_type: str = "analiz" # "analiz" or "kodlama"
+    project_path: Optional[str] = None
 
 class TaskScheduler:
     """Cron-like background task manager executing off the UI thread."""
@@ -32,6 +34,13 @@ class TaskScheduler:
         if cls._instance is None:
             cls._instance = cls(storage_path)
         return cls._instance
+
+    @classmethod
+    def reset_instance(cls):
+        """Cleanly stop and reset the singleton instance."""
+        if cls._instance is not None:
+            cls._instance.stop()
+            cls._instance = None
 
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
@@ -45,6 +54,7 @@ class TaskScheduler:
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
+        self._stop_event = threading.Event()
         self._callback: Optional[Callable[[ScheduledTask], None]] = None
 
         self._load_tasks()
@@ -58,7 +68,10 @@ class TaskScheduler:
             try:
                 data = json.loads(self.storage_path.read_text(encoding="utf-8"))
                 for t in data:
-                    self.tasks[t["id"]] = ScheduledTask(**t)
+                    t_dict = dict(t)
+                    t_dict.setdefault("task_type", "analiz")
+                    t_dict.setdefault("project_path", None)
+                    self.tasks[t["id"]] = ScheduledTask(**t_dict)
             except Exception:
                 pass
 
@@ -74,7 +87,9 @@ class TaskScheduler:
         prompt: str,
         interval_type: str,
         interval_value: int,
-        day_of_week: Optional[int] = None
+        day_of_week: Optional[int] = None,
+        task_type: str = "analiz",
+        project_path: Optional[str] = None
     ) -> ScheduledTask:
         """Register a new recurring task."""
         now = time.time()
@@ -88,7 +103,9 @@ class TaskScheduler:
             day_of_week=day_of_week,
             enabled=True,
             last_run=None,
-            next_run=next_run
+            next_run=next_run,
+            task_type=task_type,
+            project_path=project_path
         )
         self.tasks[task_id] = task
         self._save_tasks()
@@ -140,16 +157,27 @@ class TaskScheduler:
             if self._running:
                 return
             self._running = True
+            self._stop_event.clear()
             self._thread = threading.Thread(target=self._scheduler_loop, daemon=True)
             self._thread.start()
 
-    def stop(self):
+    def stop(self, timeout: float = 1.0):
         """Stop the background scheduler loop."""
         with self._lock:
             self._running = False
+            self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def __del__(self):
+        try:
+            self.stop(timeout=0.2)
+        except Exception:
+            pass
 
     def _scheduler_loop(self):
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             now = time.time()
             triggered = []
 
@@ -159,6 +187,8 @@ class TaskScheduler:
                         triggered.append(task)
 
             for task in triggered:
+                if not self._running or self._stop_event.is_set():
+                    break
                 bus.task_triggered.emit(task.id, task.name)
                 if self._callback:
                     try:
@@ -173,4 +203,4 @@ class TaskScheduler:
                 )
                 self._save_tasks()
 
-            time.sleep(1.0)
+            self._stop_event.wait(1.0)

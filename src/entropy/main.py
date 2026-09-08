@@ -17,9 +17,24 @@ def main():
     parser.add_argument("--project", default=None, help="Project directory to mount")
     args = parser.parse_args()
 
+    # Pencereli derlemede stderr yok: kapanış nedenleri ancak dosyaya yazılırsa görülür.
+    from entropy.core.config import STATE_DIR
+    from entropy.core.crash_log import install_crash_logging
+    install_crash_logging(STATE_DIR / "logs")
+
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(config.app_name)
     app.setQuitOnLastWindowClosed(False)
+
+    # Tek kopya: zaten çalışan bir kopya varsa onu öne getirip çık. Pencere
+    # kapatılınca süreç tepside yaşadığı için ikinci başlatmalar aynı belleği
+    # paylaşan kopyalar üretiyor ve donmaya yol açıyordu.
+    from entropy.core.single_instance import SingleInstanceGuard
+    guard = SingleInstanceGuard(parent=app)
+    if not guard.try_acquire():
+        guard.notify_existing()
+        print(f"[{config.app_name}] Zaten çalışıyor; mevcut pencere öne getirildi.")
+        return 0
 
     icon_path = Path.cwd() / "entropy.ico"
     if not icon_path.exists():
@@ -32,6 +47,13 @@ def main():
     if args.project:
         bridge.set_project_directory(args.project)
 
+    # Önceki oturum bir arka plan görevi sürerken kapandıysa ledger'da o satır
+    # sonsuza dek RUNNING kalıyordu; görev panelinde hayalet iş olarak görünüyordu.
+    from entropy.core.task_ledger import task_ledger
+    orphaned = task_ledger.mark_orphans_failed()
+    if orphaned:
+        print(f"[{config.app_name}] Önceki oturumdan yarım kalan {orphaned} görev kapatıldı.")
+
     scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):
@@ -41,7 +63,25 @@ def main():
                 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
                 cog = CognitiveMemorySystem()
                 rules = cog.dream_and_consolidate()
-                bus.terminal_output_received.emit(f"[Otonom Görev] Hafıza konsolidasyonu tamamlandı ({len(rules)} kural sentezlendi).\n")
+                bus.terminal_output_received.emit(f"[Otonom Görev] Hafıza konsolidasyonu tamamlandı ({len(rules)} özet).\n")
+
+                # Gerçek sentez AGY ile, arka planda: ledger'a kaydolur, sohbeti kilitlemez.
+                # Çıktı rapor arşivine değil doğrudan bilişsel belleğe yazılır.
+                consolidation_prompt = cog.build_consolidation_prompt()
+                if consolidation_prompt:
+                    def _store(full_text: str, ok: bool, _cog=cog):
+                        if ok and _cog.store_consolidation(full_text):
+                            bus.terminal_output_received.emit("[Otonom Görev] AGY konsolidasyonu belleğe işlendi.\n")
+                            bus.cognitive_memory_updated.emit()
+
+                    bridge.send_background_task_async(
+                        task_id=f"consolidate-{int(__import__('time').time())}",
+                        task_name="Bilişsel Konsolidasyon",
+                        prompt=consolidation_prompt,
+                        mode="accept-edits",  # "plan" modu keşif/plan döngüsü tetikliyor (bkz. distiller)
+                        on_result=_store,
+                        save_report=False,
+                    )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
         elif task.id == "obsidian-sync":
@@ -71,6 +111,7 @@ def main():
     ui_manager = EntropyUIManager(bridge=bridge)
     initial_mode = args.mode or config.default_mode
     ui_manager.switch_mode(initial_mode)
+    guard.activated.connect(ui_manager.bring_to_front)
 
     print(f"[{config.app_name}] Started in {initial_mode.upper()} mode.")
     return app.exec()

@@ -136,6 +136,28 @@ class EntropyUIManager(QObject):
 
         bus.mode_changed.emit(self.current_mode)
 
+    def bring_to_front(self):
+        """
+        Mevcut moddaki pencereyi gösterip öne getirir.
+
+        İkinci bir kopya başlatıldığında tek kopya kilidi bunu çağırır; tepsiye
+        çekilmiş pencere geri gelir, kullanıcı "uygulama açılmadı" sanmaz.
+        """
+        target = {
+            "zen": self.zen_window,
+            "chat": self.chat_window,
+            "floating": self.floating_widget,
+        }.get(self.current_mode, self.floating_widget)
+        try:
+            if self.current_mode == "zen":
+                self.switch_mode("zen")
+            else:
+                target.show()
+            target.raise_()
+            target.activateWindow()
+        except Exception:
+            pass
+
     def start(self):
         """Boot into default mode (Floating by default)."""
         self.switch_mode(config.default_mode)

@@ -12,3 +12,7 @@ build/
 venv/
 *.exe
 
+
+# Gecici build dogrulama ciktisi
+dist_check/
+build_check/

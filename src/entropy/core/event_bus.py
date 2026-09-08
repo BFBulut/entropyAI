@@ -1,6 +1,7 @@
 """Central Qt Typed Event Bus for Entropy AI."""
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
+
 
 class EntropyEventBus(QObject):
     """Global singleton event bus for cross-component signaling."""
@@ -39,6 +40,28 @@ class EntropyEventBus(QObject):
     knowledge_graph_updated = Signal()   # reload knowledge graph signal
     cognitive_memory_updated = Signal()  # memory nodes updated
     skills_updated = Signal()            # skills catalog updated
+    playbook_updated = Signal(str)       # skill_name: damıtılmış yordam kaydedildi/yenilendi
+    distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor
+
+    # İşçi iş parçacıklarından ana iş parçacığına iş taşır. Alıcı bir QObject slotu
+    # olduğu için bağlantı kuyruklu olur; lambda alıcı olsaydı doğrudan işçide
+    # koşar ve Qt nesnelerine oradan dokunulurdu.
+    call_on_main = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.call_on_main.connect(self._run_on_main)
+
+    @Slot(object)
+    def _run_on_main(self, fn):
+        fn()
+
+    def invoke_on_main(self, fn) -> None:
+        """fn'i ana (bus'ın) iş parçacığında çalıştırır; zaten oradaysa hemen."""
+        if QThread.currentThread() is self.thread():
+            fn()
+        else:
+            self.call_on_main.emit(fn)
 
 # Global Event Bus Instance
 bus = EntropyEventBus()

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Set
 
 IGNORE_DIRS = {
     ".git", ".svn", ".hg", "__pycache__", ".pytest_cache", ".venv", "venv",
-    "node_modules", ".idea", ".vscode", "dist", "build", ".entropy"
+    "node_modules", ".idea", ".vscode", "dist", "build", ".entropy", "skills"
 }
 
 IGNORE_EXTENSIONS = {

@@ -13,10 +13,21 @@ This document defines the agent personas, system identities, and execution proto
 - **Permissions**: Full local workspace filesystem access within selected project directory, process spawning for `agy`, Obsidian memory vault access, Supabase memory management.
 
 ### 2. CodeArchitect Agent (Sub-Agent / Specialist)
-- **Role**: Codebase indexing, static analysis, refactoring, and automated test synthesis.
-- **Constraints**: Sandboxed to selected project root. Cannot perform network requests unless authorized.
+- **Role**: Codebase indexing, static analysis, refactoring, and concrete implementation.
+- **Persona Path**: `Agents/CodeArchitect/persona.md`
+- **Constraints**: Sandboxed to selected project root. Writes concrete code files, never verbal placeholders.
 
-### 3. MemoryConsolidator (Background Dreaming Agent)
+### 3. Tester Agent (Sub-Agent / QA & Verification)
+- **Role**: Automated test synthesis, QA verification, edge case probing, and test execution.
+- **Persona Path**: `Agents/Tester/persona.md`
+- **Constraints**: Enforces 100% test pass rate. Never weakens or deletes existing tests.
+
+### 4. Researcher Agent (Sub-Agent / Deep Research & Knowledge)
+- **Role**: Domain research, external repository evaluation, documentation synthesis, and Obsidian dossier compilation.
+- **Persona Path**: `Agents/Researcher/persona.md`
+- **Constraints**: Citations and repo recommendations must be grounded and fact-checked.
+
+### 5. MemoryConsolidator (Background Dreaming Agent)
 - **Role**: Periodically analyzes episodic memories, computes importance scores, applies Ebbinghaus forgetting curves, and compiles permanent semantic notes into Obsidian & Supabase.
 - **Trigger**: Runs during idle periods or scheduled via TaskScheduler.
 

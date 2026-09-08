@@ -31,6 +31,17 @@ class ToolSynthesizer:
         self.sandbox_root = Path(sandbox_root) if sandbox_root else Path.cwd()
         self.registered_tools: Dict[str, SynthesizedTool] = {}
         self._tool_callables: Dict[str, Callable] = {}
+        self._approval_handler: Optional[Callable[[str, Dict[str, Any]], bool]] = None
+
+    def set_approval_handler(self, handler: Optional[Callable[[str, Dict[str, Any]], bool]]):
+        """
+        Tier 2 (mutating) araçlar için onay merciini kaydeder.
+
+        Handler, aracın adını ve argümanlarını alıp çalıştırmaya izin verilip
+        verilmediğini döndürür. Kayıtlı bir handler yoksa Tier 2 araçlar
+        reddedilir (fail-closed): onay soramıyorsak çalıştırmayız.
+        """
+        self._approval_handler = handler
 
     def classify_permission_tier(self, tool_name: str, code: str) -> str:
         """Automatically classify tool into Tier 1 (safe) or Tier 2 (mutating/interactive)."""
@@ -79,11 +90,9 @@ class ToolSynthesizer:
 
         tool = self.registered_tools[tool_name]
 
-        # Enforce Tier 2 interactive approval
-        if tool.tier == ToolPermissionTier.TIER_2_MUTATING:
-            bus.tool_approval_requested.emit(tool_name, str(kwargs), f"req-{tool_name}")
-
-        # Check sandbox violation on any path arguments
+        # Check sandbox violation on any path arguments.
+        # Bu, onay adımından önce gelir: sınır dışı bir çağrı için kullanıcıya
+        # hiç onay sorulmamalı, doğrudan reddedilmeli.
         resolved_root = self.sandbox_root.resolve()
         for arg_val in kwargs.values():
             if isinstance(arg_val, (str, Path)):
@@ -98,8 +107,32 @@ class ToolSynthesizer:
                 except (ValueError, RuntimeError):
                     pass
 
+        # Enforce Tier 2 interactive approval.
+        # Sinyal yalnızca UI'ı bilgilendirir; kararı handler verir. Handler yoksa
+        # onay alınamadığı için çalıştırma reddedilir.
+        if tool.tier == ToolPermissionTier.TIER_2_MUTATING:
+            request_id = f"req-{tool_name}"
+            bus.tool_approval_requested.emit(tool_name, str(kwargs), request_id)
+
+            if self._approval_handler is None:
+                bus.tool_approval_responded.emit(request_id, False)
+                raise PermissionError(
+                    f"Approval Required: '{tool_name}' Tier 2 (mutating) bir araç ve "
+                    f"kayıtlı bir onay mercii yok. set_approval_handler() ile bir "
+                    f"onaylayıcı tanımlanmadan çalıştırılamaz."
+                )
+
+            approved = bool(self._approval_handler(tool_name, kwargs))
+            bus.tool_approval_responded.emit(request_id, approved)
+            if not approved:
+                raise PermissionError(
+                    f"Approval Denied: '{tool_name}' aracının çalıştırılması reddedildi."
+                )
+
         func = self._tool_callables.get(tool_name)
         if func:
             result = func(**kwargs)
             return {"status": "success", "result": result}
         return {"status": "success", "result": f"Executed tool {tool_name} successfully"}
+
+default_synthesizer = ToolSynthesizer()

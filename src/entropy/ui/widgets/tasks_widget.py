@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.event_bus import bus
+from entropy.core.agy_bridge import extract_windows_paths
 from entropy.scheduler.cron_engine import TaskScheduler, ScheduledTask
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
@@ -281,7 +282,6 @@ class TasksWidget(QFrame):
                 for r in rules:
                     content += f"- {r}\n"
                 rep_path = ovm.save_research_report(f"Konsolide_Hafiza_{today_str}", content, tags=["dream", "consolidation"])
-                bus.report_created.emit(str(rep_path))
                 bus.cognitive_memory_updated.emit()
                 bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
@@ -301,7 +301,6 @@ class TasksWidget(QFrame):
                 notes_count = len(ovm.list_all_notes())
                 content = f"# Obsidian Exocortex Senkronizasyon Raporu\n\n- Taranan Not Sayısı: {notes_count}\n- Günlük Kayıt: {log_path.name}\n- Senkron Zamanı: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 rep_path = ovm.save_research_report("Obsidian_Senkronizasyon_Raporu", content, tags=["sync", "obsidian"])
-                bus.report_created.emit(str(rep_path))
                 bus.cognitive_memory_updated.emit()
                 bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
@@ -323,7 +322,6 @@ class TasksWidget(QFrame):
                 ovm = ObsidianVaultManager()
                 content = f"# Kod Tabanı RAG İndeksleme Raporu\n\n- İndekslenen Kod Dosyası: {indexed_count}\n- Proje Dizini: {config.default_project_path}\n- Zaman: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 rep_path = ovm.save_research_report("Kod_Tabani_RAG_Raporu", content, tags=["rag", "codebase"])
-                bus.report_created.emit(str(rep_path))
                 bus.cognitive_memory_updated.emit()
                 bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
@@ -338,17 +336,41 @@ class TasksWidget(QFrame):
         elif task.prompt:
             bus.terminal_output_received.emit(f"[Task Scheduler] '{task.name}' görevi AGY motoruna gönderiliyor: {task.prompt}\n")
             if self.bridge:
-                exec_prompt = (
-                    f"⏰ [OTONOM PLANLI GÖREV: {task.name}]\n"
-                    f"Talimat: {task.prompt}\n\n"
-                    f"Bu görevi otonom olarak icra et. Gerekli araç ve yeteneklerini kullan. Elde ettiğin bulguları ve analizleri "
-                    f"ayrıntılı bir araştırma raporu olarak yapılandır, Obsidian Reports/ altına kaydet ve bilişsel hafıza sistemine işle."
-                )
+                task_t = getattr(task, "task_type", "analiz")
+                proj_p = getattr(task, "project_path", None)
+                if not proj_p:
+                    extracted_paths = extract_windows_paths(task.prompt)
+                    if extracted_paths:
+                        proj_p = str(extracted_paths[0])
+                if task_t != "kodlama" and any(k in task.prompt.lower() for k in ["projeyi geliştir", "kodla", "dosya oluştur", "uygula", "geliştir", "build", "develop"]):
+                    task_t = "kodlama"
+                if proj_p:
+                    try:
+                        Path(proj_p).resolve().mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                if task_t == "kodlama":
+                    exec_prompt = (
+                        f"⏰ [OTONOM KODLAMA VE PROJE GELİŞTİRME GÖREVİ: {task.name}]\n"
+                        f"Talimat: {task.prompt}\n\n"
+                        f"Bu görevi otonom olarak icra et. Bu bir proje/kodlama görevidir! "
+                        f"Sadece rapor yazmakla kalma; projenin kodlarını yaz, dosyaları diske oluştur, "
+                        f"gerekli araçları (write_to_file, replace_file_content, run_command) ve alt ajanları kullan. "
+                        f"Otomatik testleri çalıştır ve doğrula. Sonuçları özetle."
+                    )
+                else:
+                    exec_prompt = (
+                        f"⏰ [OTONOM PLANLI GÖREV: {task.name}]\n"
+                        f"Talimat: {task.prompt}\n\n"
+                        f"Bu görevi otonom olarak icra et. Gerekli araç ve yeteneklerini kullan. Elde ettiğin bulguları ve analizleri "
+                        f"ayrıntılı bir araştırma raporu olarak yapılandır, Obsidian Reports/ altına kaydet ve bilişsel hafıza sistemine işle."
+                    )
                 self.bridge.send_prompt_async(
                     prompt=exec_prompt,
                     is_background=True,
                     task_id=task.id,
-                    task_name=task.name
+                    task_name=task.name,
+                    project_path=proj_p
                 )
             else:
                 bus.terminal_output_received.emit("[Task Scheduler Uyarı] AGY Bridge bağlı değil, görev gönderilemedi.\n")
@@ -373,19 +395,29 @@ class TasksWidget(QFrame):
         """Dialog to schedule a new recurring task."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Yeni Otonom Görev Ekle")
-        dialog.setFixedWidth(380)
+        dialog.setFixedWidth(400)
         dialog.setStyleSheet("background-color: #0E1420; color: #F0F6FC;")
 
         d_layout = QVBoxLayout(dialog)
 
         d_layout.addWidget(QLabel("Görev Adı:"))
         name_input = QLineEdit()
-        name_input.setPlaceholderText("örn: Proje Git Durumu Raporu")
+        name_input.setPlaceholderText("örn: Proje Geliştirme veya Git Durumu Raporu")
         d_layout.addWidget(name_input)
+
+        d_layout.addWidget(QLabel("Görev Türü:"))
+        task_type_combo = QComboBox()
+        task_type_combo.addItems(["analiz", "kodlama"])
+        d_layout.addWidget(task_type_combo)
+
+        d_layout.addWidget(QLabel("Hedef Proje Dizini (Opsiyonel):"))
+        proj_input = QLineEdit()
+        proj_input.setPlaceholderText("örn: C:\\Entropy Agent Desk")
+        d_layout.addWidget(proj_input)
 
         d_layout.addWidget(QLabel("Talimat / Prompt:"))
         prompt_input = QLineEdit()
-        prompt_input.setPlaceholderText("örn: Git durumunu kontrol et ve özetle")
+        prompt_input.setPlaceholderText("örn: Projeyi geliştir, mimariyi kur ve testleri yaz")
         d_layout.addWidget(prompt_input)
 
         d_layout.addWidget(QLabel("Tekrar Periyodu:"))
@@ -410,12 +442,22 @@ class TasksWidget(QFrame):
             if not name:
                 return
             t_id = f"custom-{int(time.time())}"
+            proj_val = proj_input.text().strip() or None
+            selected_type = task_type_combo.currentText()
+            if not proj_val and prompt:
+                extracted = extract_windows_paths(prompt)
+                if extracted:
+                    proj_val = str(extracted[0])
+            if selected_type == "analiz" and any(k in prompt.lower() for k in ["projeyi geliştir", "kodla", "dosya oluştur", "uygula", "geliştir", "build", "develop"]):
+                selected_type = "kodlama"
             self.scheduler.schedule_task(
                 task_id=t_id,
                 name=name,
                 prompt=prompt,
                 interval_type=type_combo.currentText(),
-                interval_value=val_input.value()
+                interval_value=val_input.value(),
+                task_type=selected_type,
+                project_path=proj_val
             )
             dialog.accept()
             self.refresh_tasks()
@@ -428,3 +470,12 @@ class TasksWidget(QFrame):
         d_layout.addLayout(btn_box)
 
         dialog.exec()
+
+    def closeEvent(self, event):
+        if self.scheduler:
+            try:
+                self.scheduler.stop()
+            except Exception:
+                pass
+        super().closeEvent(event)
+

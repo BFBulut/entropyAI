@@ -9,12 +9,141 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Callable, List, Dict, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
 from entropy.core.event_bus import bus
 from entropy.core.config import config, CHAT_HISTORY_FILE
+from entropy.core.task_ledger import task_ledger, TaskStatus
+from entropy.core.project_lock import project_lock_manager
+
+def is_trailing_sentence_word(word: str) -> bool:
+    w = re.sub(r'[^a-zA-Z0-9çğıöşüÇĞİÖŞÜ]', '', word.lower())
+    if not w:
+        return True
+    tr_map = str.maketrans("çğıöşü", "cgiosu")
+    w_norm = w.translate(tr_map)
+    sentence_prefixes = (
+        "proje", "klasor", "dizin", "gelis", "kod", "olustur", "yap", "yaz",
+        "test", "dosya", "icin", "ile", "veya", "lutfen", "calis", "alan",
+        "konum", "kaydet", "tasi", "kopyala"
+    )
+    exact_stopwords = {
+        "ve", "ile", "icin", "is", "in", "to", "and", "the", "for", "with",
+        "about", "create", "build", "develop", "run", "test", "write", "make"
+    }
+    if w_norm in exact_stopwords:
+        return True
+    if any(w_norm.startswith(p) for p in sentence_prefixes):
+        return True
+    return False
+
+
+def extract_windows_paths(text: str) -> List[Path]:
+    """Extract Windows absolute directory paths from user prompt text."""
+    found: List[Path] = []
+    if not text or ":" not in text:
+        return found
+
+    # 1. Quoted paths (highest precedence: explicit quotes define boundaries)
+    for m in re.findall(r'["\']([A-Za-z]:\\[^"\'\r\n<>|*?]+)["\']', text):
+        clean = m.strip()
+        try:
+            p = Path(clean).resolve()
+            if p not in found:
+                found.append(p)
+        except Exception:
+            pass
+
+    # 2. Match any candidate sequence starting with drive letter
+    for m in re.findall(r'(?:^|[\s(])([A-Za-z]:\\[^"\'\r\n<>|*?]+)', text):
+        cand = m.strip().rstrip(".,;:)")
+        # Check if the full candidate exists on disk
+        try:
+            p = Path(cand).resolve()
+            if p.exists():
+                if p not in found:
+                    found.append(p)
+                continue
+        except Exception:
+            pass
+
+        # If candidate doesn't exist as-is, peel off trailing words from right to left to see if prefix exists on disk
+        parts = cand.split()
+        matched_existing = False
+        for i in range(len(parts) - 1, 0, -1):
+            sub_cand = " ".join(parts[:i]).rstrip(".,;:)")
+            try:
+                sub_p = Path(sub_cand).resolve()
+                if sub_p.exists():
+                    if sub_p not in found:
+                        found.append(sub_p)
+                    matched_existing = True
+                    break
+            except Exception:
+                pass
+
+        if matched_existing:
+            continue
+
+        # 3. If it doesn't exist on disk at all (e.g. a new project path being created):
+        # Collect tokens starting from parts[0], stopping immediately when a sentence word is met or file extension reached
+        first_token = parts[0].rstrip(".,;:)") if parts else ""
+        if not first_token:
+            continue
+        path_tokens = [first_token]
+        if not re.search(r'\.[a-zA-Z0-9]{1,5}$', first_token):
+            for token in parts[1:4]:
+                clean_tok = token.rstrip(".,;:)")
+                if is_trailing_sentence_word(clean_tok):
+                    break
+                path_tokens.append(clean_tok)
+                if re.search(r'\.[a-zA-Z0-9]{1,5}$', clean_tok):
+                    break
+
+        chosen_str = " ".join(path_tokens).rstrip(".,;:)")
+        try:
+            chosen = Path(chosen_str).resolve()
+            if chosen not in found:
+                found.append(chosen)
+        except Exception:
+            pass
+
+    return found
+
+
+# Windows'ta CreateProcess komut satırı 32.767 karakterle sınırlı. Prompt bu sınıra
+# yaklaşınca (yordam damıtma: 24 rapor ≈ 60k karakter) agy "[WinError 206] The
+# filename or extension is too long" ile hiç başlamıyordu. Bu eşiğin üstündeki
+# prompt'lar argv yerine stdin'den, agy'nin --input-format stream-json NDJSON
+# biçimiyle verilir.
+#
+# Eşik, sohbet işçisinin zaten uyguladığı güvenli yükle aynı (26.500): işçi sistem
+# bağlamını kırparak yükü bu değerin altında tutar ve kullanıcı metnine dokunmaz
+# (test_windows_32kb_limit_never_truncates_user_prompt). Böylece olağan sohbetler
+# kanıtlanmış argv yolunda kalır; stdin yalnızca kırpmanın çare olmadığı, kırpma
+# uygulanmayan arka plan prompt'ları (damıtma, konsolidasyon) için devreye girer.
+ARGV_PROMPT_SAFE_LIMIT = 26_500
+
+
+def build_stdin_prompt_payload(prompt: str) -> str:
+    """
+    agy --input-format stream-json için tek satırlık kullanıcı mesajı üretir.
+
+    Şema, kotasız problarla doğrulandı: {"event":"user","message":{"role":"user",
+    "content":"..."}}. Eksik "event" / "message" / "content" alanları agy
+    tarafından tur başlatılmadan reddedilir.
+    """
+    return json.dumps(
+        {"event": "user", "message": {"role": "user", "content": prompt}},
+        ensure_ascii=False,
+    ) + "\n"
+
+
+def prompt_via_stdin(prompt: str) -> bool:
+    return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
+
 
 class AgyProcessBridge(QObject):
     """Bridges Entropy AI to the authenticated local Antigravity (agy) CLI."""
@@ -31,6 +160,12 @@ class AgyProcessBridge(QObject):
         self.current_model: str = self.selected_model or config.model_fallback_name
         self.current_conversation_id: Optional[str] = config.last_conversation_id
         self.total_tokens_used: int = 0
+        # Arka plan görevlerinin (damıtma, konsolidasyon, zamanlanmış araştırma)
+        # uygulama oturumu boyunca harcadığı toplam. Sohbet sayaçlarından ayrı
+        # tutulur: her arka plan görevi kendi AGY konuşmasıdır ve önceden hiç
+        # sayılmıyordu — rozet damıtma sırasında "Tokens: 0" gösteriyordu.
+        self.background_total_tokens: int = 0
+        self.last_background_usage: Dict[str, int] = {}
         self.latest_input_tokens: int = 0
         self.latest_output_tokens: int = 0
         self.latest_thinking_tokens: int = 0
@@ -51,7 +186,11 @@ class AgyProcessBridge(QObject):
         self.session_turn_count: int = 0
         self.active_project_dir: Path = config.default_project_path
         self.conversation_history: List[Dict[str, str]] = []
+        # Son turda devreye giren yetenek; "bunu slayt yap" gibi göndermeli takip
+        # mesajlarında sınıflandırıcıya öncelik ipucu olarak verilir.
+        self.last_active_skill: Optional[str] = None
         self._current_process: Optional[subprocess.Popen] = None
+        self._background_processes: Dict[str, subprocess.Popen] = {}
         self._is_running: bool = False
         self._prompt_queue: List[Tuple[str, Optional[List[str]], str]] = []
         self._lock = threading.Lock()
@@ -59,9 +198,48 @@ class AgyProcessBridge(QObject):
         # Load persisted conversation history if available
         if CHAT_HISTORY_FILE.exists():
             try:
-                self.conversation_history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+                raw_history = json.loads(CHAT_HISTORY_FILE.read_text(encoding="utf-8"))
+                self.conversation_history = [
+                    m for m in raw_history
+                    if m.get("content", "").strip() not in ["Merhaba, bu proje nedir?", "Hello"]
+                ]
             except Exception:
                 self.conversation_history = []
+
+
+    def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
+        """
+        Uzun prompt'u argv'den çıkarıp stdin NDJSON yüküne çevirir.
+
+        cmd içindeki "-p <prompt>" çiftini bulur; prompt ARGV_PROMPT_SAFE_LIMIT'i
+        aşıyorsa argümanı boşaltır, "--input-format stream-json" ekler ve
+        Popen'e yazılacak satırı döndürür. Aşmıyorsa cmd'ye dokunmaz, None döner.
+        """
+        try:
+            idx = cmd.index("-p")
+        except ValueError:
+            return None
+        if idx + 1 >= len(cmd) or not prompt_via_stdin(cmd[idx + 1]):
+            return None
+        payload = build_stdin_prompt_payload(cmd[idx + 1])
+        cmd[idx + 1] = ""
+        if "--input-format" not in cmd:
+            cmd.extend(["--input-format", "stream-json"])
+        return payload
+
+    @staticmethod
+    def _feed_stdin(proc, payload: Optional[str]):
+        """Yükü sürecin stdin'ine yazıp kapatır; yük yoksa hiçbir şey yapmaz."""
+        if not payload or getattr(proc, "stdin", None) is None:
+            return
+        try:
+            proc.stdin.write(payload)
+            proc.stdin.flush()
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
 
     @property
     def is_running(self) -> bool:
@@ -139,78 +317,100 @@ class AgyProcessBridge(QObject):
             pass
         return config.available_models
 
-    def get_cognitive_context(self, prompt: str) -> str:
-        """Retrieve relevant Obsidian MEMORY.md and cognitive memory nodes to inject into agent consciousness."""
-        # Casual greetings do not require heavy technical context injection
+    def recent_user_turns(self, n: int = 2) -> List[str]:
+        """Son n kullanıcı mesajı; sınıflandırıcının anlamsal sorgusunu zenginleştirir."""
+        try:
+            turns = [m.get("content", "") for m in self.conversation_history if m.get("role") == "user"]
+            return [t for t in turns[-n:] if isinstance(t, str) and t.strip()]
+        except Exception:
+            return []
+
+    def detect_skill_for_prompt(self, prompt: str, sm=None):
+        """
+        Mesaj için yetenek seçer; konuşma bağlamını sınıflandırıcıya taşır.
+
+        Tüm çağrı noktaları (bağlam kurulumu, işçi, arayüz rozeti) buradan geçer;
+        böylece son yetenek önceliği ve geçmiş her yerde aynı biçimde uygulanır.
+        """
+        if sm is None:
+            from entropy.skills.manager import SkillManager
+            sm = SkillManager(project_dir=getattr(self, "active_project_dir", None))
+        return sm.auto_detect_skill_for_prompt(
+            prompt,
+            last_skill=self.last_active_skill,
+            history=self.recent_user_turns(2),
+        )
+
+    def get_cognitive_context(self, prompt: str, target_skill=None, token_budget: int = None) -> str:
+        """
+        Ajana enjekte edilecek bilişsel bağlamı üretir.
+
+        Toplama işi CognitiveContextBuilder'a devredilmiştir. Önceki sürüm sabit
+        dilimler kullanıyordu (MEMORY.md'nin ilk 750 karakteri, ilk 2 raporun ilk
+        satırının ilk 180 karakteri, 4 anı). Bu seçim alakaya değil sıraya dayandığı
+        için kasadaki içeriğin yaklaşık %0,17'si ve çoğu ilgisiz kısmı gidiyordu.
+        Yeni yol, sabit bir token bütçesini öncelik sırasına göre doldurur:
+        yetenek yordamı (playbook) > ilgili anılar > rapor alıntıları > proje > kod.
+        """
+        # Kısa selamlaşmalar ağır bağlam enjeksiyonu gerektirmez.
         is_greeting = prompt.strip().lower() in [
             "selam", "selamlar", "merhaba", "merhabalar", "hey", "nasılsın",
             "günaydın", "iyi akşamlar", "iyi geceler", "naber"
         ]
-        if is_greeting:
+        if is_greeting and not target_skill:
             return ""
 
-        context_parts = []
-
-        # 1. Read Global MEMORY.md
-        mem_file = config.obsidian_vault_path / "Entropy" / "MEMORY.md"
-        if mem_file.exists():
+        if target_skill is None:
             try:
-                mem_text = mem_file.read_text(encoding="utf-8", errors="ignore").strip()
-                if mem_text:
-                    context_parts.append(f"[Kalıcı Bilişsel Hafıza (Obsidian MEMORY.md)]:\n{mem_text[:750]}")
+                from entropy.skills.manager import SkillManager
+                sm = SkillManager(project_dir=getattr(self, "active_project_dir", None))
+                target_skill = self.detect_skill_for_prompt(prompt, sm=sm)
             except Exception:
                 pass
 
-        # 2. Query SQLite / pgvector cognitive memory
+        parts = []
         try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
-            cog = CognitiveMemorySystem()
-            recalled = cog.recall(prompt, limit=4)
-            if recalled:
-                items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
-                if items:
-                    context_parts.append("[Hatırlanan İlgili Bilgiler / Anılar]:\n" + "\n".join(items))
-        except Exception:
-            pass
+            from entropy.memory.context_builder import CognitiveContextBuilder, DEFAULT_TOKEN_BUDGET
 
-        # 3. Query Project RAG Indexer for codebase context (only for technical/code queries)
-        is_code_or_tech = any(w in prompt.lower() for w in [
-            "kod", "dosya", "hata", "fonksiyon", "class", "test", "build", "mcp", "hafıza", "rag", "terminal", "mode"
-        ])
-        if is_code_or_tech:
-            try:
-                from entropy.memory.rag.project_indexer import ProjectIndexer
-                indexer = ProjectIndexer(self.active_project_dir)
-                indexer.scan_and_index(max_files=120)
-                matches = indexer.search_codebase(prompt, top_k=3)
-                if matches:
-                    snippets = [f"• [{m['path']}] {m['snippet']}" for m in matches]
-                    context_parts.append("[İlgili Proje Kodları / Belgeler]:\n" + "\n".join(snippets))
-            except Exception:
-                pass
+            builder = CognitiveContextBuilder()
+            ctx = builder.build(
+                prompt,
+                skill_name=target_skill.name if target_skill else None,
+                token_budget=token_budget or DEFAULT_TOKEN_BUDGET,
+                project_dir=getattr(self, "active_project_dir", None),
+            )
+            self.last_context_summary = ctx.summary()
+            rendered = ctx.render()
+            if rendered.strip():
+                parts.append(rendered)
+        except Exception as e:
+            bus.terminal_output_received.emit(f"[Bağlam Kurulum Hatası]: {e}\n")
 
-        # 4. Inject Active Skills & Tools Ecosystem (Progressive Disclosure)
+        # Aktif yetenek kataloğu ayrı tutulur: bütçeye tabi değildir, çünkü ajanın
+        # hangi araçlara sahip olduğunu her turda eksiksiz bilmesi gerekir.
         try:
             from entropy.skills.manager import SkillManager
-            sm = SkillManager()
-            manifest = sm.get_skills_manifest()
+            sm = SkillManager(project_dir=self.active_project_dir)
+            manifest = sm.get_skills_manifest(active_skill=target_skill.name if target_skill else None)
             if manifest:
-                context_parts.append(manifest)
+                parts.append(manifest)
         except Exception:
             pass
 
-        return "\n\n".join(context_parts)
+        return "\n\n".join(parts)
 
-    def get_mini_cognitive_context(self, prompt: str) -> str:
+    def get_mini_cognitive_context(self, prompt: str, target_skill=None) -> str:
         """Lightweight memory retrieval for follow-up turns."""
         try:
             from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
             cog = CognitiveMemorySystem()
-            recalled = cog.recall(prompt, limit=2)
+            q = f"{target_skill.name} {prompt}" if target_skill else prompt
+            recalled = cog.recall(q, limit=2)
             if recalled:
                 items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
                 if items:
-                    return "[Bağlamsal Hafıza]:\n" + "\n".join(items)
+                    tag = f"Bağlamsal Hafıza ({target_skill.name})" if target_skill else "Bağlamsal Hafıza"
+                    return f"[{tag}]:\n" + "\n".join(items)
         except Exception:
             pass
         return ""
@@ -233,7 +433,22 @@ class AgyProcessBridge(QObject):
     def set_project_directory(self, project_path: Path | str):
         """Bind Entropy AI to a specific project folder."""
         self.active_project_dir = Path(project_path).resolve()
+        config.default_project_path = self.active_project_dir
+        config.save_settings()
         bus.project_changed.emit(str(self.active_project_dir))
+        bus.terminal_output_received.emit(f"\n[Proje Değiştirildi]: Çalışma alanı '{self.active_project_dir.name}' ({self.active_project_dir}) olarak ayarlandı.\n")
+
+        def _bg_index():
+            try:
+                from entropy.memory.rag.project_indexer import ProjectIndexer
+                idx = ProjectIndexer(self.active_project_dir)
+                count = idx.scan_and_index(max_files=100)
+                bus.terminal_output_received.emit(f"[RAG İndeksleyici] '{self.active_project_dir.name}' projesinde {count} dosya indekslendi.\n")
+            except Exception:
+                pass
+
+        threading.Thread(target=_bg_index, daemon=True).start()
+
 
     def detect_model_from_text(self, text: str) -> Optional[str]:
         """Extract model name dynamically from text without hardcoding."""
@@ -244,6 +459,79 @@ class AgyProcessBridge(QObject):
                 if extracted and extracted != "Unknown":
                     return extracted
         return None
+
+    def is_code_modifying_intent(self, prompt: str, mode: str = "accept-edits") -> bool:
+        """Determine whether a prompt intends to modify codebase files vs pure reading/conversation."""
+        if mode in ["code", "write", "mutate", "edit"]:
+            return True
+        if mode in ["plan", "read", "read-only"]:
+            return False
+
+        tr_map = str.maketrans("\u00e7\u011f\u0131\u00f6\u015f\u00fc\u00c7\u011e\u0130\u00d6\u015e\u00dc", "cgiosuCGIOSU")
+        prompt_norm = prompt.translate(tr_map).strip().lower()
+
+        # Check explicit commands
+        if any(prompt_norm.startswith(cmd) for cmd in ["/edit", "/write", "/create", "/fix", "/patch"]):
+            return True
+
+        # Check for informational or conversational questions
+        q_pattern = (
+            r"\b(?:selam|merhaba|hey|nasilsin|gunaydin|iyi aksamlar|kimsin|"
+            r"nedir|nasil|ne demek|acikla|ozetle|oku|goster|listele|"
+            r"what is|how does|how to|explain|summarize|read|show|list|who are)\b"
+        )
+        is_conversational = bool(re.search(q_pattern, prompt_norm))
+        if is_conversational:
+            has_modifying_directive = any(re.search(rf"\b{w}", prompt_norm) for w in [
+                "uygula", "kodunu yaz", "kodu yaz", "degisikligi yap", "degisiklikleri yap",
+                "dosyayi guncelle", "dosyalari guncelle", "apply", "commit", "save", "fix this", "duzelt"
+            ])
+            if not has_modifying_directive:
+                return False
+
+        modifying_patterns = [
+            # Turkish verbs with conjugated suffixes (e.g. guncelleyelim, yapalim, ekleyelim, duzeltelim...)
+            r"\bguncel(?:le|leme)",
+            r"\bdegis(?:tir|iklik)",
+            r"\bolustur",
+            r"\bduzelt",
+            r"\bduzenle",
+            r"\bekle",
+            r"\bsil(?:me|elim|iniz|dir)?\b",
+            r"\bkodla(?:ma|mak|yalim|yiniz|r misin|rmisin|\b)",
+            r"\buygula",
+            r"\brefakt?or",
+            r"\byaz(?:alim|iniz|dir|ar misin|armisin|alim mi|\b)",
+            r"(?:guncelleme|degisiklik|duzeltme|ekleme|refactor).*\byap(?:alim|iniz|ar misin|armisin|\b)",
+            r"\byap(?:alim|iniz|ar misin|armisin)?\b.*(?:guncelleme|degisiklik|duzeltme|ekleme|refactor)",
+            # English verbs
+            r"\b(?:write|writing|rewrite)\b",
+            r"\b(?:edit|editing)\b",
+            r"\b(?:modify|modifying|modification)\b",
+            r"\b(?:update|updating)\b",
+            r"\b(?:create|creating)\b",
+            r"\b(?:delete|deleting|remove|removing)\b",
+            r"\b(?:fix|fixing)\b",
+            r"\b(?:implement|implementing)\b",
+            r"\b(?:patch|patching)\b",
+            r"\b(?:refactor|refactoring)\b",
+            r"\b(?:add|adding)\b",
+            r"\b(?:overwrite|overwriting)\b",
+        ]
+
+        for pat in modifying_patterns:
+            if re.search(pat, prompt_norm):
+                return True
+
+        compound_patterns = [
+            r"(?:dosya|class|fonksiyon|script|test|kodu|modul)\s+(?:yaz|olustur|degistir|ekle|sil|duzelt|guncelle)",
+            r"(?:write|create|edit|modify|add|delete|update)\s+(?:file|class|function|script|code)",
+        ]
+        for cp in compound_patterns:
+            if re.search(cp, prompt_norm):
+                return True
+
+        return False
 
     def _truncate_and_summarize_context(self) -> List[Dict[str, str]]:
         """Apply sliding window context truncation (RULE: agent-ui-routing)."""
@@ -281,21 +569,31 @@ class AgyProcessBridge(QObject):
         mode: str = "accept-edits",
         is_background: bool = False,
         task_id: Optional[str] = None,
-        task_name: Optional[str] = None
+        task_name: Optional[str] = None,
+        project_path: Optional[str] = None
     ):
         """Execute a user prompt against agy CLI, queueing if currently busy."""
         if is_background:
-            self.send_background_task_async(
-                task_id=task_id or "task-bg",
-                task_name=task_name or "Otonom Görev",
-                prompt=prompt,
-                mode=mode
-            )
+            if project_path:
+                self.send_background_task_async(
+                    task_id=task_id or "task-bg",
+                    task_name=task_name or "Otonom Görev",
+                    prompt=prompt,
+                    mode=mode,
+                    project_path=project_path
+                )
+            else:
+                self.send_background_task_async(
+                    task_id=task_id or "task-bg",
+                    task_name=task_name or "Otonom Görev",
+                    prompt=prompt,
+                    mode=mode
+                )
             return
 
         with self._lock:
             if self._is_running:
-                self._prompt_queue.append((prompt, image_attachments, pdf_attachments, active_skill, mode))
+                self._prompt_queue.append((prompt, image_attachments, pdf_attachments, active_skill, mode, project_path))
                 bus.terminal_output_received.emit(
                     f"\n[Entropy Core] Başka bir işlem yürütülüyor. Mesajınız sıraya alındı ({len(self._prompt_queue)}. sırada)...\n"
                 )
@@ -304,7 +602,7 @@ class AgyProcessBridge(QObject):
 
         thread = threading.Thread(
             target=self._execute_prompt_worker,
-            args=(prompt, image_attachments, pdf_attachments, active_skill, mode),
+            args=(prompt, image_attachments, pdf_attachments, active_skill, mode, project_path),
             daemon=True
         )
         thread.start()
@@ -314,12 +612,28 @@ class AgyProcessBridge(QObject):
         task_id: str,
         task_name: str,
         prompt: str,
-        mode: str = "accept-edits"
+        mode: str = "accept-edits",
+        project_path: Optional[str] = None,
+        on_result: Optional[Callable[[str, bool], None]] = None,
+        save_report: bool = True,
+        agent: Optional[str] = None,
     ):
-        """Execute an autonomous background task without locking the interactive user chat UI."""
+        """
+        Execute an autonomous background task without locking the interactive user chat UI.
+
+        agent: agy'nin --agent seçeneği; araç kullanımı kısıtlı bir alt ajan (ör.
+        damıtma) ile çalıştırmak için. None ise varsayılan ajan.
+
+        on_result(full_text, success): görev bitince tam çıktıyla çağrılır. Sinyaller
+        yalnızca kısa özet ve rapor yolu taşıdığı için, çıktının tamamına ihtiyaç
+        duyan tüketiciler (yordam damıtma, bilişsel konsolidasyon) bunu kullanır.
+        save_report=False: çıktı kasaya araştırma raporu olarak yazılmaz; ara
+        ürünlerin rapor arşivini kirletmemesi ve sonraki damıtmaya kaynak olarak
+        geri dönmemesi için.
+        """
         thread = threading.Thread(
             target=self._execute_background_task_worker,
-            args=(task_id, task_name, prompt, mode),
+            args=(task_id, task_name, prompt, mode, project_path, on_result, save_report, agent),
             daemon=True
         )
         thread.start()
@@ -329,99 +643,281 @@ class AgyProcessBridge(QObject):
         task_id: str,
         task_name: str,
         prompt: str,
-        mode: str = "accept-edits"
+        mode: str = "accept-edits",
+        project_path: Optional[str] = None,
+        on_result: Optional[Callable[[str, bool], None]] = None,
+        save_report: bool = True,
+        agent: Optional[str] = None,
     ):
-        agy_bin = self.find_agy_executable()
-        bus.terminal_output_received.emit(
-            f"\n[⏰ Otonom Arka Plan Görevi: {task_name}] Başlatıldı...\n"
-        )
-        bus.core_pulse_triggered.emit(0.7)
+        project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
+        if not project_dir.exists():
+            try:
+                project_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
 
-        cmd = [
-            agy_bin,
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--mode", mode,
-            "--dangerously-skip-permissions",
-            "--add-dir", str(self.active_project_dir),
-        ]
-        if self.selected_model and self.selected_model != config.model_fallback_name:
-            cmd.extend(["--model", self.selected_model])
+        # 1. Record task start in SQLite ledger
+        task_ledger.record_task_start(task_id=task_id, task_name=task_name, project_path=str(project_dir))
 
-        full_response_acc = []
-        ret_code = -1
+        write_acquired = False
         try:
-            creationflags = 0
-            if os.name == "nt":
-                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            if project_lock_manager.is_write_locked(project_dir):
+                bus.terminal_output_received.emit(
+                    f"\n[Proje Kilidi: Arka plan görevi için kilit bekleniyor ({task_name})...]\n"
+                )
+            write_acquired = project_lock_manager.acquire_write(project_dir, timeout=60.0)
+            if not write_acquired:
+                err_msg = f"Arka plan görevi '{task_name}' proje yazma kilidini (write lock) zaman aşımı nedeniyle alamadı."
+                bus.terminal_output_received.emit(f"\n[Proje Kilidi Hatası]: {err_msg}\n")
+                task_ledger.record_task_failure(task_id=task_id, error=err_msg)
+                bus.task_completed.emit(task_id, False)
+                return
 
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creationflags,
-                cwd=str(self.active_project_dir) if self.active_project_dir.exists() else None
+            agy_bin = self.find_agy_executable()
+            bus.terminal_output_received.emit(
+                f"\n[⏰ Otonom Arka Plan Görevi: {task_name}] Başlatıldı...\n"
             )
+            bus.core_pulse_triggered.emit(0.7)
 
-            for raw_line in iter(proc.stdout.readline, ''):
-                if not raw_line:
-                    break
-                line_str = raw_line.strip()
-                if not line_str:
-                    continue
+            cmd = [
+                agy_bin,
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--mode", mode,
+                "--print-timeout", "30m",
+                "--dangerously-skip-permissions",
+                "--add-dir", str(project_dir),
+            ]
+            if self.selected_model and self.selected_model != config.model_fallback_name:
+                cmd.extend(["--model", self.selected_model])
+            if agent:
+                cmd.extend(["--agent", agent])
 
+            effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', prompt, re.IGNORECASE)
+            if effort_m:
+                cmd.extend(["--effort", effort_m.group(1).lower()])
+            elif (
+                re.search(r'(?:^|\s)/boost\b', prompt, re.IGNORECASE) or
+                any(k in prompt.lower() for k in ["otonom kodlama", "proje geliştir", "geliştir", "boost", "teamwork", "subagent", "alt ajan"])
+            ):
+                cmd.extend(["--effort", "high"])
+
+            # Detect any explicit Windows paths in prompt and grant access via --add-dir
+            for p_obj in extract_windows_paths(prompt):
                 try:
-                    data = json.loads(line_str)
-                    event = data.get("event")
+                    if (p_obj.exists() or p_obj.parent.exists()) and str(p_obj) not in cmd:
+                        if not p_obj.exists() and "." not in p_obj.name:
+                            try:
+                                p_obj.mkdir(parents=True, exist_ok=True)
+                            except Exception:
+                                pass
+                        cmd.extend(["--add-dir", str(p_obj)])
+                except Exception:
+                    pass
 
-                    if event == "step_update":
-                        step = data.get("step_update", {})
-                        text_delta = step.get("text_delta")
-                        if text_delta:
-                            bus.terminal_output_received.emit(text_delta)
-                            full_response_acc.append(text_delta)
-                            bus.core_pulse_triggered.emit(0.5)
-
-                        call = step.get("tool_call")
-                        if call:
-                            tool_name = call.get("name", "Araç")
-                            bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
-                            bus.core_pulse_triggered.emit(0.6)
-
-                        res = step.get("tool_result")
-                        if res:
-                            tool_name = res.get("name", "Araç")
-                            bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
-                            bus.core_pulse_triggered.emit(0.4)
-
-                    elif event == "result":
-                        result = data.get("result", {})
-                        resp = result.get("response", "")
-                        if not full_response_acc and resp:
-                            bus.terminal_output_received.emit(resp)
-                            full_response_acc.append(resp)
-
-                except json.JSONDecodeError:
-                    bus.terminal_output_received.emit(raw_line)
-                    full_response_acc.append(raw_line)
-
-            proc.stdout.close()
-            ret_code = proc.wait()
-
-        except Exception as e:
-            err_msg = f"[Otonom Görev Hata] {task_name} yürütülemedi: {str(e)}\n"
-            bus.terminal_output_received.emit(err_msg)
-            full_response_acc.append(err_msg)
+            full_response_acc = []
             ret_code = -1
+            execution_error = None
+            task_usage: Dict[str, int] = {}
+            try:
+                creationflags = 0
+                if os.name == "nt":
+                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-        finally:
+                stdin_payload = self._apply_stdin_prompt(cmd)
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.PIPE if stdin_payload else subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=creationflags,
+                    cwd=str(project_dir) if project_dir.exists() else None
+                )
+                self._feed_stdin(proc, stdin_payload)
+                with self._lock:
+                    self._background_processes[task_id] = proc
+
+                readline_fn = getattr(proc.stdout, "readline", None)
+                stdout_stream = iter(readline_fn, '') if callable(readline_fn) else iter(proc.stdout)
+
+                for raw_line in stdout_stream:
+                    if not raw_line:
+                        break
+                    line_str = raw_line.strip()
+                    if not line_str:
+                        continue
+
+                    try:
+                        data = json.loads(line_str)
+                        event = data.get("event")
+
+                        if event == "step_update":
+                            step = data.get("step_update", {})
+                            step_type = step.get("step_type")
+                            text_delta = step.get("text_delta")
+
+                            # 1. Tool execution handling
+                            if step_type == "tool":
+                                tool_name = step.get("tool_name") or step.get("tool_info", {}).get("name") or step.get("name", "Araç")
+                                params = step.get("tool_info", {}).get("parameters") or step.get("parameters", {})
+                                state = step.get("state", "ACTIVE")
+                                duration = step.get("duration_seconds", 0.0)
+                                if state == "ACTIVE":
+                                    param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
+                                    bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                    bus.core_pulse_triggered.emit(0.7)
+                                elif state == "DONE":
+                                    out = step.get("output") or step.get("result") or step.get("content")
+                                    if out:
+                                        out_str = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+                                        bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n   Sonuç: {out_str[:300]}...\n")
+                                    else:
+                                        bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n")
+                                    bus.core_pulse_triggered.emit(0.5)
+                                elif state in ["ERROR", "FAILED"]:
+                                    err = step.get("error") or step.get("message")
+                                    if err:
+                                        bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n   Hata: {str(err)[:300]}...\n")
+                                    else:
+                                        bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n")
+                                    bus.core_pulse_triggered.emit(0.3)
+                            else:
+                                call = step.get("tool_call")
+                                if call:
+                                    tool_name = call.get("name", "Araç")
+                                    params = call.get("parameters") or call.get("args") or {}
+                                    param_str = json.dumps(params, ensure_ascii=False)[:300] if params else ""
+                                    if param_str:
+                                        bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                    else:
+                                        bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
+                                    bus.core_pulse_triggered.emit(0.6)
+
+                                res = step.get("tool_result")
+                                if res:
+                                    tool_name = res.get("name", "Araç") if isinstance(res, dict) else "Araç"
+                                    res_content = res.get("content") or res.get("output") if isinstance(res, dict) else str(res)
+                                    if res_content:
+                                        bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n   Sonuç: {str(res_content)[:300]}...\n")
+                                    else:
+                                        bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
+                                    bus.core_pulse_triggered.emit(0.4)
+
+                            # 2. Thinking telemetry
+                            thought = (
+                                step.get("thought") or
+                                step.get("reasoning") or
+                                step.get("thinking") or
+                                step.get("thought_delta") or
+                                step.get("reasoning_content") or
+                                data.get("thought") or
+                                data.get("thought_delta") or
+                                data.get("reasoning")
+                            )
+                            step_idx = step.get("step_index", 1)
+                            if thought and isinstance(thought, str) and thought.strip():
+                                bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
+                                bus.core_pulse_triggered.emit(0.5)
+                            elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
+                                bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünülüyor (Adım #{step_idx})...]\n")
+                                bus.core_pulse_triggered.emit(0.5)
+
+                            # 3. Text delta
+                            if text_delta:
+                                bus.terminal_output_received.emit(text_delta)
+                                full_response_acc.append(text_delta)
+                                bus.core_pulse_triggered.emit(0.5)
+
+                        elif event == "result":
+                            result = data.get("result", {})
+                            resp = result.get("response", "")
+                            if not full_response_acc and resp:
+                                bus.terminal_output_received.emit(resp)
+                                full_response_acc.append(resp)
+
+                            # Her arka plan görevi yeni bir konuşma olduğundan agy'nin
+                            # kümülatif "usage" değeri doğrudan bu görevin maliyetidir.
+                            usage = result.get("usage")
+                            if isinstance(usage, dict):
+                                cum_in = int(usage.get("input_tokens", 0) or 0)
+                                cum_out = int(usage.get("output_tokens", 0) or 0)
+                                task_usage = {
+                                    "input_tokens": cum_in,
+                                    "output_tokens": cum_out,
+                                    "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
+                                    "cache_read_tokens": int(usage.get("cache_read_tokens", 0) or 0),
+                                    "total_tokens": int(usage.get("total_tokens", cum_in + cum_out) or 0),
+                                }
+
+                    except json.JSONDecodeError:
+                        bus.terminal_output_received.emit(raw_line)
+                        full_response_acc.append(raw_line)
+
+                proc.stdout.close()
+                ret_code = proc.wait()
+
+            except Exception as e:
+                execution_error = str(e)
+                err_msg = f"[Otonom Görev Hata] {task_name} yürütülemedi: {execution_error}\n"
+                bus.terminal_output_received.emit(err_msg)
+                full_response_acc.append(err_msg)
+                ret_code = -1
+            finally:
+                with self._lock:
+                    self._background_processes.pop(task_id, None)
+                # Temizlik, görevin sonucunu etkilememeli: buradaki bir istisna
+                # dış except'e sızarsa tamamlanmış bir görev FAILED kaydedilir.
+                # Bu yüzden poll() de dahil tüm blok korunur.
+                try:
+                    if proc and proc.poll() is None:
+                        pid = proc.pid
+                        if sys.platform == "win32" or os.name == "nt":
+                            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        else:
+                            proc.terminate()
+                        proc.wait(timeout=2.0)
+                except Exception:
+                    pass
+
             full_text = "".join(full_response_acc).strip()
-            success = ret_code == 0 and len(full_text) > 0
+            success = ret_code == 0 and len(full_text) > 0 and execution_error is None
+
+            # Görev maliyeti oturum sayacına eklenir ve rozet yenilenir; ledger'a da
+            # yazılır ki damıtma/konsolidasyon gibi işlerin gerçek kotası izlenebilsin.
+            if task_usage:
+                self.last_background_usage = dict(task_usage)
+                self.background_total_tokens += task_usage.get("total_tokens", 0)
+                bus.terminal_output_received.emit(
+                    f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
+                    f"(girdi {task_usage.get('input_tokens', 0):,} / çıktı {task_usage.get('output_tokens', 0):,}) — "
+                    f"arka plan toplamı {self.background_total_tokens:,}\n"
+                )
+                bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
+
+            # Record in SQLite Task Ledger
+            if success:
+                task_ledger.record_task_success(task_id=task_id, summary=full_text[:300], usage=task_usage or None)
+            else:
+                err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
+                task_ledger.record_task_failure(task_id=task_id, error=err_detail)
+
+            # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
+            if on_result is not None:
+                try:
+                    on_result(full_text, success)
+                except Exception as cb_err:
+                    bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
+
+            if not save_report:
+                bus.task_completed.emit(task_id, success)
+                bus.terminal_output_received.emit(
+                    f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n"
+                )
+                return
 
             # Generate and save research report for completed background task
             clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
@@ -439,7 +935,23 @@ class AgyProcessBridge(QObject):
                 report_content += f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
                 report_content += f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
 
-                rep_path = vm.save_research_report(report_title, report_content, tags=["otonom_gorev", task_id])
+                proj_name = self.active_project_dir.name if self.active_project_dir else None
+                # Arka plan görevi hangi yeteneğin işiyse rapor o yeteneğe atfedilir;
+                # zamanlanmış araştırma görevleri yordam damıtmanın ana kaynağıdır ve
+                # atıfsız rapor hiçbir yetenek için kaynak sayılmaz.
+                task_skill = None
+                try:
+                    detected = self.detect_skill_for_prompt(prompt)
+                    task_skill = detected.name if detected else None
+                except Exception:
+                    task_skill = None
+                rep_path = vm.save_research_report(
+                    report_title,
+                    report_content,
+                    tags=["otonom_gorev", task_id],
+                    project_name=proj_name,
+                    skill_name=task_skill,
+                )
 
                 # Store distilled summary in cognitive memory
                 try:
@@ -453,7 +965,6 @@ class AgyProcessBridge(QObject):
                 except Exception:
                     pass
 
-                bus.report_created.emit(str(rep_path))
                 bus.task_notification.emit(task_id, task_name, str(rep_path))
                 bus.cognitive_memory_updated.emit()
                 bus.knowledge_graph_updated.emit()
@@ -466,6 +977,21 @@ class AgyProcessBridge(QObject):
             bus.terminal_output_received.emit(
                 f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
             )
+        except Exception as outer_err:
+            try:
+                task_rec = task_ledger.get_task(task_id)
+                if task_rec and task_rec.get("status") == TaskStatus.RUNNING.value:
+                    task_ledger.record_task_failure(task_id=task_id, error=str(outer_err))
+            except Exception:
+                pass
+            bus.task_completed.emit(task_id, False)
+            bus.terminal_output_received.emit(f"\n[Otonom Görev Kritik Hata]: {outer_err}\n")
+        finally:
+            if write_acquired:
+                try:
+                    project_lock_manager.release_write(project_dir)
+                except Exception:
+                    pass
 
     def _execute_prompt_worker(
         self,
@@ -473,9 +999,59 @@ class AgyProcessBridge(QObject):
         image_attachments: Optional[List[str]] = None,
         pdf_attachments: Optional[List[str]] = None,
         active_skill: Optional[str] = None,
-        mode: str = "accept-edits"
+        mode: str = "accept-edits",
+        project_path: Optional[str] = None
     ):
-        # 1. Process PDF Attachments if any
+        project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
+        if not project_dir.exists():
+            try:
+                project_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+        is_write = self.is_code_modifying_intent(prompt, mode=mode)
+        lock_acquired = False
+        is_exclusive = is_write
+
+        if is_write:
+            if project_lock_manager.is_write_locked(project_dir):
+                bus.terminal_output_received.emit(
+                    "\n[Proje Kilidi: Arka plan görevi çalışıyor, işlem bekleniyor...]\n"
+                )
+            lock_acquired = project_lock_manager.acquire_write(project_dir, timeout=30.0)
+        else:
+            if project_lock_manager.is_write_locked(project_dir):
+                bus.terminal_output_received.emit(
+                    "\n[Proje Kilidi: Arka plan görevi çalışıyor, işlem bekleniyor...]\n"
+                )
+            lock_acquired = project_lock_manager.acquire_read(project_dir, timeout=30.0)
+
+        if not lock_acquired:
+            bus.terminal_output_received.emit(
+                "\n[Proje Kilidi: Zaman aşımı! Arka plan görevi projeyi kullanıyor. Lütfen görevin bitmesini bekleyin.]\n"
+            )
+            bus.core_state_changed.emit("idle")
+            with self._lock:
+                self._is_running = False
+                if self._prompt_queue:
+                    next_task = self._prompt_queue.pop(0)
+                    self._is_running = True
+                    next_prompt = next_task[0]
+                    next_imgs = next_task[1] if len(next_task) > 1 else None
+                    next_pdfs = next_task[2] if len(next_task) > 2 else None
+                    next_skill = next_task[3] if len(next_task) > 3 else None
+                    next_mode = next_task[4] if len(next_task) > 4 else "accept-edits"
+                    next_proj = next_task[5] if len(next_task) > 5 else None
+                    threading.Thread(
+                        target=self._execute_prompt_worker,
+                        args=(next_prompt, next_imgs, next_pdfs, next_skill, next_mode, next_proj),
+                        daemon=True
+                    ).start()
+            return
+
+        raw_user_prompt = prompt
+        working_prompt = prompt
+
+        # 1. Process PDF Attachments if any (Multi-page full ingestion)
         if pdf_attachments:
             try:
                 from entropy.skills.pdf_engine import PDFIngestionEngine
@@ -484,35 +1060,75 @@ class AgyProcessBridge(QObject):
                 for pdf_file in pdf_attachments:
                     res = pdf_eng.ingest_and_store_memory(pdf_file)
                     meta = res["metadata"]
-                    content_body = res["full_content"][:4000]
+                    content_body = res["full_content"]
+                    # Multi-page safe budget: ensure every single page has representation
+                    max_pdf_chars = 14000
+                    if len(content_body) > max_pdf_chars:
+                        pages = res.get("pages", [])
+                        if pages:
+                            chars_per_page = max(200, max_pdf_chars // len(pages))
+                            sampled_blocks = []
+                            for pg in pages:
+                                p_num = pg.get("page", 1)
+                                p_txt = pg.get("text", "").strip()
+                                snippet = p_txt[:chars_per_page]
+                                if len(p_txt) > chars_per_page:
+                                    snippet += " ...[sayfa devamı]"
+                                sampled_blocks.append(f"--- [Sayfa {p_num} / {meta['pages']}] ---\n{snippet}")
+                            content_body = "\n\n".join(sampled_blocks) + f"\n\n[Belge {meta['pages']} sayfa içerir. Tüm sayfalar taranarak özetlendi. Tam metin arşivi: {res['digest_path']}]"
+                        else:
+                            content_body = content_body[:max_pdf_chars] + f"\n\n[... PDF içeriği ilk {max_pdf_chars} karakter dahil edildi. Arşiv: {res['digest_path']}]"
                     pdf_blocks.append(
                         f"\n[EKLENEN PDF BELGESİ: {meta['filename']} - {meta['pages']} Sayfa, {meta['word_count']} Kelime]:\n"
                         f"{content_body}\n"
                         f"(Tam özet arşivi: {res['digest_path']})\n"
                     )
                 if pdf_blocks:
-                    prompt = "\n".join(pdf_blocks) + "\n\n" + prompt
+                    working_prompt = "\n".join(pdf_blocks) + "\n\n" + raw_user_prompt
             except Exception as e:
                 bus.terminal_output_received.emit(f"[PDF İşleme Hatası]: {e}\n")
 
-        # 2. Inject Explicit Active Skill if selected
-        if active_skill and active_skill.lower() not in ["auto", "otomatik", "otomatik algıla"]:
-            try:
-                from entropy.skills.manager import SkillManager
-                sm = SkillManager()
-                skills = {s.name: s for s in sm.list_skills()}
-                if active_skill in skills:
-                    target_skill = skills[active_skill]
-                    skill_banner = (
-                        f"\n[KULLANICI TARAFINDAN SEÇİLEN UZMANLIK YETENEĞİ: {target_skill.name.upper()}]\n"
-                        f"{target_skill.instructions}\n"
-                    )
-                    prompt = skill_banner + "\n\n" + prompt
-            except Exception:
-                pass
+        # 2. Skill Resolution (Explicit Slash Command, active_skill parameter, or Semantic Auto-Detection)
+        target_skill = None
+        compact_skill_banner = ""
+        try:
+            from entropy.skills.manager import SkillManager
+            sm = SkillManager(project_dir=self.active_project_dir)
+            all_skills = sm.list_skills()
+            skills_map = {s.name.lower(): s for s in all_skills}
+
+            if active_skill and active_skill.lower() not in ["auto", "otomatik", "otomatik algıla"]:
+                target_skill = skills_map.get(active_skill.lower())
+
+            # Check if any skill is explicitly summoned via slash command in prompt
+            if not target_skill:
+                for s in all_skills:
+                    if re.search(rf'(?:^|\s)/{re.escape(s.name)}\b', raw_user_prompt, re.IGNORECASE):
+                        target_skill = s
+                        break
+
+            # Fall back to semantic auto-detection
+            if not target_skill:
+                target_skill = self.detect_skill_for_prompt(raw_user_prompt, sm=sm)
+
+            if target_skill:
+                script_info = ""
+                if target_skill.scripts:
+                    s_names = ", ".join([sc.get("name", "") for sc in target_skill.scripts if sc.get("name")])
+                    if s_names:
+                        script_info = f" (Araçlar: {s_names})"
+                # Progressive Disclosure: compact 1-2 line banner instead of pasting 38KB markdown
+                compact_skill_banner = (
+                    f"[AKTİF UZMANLIK YETENEĞİ: {target_skill.name.upper()}]{script_info}\n"
+                    f"Özet: {target_skill.description}\n"
+                    f"Detaylı yönergeler ve araçlar için '{target_skill.path}' dosyasını inceleyin."
+                )
+                bus.terminal_output_received.emit(f"[🎯 Yetenek Devrede]: '{target_skill.name}' yeteneği aktif olarak kullanılıyor.\n")
+        except Exception:
+            pass
 
         bus.core_state_changed.emit("thinking")
-        bus.agent_turn_started.emit(prompt)
+        bus.agent_turn_started.emit(raw_user_prompt)
 
         agy_bin = self.find_agy_executable()
 
@@ -529,27 +1145,111 @@ class AgyProcessBridge(QObject):
             }
             self.session_turn_count = 0
 
+        # Regex and natural language detection (/plan, /boost, /effort, /grill-me, /teamwork-preview, /goal, /learn)
+        if re.search(r'(?:^|\s)/plan\b', raw_user_prompt, re.IGNORECASE):
+            mode = "plan"
+
+        is_boost_intent = bool(
+            re.search(r'(?:^|\s)/boost\b', raw_user_prompt, re.IGNORECASE) or
+            any(phrase in raw_user_prompt.lower() for phrase in [
+                "boost yöntemi", "boost modu", "tam kapasite", "maksimum akıl yürütme", "derin planlama", "derin mimari"
+            ])
+        )
+        is_teamwork_intent = bool(
+            re.search(r'(?:^|\s)/teamwork-preview\b', raw_user_prompt, re.IGNORECASE) or
+            any(phrase in raw_user_prompt.lower() for phrase in [
+                "teamwork preview", "teamwork", "takım çalışması", "orkestratör sistemi", "orkestrasyon",
+                "sub-agent", "subagent", "alt ajan", "çoklu ajan", "ajan geliştir", "proje geliştir"
+            ])
+        )
+
+        slash_directives = []
+        if is_boost_intent:
+            slash_directives.append(
+                "[MOD: BOOST] Maksimum akıl yürütme, derin mimari planlama ve tam otonom orkestrasyon devrede. "
+                "Projeyi uçtan uca tasarla, alt görevlere böl, dosya oluşturma araçlarını (write_to_file, replace_file_content, run_command) "
+                "ve alt ajan araçlarını (invoke_subagent, define_subagent, manage_subagents) kullanarak dosyaları fiilen diske oluştur, testleri yaz ve çalıştırarak doğrula."
+            )
+        if re.search(r'(?:^|\s)/grill-me\b', raw_user_prompt, re.IGNORECASE):
+            slash_directives.append("[MOD: GRILL-ME] Kullanıcının sunduğu fikir, mimari veya kodu acımasızca sorgula; kör noktaları, ölçekleme darboğazlarını ve riskleri doğrudan yüzeye çıkar.")
+        if is_teamwork_intent:
+            slash_directives.append(
+                "[MOD: TEAMWORK-PREVIEW] Görevi orkestratör, uygulayıcı uzman (CodeArchitect), test mimarı (Tester) ve araştırmacı (Researcher) perspektifinden bölümlere ayır. "
+                "Yalnızca statik bir önizleme sunmakla kalma; çoklu ajan iş akışını aktif olarak koordine et, alt görevleri belirle ve projenin somut kodlarını ve dosyalarını fiilen oluşturmaya başla."
+            )
+        goal_m = re.search(r'(?:^|\s)/goal\s+([^\n\r]+)', raw_user_prompt, re.IGNORECASE)
+        if goal_m:
+            slash_directives.append(f"[OTURUM HEDEFİ]: '{goal_m.group(1).strip()}' hedefini bu oturumun birincil odak noktası olarak al.")
+        elif re.search(r'(?:^|\s)/goal\b', raw_user_prompt, re.IGNORECASE):
+            slash_directives.append("[OTURUM HEDEFİ]: Kullanıcının belirttiği temel hedefi bu oturumun birincil odak noktası olarak al.")
+        if re.search(r'(?:^|\s)/learn\b', raw_user_prompt, re.IGNORECASE):
+            slash_directives.append("[MOD: LEARN]: Bu oturumda ulaşılan nihai çözüm, mimari kararlar ve kuralları kalıcı bilişsel hafızaya ve Obsidian kasanıza kaydedilmek üzere özetle.")
+
+        autonomous_rules = (
+            "TEMEL YÜRÜTME VE KODLAMA KURALLARI:\n"
+            "1. Kullanıcı senden yeni bir proje oluşturmanı, bir sistemi kodlamanı veya dosyalar oluşturmanı istediğinde: "
+            "ASLA sadece 'dosyaları oluşturdum, mimariyi kurdum' şeklinde metin çıktısı vermekle yetinme! "
+            "FİİLİ OLARAK dosya oluşturma ve düzenleme araçlarını (write_to_file, replace_file_content, run_command) kullanarak "
+            "çalışma dizininde dosyaları oluştur, kodları yaz ve otomatik testleri çalıştırarak doğrula.\n"
+            "2. Karmaşık, çok ofisli veya çoklu ajan mimarisine sahip projelerde tek başına çalışmak yerine "
+            "Antigravity'nin alt ajan araçlarını (invoke_subagent, define_subagent, manage_subagents) kullan; "
+            "CodeArchitect (mimari ve şasi), Developer (uygulama ve entegrasyon), Tester (testler ve doğrulama) "
+            "ve Researcher (araştırma ve raporlama) gibi uzman rollere görev delege et.\n"
+            "3. Kodladığın her yeni modül veya proje için otomatik testleri (pytest vb.) çalıştır ve %100 başarı oranını sağla."
+        )
+
+        max_cli_payload = 26000
+
         if self.current_conversation_id:
-            mini_context = self.get_mini_cognitive_context(prompt)
-            turn_prompt = f"{mini_context}\n{prompt}" if mini_context else prompt
+            # Yetenek belirlendiyse hatırlanır; belirlenmediyse önceki değer korunur ki
+            # araya giren yeteneksiz bir tur ("tamam", "devam") önceliği silmesin.
+            if target_skill is not None:
+                self.last_active_skill = target_skill.name
+            mini_context = self.get_mini_cognitive_context(raw_user_prompt, target_skill=target_skill)
+            prefix_parts = [autonomous_rules]
+            if compact_skill_banner:
+                prefix_parts.append(compact_skill_banner)
+            if slash_directives:
+                prefix_parts.extend(slash_directives)
+            if mini_context:
+                prefix_parts.append(mini_context)
+            prefix_context = "\n\n".join(prefix_parts)
+
+            # Never truncate user prompt; truncate prefix context if needed to stay below Windows limit
+            if prefix_context:
+                available_prefix = max(0, max_cli_payload - len(working_prompt) - 2)
+                if len(prefix_context) > available_prefix:
+                    prefix_context = prefix_context[:available_prefix]
+                turn_prompt = f"{prefix_context}\n\n{working_prompt}" if prefix_context else working_prompt
+            else:
+                turn_prompt = working_prompt
+
             cmd = [
                 agy_bin,
                 "-p", turn_prompt,
                 "--conversation", self.current_conversation_id,
                 "--output-format", "stream-json",
                 "--mode", mode,
+                "--print-timeout", "30m",
                 "--dangerously-skip-permissions",
-                "--add-dir", str(self.active_project_dir),
+                "--add-dir", str(project_dir),
             ]
         else:
-            cognitive_context = self.get_cognitive_context(prompt)
+            cognitive_context = self.get_cognitive_context(raw_user_prompt, target_skill=target_skill)
             system_directive = (
                 "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
                 "Kullanıcıya daima Türkçe ve samimi, net, profesyonel bir üslupla yanıt ver.\n"
                 "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından tamamen haberdarsın.\n"
+                f"{autonomous_rules}\n"
             )
+            if compact_skill_banner:
+                system_directive += f"\n{compact_skill_banner}\n"
+
+            if slash_directives:
+                system_directive += "\n" + "\n".join(slash_directives) + "\n"
+
             if cognitive_context:
-                system_directive += f"\n{cognitive_context[:2500]}\n"
+                system_directive += f"\n{cognitive_context[:6000]}\n"
 
             # Inject recent chat history summary if starting a fresh session
             if self.conversation_history:
@@ -558,26 +1258,51 @@ class AgyProcessBridge(QObject):
                     [f"- {'Kullanıcı' if m.get('role')=='user' else 'Entropy'}: {m.get('content', '')[:100]}" for m in recent]
                 ) + "\n"
 
-            full_prompt_payload = f"{system_directive}\nKullanıcı Mesajı: {prompt}"
-            if len(full_prompt_payload) > 3500:
-                full_prompt_payload = full_prompt_payload[:3500]
+            user_msg = f"\nKullanıcı Mesajı: {working_prompt}"
+            # Safe payload calculation: NEVER truncate user message, trim system directive if needed
+            available_dir = max(0, max_cli_payload - len(user_msg))
+            if len(system_directive) > available_dir:
+                system_directive = system_directive[:available_dir]
+
+            full_prompt_payload = f"{system_directive}{user_msg}" if system_directive else user_msg
 
             cmd = [
                 agy_bin,
                 "-p", full_prompt_payload,
                 "--output-format", "stream-json",
                 "--mode", mode,
+                "--print-timeout", "30m",
                 "--dangerously-skip-permissions",
-                "--add-dir", str(self.active_project_dir),
+                "--add-dir", str(project_dir),
             ]
 
         if self.selected_model and self.selected_model != config.model_fallback_name:
             cmd.extend(["--model", self.selected_model])
 
+        # Regex-based /effort command detection or automatic boost/teamwork high effort
+        effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', raw_user_prompt, re.IGNORECASE)
+        if effort_m:
+            cmd.extend(["--effort", effort_m.group(1).lower()])
+        elif is_boost_intent or is_teamwork_intent:
+            cmd.extend(["--effort", "high"])
+
         if image_attachments:
             for img in image_attachments:
                 if Path(img).exists():
                     cmd.extend(["--add-dir", str(Path(img).parent)])
+
+        # Detect any explicit Windows paths in prompt and grant access via --add-dir
+        for p_obj in extract_windows_paths(raw_user_prompt):
+            try:
+                if (p_obj.exists() or p_obj.parent.exists()) and str(p_obj) not in cmd:
+                    if not p_obj.exists() and "." not in p_obj.name:
+                        try:
+                            p_obj.mkdir(parents=True, exist_ok=True)
+                        except Exception:
+                            pass
+                    cmd.extend(["--add-dir", str(p_obj)])
+            except Exception:
+                pass
 
         full_response_acc = []
 
@@ -586,29 +1311,33 @@ class AgyProcessBridge(QObject):
             if os.name == "nt":
                 creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
+            stdin_payload = self._apply_stdin_prompt(cmd)
             self._current_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if stdin_payload else subprocess.DEVNULL,
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
                 creationflags=creationflags,
-                cwd=str(self.active_project_dir) if self.active_project_dir.exists() else None
+                cwd=str(project_dir) if project_dir.exists() else None
             )
+            self._feed_stdin(self._current_process, stdin_payload)
 
-            short_prompt = prompt.replace("\n", " ")[:65]
-            if len(prompt) > 65:
+            short_prompt = raw_user_prompt.replace("\n", " ")[:65]
+            if len(raw_user_prompt) > 65:
                 short_prompt += "..."
             status_tag = f"Sohbet: {self.current_conversation_id[:8]}..." if self.current_conversation_id else "Yeni Sohbet"
             bus.terminal_output_received.emit(f"\n[Entropy Core | {self.selected_model} | {status_tag}] > {short_prompt}\n")
 
-            for raw_line in iter(self._current_process.stdout.readline, ''):
+            readline_fn = getattr(self._current_process.stdout, "readline", None)
+            stdout_stream = iter(readline_fn, '') if callable(readline_fn) else iter(self._current_process.stdout)
+
+            for raw_line in stdout_stream:
                 if not raw_line:
                     break
-
                 line_str = raw_line.strip()
                 if not line_str:
                     continue
@@ -634,24 +1363,83 @@ class AgyProcessBridge(QObject):
 
                     elif event == "step_update":
                         step = data.get("step_update", {})
+                        step_type = step.get("step_type")
                         text_delta = step.get("text_delta")
+
+                        # 1. Tool handling
+                        if step_type == "tool":
+                            tool_name = step.get("tool_name") or step.get("tool_info", {}).get("name") or step.get("name", "Araç")
+                            params = step.get("tool_info", {}).get("parameters") or step.get("parameters", {})
+                            state = step.get("state", "ACTIVE")
+                            duration = step.get("duration_seconds", 0.0)
+                            if state == "ACTIVE":
+                                param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
+                                bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                bus.core_pulse_triggered.emit(0.7)
+                            elif state == "DONE":
+                                out = step.get("output") or step.get("result") or step.get("content")
+                                if out:
+                                    out_str = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+                                    bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n   Sonuç: {out_str[:300]}...\n")
+                                else:
+                                    bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n")
+                                bus.core_pulse_triggered.emit(0.5)
+                            elif state in ["ERROR", "FAILED"]:
+                                err = step.get("error") or step.get("message")
+                                if err:
+                                    bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n   Hata: {str(err)[:300]}...\n")
+                                else:
+                                    bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n")
+                                bus.core_pulse_triggered.emit(0.3)
+                        else:
+                            call = step.get("tool_call")
+                            if call:
+                                tool_name = call.get("name", "Araç")
+                                params = call.get("parameters") or call.get("args") or {}
+                                param_str = json.dumps(params, ensure_ascii=False)[:300] if params else ""
+                                if param_str:
+                                    bus.terminal_output_received.emit(f"\n[🔧 Araç Yürütülüyor: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                else:
+                                    bus.terminal_output_received.emit(f"\n[🔧 Araç Yürütülüyor: {tool_name}...]\n")
+                                bus.core_pulse_triggered.emit(0.7)
+
+                            res = step.get("tool_result")
+                            if res:
+                                tool_name = res.get("name", "Araç") if isinstance(res, dict) else "Araç"
+                                res_content = res.get("content") or res.get("output") if isinstance(res, dict) else str(res)
+                                if res_content:
+                                    bus.terminal_output_received.emit(f"[✔ Araç Tamamlandı: {tool_name}]\n   Sonuç: {str(res_content)[:300]}...\n")
+                                else:
+                                    bus.terminal_output_received.emit(f"[✔ Araç Tamamlandı: {tool_name}]\n")
+                                bus.core_pulse_triggered.emit(0.5)
+
+                        # 2. Thinking telemetry (sent to terminal)
+                        thought = (
+                            step.get("thought") or
+                            step.get("reasoning") or
+                            step.get("thinking") or
+                            step.get("thought_delta") or
+                            step.get("reasoning_content") or
+                            data.get("thought") or
+                            data.get("thought_delta") or
+                            data.get("reasoning")
+                        )
+                        step_idx = step.get("step_index", 1)
+                        if thought and isinstance(thought, str) and thought.strip():
+                            bus.terminal_output_received.emit(f"[🧠 Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
+                            bus.core_pulse_triggered.emit(0.6)
+                        elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
+                            bus.terminal_output_received.emit(f"[🧠 Düşünülüyor / Akıl Yürütülüyor (Adım #{step_idx})...]\n")
+                            bus.core_pulse_triggered.emit(0.6)
+
+                        # 3. Text delta (sent strictly to chat window)
                         if text_delta:
-                            bus.terminal_output_received.emit(text_delta)
                             full_response_acc.append(text_delta)
-                            bus.token_chunk_received.emit(text_delta)
-                            bus.core_pulse_triggered.emit(0.8)
-
-                        call = step.get("tool_call")
-                        if call:
-                            tool_name = call.get("name", "Araç")
-                            bus.terminal_output_received.emit(f"\n[🔧 Araç Yürütülüyor: {tool_name}...]\n")
-                            bus.core_pulse_triggered.emit(0.7)
-
-                        res = step.get("tool_result")
-                        if res:
-                            tool_name = res.get("name", "Araç")
-                            bus.terminal_output_received.emit(f"[✔ Araç Tamamlandı: {tool_name}]\n")
-                            bus.core_pulse_triggered.emit(0.5)
+                            try:
+                                bus.token_chunk_received.emit(text_delta)
+                                bus.core_pulse_triggered.emit(0.8)
+                            except (RuntimeError, Exception):
+                                pass
 
                         usage = step.get("usage")
                         if usage:
@@ -663,9 +1451,10 @@ class AgyProcessBridge(QObject):
                         result = data.get("result", {})
                         resp = result.get("response", "")
                         if not full_response_acc and resp:
-                            bus.terminal_output_received.emit(resp)
                             full_response_acc.append(resp)
                             bus.token_chunk_received.emit(resp)
+                        resp_len = len(resp or "".join(full_response_acc))
+                        bus.terminal_output_received.emit(f"\n[✔ Yanıt Akışı Tamamlandı ({resp_len} karakter)]\n")
 
                         usage = result.get("usage")
                         if usage:
@@ -720,11 +1509,23 @@ class AgyProcessBridge(QObject):
 
         except Exception as e:
             err_msg = f"[Entropy AI Hata] agy CLI yürütülemedi: {str(e)}\n"
-            bus.terminal_output_received.emit(err_msg)
+            try:
+                bus.terminal_output_received.emit(err_msg)
+            except (RuntimeError, Exception):
+                pass
             full_response_acc.append(err_msg)
             ret_code = -1
 
         finally:
+            if lock_acquired:
+                try:
+                    if is_exclusive:
+                        project_lock_manager.release_write(project_dir)
+                    else:
+                        project_lock_manager.release_read(project_dir)
+                except Exception:
+                    pass
+
             next_task = None
             with self._lock:
                 self._is_running = False
@@ -734,20 +1535,21 @@ class AgyProcessBridge(QObject):
                     self._is_running = True
 
             full_text = "".join(full_response_acc)
-            self._save_chat_turn(prompt, full_text)
-            bus.core_state_changed.emit("idle")
-            bus.agent_turn_completed.emit(full_text)
+            try:
+                self._save_chat_turn(raw_user_prompt, full_text)
+                bus.core_state_changed.emit("idle")
+                bus.agent_turn_completed.emit(full_text)
+            except (RuntimeError, Exception):
+                pass
 
-            # Auto-recovery if AGY produced no output or error
+            # Auto-recovery only if AGY produced truly empty output or was denied
             stripped_text = full_text.strip()
-            is_empty_or_denied = (
-                not stripped_text or
-                "jetski: no output produced" in stripped_text or
-                "auto-denied" in stripped_text or
-                "Traceback" in stripped_text or
-                ret_code != 0
+            is_truly_empty_or_denied = (
+                (len(stripped_text) < 50 and (not stripped_text or "jetski: no output produced" in stripped_text or ret_code != 0)) or
+                "auto-denied" in stripped_text
             )
-            if is_empty_or_denied and self.current_conversation_id:
+            # Never reset if rich output (> 200 chars) was successfully generated
+            if len(full_text) <= 200 and is_truly_empty_or_denied and self.current_conversation_id:
                 bus.terminal_output_received.emit(
                     "\n[Entropy Core] Oturum kilitlendi veya yanıtsız kaldı. Gelecek mesaj için temiz oturuma geçiliyor...\n"
                 )
@@ -761,8 +1563,9 @@ class AgyProcessBridge(QObject):
 
             # Auto-save research reports and technical dossiers (including autonomous scheduled tasks)
             is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
-            is_task_prompt = "[otonom planlı görev:" in prompt.lower()
-            is_explicit_research = any(w in prompt.lower() for w in [
+            is_task_prompt = "[otonom planlı görev:" in raw_user_prompt.lower()
+            is_explicit_learn = bool(re.search(r'(?:^|\s)/learn\b', raw_user_prompt, re.IGNORECASE))
+            is_explicit_research = is_explicit_learn or any(w in raw_user_prompt.lower() for w in [
                 "araştır", "araştırma yap", "rapor hazırla", "raporla", "analiz et", "derinlemesine incele", "dossier", "dokümantasyon oluştur"
             ])
             has_markdown_structure = ("# " in full_text or "## " in full_text) and len(full_text) > 250
@@ -774,15 +1577,26 @@ class AgyProcessBridge(QObject):
                     vm = ObsidianVaultManager()
 
                     if is_task_prompt:
-                        match = re.search(r"\[OTONOM PLANLI GÖREV:\s*([^\]]+)\]", prompt, re.IGNORECASE)
+                        match = re.search(r"\[OTONOM PLANLI GÖREV:\s*([^\]]+)\]", raw_user_prompt, re.IGNORECASE)
                         task_name = match.group(1).strip() if match else "Otonom Görev"
                         time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
                         clean_title = f"Gorev_{task_name.replace(' ', '_')}_{time_tag}"
                     else:
-                        first_line = prompt.strip().split("\n")[0][:36]
+                        clean_prompt = re.sub(r'^(?:\[SİZ\]:\s*)?', '', raw_user_prompt.strip(), flags=re.IGNORECASE)
+                        clean_prompt = re.sub(r'^(?:/[a-zA-Z0-9_\-:]+\s*)+', '', clean_prompt.strip())
+                        first_line = clean_prompt.strip().split("\n")[0][:40]
                         clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
 
-                    rep_path = vm.save_research_report(clean_title, full_text)
+                    proj_name = self.active_project_dir.name if self.active_project_dir else None
+                    # Rapor, üreten yeteneğe atfedilir: Skills/<yetenek>/Reports/ altına
+                    # düşer ve skill: etiketi alır. Bu atıf olmadan yordam damıtma o
+                    # yetenek için kaynak bulamaz (eski kasada 0 rapor atıflıydı).
+                    rep_path = vm.save_research_report(
+                        clean_title,
+                        full_text,
+                        project_name=proj_name,
+                        skill_name=(target_skill.name if target_skill else None),
+                    )
 
                     # Extract distilled summary (Layer 6 consolidation) rather than storing massive full text
                     paragraphs = [p.strip() for p in full_text.split("\n\n") if p.strip() and not p.startswith("#")]
@@ -795,17 +1609,21 @@ class AgyProcessBridge(QObject):
                             category="semantic",
                             content=f"Araştırma/Görev Özeti [{clean_title}]: {distilled_summary}",
                             importance=0.88,
-                            metadata={"source": "task_or_research", "path": str(rep_path)}
+                            metadata={
+                                "source": "task_or_research",
+                                "path": str(rep_path),
+                                "skill": target_skill.name if target_skill else None
+                            }
                         )
                     except Exception:
                         pass
 
-                    bus.report_created.emit(str(rep_path))
-                    bus.cognitive_memory_updated.emit()
-                    bus.knowledge_graph_updated.emit()
-
                     if is_task_prompt:
                         bus.task_notification.emit(task_name, task_name, str(rep_path))
+                    else:
+                        bus.report_created.emit(str(rep_path))
+                    bus.cognitive_memory_updated.emit()
+                    bus.knowledge_graph_updated.emit()
 
                     bus.terminal_output_received.emit(
                         f"\n[📚 Araştırma Raporu & Hafıza Kaydedildi]: '{clean_title}.md' bilişsel hafızaya işlendi ve Obsidian kasanıza kaydedildi.\n"
@@ -817,17 +1635,22 @@ class AgyProcessBridge(QObject):
             try:
                 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 vm = ObsidianVaultManager()
-                short_p = prompt.replace("\n", " ")[:60]
+                short_p = raw_user_prompt.replace("\n", " ")[:60]
                 short_r = full_text.replace("\n", " ")[:100]
                 vm.append_daily_log(f"- **Etkileşim**: {short_p} -> {short_r}...")
             except Exception:
                 pass
 
             if next_task:
-                next_prompt, next_imgs, next_pdfs, next_skill, next_mode = next_task
+                next_prompt = next_task[0]
+                next_imgs = next_task[1] if len(next_task) > 1 else None
+                next_pdfs = next_task[2] if len(next_task) > 2 else None
+                next_skill = next_task[3] if len(next_task) > 3 else None
+                next_mode = next_task[4] if len(next_task) > 4 else "accept-edits"
+                next_proj = next_task[5] if len(next_task) > 5 else None
                 next_thread = threading.Thread(
                     target=self._execute_prompt_worker,
-                    args=(next_prompt, next_imgs, next_pdfs, next_skill, next_mode),
+                    args=(next_prompt, next_imgs, next_pdfs, next_skill, next_mode, next_proj),
                     daemon=True
                 )
                 next_thread.start()
@@ -842,8 +1665,30 @@ class AgyProcessBridge(QObject):
                         subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     else:
                         self._current_process.terminate()
+                    try:
+                        self._current_process.wait(timeout=2.0)
+                    except Exception:
+                        pass
                     bus.terminal_output_received.emit("\n[Entropy AI] İşlem kullanıcı tarafından durduruldu.\n")
                 except Exception:
                     pass
                 self._is_running = False
                 bus.core_state_changed.emit("idle")
+
+    def terminate_background_task(self, task_id: str):
+        """Cancel an autonomous background task and its child language_server process tree."""
+        with self._lock:
+            proc = self._background_processes.get(task_id)
+        if proc and proc.poll() is None:
+            try:
+                pid = proc.pid
+                if sys.platform == "win32" or os.name == "nt":
+                    subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except Exception:
+                    pass
+            except Exception:
+                pass

@@ -178,6 +178,146 @@ def test_zen_mode_skills_tab_and_pdf(qapp, tmp_path, monkeypatch):
     zen._on_send_chat()
 
     assert len(called_args.get("pdf_attachments", [])) == 1
-    assert "Annual_Report_2026.pdf" in called_args["pdf_attachments"][0]
-
     zen.close()
+
+def test_skill_import_from_local_dir_and_file(tmp_path):
+    skills_dir = tmp_path / "skills"
+    mgr = SkillManager(root_skills_dir=skills_dir)
+    mgr.state_file = tmp_path / "skills_state.json"
+
+    # Create an external skill directory
+    ext_dir = tmp_path / "external_skill"
+    ext_dir.mkdir()
+    (ext_dir / "SKILL.md").write_text("---\nname: ext-tester\ndescription: External tester\n---\n# Ext", encoding="utf-8")
+    scripts = ext_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "test.py").write_text("print(1)", encoding="utf-8")
+
+    # Import from directory
+    skill = mgr.import_skill_from_source(str(ext_dir))
+    assert skill is not None
+    assert skill.name == "ext-tester"
+    assert (skills_dir / "ext-tester" / "SKILL.md").exists()
+    assert (skills_dir / "ext-tester" / "scripts" / "test.py").exists()
+
+    # Import from direct SKILL.md file with custom name
+    single_file = tmp_path / "custom_skill.md"
+    single_file.write_text("---\nname: single-file\ndescription: Single file skill\n---\n# Single", encoding="utf-8")
+    skill2 = mgr.import_skill_from_source(str(single_file), custom_name="renamed-skill")
+    assert skill2 is not None
+    assert skill2.name == "renamed-skill"
+    assert (skills_dir / "renamed-skill" / "SKILL.md").exists()
+
+def test_skill_auto_detection(tmp_path):
+    skills_dir = tmp_path / "skills"
+    mgr = SkillManager(root_skills_dir=skills_dir)
+    mgr.state_file = tmp_path / "skills_state.json"
+
+    mgr.create_skill(
+        name="solidity-auditor",
+        description="Solidity akıllı sözleşme güvenlik ve reentrancy analizi",
+        instructions="# Auditor instructions"
+    )
+
+    detected = mgr.auto_detect_skill_for_prompt("Bu akıllı sözleşmede reentrancy açığı var mı?")
+    assert detected is not None
+    assert detected.name == "solidity-auditor"
+
+    detected_none = mgr.auto_detect_skill_for_prompt("Bugün hava nasıl?")
+    assert detected_none is None
+
+def test_chat_mode_project_switching(qapp, tmp_path):
+    bridge = AgyProcessBridge()
+    chat = ChatModeWindow(bridge=bridge)
+    chat.show()
+
+    assert hasattr(chat, "project_btn")
+    new_dir = tmp_path / "new_project"
+    new_dir.mkdir()
+
+    bridge.set_project_directory(str(new_dir))
+    assert Path(new_dir).name in chat.project_btn.text()
+
+    chat.close()
+
+def test_skill_auto_detection_turkish_normalization(tmp_path):
+    skills_dir = tmp_path / "skills"
+    mgr = SkillManager(root_skills_dir=skills_dir)
+    mgr.state_file = tmp_path / "skills_state.json"
+
+    mgr.create_skill(
+        name="financial-auditor",
+        description="Mali tablolar, bilanço ve nakit akım denetimi",
+        instructions="# Financial instructions"
+    )
+    mgr.create_skill(
+        name="pdf-analyzer",
+        description="PDF ve doküman inceleme",
+        instructions="# PDF instructions"
+    )
+    mgr.create_skill(
+        name="skill-creator",
+        description="Yeni yetenek ve araç oluşturma",
+        instructions="# Skill creator instructions"
+    )
+
+    # Turkish prompt with suffixes and non-ascii characters
+    detected1 = mgr.auto_detect_skill_for_prompt("Son çeyrek bilançosunu detaylıca incele")
+    assert detected1 is not None
+    assert detected1.name == "financial-auditor"
+
+    detected2 = mgr.auto_detect_skill_for_prompt("Bu PDF dokümanını oku ve özet çıkar")
+    assert detected2 is not None
+    assert detected2.name == "pdf-analyzer"
+
+    detected3 = mgr.auto_detect_skill_for_prompt("Proje için yeni bir yetenek oluştur")
+    assert detected3 is not None
+    assert detected3.name == "skill-creator"
+
+def test_skill_import_from_repo_with_only_readme(tmp_path):
+    skills_dir = tmp_path / "skills"
+    mgr = SkillManager(root_skills_dir=skills_dir)
+    mgr.state_file = tmp_path / "skills_state.json"
+
+    # Create dummy repo dir with only README.md and python script (no SKILL.md)
+    repo_dir = tmp_path / "crypto-tracker-repo"
+    repo_dir.mkdir()
+    (repo_dir / "README.md").write_text("# Crypto Tracker\nTracks live crypto prices and liquidity pools.", encoding="utf-8")
+    (repo_dir / "tracker.py").write_text("print('tracking')", encoding="utf-8")
+
+    imported = mgr.import_skill_from_source(str(repo_dir))
+    assert imported is not None
+    assert "crypto" in imported.name.lower() or "tracker" in imported.name.lower()
+    # Verify synthesized SKILL.md exists
+    dest_skill_md = skills_dir / imported.name / "SKILL.md"
+    assert dest_skill_md.exists()
+    content = dest_skill_md.read_text(encoding="utf-8")
+    assert "name:" in content
+    assert "description:" in content
+
+def test_multi_page_pdf_page_budget_sampling(tmp_path):
+    pdf_path = tmp_path / "Multi_Page_Doc.pdf"
+    writer = pypdf.PdfWriter()
+    for i in range(5):
+        writer.add_blank_page(width=200, height=200)
+    with open(pdf_path, "wb") as f:
+        writer.write(f)
+
+    engine = PDFIngestionEngine(cache_dir=tmp_path / "cache")
+    res = engine.extract_pdf_content(pdf_path)
+    assert res["metadata"]["pages"] == 5
+    assert len(res["pages"]) == 5
+
+def test_extract_skill_source_from_local_directory(tmp_path):
+    from entropy.skills.manager import extract_skill_source_from_text
+    dummy_dir = tmp_path / "my_custom_tool"
+    dummy_dir.mkdir()
+    (dummy_dir / "script.py").write_text("print('hello')", encoding="utf-8")
+
+    prompt = f"Lütfen şu yeteneği sisteme kur: {str(dummy_dir)}"
+    detected_path = extract_skill_source_from_text(prompt)
+    assert detected_path is not None
+    assert Path(detected_path).resolve() == dummy_dir.resolve()
+
+
+

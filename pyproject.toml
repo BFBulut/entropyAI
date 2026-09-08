@@ -8,20 +8,29 @@ version = "0.1.0"
 description = "Autonomous Agentic Operating System & Desktop Interface for Antigravity"
 readme = "GEMINI.md"
 requires-python = ">=3.11"
+# Not: apscheduler, pygments, markdown ve supabase kaldırıldı; kod tabanında
+# hiçbiri içe aktarılmıyor. Zamanlayıcı (scheduler/cron_engine.py) threading ile,
+# markdown işleme (ui/widgets/markdown_renderer.py) elle yazılmış, bilişsel bellek
+# (memory/supabase/cognitive_memory.py) ise SQLite üzerinde çalışıyor.
 dependencies = [
     "PySide6>=6.6.0",
     "pydantic>=2.5.0",
-    "apscheduler>=3.10.0",
-    "pygments>=2.15.0",
-    "markdown>=3.5.0",
-    "supabase>=2.0.0",
+    "numpy>=1.26.0",   # agent_desk/analysis/* modüllerinde koşulsuz içe aktarılıyor
+    "pypdf>=4.0.0",    # skills/pdf_engine.py'de koşulsuz içe aktarılıyor
 ]
 
 [project.optional-dependencies]
+# try/except ile korunan, yokluğunda uygulamanın çalışmaya devam ettiği eklentiler.
+extras = [
+    "pillow>=10.0.0",    # agent_desk/core/media_payload_handler.py (görsel işleme)
+    "pyyaml>=6.0",       # skills/manager.py (SKILL.md frontmatter ayrıştırma)
+    "fastembed>=0.3.0",  # memory/.../cognitive_memory.py (yerel nöral gömme)
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-qt>=4.3.0",
     "pytest-asyncio>=0.23.0",
+    "psutil>=5.9.0",     # tests/test_agent_desk_core.py
 ]
 
 [project.scripts]
@@ -30,3 +39,4 @@ entropy = "entropy.main:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-p no:unraisableexception"
