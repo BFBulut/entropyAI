@@ -153,7 +153,26 @@ def build_stdin_prompt_payload(prompt: str) -> str:
 
 
 def prompt_via_stdin(prompt: str) -> bool:
-    return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
+    """
+    Prompt argv yerine stdin'den mi geçmeli?
+
+    İki koşuldan biri yeterli:
+    1. Uzunluk eşiği (argv sınırı),
+    2. Prompt'ta SATIR SONU olması.
+
+    (2) canlı koşuda bulundu: Windows'ta `claude` çalıştırılabiliri bir toplu iş
+    sarmalayıcısıdır (`claude.CMD`) ve `subprocess` bu sarmalayıcıyı
+    `cmd.exe` üzerinden başlatır. cmd.exe çok satırlı bir argümanı İLK SATIR
+    SONUNDA keser: `-p "# ajan\n\n[GÖREV SÖZLEŞMESİ]..."` argümanından modele
+    yalnızca `# ajan` ulaşıyor, görev metninin tamamı sessizce kayboluyordu
+    (ölçüm: `.cmd` sarmalayıcı `['-p', 'satir1']`, `.exe` ise
+    `['-p', 'satir1\\nsatir2\\nsatir3']` alıyor). Eşiğin altındaki her ofis alt
+    kartı bu yüzden "bana görev metni verilmedi" diyerek başarısız oluyordu.
+    Satır sonu içeren prompt stdin'deki NDJSON yolundan geçince argümanda metin
+    kalmıyor ve kesilme olanaksızlaşıyor.
+    """
+    text = prompt or ""
+    return len(text) > ARGV_PROMPT_SAFE_LIMIT or "\n" in text
 
 
 def argv_length(cmd: List[str]) -> int:
@@ -525,9 +544,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             # Uzun sistem istemi argv'ye HİÇ girmez: bilişsel bağlam + ajan
             # manifesti buradan geçtiği için "command line is too long" hatası
             # tam olarak bu satırda doğuyordu.
-            if (
-                CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE
-                and len(append_system_prompt) > SYSTEM_PROMPT_ARGV_LIMIT
+            # Satır sonu koşulu uzunluk koşuluyla aynı nedenle var: `claude.CMD`
+            # toplu iş sarmalayıcısı çok satırlı argümanı ilk satır sonunda
+            # kesiyor (bkz. `prompt_via_stdin`). Kısa ama çok satırlı bir sistem
+            # istemi argv'de kalırsa modele yalnızca ilk satırı ulaşırdı.
+            if CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE and (
+                len(append_system_prompt) > SYSTEM_PROMPT_ARGV_LIMIT
+                or "\n" in append_system_prompt
             ):
                 path = self.write_system_prompt_file(append_system_prompt)
                 if path:
@@ -1388,9 +1411,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     task_id=task_id, summary=masked[:300], usage=task_usage or None
                 )
             elif not self._shutting_down:
+                # usage ile: başarısız görev de token yaktı. Sütun NULL kalırsa
+                # `OfficeHarness.ledger_tokens` None döner ve ofis bütçesi
+                # gerçek maliyeti değil karakter/4 tahminini sayar — canlı
+                # koşuda başarısız bir Claude alt kartının maliyeti muhasebeye
+                # hiç girmedi. AGY köprüsündeki A7a davranışıyla eşitlendi.
                 task_ledger.record_task_failure(
                     task_id=task_id,
                     error=execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}",
+                    usage=task_usage or None,
                 )
 
             notified["done"] = True

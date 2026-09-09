@@ -1033,7 +1033,16 @@ class OfficeHarness:
             ingest_office_into_entropy = None  # type: ignore
         if ingest_office_into_entropy is not None:
             try:
-                ingest_office_into_entropy(self.office_name, str(path))
+                # İkinci konumsal parametre `store`'dur, rapor YOLU değil.
+                # Canlı koşuda buraya `str(path)` geçiliyordu ve çağrı her
+                # seferinde `'str' object has no attribute 'upsert_node'` ile
+                # patlıyordu; hata yutulduğu için ofis raporu Entropy grafına
+                # HİÇ akmıyor, yalnızca sessiz bir uyarı satırı kalıyordu.
+                # Fonksiyon zaten ofisin `reports/` klasörünün tamamını tarar,
+                # yeni yazılan rapor da o taramaya girer.
+                ingest_office_into_entropy(
+                    self.office_name, vault_path=self.board.vault_path
+                )
             except Exception:
                 logger.warning("Ofis raporu belleğe aktarılamadı: %s", card.id)
         return path
