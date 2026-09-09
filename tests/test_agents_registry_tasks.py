@@ -416,9 +416,9 @@ def test_run_uses_real_bridge_path_and_moves_card_to_review(board, registry, tmp
         return _FakeProc(_agy_lines("Rapor hazır."))
 
     monkeypatch.setattr("entropy.core.agy_bridge.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("entropy.core.agy_bridge.bus.task_completed", _Emitter(done))
-
     card = board.create(_card(agent="yazar", provider="agy"))
+    monkeypatch.setattr("entropy.core.agy_bridge.bus.task_completed",
+                        _Emitter(done, f"card-{card.id}"))
     task_id = board.run(card.id, bridge_factory=lambda provider: bridge)
     assert task_id == f"card-{card.id}"
     assert done.wait(timeout=10), "arka plan görevi bitmedi"
@@ -451,9 +451,9 @@ def test_run_marks_card_failed_when_process_fails(board, registry, tmp_path, mon
         "entropy.core.agy_bridge.subprocess.Popen",
         lambda cmd, **kw: _FakeProc([], returncode=1),
     )
-    monkeypatch.setattr("entropy.core.agy_bridge.bus.task_completed", _Emitter(done))
-
     card = board.create(_card())
+    monkeypatch.setattr("entropy.core.agy_bridge.bus.task_completed",
+                        _Emitter(done, f"card-{card.id}"))
     board.run(card.id, bridge_factory=lambda provider: bridge)
     assert done.wait(timeout=10)
     assert board.get(card.id).status == "failed"
@@ -598,12 +598,22 @@ def test_watchers_emit_on_new_files(vault, qapp):
 
 
 class _Emitter:
-    """bus.task_completed yerine geçen, testin beklediği olayı kuran nesne."""
+    """
+    bus.task_completed yerine geçen, testin beklediği olayı kuran nesne.
 
-    def __init__(self, event):
+    Görev kimliği süzgeci şart: `bus` süreç genelinde tek nesne ve önceki bir
+    testten artakalan köprü iş parçacığı da bu sinyali yayınlıyor. Süzgeçsiz
+    sürüm o yayınla erkenden tetikleniyor ve test kartı henüz yazılmadan
+    okuyordu (kaynağı belirsiz "assert 'running' == 'failed'" hataları).
+    """
+
+    def __init__(self, event, task_id=None):
         self._event = event
+        self._task_id = task_id
 
     def emit(self, *args):
+        if self._task_id is not None and (not args or args[0] != self._task_id):
+            return
         self._event.set()
 
 

@@ -53,7 +53,10 @@ from entropy.core.config import config
 config_module = _sys.modules["entropy.core.config"]
 from entropy.core.event_bus import bus
 from entropy.core.masking import mask_tool_output
-from entropy.core.project_lock import project_lock_manager
+from entropy.core.project_lock import LOCK_TIMEOUT_MARKER, project_lock_manager
+
+# Arka plan görevinin proje kilidini bekleyeceği süre (sn); bkz. agy_bridge.
+BACKGROUND_LOCK_TIMEOUT = 60.0
 from entropy.core.provider import (
     ProviderCommonMixin,
     agent_definitions_dir,
@@ -912,16 +915,34 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         on_result: Optional[Callable[[str, bool], None]] = None,
         save_report: bool = True,
         agent: Optional[str] = None,
+        needs_write: Optional[bool] = None,
     ) -> None:
         """AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında."""
         with self._lock:
             if self._shutting_down:
+                # Sessiz dönüş çağıranı asılı bırakıyordu; ret de bir sonuçtur.
+                self._notify_result(
+                    on_result,
+                    f"Arka plan görevi '{task_name}' başlatılmadı: köprü kapanıyor.",
+                    False,
+                )
                 return
         threading.Thread(
             target=self._execute_background_task_worker,
-            args=(task_id, task_name, prompt, mode, project_path, on_result, save_report, agent),
+            args=(task_id, task_name, prompt, mode, project_path, on_result,
+                  save_report, agent, needs_write),
             daemon=True,
         ).start()
+
+    @staticmethod
+    def _notify_result(on_result, text: str, success: bool) -> None:
+        """Geri çağrıyı korumalı çağırır; geri çağrının hatası köprüyü düşürmez."""
+        if on_result is None:
+            return
+        try:
+            on_result(text, success)
+        except Exception as cb_err:
+            bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
 
     def _execute_background_task_worker(
         self,
@@ -933,6 +954,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         on_result: Optional[Callable[[str, bool], None]] = None,
         save_report: bool = True,
         agent: Optional[str] = None,
+        needs_write: Optional[bool] = None,
     ) -> None:
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -948,13 +970,30 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             provider=self.provider_name,
         )
 
+        # Kilit türü: çağıran açıkça söylediyse o, yoksa prompt/moddan çıkarım.
+        if needs_write is None:
+            try:
+                needs_write = self.is_code_modifying_intent(prompt, mode=mode)
+            except Exception:
+                needs_write = True
+
         write_acquired = False
+        read_acquired = False
+        notified = {"done": False}
         try:
-            write_acquired = project_lock_manager.acquire_write(project_dir, timeout=60.0)
-            if not write_acquired:
-                err = f"Arka plan görevi '{task_name}' proje yazma kilidini alamadı."
+            if needs_write:
+                write_acquired = project_lock_manager.acquire_write(project_dir, timeout=BACKGROUND_LOCK_TIMEOUT)
+                acquired, kind = write_acquired, "yazma kilidini"
+            else:
+                read_acquired = project_lock_manager.acquire_read(project_dir, timeout=BACKGROUND_LOCK_TIMEOUT)
+                acquired, kind = read_acquired, "okuma kilidini"
+            if not acquired:
+                err = f"{LOCK_TIMEOUT_MARKER} Arka plan görevi '{task_name}' proje {kind} alamadı."
                 task_ledger.record_task_failure(task_id=task_id, error=err)
                 bus.terminal_output_received.emit(f"\n[Proje Kilidi Hatası]: {err}\n")
+                # Geri çağrı olmadan dönmek çağıranın kartını asılı bırakıyordu.
+                notified["done"] = True
+                self._notify_result(on_result, err, False)
                 bus.task_completed.emit(task_id, False)
                 return
 
@@ -1057,11 +1096,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     error=execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}",
                 )
 
-            if on_result is not None:
-                try:
-                    on_result(full_text, success)
-                except Exception as cb_err:
-                    bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
+            notified["done"] = True
+            self._notify_result(on_result, full_text, success)
 
             if not save_report:
                 bus.task_completed.emit(task_id, success)
@@ -1113,12 +1149,20 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     task_ledger.record_task_failure(task_id=task_id, error=str(outer_err))
             except Exception:
                 pass
+            if not notified["done"]:
+                notified["done"] = True
+                self._notify_result(on_result, f"Otonom görev kritik hata: {outer_err}", False)
             bus.task_completed.emit(task_id, False)
             bus.terminal_output_received.emit(f"\n[Otonom Görev Kritik Hata]: {outer_err}\n")
         finally:
             if write_acquired:
                 try:
                     project_lock_manager.release_write(project_dir)
+                except Exception:
+                    pass
+            if read_acquired:
+                try:
+                    project_lock_manager.release_read(project_dir)
                 except Exception:
                     pass
 

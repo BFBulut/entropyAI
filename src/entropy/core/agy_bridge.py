@@ -22,7 +22,11 @@ import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
 config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config, CHAT_HISTORY_FILE
 from entropy.core.task_ledger import task_ledger, TaskStatus
-from entropy.core.project_lock import project_lock_manager
+from entropy.core.project_lock import LOCK_TIMEOUT_MARKER, project_lock_manager
+
+# Arka plan görevinin proje kilidini bekleyeceği süre (sn). Modül düzeyinde:
+# testler gerçek kilit çakışmasını makul sürede sürebilsin diye.
+BACKGROUND_LOCK_TIMEOUT = 60.0
 from entropy.core.masking import mask_tool_output
 from entropy.core.provider import (
     ProviderCommonMixin,
@@ -557,6 +561,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         on_result: Optional[Callable[[str, bool], None]] = None,
         save_report: bool = True,
         agent: Optional[str] = None,
+        needs_write: Optional[bool] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
@@ -570,18 +575,45 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         save_report=False: çıktı kasaya araştırma raporu olarak yazılmaz; ara
         ürünlerin rapor arşivini kirletmemesi ve sonraki damıtmaya kaynak olarak
         geri dönmemesi için.
+
+        needs_write: proje kilidi türü. None ise prompt/moddan çıkarılır. False
+        olduğunda PAYLAŞIMLI okuma kilidi alınır — okuma niyetli alt kartlar
+        (ofis alt görevleri) tek yazma kilidi yüzünden sıraya girmesin diye;
+        eskiden her arka plan görevi yazma kilidi alıyordu ve ofisin
+        `max_parallel` ayarı fiilen 1'e düşüyordu.
+
+        on_result SÖZLEŞMESİ: bu çağrı bir kez döndüyse geri çağrı MUTLAKA
+        çalışır (erken dönüşler dahil). Aksi hâlde çağıranın kartı sonsuza dek
+        `running` kalıyor ve ofis pompası hiç ilerlemiyordu.
         """
         with self._lock:
             if self._shutting_down:
-                # Kapanış başladıktan sonra gelen görev sessizce reddedilir;
-                # başlatılsaydı öksüz bir agy ağacı olarak geride kalırdı.
+                # Kapanış başladıktan sonra gelen görev reddedilir; başlatılsaydı
+                # öksüz bir agy ağacı olarak geride kalırdı. Reddi geri çağrıya
+                # bildirmek şart: sessiz dönüş çağıranı asılı bırakıyordu.
+                self._notify_result(
+                    on_result,
+                    f"Arka plan görevi '{task_name}' başlatılmadı: köprü kapanıyor.",
+                    False,
+                )
                 return
         thread = threading.Thread(
             target=self._execute_background_task_worker,
-            args=(task_id, task_name, prompt, mode, project_path, on_result, save_report, agent),
+            args=(task_id, task_name, prompt, mode, project_path, on_result,
+                  save_report, agent, needs_write),
             daemon=True
         )
         thread.start()
+
+    @staticmethod
+    def _notify_result(on_result, text: str, success: bool) -> None:
+        """Geri çağrıyı korumalı çağırır; geri çağrının hatası köprüyü düşürmez."""
+        if on_result is None:
+            return
+        try:
+            on_result(text, success)
+        except Exception as cb_err:
+            bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
 
     def _execute_background_task_worker(
         self,
@@ -593,6 +625,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         on_result: Optional[Callable[[str, bool], None]] = None,
         save_report: bool = True,
         agent: Optional[str] = None,
+        needs_write: Optional[bool] = None,
     ):
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -609,17 +642,44 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             provider=self.provider_name,
         )
 
+        # Kilit türü: çağıran açıkça söylediyse o, yoksa prompt/moddan çıkarım.
+        # Okuma niyetli görevler paylaşımlı kilit alır ve birbirini beklemez.
+        if needs_write is None:
+            try:
+                needs_write = self.is_code_modifying_intent(prompt, mode=mode)
+            except Exception:
+                needs_write = True
+
         write_acquired = False
+        read_acquired = False
+        # Geri çağrının bir kez ve yalnızca bir kez çalıştığının kaydı: rapor
+        # yazımı sırasında patlayan bir istisna geri çağrıyı ikinci kez
+        # tetiklemesin, hiç ulaşılamayan bir çıkış da onu atlamasın.
+        notified = {"done": False}
         try:
             if project_lock_manager.is_write_locked(project_dir):
                 bus.terminal_output_received.emit(
                     f"\n[Proje Kilidi: Arka plan görevi için kilit bekleniyor ({task_name})...]\n"
                 )
-            write_acquired = project_lock_manager.acquire_write(project_dir, timeout=60.0)
-            if not write_acquired:
-                err_msg = f"Arka plan görevi '{task_name}' proje yazma kilidini (write lock) zaman aşımı nedeniyle alamadı."
+            if needs_write:
+                write_acquired = project_lock_manager.acquire_write(project_dir, timeout=BACKGROUND_LOCK_TIMEOUT)
+                acquired = write_acquired
+                kind = "yazma kilidini (write lock)"
+            else:
+                read_acquired = project_lock_manager.acquire_read(project_dir, timeout=BACKGROUND_LOCK_TIMEOUT)
+                acquired = read_acquired
+                kind = "okuma kilidini (read lock)"
+            if not acquired:
+                err_msg = (
+                    f"{LOCK_TIMEOUT_MARKER} Arka plan görevi '{task_name}' proje "
+                    f"{kind} zaman aşımı nedeniyle alamadı."
+                )
                 bus.terminal_output_received.emit(f"\n[Proje Kilidi Hatası]: {err_msg}\n")
                 task_ledger.record_task_failure(task_id=task_id, error=err_msg)
+                # Geri çağrı burada da çalışmalı: kilit yüzünden hiç başlamayan
+                # görev sessizce dönerse çağıranın kartı sonsuza dek `running`
+                # kalıyor ve ofis pompası bir daha ilerlemiyordu.
+                self._notify_result(on_result, err_msg, False)
                 bus.task_completed.emit(task_id, False)
                 return
 
@@ -881,11 +941,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
 
             # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
-            if on_result is not None:
-                try:
-                    on_result(full_text, success)
-                except Exception as cb_err:
-                    bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
+            notified["done"] = True
+            self._notify_result(on_result, full_text, success)
 
             if not save_report:
                 bus.task_completed.emit(task_id, success)
@@ -959,12 +1016,20 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     task_ledger.record_task_failure(task_id=task_id, error=str(outer_err))
             except Exception:
                 pass
+            if not notified["done"]:
+                notified["done"] = True
+                self._notify_result(on_result, f"Otonom görev kritik hata: {outer_err}", False)
             bus.task_completed.emit(task_id, False)
             bus.terminal_output_received.emit(f"\n[Otonom Görev Kritik Hata]: {outer_err}\n")
         finally:
             if write_acquired:
                 try:
                     project_lock_manager.release_write(project_dir)
+                except Exception:
+                    pass
+            if read_acquired:
+                try:
+                    project_lock_manager.release_read(project_dir)
                 except Exception:
                     pass
 

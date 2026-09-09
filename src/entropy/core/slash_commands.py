@@ -571,11 +571,21 @@ def _handle_desk(args: str) -> str:
                 c for c in board.list()
                 if c.office == spec.name and not c.parent and c.status in ("running", "review")
             ]
-            state = ", ".join(
-                f"{_html_escape(c.title)} ({_html_escape(c.status)}"
-                + (f", not {c.grade}" if c.grade is not None else "") + ")"
-                for c in active
-            ) or "boşta"
+            harness = OfficeHarness(spec.name, board=board, offices=offices)
+            parts = []
+            for c in active:
+                # Harcama tahminden değil, harness'ın ledger'dan topladığı
+                # gerçek sayıdan okunur; kullanıcı kartın kaç token yaktığını
+                # ancak burada görebiliyor.
+                spent = int(harness._card_state(c.id).get("tokens", 0))
+                budget = int(c.budget_tokens or spec.budget_tokens or 0)
+                cost = f", {spent:,} tk" + (f"/{budget:,}" if budget else "")
+                parts.append(
+                    f"{_html_escape(c.title)} ({_html_escape(c.status)}"
+                    + (f", not {c.grade}" if c.grade is not None else "")
+                    + _html_escape(cost) + ")"
+                )
+            state = ", ".join(parts) or "boşta"
             rows.append(
                 f"🏢 <b>{_html_escape(spec.name)}</b> — {_html_escape(spec.purpose or '-')}<br/>"
                 f"<span style='color:#8B949E;font-size:11px;'>{state}</span>"

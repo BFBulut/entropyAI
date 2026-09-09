@@ -56,6 +56,20 @@ SECTION_CRITERIA = "Kabul ölçütleri"
 SECTION_NOTES = "Notlar"
 SECTION_RESULT = "Sonuç"
 
+# Alt kart adım tavanı. agy'de adım/tur sayısını sınırlayan bir CLI bayrağı YOK
+# (`agy -p --help`: yalnızca --effort ve --print-timeout), bu yüzden sınır
+# prompt sözleşmesiyle konuyor.
+MAX_STEPS_PER_CARD = 20
+
+COST_DISCIPLINE = (
+    "[MALİYET DİSİPLİNİ]\n"
+    "- Yalnızca sana verilen dosyaları ve yolları oku; deponun tamamını tarama, "
+    "geniş `grep`/`glob` gezintisi yapma.\n"
+    f"- En çok {MAX_STEPS_PER_CARD} araç adımı kullan; ölçütleri karşıladığında dur.\n"
+    "- Aynı dosyayı ikinci kez okuma; gerekli bilgiyi ilk okumada çıkar.\n"
+    "- Bilgi eksikse tahmin üretme, 'yapılamadı: <neden>' yaz."
+)
+
 
 @dataclass
 class TaskCard:
@@ -89,6 +103,12 @@ class TaskCard:
     verdict: str = ""
     # Kaç kez koşuldu: eşiğin altındaki alt kart bir kez yeniden koşar (retry ≤ 1).
     attempt: int = 0
+    # Kart düzeyi token tavanı; 0 ise ofisin `budget_tokens` değeri geçerli.
+    budget_tokens: int = 0
+    # Kilit niyeti: "write" (proje dosyalarını değiştirir) | "read" | "" (çıkarım).
+    # Ofis alt kartları varsayılan olarak OKUMA: paylaşımlı kilitle aynı proje
+    # dizininde birbirlerini beklemeden koşabilsinler.
+    intent: str = ""
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -109,6 +129,8 @@ class TaskCard:
             "grade": "" if self.grade is None else round(float(self.grade), 3),
             "verdict": self.verdict,
             "attempt": int(self.attempt or 0),
+            "budget_tokens": int(self.budget_tokens or 0),
+            "intent": self.intent,
         }
 
 
@@ -122,23 +144,142 @@ def new_task_id(title: str = "") -> str:
     return f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{slug}"
 
 
+SECTIONS = (SECTION_GOAL, SECTION_CRITERIA, SECTION_NOTES, SECTION_RESULT)
+
+# Bölüm sınırı YALNIZCA bu dört başlıktır. Eskiden herhangi bir `## ...` satırı
+# sınır sayılıyordu ve ajan çıktısı `## Bulgular` gibi bir başlık içerdiğinde
+# "Sonuç" bölümü ilk başlıkta kesiliyordu: 29k karakterlik çıktı geri okunduğunda
+# birkaç yüz karaktere iniyordu.
+_SECTION_HEAD_RE = re.compile(r"^##\s+(" + "|".join(re.escape(s) for s in SECTIONS) + r")\s*$")
+
+# Gövde metni tesadüfen tam da bu dört başlıktan birini içerebilir. O durumda
+# yazarken bir seviye indirilir ve görünmez bir HTML yorumu işareti konur;
+# okurken aynı işaretle geri yükselir. Simetrik olduğu için kayıpsız.
+_ESCAPE_MARK = "<!--entropy-esc-->"
+_ESCAPED_HEAD_RE = re.compile(
+    r"^###\s+(" + "|".join(re.escape(s) for s in SECTIONS) + r")\s*" + re.escape(_ESCAPE_MARK) + r"\s*$"
+)
+
+
+def _escape_body(text: str) -> str:
+    """Bölüm sınırıyla çakışan başlıkları bir seviye indirir (yazma yönü)."""
+    if not text:
+        return text or ""
+    out = []
+    for line in text.splitlines():
+        m = _SECTION_HEAD_RE.match(line)
+        out.append(f"### {m.group(1)} {_ESCAPE_MARK}" if m else line)
+    return "\n".join(out)
+
+
+def _unescape_body(text: str) -> str:
+    """`_escape_body`nin tersi (okuma yönü)."""
+    if not text or _ESCAPE_MARK not in text:
+        return text or ""
+    out = []
+    for line in text.splitlines():
+        m = _ESCAPED_HEAD_RE.match(line)
+        out.append(f"## {m.group(1)}" if m else line)
+    return "\n".join(out)
+
+
+def trim_to_sections(text: str, limit: int) -> str:
+    """
+    Metni `limit` karakterin altına, BÖLÜM BÜTÜNLÜĞÜNÜ bozmadan kırpar.
+
+    Değerlendirici prompt'u için: ham `text[:1500]` kesmesi cümlenin ortasında
+    duruyor ve değerlendirici eksik gördüğü bölümü "yapılmamış" sayıyordu. Burada
+    yalnızca tam markdown blokları (başlıktan başlığa) alınır.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    blocks: List[List[str]] = [[]]
+    for line in text.splitlines():
+        if re.match(r"^#{1,6}\s+\S", line) and blocks[-1]:
+            blocks.append([])
+        blocks[-1].append(line)
+    kept: List[str] = []
+    total = 0
+    for block in blocks:
+        chunk = "\n".join(block)
+        if kept and total + len(chunk) + 1 > limit:
+            break
+        kept.append(chunk)
+        total += len(chunk) + 1
+    out = "\n".join(kept)
+    if len(out) > limit:
+        # Tek blok bile sığmıyor: sert kesmekten başka seçenek yok.
+        out = out[:limit]
+    if len(out) < len(text):
+        out = out.rstrip() + "\n\n[... çıktı kırpıldı; tamamı kartta]"
+    return out
+
+
 def _split_sections(body: str) -> Dict[str, str]:
-    """Gövdeyi `## Başlık` bölümlerine ayırır."""
+    """Gövdeyi bilinen `## Başlık` bölümlerine ayırır."""
     sections: Dict[str, str] = {}
     current = None
     buf: List[str] = []
     for line in (body or "").splitlines():
-        m = re.match(r"^##\s+(.+?)\s*$", line)
+        m = _SECTION_HEAD_RE.match(line)
         if m:
             if current:
-                sections[current] = "\n".join(buf).strip()
+                sections[current] = _unescape_body("\n".join(buf).strip())
             current = m.group(1).strip()
             buf = []
         elif current:
             buf.append(line)
     if current:
-        sections[current] = "\n".join(buf).strip()
+        sections[current] = _unescape_body("\n".join(buf).strip())
     return sections
+
+
+# Proje dosyalarını değiştirme niyeti taşıyan fiiller. Liste kasıtlı olarak dar:
+# "rapor yaz" gibi kasaya üreten işler yazma kilidi almamalı, yoksa her alt kart
+# yeniden sıraya girer ve ofis paralelliği anlamsızlaşır.
+_WRITE_INTENT_RE = re.compile(
+    r"\b(refactor|refaktör|kodu?\s+(değiştir|düzelt|yaz)|dosyayı?\s+(değiştir|düzenle|güncelle|sil)|"
+    r"düzenle|yamala|patch|implement|uygula|commit|migrasyon|migration|"
+    r"testleri?\s+(ekle|yaz)|hata\s*ayıkla|debug|derle|build)\b",
+    re.IGNORECASE,
+)
+
+
+def _accepts_kwarg(func, name: str) -> bool:
+    """`func` verilen adlı anahtar argümanı (ya da **kwargs) kabul ediyor mu?"""
+    import inspect
+
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def card_needs_write(card: "TaskCard", agent_spec=None) -> bool:
+    """
+    Kart proje dizininde YAZMA kilidi gerektiriyor mu?
+
+    Sıra: (1) kartın açık `intent` alanı, (2) ajanın `tools_policy` kısıtı,
+    (3) ofis alt kartıysa varsayılan OKUMA, (4) metinde yazma fiili araması.
+    """
+    intent = (card.intent or "").strip().lower()
+    if intent in ("write", "yazma", "rw"):
+        return True
+    if intent in ("read", "okuma", "ro", "read-only"):
+        return False
+    if agent_spec is not None and (getattr(agent_spec, "tools_policy", "") or "").lower() in (
+        "read-only", "readonly", "okuma"
+    ):
+        return False
+    if card.parent or card.office:
+        # Ofis alt kartı: aksi açıkça yazılmadıkça okuma kilidiyle koşar.
+        return False
+    text = " ".join([card.title or "", card.goal or "", " ".join(card.criteria or []), card.notes or ""])
+    return bool(_WRITE_INTENT_RE.search(text))
 
 
 def _bullets(text: str) -> List[str]:
@@ -212,6 +353,10 @@ class TaskBoard:
             attempt = int(str(front.get("attempt") or 0).strip() or 0)
         except (TypeError, ValueError):
             attempt = 0
+        try:
+            budget_tokens = int(str(front.get("budget_tokens") or 0).strip() or 0)
+        except (TypeError, ValueError):
+            budget_tokens = 0
         return TaskCard(
             id=str(front.get("id") or path.stem),
             title=str(front.get("title") or path.stem),
@@ -235,6 +380,8 @@ class TaskBoard:
             grade=grade,
             verdict=str(front.get("verdict") or ""),
             attempt=attempt,
+            budget_tokens=budget_tokens,
+            intent=str(front.get("intent") or "").strip().lower(),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -256,10 +403,10 @@ class TaskBoard:
         path.parent.mkdir(parents=True, exist_ok=True)
         criteria = "\n".join(f"- {c}" for c in (card.criteria or [])) or "-"
         body = (
-            f"## {SECTION_GOAL}\n{card.goal or '-'}\n\n"
+            f"## {SECTION_GOAL}\n{_escape_body(card.goal) or '-'}\n\n"
             f"## {SECTION_CRITERIA}\n{criteria}\n\n"
-            f"## {SECTION_NOTES}\n{card.notes or ''}\n\n"
-            f"## {SECTION_RESULT}\n{card.summary or ''}\n"
+            f"## {SECTION_NOTES}\n{_escape_body(card.notes)}\n\n"
+            f"## {SECTION_RESULT}\n{_escape_body(card.summary)}\n"
         )
         path.write_text(f"{render_frontmatter(card.to_frontmatter())}\n\n{body}", encoding="utf-8")
         self._notify(card.id)
@@ -339,7 +486,11 @@ class TaskBoard:
             f"Kabul ölçütleri:\n{criteria}\n\n"
             "Kurallar: Ölçütlerin her birini tek tek ele al ve karşılandığını "
             "kanıtıyla göster. Yapamadığın maddeyi 'yapılamadı' diye açıkça yaz; "
-            "sessizce atlama. Yanıtın Türkçe ve markdown olsun."
+            "sessizce atlama. Yanıtın Türkçe ve markdown olsun.\n\n"
+            # Maliyet disiplini: kota koruması yalnızca bütçe sayacıyla değil,
+            # görevin kendi kapsamıyla da yapılır. Sınırsız keşif yetkisi verilen
+            # bir alt kart tek başına ofisin bütçesini bitiriyordu.
+            f"{COST_DISCIPLINE}"
         )
         if card.notes:
             parts.append(f"[NOTLAR]\n{card.notes}")
@@ -377,6 +528,7 @@ class TaskBoard:
             return None
 
         prompt = self.build_prompt(card, agent_spec=agent_spec)
+        needs_write = card_needs_write(card, agent_spec=agent_spec)
         task_id = f"card-{card.id}"
         card = replace(card, status="running", started_at=_now(), provider=provider)
         self._write(card)
@@ -391,16 +543,26 @@ class TaskBoard:
                         "Kart tamamlama geri çağrısı hata verdi (%s)", _card_id
                     )
 
+        kwargs = dict(
+            task_id=task_id,
+            task_name=card.title or card.id,
+            prompt=prompt,
+            mode="accept-edits",
+            on_result=_on_result,
+            save_report=True,
+            agent=card.agent or None,
+            # Okuma niyetli kart paylaşımlı kilitle koşar; aksi hâlde aynı
+            # proje dizinindeki ikinci alt kart 60 sn bekleyip ölüyordu.
+            needs_write=needs_write,
+        )
+        # `needs_write` bilmeyen dar köprü sözleşmeleri (ve sahte köprüler) için
+        # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
+        # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
+        # başlatırdı.
+        if not _accepts_kwarg(bridge.send_background_task_async, "needs_write"):
+            kwargs.pop("needs_write", None)
         try:
-            bridge.send_background_task_async(
-                task_id=task_id,
-                task_name=card.title or card.id,
-                prompt=prompt,
-                mode="accept-edits",
-                on_result=_on_result,
-                save_report=True,
-                agent=card.agent or None,
-            )
+            bridge.send_background_task_async(**kwargs)
         except Exception as exc:
             self._finish(card.id, f"Görev başlatılamadı: {exc}", False)
             if on_done is not None:
@@ -466,7 +628,10 @@ class TaskBoard:
             card,
             status="review" if ok else "failed",
             finished_at=_now(),
-            summary=summary[:4000] if summary else ("Çıktı üretilmedi." if not ok else ""),
+            # Özet KIRPILMAZ: kart artık `##` başlıklı uzun çıktıyı kayıpsız
+            # geri okuyabiliyor ve tek gerçek kaynak o. Kırpma, çıktının
+            # tüketildiği yerde (değerlendirici prompt'u) yapılır.
+            summary=summary if summary else ("Çıktı üretilmedi." if not ok else ""),
             output_paths=outputs,
         )
         self._write(card)

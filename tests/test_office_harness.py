@@ -665,6 +665,21 @@ class _FakeProc:
         return self.returncode
 
 
+def _wait_until(predicate, timeout=10.0, interval=0.05):
+    """Koşul sağlanana kadar bekler; sağlanırsa True."""
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if predicate():
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
 def _agy_lines(text):
     return [
         json.dumps({"event": "step_update", "step_update": {"text_delta": text}}) + "\n",
@@ -712,6 +727,10 @@ def test_real_bridge_path_plans_and_runs_office_chain(seeded, board, registry, o
                             offices=offices, bridge_factory=lambda provider: bridge)
     assert harness.start(card.id) is True
     assert finished.wait(timeout=20), "değerlendirme adımına ulaşılamadı"
+    # Zincirin SONUNU beklemek şart: köprü işçi iş parçacıkları test bittikten
+    # sonra da `bus.task_completed` yayınlıyor ve sonraki testin bu sinyale
+    # bağladığı `threading.Event`'i erkenden tetikliyordu (testler arası sızıntı).
+    _wait_until(lambda: board.get(card.id).status in ("review", "failed"), 20)
 
     # Planlama çağrısı orkestratör ajanıyla ve rapor kaydetmeden koşmalı.
     plan_cmd = commands[0]

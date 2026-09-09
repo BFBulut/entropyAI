@@ -42,6 +42,54 @@ from typing import Dict, List, Optional
 # Kasa içindeki göreli konumlar. Tek yerde durur: hem izleyici hem görev kartları
 # hem de manifest'e yazılan "şuraya dosya koy" yönergesi buradan okur.
 AGENTS_SUBDIR = "Entropy/Agents"
+
+# Hangi tohum tanımların bir kez yazıldığını tutan işaret dosyası. Ajanlar ve
+# ofisler aynı deseni kullanır (her biri kendi klasöründe).
+SEED_MARKER_FILENAME = ".seeded.json"
+
+
+def _seed_missing(marker_path, defaults, existing, write) -> List[str]:
+    """
+    Ad bazında eksik tohumları yazar; yazılan adları döndürür.
+
+    Kural: bir tohum adı ya diskte VARSA ya da işaret dosyasında "bir kez
+    yazılmış" diye geçiyorsa atlanır. Böylece (a) sürümle gelen yeni tohumlar
+    mevcut kasaya düşer, (b) kullanıcının sildiği tohum geri dirilmez.
+
+    İşaret dosyası hiç yoksa (bu sürümden önce kurulmuş kasa) o ana kadarki
+    tohumlar "görülmemiş" sayılır: eksik olanlar bir kez yazılır ve dosya
+    oluşur. Bunun bilinen bedeli, bu sürümden ÖNCE silinmiş bir tohum ajanın
+    tek seferliğine geri gelmesidir; alternatifi yeni rollerin hiç gelmemesiydi.
+    """
+    import json as _json
+
+    seen: set = set()
+    try:
+        raw = _json.loads(Path(marker_path).read_text(encoding="utf-8"))
+        seen = {str(n) for n in (raw.get("seeded") or [])}
+    except Exception:
+        seen = set()
+
+    created: List[str] = []
+    for spec in defaults:
+        if spec.name in seen or spec.name in existing:
+            continue
+        try:
+            write(spec)
+            created.append(spec.name)
+        except Exception:
+            continue
+
+    try:
+        marker = Path(marker_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        merged = sorted(seen | {s.name for s in defaults})
+        marker.write_text(
+            _json.dumps({"seeded": merged}, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+    return created
 AGENT_FILENAME = "AGENT.md"
 
 VALID_PROVIDERS = ("agy", "claude")
@@ -495,22 +543,22 @@ class AgentRegistry:
 
     def ensure_defaults(self) -> List[str]:
         """
-        Varsayılan üç ajanı yalnızca HİÇ yoksa yazar; oluşturulan adları döndürür.
+        Eksik tohum ajanları AD BAZINDA tamamlar; oluşturulan adları döndürür.
 
-        Ad ad kontrol edilmez, klasörün tamamı boş mu diye bakılır: kullanıcı
-        `arastirmaci`yi bilinçli sildiyse her açılışta geri gelmemeli. Kasada
-        hiç ajan yoksa ilk açılış sayılır ve tohum tanımlar yazılır.
+        Eskiden "klasör tamamen boşsa yaz" kuralı vardı ve Faz 3'te kadroya
+        eklenen `orkestrator`/`degerlendirici` mevcut kasalara hiç gelmiyordu:
+        kasada zaten üç ajan olduğu için tohumlama atlanıyordu.
+
+        Kullanıcının bilinçli sildiği ajanı geri getirmemek için hangi tohumun
+        bir kez yazıldığı `<kasa>/Entropy/Agents/.seeded.json` işaret dosyasında
+        tutulur. Yalnızca İLK KEZ görülen tohum adları yazılır.
         """
-        if self.list():
-            return []
-        created: List[str] = []
-        for spec in DEFAULT_AGENTS:
-            try:
-                self._write(spec)
-                created.append(spec.name)
-            except Exception:
-                continue
-        return created
+        return _seed_missing(
+            marker_path=self.agents_dir / SEED_MARKER_FILENAME,
+            defaults=DEFAULT_AGENTS,
+            existing={spec.name for spec in self.list()},
+            write=self._write,
+        )
 
     # -- derleme --------------------------------------------------------
 

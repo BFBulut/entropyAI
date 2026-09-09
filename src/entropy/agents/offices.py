@@ -35,7 +35,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from entropy.agents.registry import parse_frontmatter, render_frontmatter
+from entropy.agents.registry import (
+    SEED_MARKER_FILENAME,
+    _seed_missing,
+    parse_frontmatter,
+    render_frontmatter,
+)
 
 OFFICES_SUBDIR = "Entropy/Offices"
 OFFICE_FILENAME = "OFFICE.md"
@@ -244,21 +249,19 @@ class OfficeRegistry:
 
     def ensure_defaults(self) -> List[str]:
         """
-        Tohum ofisi yalnızca HİÇ ofis yoksa yazar; oluşturulan adları döndürür.
+        Eksik tohum ofisleri AD BAZINDA tamamlar; oluşturulan adları döndürür.
 
-        Ajan tohumlamasıyla aynı gerekçe: kullanıcı `arastirma-ofisi`ni bilinçli
-        sildiyse her açılışta geri gelmemeli.
+        Ajan tohumlamasıyla birebir aynı desen: sürümle gelen yeni tohum ofis
+        mevcut kasaya düşsün, kullanıcının sildiği ofis geri dirilmesin. Hangi
+        tohumun bir kez yazıldığı `<kasa>/Entropy/Offices/.seeded.json` işaret
+        dosyasında tutulur.
         """
-        if self.list():
-            return []
-        created: List[str] = []
-        for spec in DEFAULT_OFFICES:
-            try:
-                self._write(spec)
-                created.append(spec.name)
-            except Exception:
-                continue
-        return created
+        return _seed_missing(
+            marker_path=self.offices_dir / SEED_MARKER_FILENAME,
+            defaults=DEFAULT_OFFICES,
+            existing={spec.name for spec in self.list()},
+            write=self._write,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+# Kilit zaman aşımıyla hiç başlayamayan arka plan görevinin hata metnine konan
+# işaret. Çağıran (ofis harness'ı) bunu görünce kartı "başarısız" saymak yerine
+# sıraya geri koyar: iş yanlış yapılmadı, hiç başlamadı.
+LOCK_TIMEOUT_MARKER = "[proje-kilidi-zaman-asimi]"
+
+
 class _ProjectRWLock:
     """Reader-Writer Lock for a single normalized project directory.
 

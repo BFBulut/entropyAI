@@ -15,10 +15,12 @@ Akış:
                  notlar; `grade < 0.6` ve `attempt < 1` olan alt kart bir kez
                  yeniden koşar. Sonra üst kart `review` olur.
 
-Kota koruması: her adımın tahmini token maliyeti toplanır; ofisin
-`budget_tokens` değeri aşılırsa zincir durur ve üst kart nedeniyle `failed`
-olur. Tahmin (karakter/4) kasıtlı kabadır — amaç muhasebe değil, kaçak
-zincirin kotayı boşaltmasını engellemek.
+Kota koruması: her adım bittiğinde maliyet SQLite ledger'dan (sağlayıcının
+bildirdiği gerçek `total_tokens`) okunur ve toplanır; ledger'da usage yoksa
+karakter/4 tahminine düşülür. Kartın `budget_tokens` alanı (yoksa ofisinki)
+aşılırsa SÜREN alt kartlar `terminate_background_task` ile öldürülür ve üst kart
+nedeniyle `failed` olur — yalnızca üst kartı başarısız saymak kotayı korumuyordu,
+süren agy süreçleri token yakmaya devam ediyordu.
 """
 
 from __future__ import annotations
@@ -33,9 +35,24 @@ from typing import Callable, Dict, List, Optional
 
 from entropy.agents.offices import OfficeRegistry, OfficeSpec
 from entropy.agents.registry import AgentRegistry
-from entropy.agents.tasks import TaskBoard, TaskCard, _now, new_task_id
+from entropy.agents.tasks import (
+    TaskBoard,
+    TaskCard,
+    _now,
+    card_needs_write,
+    new_task_id,
+    trim_to_sections,
+)
+from entropy.core.project_lock import LOCK_TIMEOUT_MARKER
 
 logger = logging.getLogger(__name__)
+
+# Kilit yüzünden başlayamayan alt kart en çok bu kadar kez sıraya geri konur;
+# sonrası gerçek bir kilitlenmedir ve sonsuz döngüye dönüşmemeli.
+MAX_LOCK_REQUEUES = 5
+
+# Değerlendirici prompt'unda alt kart başına en çok bu kadar karakterlik özet.
+EVAL_SUMMARY_CHARS = 6000
 
 STATE_FILENAME = "state.json"
 
@@ -167,18 +184,110 @@ class OfficeHarness:
         except Exception:
             pass
 
-    def _spend(self, card_id: str, tokens: int) -> bool:
+    def _budget(self, card_id: str) -> int:
+        """Geçerli token tavanı: kartınki varsa o, yoksa ofisinki."""
+        card = self.board.get(card_id)
+        if card is not None and int(card.budget_tokens or 0) > 0:
+            return int(card.budget_tokens)
+        office = self.office
+        return int(office.budget_tokens) if office else 0
+
+    @staticmethod
+    def ledger_tokens(ledger_task_id: str) -> Optional[int]:
+        """
+        Ledger'daki GERÇEK token maliyeti; kayıt/usage yoksa None.
+
+        Köprü `usage` alanını görev bitince ledger'a yazıyor. Bus'taki
+        `token_usage_updated` sinyali kullanılmıyor: görev kimliği taşımadığı
+        için eşzamanlı iki alt kartın maliyeti birbirine karışırdı.
+        """
+        try:
+            from entropy.core.task_ledger import task_ledger
+
+            rec = task_ledger.get_task(ledger_task_id)
+        except Exception:
+            return None
+        if not rec:
+            return None
+        value = rec.get("total_tokens")
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _spend(self, card_id: str, tokens: int, ledger_task_id: Optional[str] = None) -> bool:
         """
         Harcamayı işler; bütçe aşılmadıysa True.
 
+        `ledger_task_id` verilirse maliyet önce SQLite ledger'dan (sağlayıcının
+        bildirdiği gerçek `total_tokens`) okunur; yalnızca ledger'da usage yoksa
+        karakter/4 tahminine düşülür. Tahmin gerçek maliyetin onda birini bile
+        göstermiyordu ve bütçe koruması fiilen çalışmıyordu.
+
         Aşıldığında False döner ve çağıran zinciri durdurur — kontrol harcamadan
-        ÖNCE değil sonra yapılır çünkü tahminin kendisi ancak metin oluştuktan
-        sonra bilinir; önemli olan bir sonraki çağrının engellenmesi.
+        sonra yapılır çünkü maliyet ancak çağrı bittikten sonra bilinir; önemli
+        olan bir SONRAKİ çağrının engellenmesi ve sürenlerin öldürülmesi.
         """
-        office = self.office
-        budget = office.budget_tokens if office else 0
-        entry = self._save_card_state(card_id, tokens=self._card_state(card_id).get("tokens", 0) + int(tokens))
+        real = self.ledger_tokens(ledger_task_id) if ledger_task_id else None
+        amount = int(real) if real is not None else int(tokens)
+        state = self._card_state(card_id)
+        entry = self._save_card_state(
+            card_id,
+            tokens=int(state.get("tokens", 0)) + amount,
+            measured_tokens=int(state.get("measured_tokens", 0)) + (int(real) if real is not None else 0),
+            estimated_tokens=int(state.get("estimated_tokens", 0)) + (0 if real is not None else int(tokens)),
+        )
+        budget = self._budget(card_id)
         return not (budget and entry.get("tokens", 0) > budget)
+
+    def _terminate_children(self, card_id: str) -> List[str]:
+        """Süren alt kartların köprü süreçlerini öldürür; durdurulan kimlikler."""
+        stopped: List[str] = []
+        card = self.board.get(card_id)
+        if card is None:
+            return stopped
+        for child in self._children(card):
+            if child.status != "running":
+                continue
+            try:
+                bridge = TaskBoard.bridge_for(child.provider or "agy",
+                                              bridge_factory=self.bridge_factory)
+            except Exception:
+                bridge = None
+            if bridge is not None:
+                try:
+                    bridge.terminate_background_task(f"card-{child.id}")
+                except Exception:
+                    logger.warning("Alt kart süreci durdurulamadı: %s", child.id)
+            try:
+                self.board.update(replace(
+                    child, status="failed", finished_at=_now(),
+                    summary=(child.summary or "") + "\nBütçe aşımı nedeniyle durduruldu.",
+                ))
+            except Exception:
+                pass
+            stopped.append(child.id)
+        return stopped
+
+    def _fail_budget(self, card_id: str, phase_label: str) -> None:
+        """
+        Bütçe aşımını kapatır: süren alt kartları ÖLDÜR, üst kartı `failed` yap.
+
+        Alt kartları öldürmeden üst kartı başarısız saymak kotayı korumuyordu;
+        süren iki agy süreci bütçe aşıldıktan sonra da token yakmayı
+        sürdürüyordu.
+        """
+        spent = int(self._card_state(card_id).get("tokens", 0))
+        stopped = self._terminate_children(card_id)
+        reason = (
+            f"Bütçe (budget_tokens={self._budget(card_id)}) {phase_label} adımında aşıldı; "
+            f"harcanan ≈ {spent} token."
+        )
+        if stopped:
+            reason += f" Durdurulan alt kart: {', '.join(stopped)}."
+        self._fail(card_id, reason)
 
     def _children(self, card: TaskCard) -> List[TaskCard]:
         out: List[TaskCard] = []
@@ -261,8 +370,8 @@ class OfficeHarness:
         )
 
     def _on_plan(self, card_id: str, text: str, ok: bool) -> None:
-        if not self._spend(card_id, _estimate_tokens(text)):
-            self._fail(card_id, "Ofis bütçesi (budget_tokens) planlama adımında aşıldı.")
+        if not self._spend(card_id, _estimate_tokens(text), ledger_task_id=f"office-plan-{card_id}"):
+            self._fail_budget(card_id, "planlama")
             return
         if not ok:
             self._fail(card_id, "Planlama çağrısı başarısız oldu.")
@@ -341,7 +450,14 @@ class OfficeHarness:
             children = self._children(card)
             running = [c for c in children if c.status == "running"]
             backlog = [c for c in children if c.status == "backlog"]
-            free = max(0, int(office.max_parallel or 1) - len(running))
+            # Yazma niyetli alt kart varsa paralellik fiilen 1'dir: proje yazma
+            # kilidi tekildir ve ikinci kart zaten 60 sn bekleyip ölürdü. Okuma
+            # niyetli kartlar paylaşımlı kilitle gerçekten paralel koşar.
+            limit = int(office.max_parallel or 1)
+            if any(card_needs_write(c, agent_spec=self.registry.get(c.agent) if c.agent else None)
+                   for c in (running + backlog)):
+                limit = 1
+            free = max(0, limit - len(running))
             # `_starting`: köprü geri çağrıyı SENKRON verdiğinde (test taklidi ya
             # da anında hata) `board.run` içinden yeniden _pump'a giriliyor ve
             # aynı alt kart iki kez başlatılabiliyordu. Başlatılan kimlik önce
@@ -355,7 +471,7 @@ class OfficeHarness:
                 return
         for child in to_start:
             if not self._spend(card_id, _estimate_tokens(child.goal, *(child.criteria or []))):
-                self._fail(card_id, "Ofis bütçesi (budget_tokens) yürütme adımında aşıldı.")
+                self._fail_budget(card_id, "yürütme")
                 return
             self.board.run(
                 child.id,
@@ -368,7 +484,23 @@ class OfficeHarness:
             self._starting.discard(child_id)
         child = self.board.get(child_id)
         if child is not None:
-            self._spend(card_id, _estimate_tokens(child.summary))
+            if not self._spend(card_id, _estimate_tokens(child.summary),
+                               ledger_task_id=f"card-{child_id}"):
+                self._fail_budget(card_id, "yürütme")
+                return
+            # Proje kilidini alamadığı için HİÇ BAŞLAMAMIŞ kart başarısız
+            # değildir; sıraya geri konur. Eskiden bu kart `failed` kalıyor ve
+            # ofis, yapılmamış bir işi yapılmış sayıyordu.
+            if not ok and LOCK_TIMEOUT_MARKER in (child.summary or ""):
+                state = self._card_state(card_id)
+                requeues = int(state.get("lock_requeues") or 0)
+                if requeues < MAX_LOCK_REQUEUES:
+                    self._save_card_state(card_id, lock_requeues=requeues + 1)
+                    self.board.update(replace(
+                        child, status="backlog", finished_at="",
+                        summary="", notes=(child.notes + "\n" if child.notes else "")
+                        + "Proje kilidi alınamadı; sıraya geri konuldu.",
+                    ))
         self._pump(card_id)
 
     # -- 3. değerlendirme -----------------------------------------------
@@ -413,10 +545,13 @@ class OfficeHarness:
             criteria = "\n".join(f"  - {c}" for c in (child.criteria or [])) or "  - (belirtilmedi)"
             summary = (child.summary or "(çıktı yok)").strip()
             # Değerlendirme prompt'u tüm çıktıyı taşıyamaz: beş alt görev tam
-            # metinle kolayca 100k token eder. Kart başına 1500 karakter.
+            # metinle kolayca 100k token eder. Kart başına EVAL_SUMMARY_CHARS
+            # karakter, ama cümlenin ortasından değil bölüm sınırından kesilir:
+            # yarım kalan bölüm değerlendiriciye "eksik iş" gibi görünüyordu.
             blocks.append(
                 f"### id: {child.id}\nBaşlık: {child.title}\nDurum: {child.status}\n"
-                f"Kabul ölçütleri:\n{criteria}\nÇıktı özeti:\n{summary[:1500]}"
+                f"Kabul ölçütleri:\n{criteria}\nÇıktı özeti:\n"
+                f"{trim_to_sections(summary, EVAL_SUMMARY_CHARS)}"
             )
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
@@ -429,8 +564,8 @@ class OfficeHarness:
         )
 
     def _on_grades(self, card_id: str, text: str, ok: bool) -> None:
-        if not self._spend(card_id, _estimate_tokens(text)):
-            self._fail(card_id, "Ofis bütçesi (budget_tokens) değerlendirme adımında aşıldı.")
+        if not self._spend(card_id, _estimate_tokens(text), ledger_task_id=f"office-eval-{card_id}"):
+            self._fail_budget(card_id, "değerlendirme")
             return
         data = extract_json_block(text or "") if ok else None
         grades = (data or {}).get("grades") if isinstance(data, dict) else None
@@ -513,7 +648,8 @@ class OfficeHarness:
             finished_at=_now(),
             grade=avg,
             verdict=f"{len(children)} alt görev, ortalama not {avg if avg is not None else '-'}",
-            summary=report[:8000],
+            # Kart artık uzun metni kayıpsız saklıyor; birleşik rapor kırpılmaz.
+            summary=report,
             output_paths=outputs,
         ))
         self._save_card_state(card_id, phase=PHASE_DONE)
@@ -683,16 +819,24 @@ class OfficeHarness:
         if bridge is None:
             return False
         body = (spec.prompt.strip() + "\n\n") if (spec and spec.prompt) else ""
+        kwargs = dict(
+            task_id=task_id,
+            task_name=task_name,
+            prompt=body + prompt,
+            mode="accept-edits",
+            on_result=on_result,
+            save_report=False,
+            agent=agent_name or None,
+            # Planlama ve değerlendirme yalnızca metin üretir: paylaşımlı okuma
+            # kilidi yeter, yazma kilidi alt kartları gereksiz yere bekletirdi.
+            needs_write=False,
+        )
+        from entropy.agents.tasks import _accepts_kwarg
+
+        if not _accepts_kwarg(bridge.send_background_task_async, "needs_write"):
+            kwargs.pop("needs_write", None)
         try:
-            bridge.send_background_task_async(
-                task_id=task_id,
-                task_name=task_name,
-                prompt=body + prompt,
-                mode="accept-edits",
-                on_result=on_result,
-                save_report=False,
-                agent=agent_name or None,
-            )
+            bridge.send_background_task_async(**kwargs)
         except Exception:
             logger.exception("Ofis çağrısı başlatılamadı: %s", agent_name)
             return False
