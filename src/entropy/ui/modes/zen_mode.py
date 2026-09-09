@@ -602,6 +602,25 @@ class ZenModeWindow(QMainWindow):
             clean_name = (model_name or config.model_fallback_name).strip("[]")
             self.badge_model.setText(f"[{clean_name}]")
 
+    def refresh_provider_ui(self):
+        """
+        Sağlayıcı değiştiğinde model listesini tazeler.
+
+        Zen kipinde ayrı bir sağlayıcı seçicisi YOK (üst çubuk kasıtlı olarak
+        minimal); seçim sohbet kipinden yapılır, burada yalnızca yeni köprünün
+        model listesi yansıtılır.
+        """
+        if not hasattr(self, "model_combo"):
+            return
+        try:
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            for m in self.bridge.fetch_available_models():
+                self.model_combo.addItem(m)
+            self.model_combo.setCurrentText(self.bridge.selected_model)
+        finally:
+            self.model_combo.blockSignals(False)
+
 
     @Slot(int)
     def _update_tokens(self, tokens: int):

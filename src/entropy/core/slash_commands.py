@@ -1,10 +1,13 @@
 """Dynamic Slash Commands Registry and Discovery Engine for Antigravity & Entropy AI."""
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SlashCommand:
@@ -174,7 +177,23 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         category="builtin",
         badge="📘 YORDAM",
         color="#00FF9D",
-        usage="/distill [<yetenek_adı>|all|index|stop [<yetenek>]]",
+        usage="/distill [<yetenek_adı>|all|index|stop [<yetenek>]|refresh <yetenek>]",
+    ),
+    SlashCommand(
+        name="/handoff",
+        description="Bu oturum için devir sayfası yazar (hedef, kararlar, açık işler, sonraki adım) ve bağlamı sıkıştırır.",
+        category="builtin",
+        badge="🔁 AKTARIM",
+        color="#00F0FF",
+        usage="/handoff [not]",
+    ),
+    SlashCommand(
+        name="/provider",
+        description="Aktif CLI sağlayıcısını gösterir veya değiştirir (agy | claude).",
+        category="builtin",
+        badge="🔀 SAĞLAYICI",
+        color="#9D00FF",
+        usage="/provider [agy|claude]",
     ),
 ]
 
@@ -182,6 +201,104 @@ LOCAL_COMMANDS: List[SlashCommand] = [
 def _html_escape(text: str) -> str:
     import html as _html
     return _html.escape(str(text))
+
+
+def _handle_provider(cmd: dict, bridge) -> str:
+    """
+    `/provider` sonucunu yürütür: show -> mevcut sağlayıcı/model; set -> arayüz
+    yöneticisi üzerinden canlı köprü değişimi; error -> ayrıştırıcı mesajı.
+    """
+    action = cmd.get("action")
+    if action == "error":
+        return f"<span style='color:#e06c75;'>{cmd.get('message', 'Geçersiz /provider komutu.')}</span>"
+
+    if action == "show":
+        name = getattr(bridge, "provider_name", "agy")
+        model = getattr(bridge, "selected_model", "") or "-"
+        return (
+            "<b>Sağlayıcı</b><br>"
+            f"Aktif: <b>{name}</b><br>"
+            f"Model: <code>{model}</code><br>"
+            "<i>Değiştirmek için: /provider agy | /provider claude</i>"
+        )
+
+    name = cmd.get("provider", "")
+    from entropy.ui.manager import EntropyUIManager
+    mgr = getattr(EntropyUIManager, "instance", None)
+    if mgr is None:
+        return ("<span style='color:#e06c75;'>Arayüz yöneticisi hazır değil; "
+                "sağlayıcı değiştirilemedi.</span>")
+    try:
+        ok = mgr.switch_provider(name)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Sağlayıcı değiştirilemedi: {e}</span>"
+    if not ok:
+        return f"<span style='color:#e06c75;'>Sağlayıcı '{name}' olarak değiştirilemedi.</span>"
+    new_model = getattr(getattr(mgr, "bridge", None), "selected_model", "") or "-"
+    return f"<b>Sağlayıcı</b> artık <b>{name}</b> (model: <code>{new_model}</code>)."
+
+
+def _handle_handoff(note: str, bridge) -> str:
+    """
+    `/handoff [not]`: devir sayfasını yazar, köprüye sıkıştırmayı önerir, özet basar.
+
+    Sayfa yazımı model çağırmaz (bkz. memory/handoff.py); bu yüzden komut kota
+    harcamaz ve bağlam dolduğunda güvenle çalıştırılabilir. Sıkıştırma köprüye
+    aittir: `compress_history_with_handoff(page)` varsa çağrılır, yoksa sayfa
+    yine de yazılmıştır — aktarımın değeri sıkıştırmaya bağlı değildir.
+    """
+    from entropy.memory.handoff import write_handoff
+
+    history = list(getattr(bridge, "conversation_history", None) or [])
+    if not history:
+        return (
+            "<b>🔁 Oturum Aktarımı</b><br/>Bu oturumda kaydedilmiş tur yok; "
+            "devredilecek bir şey bulunamadı."
+        )
+
+    project_dir = getattr(bridge, "active_project_dir", None)
+    meta = {
+        "note": note or "",
+        "project": Path(project_dir).name if project_dir else None,
+        "turns": len(history),
+    }
+    usage = getattr(bridge, "cumulative_usage", None)
+    if isinstance(usage, dict):
+        meta.update({k: v for k, v in usage.items() if isinstance(v, int)})
+
+    try:
+        path = write_handoff(history, meta)
+    except Exception as exc:
+        return f"<b>🔁 Oturum Aktarımı</b><br/>Sayfa yazılamadı: {_html_escape(exc)}"
+
+    compressed = False
+    compress = getattr(bridge, "compress_history_with_handoff", None)
+    if callable(compress):
+        try:
+            compressed = bool(compress(str(path)))
+        except Exception as exc:
+            logger.warning("Aktarım sonrası bağlam sıkıştırılamadı: %s", exc)
+
+    from entropy.memory.handoff import SECTION_TITLES, load_latest_handoff
+
+    page = load_latest_handoff() or {}
+    sections = page.get("sections") or {}
+    rows = []
+    for key in ("hedef", "acik_isler", "sonraki_adim"):
+        items = sections.get(key) or []
+        if items:
+            rows.append(
+                f"<div style='margin-top:2px;'><b style='color:#00F0FF;'>{SECTION_TITLES[key]}:</b> "
+                f"{_html_escape('; '.join(items[:2]))}</div>"
+            )
+    return (
+        f"<b>🔁 Oturum Aktarımı Yazıldı</b> ({len(history)} tur)"
+        + "".join(rows)
+        + f"<div style='color:#8B949E;font-size:11px;margin-top:4px;'>Sayfa: <code>{_html_escape(path)}</code>"
+        + ("<br/>Bağlam sıkıştırıldı; sohbet aktarım sayfasından sürüyor." if compressed
+           else "<br/>Sayfa bir sonraki oturuma 'Önceki oturum' olarak enjekte edilecek.")
+        + "</div>"
+    )
 
 
 def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[str]:
@@ -192,12 +309,14 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     yerde durur ve iki mod ayrışamaz. Dönen değer sohbete basılacak HTML'dir;
     None dönerse komut yerel değildir ve normal akış devam eder.
 
-    Şu an tek yerel komut /distill:
+    Yerel komutlar:
         /distill                 bekleyen damıtmaları ve maliyetlerini listeler
-        /distill <yetenek>       o yetenek için damıtmayı arka planda başlatır
+        /distill <yetenek>       yalnızca OKUNMAMIŞ raporları damıtır (artımlı)
+        /distill refresh <yet.>  tüm arşivi yeniden okur (açık istek; pahalı)
         /distill all             bekleyen tüm yetenekler için başlatır
         /distill index           kasadaki raporları yeteneklere yeniden eşler
         /distill stop [<yetenek>|all]  zincirlenen damıtmayı durdurur
+        /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
 
     `distiller` testler için enjekte edilebilir; verilmezse gerçek depo kullanılır.
     """
@@ -205,9 +324,21 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     # Tam token eşleşmesi: startswith("/distill") "/distillery" gibi başka bir
     # komutu da yakalar ve onu yerel sanıp AGY'ye gitmesini engellerdi.
     head, _, args = text.partition(" ")
-    if head.lower() != "/distill":
-        return None
+    head_low = head.lower()
     args = args.strip()
+
+    # /provider: ayrıştırma köprü tarafında (provider.provider_command), yürütme
+    # burada. Yerel komut olduğu için asla AGY/Claude'a gitmez.
+    from entropy.core.provider import provider_command
+    pcmd = provider_command(text)
+    if pcmd is not None:
+        return _handle_provider(pcmd, bridge)
+
+    if head_low == "/handoff":
+        return _handle_handoff(args, bridge)
+
+    if head_low != "/distill":
+        return None
 
     from entropy.memory.distiller import PlaybookDistiller
     from entropy.skills.manager import SkillManager
@@ -279,6 +410,15 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
             "</div>"
         )
 
+    # "Damıt" artımlıdır: yalnızca okunmamış raporlar işlenir. Tüm arşivi yeniden
+    # okumak (513 rapor ≈ 20 tur) açık bir istektir; sessizce olmaz.
+    allow_refresh = False
+    if args.lower().startswith("refresh"):
+        allow_refresh = True
+        args = args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else ""
+        if not args:
+            return "<b>📘 Yordam Tazeleme</b><br/>Kullanım: <code>/distill refresh &lt;yetenek&gt;</code>"
+
     targets: List[str]
     if args.lower() == "all":
         targets = [p["skill"] for p in distiller.pending(list(skills))]
@@ -293,9 +433,18 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
 
     lines = ["<b>📘 Yordam Damıtma Başlatıldı</b>"]
     for name in targets:
-        started = distiller.run_via_bridge(bridge, name, description=skills[name].description or "")
+        started = distiller.run_via_bridge(
+            bridge, name, description=skills[name].description or "", allow_refresh=allow_refresh
+        )
         if not started:
-            lines.append(f"• {_html_escape(name)}: kaynak rapor yok, atlandı.")
+            total = distiller.plan(name)["sources_total"]
+            if total and not allow_refresh:
+                lines.append(
+                    f"• {_html_escape(name)}: okunmamış rapor yok ({total} rapor işlenmiş). "
+                    f"Tüm arşivi yeniden okumak için: <code>/distill refresh {_html_escape(name)}</code>"
+                )
+            else:
+                lines.append(f"• {_html_escape(name)}: kaynak rapor yok, atlandı.")
             continue
         if started.get("already_running"):
             lines.append(

@@ -99,8 +99,35 @@ STATE_DIR = _resolve_state_dir()
 SETTINGS_FILE = STATE_DIR / "settings.json"
 CHAT_HISTORY_FILE = STATE_DIR / "chat_history.json"
 
+def claude_api_available() -> bool:
+    """
+    ANTHROPIC_API_KEY tanımlı mı?
+
+    Yalnızca TESPİT: doğrudan API (ClaudeApiBridge) ücretlidir ve abonelik
+    kotasından değil kredi kartından harcar. Anahtar bulunsa bile sağlayıcı
+    kendiliğinden API'ye geçmez; kullanıcı `allow_claude_api` ayarını açıkça
+    açmadıkça bu bilgi yalnızca ayar ekranında "kullanılabilir" olarak görünür.
+    """
+    return bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+
+
+# Sağlayıcı başına varsayılan model. Bir sağlayıcıya geçildiğinde selected_model
+# bu tablodan doldurulur: gemini-* bir model adını `claude --model`e vermek
+# süreci hiç başlatmadan hataya düşürüyordu.
+DEFAULT_PROVIDER_MODELS = {
+    "agy": "gemini-3.1-pro-high",
+    "claude": "claude-opus-5",
+}
+
+
 class EntropyConfig(BaseModel):
     app_name: str = "Entropy AI"
+    # Aktif CLI sağlayıcısı: "agy" (Antigravity) veya "claude" (Claude Code).
+    provider: str = "agy"
+    provider_models: dict = Field(default_factory=lambda: dict(DEFAULT_PROVIDER_MODELS))
+    # Doğrudan Anthropic API köprüsü (ClaudeApiBridge) için yer tutucu izin
+    # bayrağı. Uygulama YOK; açık olsa bile bugün hiçbir kod yolu API çağırmaz.
+    allow_claude_api: bool = False
     obsidian_vault_path: Path = Field(default_factory=_default_obsidian_vault)
     default_project_path: Path = Field(default_factory=lambda: APP_ROOT)
     default_mode: str = "floating"  # "floating", "zen", "chat"
@@ -143,6 +170,9 @@ class EntropyConfig(BaseModel):
                 "autostart_enabled": self.autostart_enabled,
                 "last_conversation_id": self.last_conversation_id,
                 "last_cumulative_usage": self.last_cumulative_usage,
+                "provider": self.provider,
+                "provider_models": self.provider_models,
+                "allow_claude_api": self.allow_claude_api,
             }
             # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
             # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
@@ -169,6 +199,17 @@ class EntropyConfig(BaseModel):
                     self.last_conversation_id = data["last_conversation_id"]
                 if "last_cumulative_usage" in data and isinstance(data["last_cumulative_usage"], dict):
                     self.last_cumulative_usage = data["last_cumulative_usage"]
+                # Sağlayıcı alanları eski ayar dosyalarında yok; varsayılan
+                # ("agy") korunur, böylece güncelleme kimsenin kurulumunu
+                # habersizce Claude'a çevirmez.
+                if data.get("provider") in ("agy", "claude"):
+                    self.provider = data["provider"]
+                if isinstance(data.get("provider_models"), dict):
+                    merged = dict(DEFAULT_PROVIDER_MODELS)
+                    merged.update({k: v for k, v in data["provider_models"].items() if v})
+                    self.provider_models = merged
+                if isinstance(data.get("allow_claude_api"), bool):
+                    self.allow_claude_api = data["allow_claude_api"]
         except Exception as e:
             print(f"[Entropy Config] Ayarlar okunamadı ({SETTINGS_FILE}): {e}", file=sys.stderr)
 

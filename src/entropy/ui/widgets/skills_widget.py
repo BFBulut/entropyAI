@@ -391,6 +391,20 @@ class SkillsWidget(QFrame):
         bus.project_changed.connect(self._on_project_changed)
         bus.playbook_updated.connect(self._on_playbook_updated)
         bus.distill_progress.connect(self._on_distill_progress)
+        # Kasaya yeni rapor düştüğünde sayaç ve düğme, uygulama yeniden
+        # başlatılmadan güncellensin (ReportWatcher ya da rapor yazımı yayar).
+        bus.reports_updated.connect(self._on_reports_updated)
+
+        # Rapor izleyicisi süreç genelinde tektir ve yeniden çağrı güvenlidir.
+        # Buradan başlatılır çünkü kasadaki rapor değişimini canlı görmesi
+        # gereken tek yüzey bu panel; main.py bunu ayrıca çağırırsa ikinci
+        # izleyici açılmaz. (Kapanışta stop_report_watcher() çağrılmalıdır.)
+        try:
+            from entropy.memory.report_watcher import start_report_watcher
+
+            start_report_watcher()
+        except Exception:
+            pass
 
         self.refresh_skills()
 
@@ -502,17 +516,44 @@ class SkillsWidget(QFrame):
             else:
                 pb_color, pb_bg, pb_tip = "#8B949E", "#141C2C", "Kaynak rapor yok; damıtılacak bir şey yok"
 
-            pb_btn = QPushButton("📘")
-            pb_btn.setFixedSize(26, 26)
-            pb_btn.setToolTip(f"{pb_tip}\nTıkla: bu yetenek için yordam damıt (AGY kotası harcar)")
-            pb_btn.setStyleSheet(
+            # İki ayrı eylem. "Damıt" artımlıdır: yalnızca okunmamış raporları
+            # işler. Okunmamış yoksa düğme kapanır ve kullanıcı "Tazele"yi bilerek
+            # seçer — tek düğme olduğunda "Damıt" sessizce tüm arşivi yeniden
+            # okutuyordu (513 raporda ~20 tur AGY kotası).
+            unread = max(0, n_src - pb_state.get("distilled_from", 0))
+            btn_style = (
                 f"QPushButton {{ background-color:{pb_bg}; color:{pb_color}; border:1px solid {pb_color}; border-radius:4px; }}"
                 f"QPushButton:hover {{ background-color:{pb_color}; color:#080B10; }}"
                 "QPushButton:disabled { color:#3A4556; border-color:#1F2B42; background-color:#0E1420; }"
             )
-            pb_btn.setEnabled(self.bridge is not None and n_src > 0)
+
+            pb_btn = QPushButton("📘" if not unread else f"📘 {unread}")
+            pb_btn.setObjectName(f"distill_btn_{s.name}")
+            pb_btn.setFixedHeight(26)
+            pb_btn.setMinimumWidth(26)
+            pb_btn.setToolTip(
+                f"{pb_tip}\n"
+                + (f"Tıkla: {unread} yeni raporu damıt (artımlı, AGY kotası harcar)"
+                   if unread else "Okunmamış rapor yok; tazelemek için ♻ düğmesini kullan")
+            )
+            pb_btn.setStyleSheet(btn_style)
+            pb_btn.setEnabled(self.bridge is not None and unread > 0)
             pb_btn.clicked.connect(lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc))
             card_layout.addWidget(pb_btn)
+
+            rf_btn = QPushButton("♻")
+            rf_btn.setObjectName(f"refresh_btn_{s.name}")
+            rf_btn.setFixedSize(26, 26)
+            rf_btn.setToolTip(
+                f"Tazele: '{s.name}' için {n_src} raporun TAMAMI yeniden okunur.\n"
+                "Pahalıdır; yalnızca yordamın bozulduğunu düşünüyorsan kullan."
+            )
+            rf_btn.setStyleSheet(btn_style)
+            rf_btn.setEnabled(self.bridge is not None and n_src > 0)
+            rf_btn.clicked.connect(
+                lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc, refresh=True)
+            )
+            card_layout.addWidget(rf_btn)
 
             # İlerleme sayacı: damıtılan/toplam. Yalnızca kaynak varsa gösterilir;
             # tamamlanınca yeşil, kısmi/bayat iken sarı.
@@ -569,8 +610,13 @@ class SkillsWidget(QFrame):
     def _filter_skills(self):
         self.refresh_skills()
 
-    def _on_distill(self, skill_name: str, description: str = ""):
-        """Seçilen yetenek için yordam damıtmayı arka planda başlatır."""
+    def _on_distill(self, skill_name: str, description: str = "", refresh: bool = False):
+        """
+        Seçilen yetenek için yordam damıtmayı arka planda başlatır.
+
+        refresh=False (📘): yalnızca okunmamış raporlar işlenir.
+        refresh=True  (♻): tüm arşiv yeniden okunur — ayrı ve açık bir eylem.
+        """
         if self.bridge is None:
             QMessageBox.information(self, "Yordam Damıtma", "Damıtma için AGY köprüsü gerekli; bu panel köprüsüz açılmış.")
             return
@@ -582,30 +628,64 @@ class SkillsWidget(QFrame):
             )
             return
 
-        plan = PlaybookDistiller().plan(skill_name)
+        distiller = PlaybookDistiller()
+        plan = distiller.plan(skill_name)
         if plan["sources_total"] == 0:
             QMessageBox.information(self, "Yordam Damıtma", f"'{skill_name}' için kaynak rapor yok.")
             return
 
+        unread = distiller.unread_count(skill_name)
+        if not refresh and unread == 0:
+            QMessageBox.information(
+                self,
+                "Yordam Damıtma",
+                f"'{skill_name}' için okunmamış rapor yok ({plan['sources_total']} rapor işlenmiş).\n\n"
+                "Tüm arşivi yeniden okutmak istiyorsan ♻ (Tazele) düğmesini kullan.",
+            )
+            return
+
+        if refresh:
+            title, detail = (
+                "Yordam Tazeleme",
+                f"'{skill_name}' için {plan['sources_total']} raporun TAMAMI yeniden okunacak "
+                f"(~{plan['estimated_total_tokens']:,} token, {plan['estimated_total_passes']} tur; AGY kotası harcar).",
+            )
+        else:
+            title, detail = (
+                "Yordam Damıtma",
+                f"'{skill_name}' için {unread} yeni rapor işlenecek; bu turda "
+                f"{plan['sources_this_pass']} tanesi (~{plan['estimated_prompt_tokens']:,} token, AGY kotası harcar).",
+            )
+
         answer = QMessageBox.question(
             self,
-            "Yordam Damıtma",
-            f"'{skill_name}' için {plan['sources_this_pass']}/{plan['sources_total']} rapor okunacak "
-            f"(~{plan['estimated_prompt_tokens']:,} token, AGY kotası harcar).\n\n"
-            "Arka planda çalışır; bitince Skills/<yetenek>/PLAYBOOK.md yazılır.\n\nBaşlatılsın mı?",
+            title,
+            f"{detail}\n\nArka planda çalışır; bitince Skills/<yetenek>/PLAYBOOK.md yazılır.\n\nBaşlatılsın mı?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        started = PlaybookDistiller().run_via_bridge(self.bridge, skill_name, description=description or "")
+        started = distiller.run_via_bridge(
+            self.bridge, skill_name, description=description or "", allow_refresh=refresh
+        )
         if started and not started.get("already_running"):
             bus.terminal_output_received.emit(
                 f"[Damıtma] '{skill_name}' başlatıldı: {started['sources']} rapor, ~{started['prompt_tokens']:,} token.\n"
             )
 
     def _on_playbook_updated(self, _skill_name: str):
+        self.refresh_skills()
+
+    def _on_reports_updated(self, _skill_name: str = ""):
+        """Kaynak raporlar değişti: durum yeniden hesaplanmalı (sayaç/düğme canlı)."""
+        try:
+            from entropy.memory.playbook import clear_file_facts_cache
+
+            clear_file_facts_cache()
+        except Exception:
+            pass
         self.refresh_skills()
 
     def _on_distill_progress(self, skill_name: str, done: int, total: int):

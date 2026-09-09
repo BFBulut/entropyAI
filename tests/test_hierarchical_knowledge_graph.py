@@ -315,10 +315,17 @@ def test_obsidian_project_scoped_reports_positional(tmp_path):
     """
     Verify positional call signature save_research_report(title, content, project_name, skill_name)
     accurately assigns project and skill instead of dropping or confusing arguments.
+
+    Hedef klasör kuralı 2026-09-09'da tersine çevrildi: YETENEK, projeden önce
+    gelir. Gerekçe ölçüldü (gerçek kasa): proje öncelikli olduğu sürece yetenek
+    atıflı 77 rapor Projects/*/Reports/ altına düşüyor ve yordam damıtma onları
+    kaynak olarak göremiyordu (google-flow "kaynak yok", financial-auditor
+    104/104 "güncel"). Proje bağlamı `project:` etiketiyle korunur; her iki
+    konumlu argüman da hâlâ doğru alana bağlanır.
     """
     vm = ObsidianVaultManager(vault_path=tmp_path)
     rep = vm.save_research_report("Positional_Test", "# Positional Content", "Entropy_Agent_Desk", "website-builder")
-    expected_path = tmp_path / "Entropy" / "Projects" / "Entropy_Agent_Desk" / "Reports" / "Positional_Test.md"
+    expected_path = tmp_path / "Entropy" / "Skills" / "website-builder" / "Reports" / "Positional_Test.md"
     assert rep == expected_path
     assert expected_path.exists()
     content = expected_path.read_text(encoding="utf-8")

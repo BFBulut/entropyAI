@@ -253,6 +253,18 @@ class ChatModeWindow(QMainWindow):
         self.project_btn.clicked.connect(self._select_project_dir)
         h_layout.addWidget(self.project_btn)
 
+        # Sağlayıcı seçici: hangi CLI'ın konuştuğunu belirler (agy / claude).
+        # Model listesi sağlayıcıya bağlı olduğu için seçim değişince aşağıdaki
+        # model combo'su da yeniden doldurulur (refresh_provider_ui).
+        self.provider_combo = QComboBox()
+        self.provider_combo.setToolTip("Sağlayıcı (CLI): agy = Antigravity, claude = Claude Code")
+        from entropy.core.provider import PROVIDERS as _PROVIDERS
+        for p in _PROVIDERS:
+            self.provider_combo.addItem(p)
+        self.provider_combo.setCurrentText(getattr(self.bridge, "provider_name", "agy"))
+        self.provider_combo.currentTextChanged.connect(self._on_provider_selected)
+        h_layout.addWidget(self.provider_combo)
+
         # Dynamic Model Selector Combo (RULE: agent-ui-models)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -872,6 +884,33 @@ class ChatModeWindow(QMainWindow):
     def _on_model_selected(self, model_name: str):
         if model_name and model_name != self.bridge.selected_model:
             self.bridge.set_model(model_name)
+
+    def _on_provider_selected(self, provider: str):
+        """Sağlayıcı listesinden seçim: köprüyü yönetici üzerinden değiştirir."""
+        if not provider or provider == getattr(self.bridge, "provider_name", "agy"):
+            return
+        from entropy.ui.manager import EntropyUIManager
+
+        manager = EntropyUIManager.instance
+        if manager is None:
+            return
+        manager.switch_provider(provider)
+
+    def refresh_provider_ui(self):
+        """Köprü değiştikten sonra üst çubuğu tazeler (model listesi + seçim)."""
+        try:
+            self.provider_combo.blockSignals(True)
+            self.provider_combo.setCurrentText(getattr(self.bridge, "provider_name", "agy"))
+        finally:
+            self.provider_combo.blockSignals(False)
+        try:
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            for m in self.bridge.fetch_available_models():
+                self.model_combo.addItem(m)
+            self.model_combo.setCurrentText(self.bridge.selected_model)
+        finally:
+            self.model_combo.blockSignals(False)
 
     @Slot(int)
     def _update_tokens(self, tokens: int):

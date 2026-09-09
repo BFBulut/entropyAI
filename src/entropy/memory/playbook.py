@@ -279,7 +279,11 @@ _NON_REPORT_STEMS = {
     # damıtmasına giriyor ve her turda değiştiği için "1 okunmamış" kalıyordu.
     "playbook",
 }
-_NON_REPORT_DIRS = {"dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian"}
+# Oturum aktarım sayfaları (Sessions/) bilerek dışarıda: bunlar yordam değil OLAY
+# kaydıdır ("şu oturumda şunu yaptık"). Damıtmaya girerlerse playbook, tekrar
+# edilebilir bir yöntem yerine geçmişin günlüğüne dönüşür. Bağlam kurucu ve geri
+# çağırma onları ayrıca görür (bkz. memory/handoff.py).
+_NON_REPORT_DIRS = {"dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian", "sessions"}
 _DAILY_NOTE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -352,6 +356,43 @@ class SkillReportIndex:
     def paths_for(self, skill: str) -> List[Path]:
         return [Path(p) for p in self.load().get(skill, []) if Path(p).is_file()]
 
+    def all_paths(self) -> Set[str]:
+        """İndekste geçen tüm rapor yolları (artımlı güncellemede 'yeni mi' testi)."""
+        out: Set[str] = set()
+        for paths in self.load().values():
+            out.update(paths)
+        return out
+
+    def add(self, skill: str, path: Path, save: bool = True) -> bool:
+        """
+        Tek raporu indekse ekler; gerçekten eklendiyse True.
+
+        Tam yeniden tarama (rebuild) 800+ dosya okur ve OneDrive'da saniyeler
+        sürer. Rapor yazıldığı anda yalnızca o dosyayı eklemek, kartın sayacının
+        anında artması için yeterlidir.
+        """
+        if not skill:
+            return False
+        key = str(path)
+        self.load()
+        bucket = self._map.setdefault(skill, [])
+        if key in bucket:
+            return False
+        bucket.append(key)
+        if save:
+            self.save()
+        return True
+
+    def add_many(self, pairs: List[Tuple[str, Path]]) -> int:
+        """Birden çok (yetenek, yol) çiftini tek yazımla ekler; eklenen sayısı döner."""
+        added = 0
+        for skill, path in pairs:
+            if self.add(skill, path, save=False):
+                added += 1
+        if added:
+            self.save()
+        return added
+
     def rebuild(self, reports: List[Path], classify) -> Dict[str, int]:
         """
         Raporları verilen sınıflandırıcıyla yeteneklere dağıtır.
@@ -407,6 +448,46 @@ class PlaybookStore:
     def reports_dir(self, skill: str) -> Path:
         return self.skill_dir(skill) / "Reports"
 
+    def tag_scan_dirs(self) -> List[Path]:
+        """
+        `skill:` etiketi aranacak rapor klasörleri.
+
+        Düz Reports/ ve her projenin Reports/ klasörü. Yetenek-kapsamlı klasörler
+        buraya girmez: onlar zaten doğrudan okunuyor.
+        """
+        entropy_dir = self.vault_path / "Entropy"
+        dirs: List[Path] = []
+        flat = entropy_dir / "Reports"
+        if flat.is_dir():
+            dirs.append(flat)
+        projects = entropy_dir / "Projects"
+        if projects.is_dir():
+            try:
+                for child in sorted(projects.iterdir()):
+                    rep = child / "Reports"
+                    if rep.is_dir():
+                        dirs.append(rep)
+            except OSError:
+                pass
+        return dirs
+
+    def tagged_reports(self, skill: str) -> List[Path]:
+        """`skill:<ad>` etiketi taşıyan raporlar (düz + proje kapsamlı klasörler)."""
+        needle = f"skill:{self._safe(skill)}".lower()
+        alt = f"skill:{skill}".lower()
+        out: List[Path] = []
+        for d in self.tag_scan_dirs():
+            for p in sorted(d.glob("*.md")):
+                if p.stem.strip().lower() in _NON_REPORT_STEMS:
+                    continue
+                facts = _file_facts(p)
+                if facts is None:
+                    continue
+                head = facts[2]
+                if needle in head or alt in head:
+                    out.append(p)
+        return out
+
     # -- kaynak raporlar ------------------------------------------------
 
     def source_reports(self, skill: str) -> List[Path]:
@@ -415,7 +496,8 @@ class PlaybookStore:
 
         Üç kaynaktan toplanır:
           1. Yetenek-kapsamlı klasör (yeni yazılan raporlar buraya gider)
-          2. Düz Reports/ içinde `skill:<ad>` etiketi taşıyanlar
+          2. Etiketli raporlar: düz Reports/ VE Projects/<proje>/Reports/ içinde
+             `skill:<ad>` etiketi taşıyanlar
           3. Yetenek-rapor indeksi (etiketsiz eski raporlar için)
 
         Üçüncüsü gerekli, çünkü kasadaki mevcut raporlar yetenek ayrımı
@@ -428,19 +510,15 @@ class PlaybookStore:
             for p in sorted(scoped.glob("*.md")):
                 found[p] = None
 
-        flat = self.vault_path / "Entropy" / "Reports"
-        if flat.is_dir():
-            needle = f"skill:{self._safe(skill)}".lower()
-            alt = f"skill:{skill}".lower()
-            for p in sorted(flat.glob("*.md")):
-                if p in found:
-                    continue
-                facts = _file_facts(p)
-                if facts is None:
-                    continue
-                head = facts[2]
-                if needle in head or alt in head:
-                    found[p] = None
+        # Etiketli raporlar. Düz Reports/ TEK BAŞINA yetmiyor: köprü, etkin bir
+        # proje varsa raporu Projects/<proje>/Reports/ altına yazıyor ve yetenek
+        # yalnızca `skill:` etiketi olarak kalıyor. Ölçüm (gerçek kasa, 2026-09-09):
+        # düz Reports/ altında etiketli 0 rapor, Projects/*/Reports/ altında 77
+        # (autonomous-agent 26, permissioned-github 27, financial-auditor 13,
+        # google-flow 3). Yalnızca düz klasör tarandığı için bu raporların hiçbiri
+        # kaynak sayılmıyor, google-flow gibi yeni yetenekler "kaynak yok" görünüyordu.
+        for p in self.tagged_reports(skill):
+            found.setdefault(p, None)
 
         # İndeks süreç genelinde tek dosyadır; başka bir kasaya ait girdiler
         # aktif kasanın sonuçlarına karışmamalı (kasa değiştirildiğinde ya da
@@ -623,6 +701,83 @@ class PlaybookStore:
             "needs_refresh": pb is not None and stale_reason in ("bayat", "kismi"),
             "path": str(self.playbook_path(skill)),
         }
+
+
+_SKILL_TAG_RE = re.compile(r"skill:\s*([A-Za-z0-9 _\-]+)")
+
+
+def skill_tag_of(head_text: str) -> Optional[str]:
+    """Rapor başlığındaki `skill:<ad>` etiketi; yoksa None."""
+    m = _SKILL_TAG_RE.search(head_text or "")
+    if not m:
+        return None
+    name = m.group(1).strip().strip("]").strip()
+    return name or None
+
+
+def classify_report(path: Path, known_skills: Set[str], classify=None) -> Optional[str]:
+    """
+    Tek bir raporun yeteneği: önce `skill:` etiketi, sonra anlamsal sınıflandırıcı.
+
+    Etiket varsa model/anlamsal iş yapılmaz — etiket zaten üreten tarafın kesin
+    beyanıdır ve tek dosya için sınıflandırıcı çağırmak gereksiz maliyettir.
+    """
+    facts = _file_facts(path)
+    if facts is None:
+        return None
+    head = facts[2]
+    tagged = skill_tag_of(head)
+    if tagged and (not known_skills or tagged in known_skills):
+        return tagged
+    if classify is None:
+        return None
+    try:
+        hit = classify(path.stem, head)
+    except Exception:
+        return None
+    if hit and (not known_skills or hit in known_skills):
+        return hit
+    return None
+
+
+def index_new_reports(
+    store: "PlaybookStore",
+    known_skills: Optional[Set[str]] = None,
+    classify=None,
+    limit: int = 200,
+) -> Dict[str, int]:
+    """
+    İndekste bulunmayan raporları artımlı olarak eşler; {yetenek: eklenen} döner.
+
+    `rebuild()` kasadaki her raporu okur (gerçek kasada 800+ dosya, OneDrive'da
+    saniyeler). Buradaki geçiş yalnızca indekste HENÜZ OLMAYAN dosyaları okur;
+    kararlı durumda hiçbir dosya okunmaz, tek bir dizin taraması yapılır.
+    `limit` tek geçişte eşlenecek dosya tavanıdır: ilk kurulumda bin dosyalık bir
+    kasa arayüzü kilitlemesin, sonraki geçişler kaldığı yerden sürsün.
+    """
+    index = store.index
+    known = index.all_paths()
+    skills = set(known_skills or ())
+    pairs: List[Tuple[str, Path]] = []
+    for p in discover_reports(store.vault_path):
+        if len(pairs) >= limit:
+            break
+        if str(p) in known:
+            continue
+        # Yetenek-kapsamlı klasördeki rapor zaten doğrudan okunuyor; indekste
+        # ikinci kez durması gereksiz.
+        if "Skills" in p.parts and "Reports" in p.parts:
+            continue
+        skill = classify_report(p, skills, classify)
+        if skill:
+            pairs.append((skill, p))
+    if not pairs:
+        return {}
+    index.add_many(pairs)
+    out: Dict[str, int] = {}
+    for skill, _p in pairs:
+        out[skill] = out.get(skill, 0) + 1
+    return out
 
 
 # ---------------------------------------------------------------------------

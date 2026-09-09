@@ -99,10 +99,16 @@ class ObsidianVaultManager:
     ) -> Path:
         """
         Save a research dossier in the Reports directory with wikilinks, sanitized body and frontmatter.
-        Supports project-scoped and skill-scoped destination folders:
-        - If project_name provided: Entropy/Projects/<project_name>/Reports/<safe_title>.md
+        Destination folders (skill wins over project):
         - If skill_name provided: Entropy/Skills/<skill_name>/Reports/<safe_title>.md
+        - Else if project_name provided: Entropy/Projects/<project_name>/Reports/<safe_title>.md
         - Otherwise fallback: Entropy/Reports/<safe_title>.md
+
+        Yetenek, projeden önce gelir: yordam damıtma kaynaklarını
+        Skills/<yetenek>/Reports/ altından okur ve proje öncelikli olduğu sürece
+        yetenek atıflı her rapor Projects/<proje>/Reports/ altına düşüyordu
+        (ölçüm 2026-09-09: 77 etiketli rapor orada, yetenek klasörlerinde 11).
+        Proje bağlamı `project:<ad>` etiketiyle korunur, kaybolmaz.
         """
         # Handle positional args: (title, content, project_name, skill_name)
         actual_tags = tags
@@ -126,10 +132,10 @@ class ObsidianVaultManager:
         clean_proj = "".join([c if c.isalnum() or c in " -_" else "_" for c in project_name]).strip() if project_name else None
         clean_skill = "".join([c if c.isalnum() or c in " -_" else "_" for c in skill_name]).strip() if skill_name else None
 
-        if clean_proj:
-            target_dir = self.entropy_dir / "Projects" / clean_proj / "Reports"
-        elif clean_skill:
+        if clean_skill:
             target_dir = self.entropy_dir / "Skills" / clean_skill / "Reports"
+        elif clean_proj:
+            target_dir = self.entropy_dir / "Projects" / clean_proj / "Reports"
         else:
             target_dir = self.reports_dir
 
@@ -159,7 +165,58 @@ class ObsidianVaultManager:
             f"---\n\n"
         )
         report_file.write_text(frontmatter + cleaned_content, encoding="utf-8")
+        self._register_report(report_file, clean_skill)
         return report_file
+
+    def _register_report(self, report_file: Path, skill_name: Optional[str]) -> Optional[str]:
+        """
+        Yeni raporu yetenek-rapor indeksine ANINDA ekler ve arayüze haber verir.
+
+        İndeks yalnızca `/distill index` ile yenileniyordu; aradaki her rapor,
+        kullanıcı komutu elle çalıştırana kadar hiçbir yeteneğin kaynağı
+        sayılmıyordu ("yeni raporlar damıtılacak öğelere düşmüyor"). Burada tek
+        dosya eklenir — tam yeniden tarama yapılmaz.
+
+        Yetenek biliniyorsa doğrudan kullanılır; bilinmiyorsa yalnızca BU dosya
+        için anlamsal sınıflandırma çalıştırılır. Hata hiçbir koşulda rapor
+        yazımını düşürmez: indeks türetilmiş veridir, yeniden üretilebilir.
+        """
+        try:
+            from entropy.memory.playbook import PlaybookStore, classify_report
+
+            store = PlaybookStore(vault_path=self.vault_path)
+            skill = skill_name
+            if not skill:
+                known: Set[str] = set()
+                classify = None
+                try:
+                    from entropy.skills.manager import SkillManager
+
+                    sm = SkillManager()
+                    known = {s.name for s in sm.list_skills() if s.enabled}
+
+                    def classify(title: str, head_text: str):
+                        hit = sm.auto_detect_skill_for_prompt(f"{title} {head_text[:1500]}")
+                        return hit.name if hit else None
+                except Exception:
+                    classify = None
+                skill = classify_report(report_file, known, classify)
+            if not skill:
+                return None
+            # Yetenek klasöründeki rapor zaten doğrudan okunuyor; indekste ikinci
+            # kez durması gereksiz. Yine de sinyal yayınlanır: sayaç artmalı.
+            in_skill_dir = "Skills" in report_file.parts and "Reports" in report_file.parts
+            if not in_skill_dir:
+                store.index.add(skill, report_file)
+            try:
+                from entropy.core.event_bus import bus
+
+                bus.reports_updated.emit(skill)
+            except Exception:
+                pass
+            return skill
+        except Exception:
+            return None
 
     def get_research_reports(self) -> List[Dict[str, str]]:
         """Recursively collect all research reports across all subfolders (global, project-scoped, skill-scoped)."""

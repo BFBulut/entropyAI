@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
+from entropy.core.provider import create_bridge, switch_provider
 from entropy.ui.modes.chat_mode import ChatModeWindow
 from entropy.ui.modes.floating_mode import FloatingModeWidget
 from entropy.ui.modes.zen_mode import ZenModeWindow
@@ -14,9 +15,16 @@ from entropy.ui.modes.zen_mode import ZenModeWindow
 class EntropyUIManager(QObject):
     """Controls window lifecycles and mode transitions for Entropy AI."""
 
+    #: Tek örnek başvurusu (bkz. __init__); sağlayıcı seçicisi bunu kullanır.
+    instance: Optional["EntropyUIManager"] = None
+
     def __init__(self, bridge: Optional[AgyProcessBridge] = None, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self.bridge = bridge or AgyProcessBridge()
+        self.bridge = bridge or create_bridge(config)
+        # Üst çubuktaki "Sağlayıcı" listesi köprüyü değiştirmek için yöneticiye
+        # ulaşmak zorunda; pencerelere yönetici başvurusu geçirmek yerine tek
+        # örnek burada yayınlanır (uygulamada zaten tek yönetici var).
+        EntropyUIManager.instance = self
 
         # Initialize windows
         self.floating_widget = FloatingModeWidget()
@@ -29,6 +37,34 @@ class EntropyUIManager(QObject):
 
         self._setup_tray_icon()
         self._connect_signals()
+
+    def switch_provider(self, provider: str) -> bool:
+        """
+        Çalışırken sağlayıcı değiştirir ve açık pencereleri yeni köprüye bağlar.
+
+        Eski köprü söndürülür (arka plan süreçleri ve ledger satırları öksüz
+        kalmasın); pencereler yeniden yaratılmaz, yalnızca `bridge` başvuruları
+        ve model listesi tazelenir — mod geçmişi ve ekran içeriği korunur.
+        """
+        try:
+            new_bridge = switch_provider(self.bridge, provider, cfg=config)
+        except Exception as e:
+            bus.terminal_output_received.emit(f"\n[Sağlayıcı Değişimi Hatası]: {e}\n")
+            return False
+
+        self.bridge = new_bridge
+        for win in (self.zen_window, self.chat_window):
+            try:
+                win.bridge = new_bridge
+                refresh = getattr(win, "refresh_provider_ui", None)
+                if callable(refresh):
+                    refresh()
+            except Exception:
+                pass
+        bus.terminal_output_received.emit(
+            f"\n[Sağlayıcı] Artık {provider} kullanılıyor (model: {new_bridge.selected_model}).\n"
+        )
+        return True
 
     def _set_window_icons(self):
         """Apply high-resolution cybernetic app icon to all windows."""

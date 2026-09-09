@@ -7,7 +7,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from entropy.core.config import config
-from entropy.core.agy_bridge import AgyProcessBridge
+from entropy.core.provider import create_bridge
 from entropy.scheduler.cron_engine import TaskScheduler
 from entropy.ui.manager import EntropyUIManager
 
@@ -43,7 +43,11 @@ def main():
         app.setWindowIcon(QIcon(str(icon_path)))
 
     # Initialize Core Bridge & Scheduler
-    bridge = AgyProcessBridge()
+    # Köprü artık doğrudan kurulmaz: hangi CLI'ın (agy / claude) kullanılacağı
+    # ayarlardan gelir ve fabrika o sağlayıcının köprüsünü üretir.
+    bridge = create_bridge(config)
+    print(f"[{config.app_name}] Sağlayıcı: {getattr(bridge, 'provider_name', 'agy')} "
+          f"(model: {bridge.selected_model})")
     if args.project:
         bridge.set_project_directory(args.project)
 
@@ -59,6 +63,15 @@ def main():
     # `/` komut listesinde belirsin (bus.skills_updated).
     from entropy.skills.manager import start_skill_watcher
     start_skill_watcher(project_dir=bridge.active_project_dir)
+
+    # Kasadaki rapor dosyaları (Obsidian vault) da canlı izlenir: bir alt ajan
+    # rapor yazdığında yetenek kartındaki 📘 sayacı yeniden başlatmadan güncellensin
+    # (bus.reports_updated).
+    from entropy.memory.report_watcher import start_report_watcher, stop_report_watcher
+    try:
+        start_report_watcher()
+    except Exception as e:
+        print(f"[{config.app_name}] Rapor izleyici başlatılamadı: {e}")
 
     scheduler = TaskScheduler.get_instance()
 
@@ -131,6 +144,10 @@ def main():
                       f"{stats['tasks']} görev iptal edildi.")
         except Exception as e:
             print(f"[{config.app_name}] Kapanış temizliği hatası: {e}")
+        try:
+            stop_report_watcher()
+        except Exception:
+            pass
         try:
             scheduler.stop()
         except Exception:

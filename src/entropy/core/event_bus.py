@@ -25,6 +25,12 @@ class EntropyEventBus(QObject):
     # Project Context
     project_changed = Signal(str)        # absolute project directory path
 
+    # Bağlam doluluğu: köprü, sağlayıcının bağlam penceresinin ne kadarının
+    # dolduğunu her turdan sonra ölçer ve eşiği (%60) ilk aşışta bir kez yayar.
+    # Arayüz bunu uyarı/rozet olarak gösterir, bellek katmanı aktarım sayfası
+    # yazar. Her turda yayılsaydı uzun oturumda sürekli uyarı olurdu.
+    context_pressure = Signal(float)     # 0.0-1.0+ doluluk oranı
+
     # Sohbet geçmişi: tek kaynak diskteki dosya. Bir tur kaydedildiğinde ya da
     # sohbet arşivlenip sıfırlandığında tüm pencereler (Zen, Chat) aynı içeriği
     # gösterebilsin diye haber verilir. Alıcılar QObject slotudur; lambda değil.
@@ -52,6 +58,11 @@ class EntropyEventBus(QObject):
     skill_detected = Signal(str, float)  # skill_name veya "", confidence 0.0-1.0
     mcp_servers_updated = Signal()       # mcp_config.json değişti (ekle/düzenle/kaldır/aç-kapa)
     playbook_updated = Signal(str)       # skill_name: damıtılmış yordam kaydedildi/yenilendi
+    # Kasaya yeni rapor düştü ya da rapor-yetenek indeksi artımlı güncellendi.
+    # Argüman etkilenen yetenek adı ("" = bilinmiyor/çok sayıda). Yetenek kartının
+    # damıtma sayacı, uygulamayı yeniden başlatmadan artabilsin diye ayrı sinyal:
+    # playbook_updated "yordam yazıldı" demektir, bu ise "kaynak değişti".
+    reports_updated = Signal(str)        # skill_name veya ""
     distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor
 
     # İşçi iş parçacıklarından ana iş parçacığına iş taşır. Alıcı bir QObject slotu

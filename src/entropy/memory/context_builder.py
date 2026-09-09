@@ -45,6 +45,10 @@ BUDGET_REPORTS = 900
 BUDGET_PROJECT = 400
 BUDGET_CODE = 400
 BUDGET_GLOBAL_MEMORY = 300
+# Önceki oturumun aktarım sayfası. Yalnızca yeni oturumun ilk turunda ödenir
+# (sayfa "tüketildi" diye işaretlenir), her turda değil: 300 token her turda
+# yeniden ödenirse aktarımın kazandırdığı bağlam maliyetiyle eşitlenir.
+BUDGET_HANDOFF = 300
 
 
 @dataclass
@@ -608,6 +612,50 @@ class CognitiveContextBuilder:
             tokens=estimate_tokens(body),
         )
 
+    def _handoff_section(self, budget: int, consume: bool = True) -> Optional[ContextSection]:
+        """
+        Önceki oturumun aktarım sayfasından "Önceki oturum" bölümü.
+
+        Sayfanın tamamı değil, bir sonraki oturumun gerçekten ihtiyaç duyduğu dört
+        bölüm alınır: hedef, açık işler, sonraki adım, alınan kararlar. Dokunulan
+        dosyalar ve kaynaklar bilerek dışarıda: onlar zaten proje/rapor
+        bölümlerinden ve geri çağırmadan geliyor, burada 300 token'ı yerlerdi.
+        """
+        try:
+            from entropy.memory.handoff import (
+                SECTION_TITLES,
+                mark_handoff_consumed,
+                pending_handoff,
+            )
+        except Exception:
+            return None
+
+        page = pending_handoff(self.playbooks.vault_path)
+        if not page:
+            return None
+
+        sections = page.get("sections") or {}
+        lines: List[str] = []
+        for key in ("hedef", "acik_isler", "sonraki_adim", "kararlar"):
+            items = sections.get(key) or []
+            if not items:
+                continue
+            lines.append(f"{SECTION_TITLES.get(key, key)}: " + "; ".join(items[:3]))
+        if not lines:
+            return None
+
+        body = _truncate_to_tokens("\n".join(lines), budget)
+        if not body.strip():
+            return None
+        if consume:
+            mark_handoff_consumed(page["path"])
+        return ContextSection(
+            title=f"Önceki Oturum ({Path(page['path']).stem})",
+            body=body,
+            kind="handoff",
+            tokens=estimate_tokens(body),
+        )
+
     # -- birleştirme ----------------------------------------------------
 
     def build(
@@ -616,6 +664,7 @@ class CognitiveContextBuilder:
         skill_name: Optional[str] = None,
         token_budget: int = DEFAULT_TOKEN_BUDGET,
         project_dir: Optional[Path] = None,
+        include_handoff: bool = True,
     ) -> AssembledContext:
         """
         Bağlamı öncelik sırasına göre kurar ve bütçeyi aşmadan döndürür.
@@ -630,6 +679,11 @@ class CognitiveContextBuilder:
         # spesifik ve o işe doğrudan ait. Genel recall daha geniş ve daha gürültülü
         # olduğu için sonra gelir; bütçe daralırsa ilk kırpılacak olan odur.
         plan = [
+            # Aktarım en başta: "geçen sefer nerede kalmıştık" bilgisi olmadan
+            # kurulan diğer bölümler doğru olsa bile yanlış işe hizmet eder.
+            # Bekleyen sayfa yoksa üretici None döner ve hiç yer kaplamaz.
+            ("handoff", min(BUDGET_HANDOFF, remaining),
+             lambda b: self._handoff_section(b) if include_handoff else None),
             ("playbook", min(BUDGET_PLAYBOOK, remaining),
              lambda b: self._playbook_section(skill_name, b, query) if skill_name else None),
             ("project", min(BUDGET_PROJECT, remaining),

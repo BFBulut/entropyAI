@@ -299,6 +299,9 @@ class PlaybookDistiller:
             "refresh_total": len(sources) if refresh else 0,
             **status,
             "sources_total": len(sources),
+            # Okunmamış rapor sayısı: arayüzdeki "Damıt (yeni N)" etiketi ve
+            # "tazeleme mi, artımlı mı" kararı buradan okunur.
+            "unread": len(sources) - start if not refresh else 0,
             "sources_this_pass": len(batch),
             "batch_start": start,
             "estimated_prompt_tokens": estimate_tokens("x" * (len(batch) * excerpt_chars)),
@@ -338,12 +341,30 @@ class PlaybookDistiller:
 
     # -- damıtma --------------------------------------------------------
 
-    def prepare(self, skill_name: str, description: str = "") -> Optional[Dict[str, Any]]:
+    def unread_count(self, skill_name: str) -> int:
+        """Bu yetenekte henüz damıtılmamış (yeni ya da içeriği değişmiş) rapor sayısı."""
+        sources = self.store.source_reports(skill_name)
+        if not sources:
+            return 0
+        done = self._processed(skill_name, sources)
+        return sum(1 for p in sources if p.name not in done)
+
+    def prepare(
+        self,
+        skill_name: str,
+        description: str = "",
+        allow_refresh: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """
         Damıtma prompt'unu hazırlar.
 
         None dönerse damıtacak kaynak yoktur. Dönen sözlükteki `prompt` AGY'ye
         gönderilir, çıktısı `complete()`'e verilir.
+
+        allow_refresh=False: yalnızca OKUNMAMIŞ raporlar işlenir; hepsi okunmuşsa
+        None döner. "Damıt" düğmesi bunu kullanır — kullanıcı yeni raporları
+        işletmek isterken sessizce tüm arşivin yeniden okunmasına (513 rapor,
+        ~20 tur) razı olmuş sayılmamalı. Tazeleme ayrı ve açık bir eylemdir.
         """
         sources = self.store.source_reports(skill_name)
         if not sources:
@@ -353,6 +374,9 @@ class PlaybookDistiller:
         done = self._processed(skill_name, sources)
         start = len(done)
         unprocessed = [p for p in sources if p.name not in done]
+        if not unprocessed and not allow_refresh:
+            logger.info("'%s' için okunmamış rapor yok; tazeleme istenmedi.", skill_name)
+            return None
         existing = self.store.load(skill_name)
 
         shape = pass_shape(len(sources))
@@ -490,6 +514,7 @@ class PlaybookDistiller:
         description: str = "",
         auto_continue: bool = True,
         agent: Optional[str] = None,
+        allow_refresh: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Damıtmayı AgyProcessBridge'in arka plan görev yolu üzerinden başlatır.
@@ -522,7 +547,7 @@ class PlaybookDistiller:
         if running:
             return {"already_running": True, "skill": skill_name, "task_id": running}
 
-        prepared = self.prepare(skill_name, description=description)
+        prepared = self.prepare(skill_name, description=description, allow_refresh=allow_refresh)
         if not prepared:
             return None
 
@@ -562,7 +587,7 @@ class PlaybookDistiller:
                 if auto_continue and retries < 1:
                     _RETRIES[skill_name] = retries + 1
                     bus.terminal_output_received.emit(f"[Damıtma] '{skill_name}' aynı grup yeniden deneniyor.\n")
-                    self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
+                    self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent, allow_refresh=allow_refresh)
                 elif auto_continue:
                     _RETRIES.pop(skill_name, None)
                     skipped = self._skip_batch(skill_name, prepared)
@@ -578,12 +603,12 @@ class PlaybookDistiller:
                             f"[Damıtma] '{skill_name}' tazeleme grubu atlandı "
                             f"({prepared['refresh_end']}/{total_n}); zincir sürüyor.\n"
                         )
-                        self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
+                        self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent, allow_refresh=allow_refresh)
                     elif skipped < total_n and skill_name not in _CANCELLED:
                         bus.terminal_output_received.emit(
                             f"[Damıtma] '{skill_name}' grup atlandı ({skipped}/{total_n}); zincir sürüyor.\n"
                         )
-                        self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
+                        self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent, allow_refresh=allow_refresh)
                     else:
                         # Önceden burada koşulsuz yeniden çağrılıyordu: son grup atlanınca
                         # prepare() "tazeleme" üretip 0→24'ten yeni bir zincir açıyordu.
@@ -623,7 +648,7 @@ class PlaybookDistiller:
                         f"[Damıtma] '{skill_name}' sıradaki tur başlatılıyor "
                         f"({pb.processed_count}/{pb.source_count}). Durdurmak için: /distill stop {skill_name}\n"
                     )
-                self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent)
+                self.run_via_bridge(bridge, skill_name, description=description, auto_continue=True, agent=agent, allow_refresh=allow_refresh)
 
         _ACTIVE_TASKS[skill_name] = task_id
 

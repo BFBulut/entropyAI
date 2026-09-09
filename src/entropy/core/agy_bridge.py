@@ -23,6 +23,12 @@ config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config, CHAT_HISTORY_FILE
 from entropy.core.task_ledger import task_ledger, TaskStatus
 from entropy.core.project_lock import project_lock_manager
+from entropy.core.masking import mask_tool_output
+from entropy.core.provider import (
+    ProviderCommonMixin,
+    agent_definitions_dir as _agent_definitions_dir,
+    list_agent_definitions as _list_agent_definitions,
+)
 
 def is_trailing_sentence_word(word: str) -> bool:
     w = re.sub(r'[^a-zA-Z0-9çğıöşüÇĞİÖŞÜ]', '', word.lower())
@@ -151,8 +157,17 @@ def prompt_via_stdin(prompt: str) -> bool:
     return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
 
 
-class AgyProcessBridge(QObject):
-    """Bridges Entropy AI to the authenticated local Antigravity (agy) CLI."""
+class AgyProcessBridge(ProviderCommonMixin, QObject):
+    """
+    Bridges Entropy AI to the authenticated local Antigravity (agy) CLI.
+
+    `ProviderCommonMixin` yalnızca ORTAK davranışı (bağlam doluluğu, baskı
+    sinyali, aktarım) ekler; mevcut hiçbir metodun davranışı değişmez. Sınıf
+    böylece `entropy.core.provider.ProviderBridge` sözleşmesini karşılar ve
+    fabrika ile Claude köprüsünün yerine geçebilir.
+    """
+
+    provider_name = "agy"
 
     MODEL_PATTERNS = [
         re.compile(r"(?:Model\s+Selection|Active\s+Model|Using\s+Model|Model|Engine)\s*[:=]\s*([a-zA-Z0-9\.\-_\s\(\)]+)", re.IGNORECASE),
@@ -215,6 +230,8 @@ class AgyProcessBridge(QObject):
         # bağımsız tutar. Sayaç güncellemesi (x += n) atomik değildir: iki arka
         # plan görevi aynı anda bittiğinde biri diğerinin katkısını siler.
         self._state_lock = threading.Lock()
+        # Bağlam baskısı sinyali eşiği ilk aşışta bir kez yayılır (bkz. mixin).
+        self._context_pressure_announced = False
 
         # Sohbet geçmişi tek kaynaktan (config yardımcıları) yüklenir; arayüz
         # modları da aynı fonksiyonu kullanır, böylece köprü ve ekranlar ayrışmaz.
@@ -537,6 +554,43 @@ class AgyProcessBridge(QObject):
                 return str(fb)
         return "agy"
 
+    def auth_status(self) -> Dict[str, object]:
+        """
+        Sağlayıcının oturum durumu.
+
+        agy'nin oturum sorgulayan bir alt komutu yok; `agy models` yalnızca
+        kimlik doğrulanmışsa liste döndürdüğü için varlığı dolaylı ama güvenilir
+        bir oturum kanıtı sayılır. KOTA HARCAMAZ: model listesi yerel/meta bir
+        uç, model çağırmaz.
+        """
+        agy_bin = self.find_agy_executable()
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
+        try:
+            res = subprocess.run(
+                [agy_bin, "models"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                timeout=15,
+            )
+        except Exception as e:
+            return {"provider": "agy", "logged_in": False, "error": str(e)}
+        ok = res.returncode == 0 and bool((res.stdout or "").strip())
+        out = {"provider": "agy", "logged_in": ok, "auth_method": "antigravity-cli"}
+        if not ok:
+            out["error"] = ((res.stderr or res.stdout or "").strip() or f"çıkış kodu {res.returncode}")[:300]
+        return out
+
+    def agent_definitions_dir(self) -> Path:
+        """agy ajan tanımlarının dizini: <proje>/.agents/agents/"""
+        return _agent_definitions_dir("agy", self.active_project_dir)
+
+    def list_agent_definitions(self) -> List[str]:
+        """Diskteki agy ajan adları (agent.md içeren alt klasörler)."""
+        return _list_agent_definitions("agy", self.active_project_dir)
+
     def set_project_directory(self, project_path: Path | str):
         """Bind Entropy AI to a specific project folder."""
         self.active_project_dir = Path(project_path).resolve()
@@ -783,7 +837,12 @@ class AgyProcessBridge(QObject):
                 pass
 
         # 1. Record task start in SQLite ledger
-        task_ledger.record_task_start(task_id=task_id, task_name=task_name, project_path=str(project_dir))
+        task_ledger.record_task_start(
+            task_id=task_id,
+            task_name=task_name,
+            project_path=str(project_dir),
+            provider=self.provider_name,
+        )
 
         write_acquired = False
         try:
@@ -1043,8 +1102,12 @@ class AgyProcessBridge(QObject):
                 bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
 
             # Record in SQLite Task Ledger
+            # Ledger özetine giden metin maskelenir: 300 karakterlik özetin
+            # tamamı bir dosya dökümüyle dolduğunda görev panelinde satır hiçbir
+            # şey anlatmıyordu (bkz. entropy.core.masking).
+            masked_text = mask_tool_output(full_text)
             if success:
-                task_ledger.record_task_success(task_id=task_id, summary=full_text[:300], usage=task_usage or None)
+                task_ledger.record_task_success(task_id=task_id, summary=masked_text[:300], usage=task_usage or None)
             elif not self._shutting_down:
                 err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
                 task_ledger.record_task_failure(task_id=task_id, error=err_detail)
@@ -1118,7 +1181,7 @@ class AgyProcessBridge(QObject):
 
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
-                bus.task_notification.emit(task_id, task_name, full_text[:200])
+                bus.task_notification.emit(task_id, task_name, masked_text[:200])
 
             bus.task_completed.emit(task_id, success)
             bus.terminal_output_received.emit(
@@ -1689,6 +1752,15 @@ class AgyProcessBridge(QObject):
                 bus.core_state_changed.emit("idle")
                 bus.agent_turn_completed.emit(full_text)
             except (RuntimeError, Exception):
+                pass
+
+            # Bağlam doluluğu tur BİTTİKTEN sonra ölçülür: girdi token'ı ancak
+            # result olayıyla belli olur, öncesinde ölçüm bir önceki turu
+            # yansıtırdı. Eşik aşılırsa bus.context_pressure yayılır ve (varsa)
+            # aktarım sayfasıyla geçmiş sıkıştırılır.
+            try:
+                self.check_context_pressure()
+            except Exception:
                 pass
 
             # Auto-recovery only if AGY produced truly empty output or was denied

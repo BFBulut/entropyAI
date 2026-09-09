@@ -67,6 +67,14 @@ class TaskLedger:
                 for col in ("input_tokens", "output_tokens", "total_tokens"):
                     if col not in cols:
                         conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} INTEGER")
+                # Sağlayıcı sütunu: aynı defterde artık hem agy hem claude
+                # görevleri var; hangisinin ne harcadığı ayrılamazsa token
+                # toplamları anlamsızlaşır. Göç geriye uyumlu: eski satırlar
+                # NULL kalır ve okurken "agy" varsayılır (o dönemde tek
+                # sağlayıcı oydu), sütun eklenirken varsayılan atanmaz ki
+                # gerçekten bilinmeyen değerle varsayım karışmasın.
+                if "provider" not in cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN provider TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);"
                 )
@@ -100,8 +108,20 @@ class TaskLedger:
                 )
                 conn.commit()
 
-    def record_task_start(self, task_id: str, task_name: str, project_path: str) -> None:
-        """Transition task status to RUNNING and record started_at timestamp."""
+    def record_task_start(
+        self,
+        task_id: str,
+        task_name: str,
+        project_path: str,
+        provider: str = "agy",
+    ) -> None:
+        """
+        Transition task status to RUNNING and record started_at timestamp.
+
+        provider: görevi yürüten CLI ("agy" | "claude"). Varsayılanı "agy":
+        eski çağrı yerleri (zamanlayıcı, testler) parametresiz çağırmaya devam
+        edebilsin diye geriye uyumlu.
+        """
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._lock:
             with self._get_connection() as conn:
@@ -112,21 +132,23 @@ class TaskLedger:
                         """
                         UPDATE tasks
                         SET task_name = ?, project_path = ?, status = ?, started_at = ?,
-                            completed_at = NULL, error = NULL, result_summary = NULL
+                            completed_at = NULL, error = NULL, result_summary = NULL,
+                            provider = ?
                         WHERE task_id = ?
                         """,
-                        (task_name, str(project_path), TaskStatus.RUNNING.value, now, task_id)
+                        (task_name, str(project_path), TaskStatus.RUNNING.value, now, provider, task_id)
                     )
                 else:
                     conn.execute(
                         """
                         INSERT INTO tasks (
                             task_id, task_name, project_path, status,
-                            created_at, started_at, completed_at, error, result_summary
+                            created_at, started_at, completed_at, error, result_summary,
+                            provider
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
                         """,
-                        (task_id, task_name, str(project_path), TaskStatus.RUNNING.value, now, now)
+                        (task_id, task_name, str(project_path), TaskStatus.RUNNING.value, now, now, provider)
                     )
                 conn.commit()
 
@@ -291,13 +313,27 @@ class TaskLedger:
                 conn.commit()
                 return cur.rowcount or 0
 
+    @staticmethod
+    def _row_to_dict(row) -> Dict[str, Any]:
+        """
+        Satırı sözlüğe çevirir ve eksik sağlayıcıyı "agy" olarak doldurur.
+
+        Sütun eklenmeden önce yazılmış satırlarda provider NULL'dur; o dönemde
+        tek sağlayıcı agy olduğu için okuma tarafında varsayılır. Böylece görev
+        paneli ve token raporu eski kayıtlarda boş sütun göstermez.
+        """
+        d = dict(row)
+        if not d.get("provider"):
+            d["provider"] = "agy"
+        return d
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a task record by ID."""
         with self._lock:
             with self._get_connection() as conn:
                 cur = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,))
                 row = cur.fetchone()
-                return dict(row) if row else None
+                return self._row_to_dict(row) if row else None
 
     def list_recent_tasks(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retrieve recent tasks ordered by creation time descending."""
@@ -307,7 +343,7 @@ class TaskLedger:
                     "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?",
                     (limit,)
                 )
-                return [dict(r) for r in cur.fetchall()]
+                return [self._row_to_dict(r) for r in cur.fetchall()]
 
     def get_active_tasks(self) -> List[Dict[str, Any]]:
         """Retrieve currently RUNNING or PENDING tasks."""
@@ -317,7 +353,7 @@ class TaskLedger:
                     "SELECT * FROM tasks WHERE status IN (?, ?) ORDER BY created_at DESC",
                     (TaskStatus.RUNNING.value, TaskStatus.PENDING.value)
                 )
-                return [dict(r) for r in cur.fetchall()]
+                return [self._row_to_dict(r) for r in cur.fetchall()]
 
     def delete_task(self, task_id: str) -> bool:
         """Tek bir görev kaydını kayıt defterinden siler; silindiyse True döner."""
