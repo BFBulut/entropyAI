@@ -21,7 +21,7 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü uygulaması) arayüz
 - Kozmetik değişiklik, hafıza/karar mekanizmasının önüne geçmez; kullanıcı önce işlevi ister.
 - Kaçış dizisi içeren kodu heredoc ile yazma; Edit aracını kullan.
 - Testler: `tests/test_ui_modes.py`, `tests/test_memory_inspector_and_rag.py`, `tests/test_skills.py`; `QT_QPA_PLATFORM=offscreen` ile koş.
-- Agent Desk kapsam dışıdır; dokunma.
+- Entropy Agent Desk (`src/entropy/desk/**`, motor ve varlıklar dahil) senin kapsamındadır; Entropy AI ile Desk arasındaki mimari kuralları (ayrı ofis/ajan kökü, orkestratör Entropy'yi bilmez, tek ekrana sığma) koru.
 
 ## Rapor biçimi (son mesajın)
 Kısa ve kendi başına anlaşılır: ne değişti (dosya, neden), nasıl doğrulandı (test/önizleme/ölçüm), doğrulanamayan ne kaldı.

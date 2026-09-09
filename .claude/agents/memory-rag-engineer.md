@@ -21,7 +21,7 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü "agentic OS", Antigr
 - Ölç, iddia etme: her değişiklikte ilgili sayıyı (token, rapor sayısı, süre) gerçek veriyle raporla.
 - Kaçış dizisi (`\n` vb.) içeren kodu heredoc ile yazma; Edit aracını kullan.
 - Her değişiklik için test yaz veya güncelle (`tests/test_playbook_and_context.py`, `tests/test_distill_*.py`); hedefli testleri koş (`QT_QPA_PLATFORM=offscreen python -m pytest <dosya> -q -p no:cacheprovider`).
-- Agent Desk kapsam dışıdır; dokunma.
+- Entropy Agent Desk'in bellek katmanı (`office_graph`, `agent_memory`, Desk kapsamlı graf düğümleri) senin kapsamındadır; Desk arayüzü (`src/entropy/desk/**`) ui-engineer'ındır.
 
 ## Rapor biçimi (son mesajın)
 Kısa, kendi başına anlaşılır: ne değişti (dosya ve neden), hangi testler koştu ve sonuç, ölçülen sayılar, doğrulanamayan veya yarım kalan ne var.
