@@ -203,3 +203,71 @@ def test_auto_continue_off_runs_single_pass(tmp_path, monkeypatch):
     bridge.drain()
     assert len(bridge.calls) == 1
     assert store.status("demo")["state"] == "kismi"
+
+
+def test_token_badge_from_detail_dict_uses_new_semantics():
+    """
+    `bus.token_usage_detail` sozlugu rozetin TEK kaynagi (Faz 9, Ek-1).
+
+    `total_tokens_used` artik son tur; oturum toplami `session`. Onbellek
+    okumasi ayri kalem olarak gosterilir.
+    """
+    from entropy.ui.widgets.token_badge import format_token_badge_from_detail
+
+    assert format_token_badge_from_detail({})[0] == "Tokens: 0"
+
+    text, tip = format_token_badge_from_detail({
+        "session": 77_400, "turn": 3_100, "cache_read": 41_200,
+        "cost_weighted": 40_200,
+    })
+    assert text == "Sohbet: 77k (+3k)  ·  önbellek 41k", text
+    assert "77,400" in tip and "41,200" in tip and "40,200" in tip
+
+
+def test_token_badge_bridge_path_shows_session_cache():
+    from entropy.ui.widgets.token_badge import format_token_badge
+
+    class B:
+        session_total_tokens = 77_400; total_tokens_used = 3_100
+        latest_output_tokens = 0; latest_input_tokens = 0
+        latest_thinking_tokens = 0; latest_cache_read_tokens = 0
+        session_turn_count = 5; session_cache_tokens = 41_200
+        background_total_tokens = 0; last_background_usage = {}
+
+    text, _ = format_token_badge(B())
+    assert text == "Sohbet: 77k (+3k)  ·  önbellek 41k", text
+
+
+def test_enforce_argv_limit_counts_and_drops_agents_json(monkeypatch, caplog):
+    """
+    `--agents` yuku argv toplamina dahildir ve sinir asilirsa dusurulur.
+
+    Kadro bir EK'tir: dusurulunce tur kosar, yalnizca alt ajan kadrosu gelmez.
+    Onceden yalnizca sistem istemi bosaltiliyor, kadro tek basina siniri
+    asinca islem "command line is too long" ile oluyordu.
+    """
+    import logging
+
+    from entropy.core import claude_bridge as cb
+
+    bridge = cb.ClaudeCodeBridge()
+    payload = "A" * (cb.ARGV_TOTAL_SAFE_LIMIT + 2_000)
+    cmd = ["claude", "-p", "merhaba", "--agents", payload]
+    assert cb.argv_too_long(cmd), "kurulum: argv sinirin altinda kalmis"
+
+    with caplog.at_level(logging.WARNING, logger="entropy.claude_bridge"):
+        bridge.enforce_argv_limit(cmd)
+
+    assert "--agents" not in cmd, "kadro yuku dusurulmedi"
+    assert not cb.argv_too_long(cmd)
+    assert cmd[:3] == ["claude", "-p", "merhaba"]
+    assert any("--agents" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_enforce_argv_limit_keeps_short_agents_json():
+    from entropy.core import claude_bridge as cb
+
+    bridge = cb.ClaudeCodeBridge()
+    cmd = ["claude", "-p", "merhaba", "--agents", '{"a":1}']
+    bridge.enforce_argv_limit(cmd)
+    assert "--agents" in cmd

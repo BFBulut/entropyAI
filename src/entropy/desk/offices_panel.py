@@ -300,7 +300,9 @@ class OfficesPanel(QFrame):
         actions.setSpacing(6)
         for attr, label, tip, handler in (
             ("edit_btn", "✏️ Düzenle", "Seçili ofisi düzenle", self.edit_current),
-            ("delete_btn", "🗑 Sil", "Seçili ofisi sil (ajan tanımları silinmez)", self.delete_current),
+            ("delete_btn", "📦 Arşivle",
+             "Seçili ofisi arşive taşı (silinmez; kartlar, sorgular ve posta arşive gider)",
+             self.delete_current),
             ("refresh_btn", "🔄 Yenile", "Ofis listesini yeniden oku", self.refresh_offices),
         ):
             btn = QPushButton(label)
@@ -446,24 +448,55 @@ class OfficesPanel(QFrame):
 
     @Slot()
     def delete_current(self) -> None:
-        self.delete_office(self.current_office)
+        self.archive_office(self.current_office)
 
-    def delete_office(self, name: str, confirm: bool = True) -> bool:
+    def archive_office(self, name: str, confirm: bool = True) -> bool:
+        """
+        Ofisi ARŞİVLER (Faz 9 / B-9.6) — silmez.
+
+        `vault_hygiene.archive_office` ofis klasörünü, wiki sorgu sayfalarını ve
+        posta kayıtlarını `Entropy/_archive/<tarih>/` altına taşır. Eskiden
+        `registry.delete()` çağrılıyordu: bir ofisin bütün kart geçmişi ve
+        raporları geri dönülmez biçimde gidiyordu. Arşiv çağrısı yapılamazsa
+        kayıt defterinden düşürme YAPILMAZ (veri kaybı riski) ve kullanıcı
+        uyarılır.
+        """
         if self.registry is None or not name:
             return False
         if confirm:
             answer = QMessageBox.question(
-                self, "Ofisi Sil",
-                f"'{name}' ofisi silinsin mi? (Ajan tanımları silinmez.)",
+                self, "Ofisi Arşivle",
+                f"'{name}' ofisi ARŞİVE TAŞINACAK, SİLİNMEYECEK.\n\n"
+                f"Klasörü, sorgu sayfaları ve posta kayıtları "
+                f"Entropy/_archive/<tarih>/ altına taşınır; ajan tanımları "
+                f"korunur. Devam edilsin mi?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         try:
+            from entropy.memory.vault_hygiene import archive_office as _archive
+
+            vault_path = getattr(self.registry, "vault_path", None)
+            result = _archive(name, vault_path=vault_path, dry_run=False)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Ofisler] Arşivleme hatası: {exc}\n")
+            return False
+        moved = 0
+        try:
+            moved = int(result.get("count", 0) or 0)
+        except Exception:
+            moved = 0
+        bus.terminal_output_received.emit(
+            f"[Ofisler] '{name}' arşivlendi ({moved} öğe taşındı).\n"
+        )
+        # Kayıt defterinden düşürme: arşiv başarılı olduktan SONRA.
+        try:
             self.registry.delete(name)
         except Exception as exc:
-            bus.terminal_output_received.emit(f"[Ofisler] Silme hatası: {exc}\n")
-            return False
+            bus.terminal_output_received.emit(
+                f"[Ofisler] Arşiv tamam, defterden düşürülemedi: {exc}\n"
+            )
         if self.current_office == name:
             self.current_office = ""
         self.refresh_offices()
@@ -471,3 +504,7 @@ class OfficesPanel(QFrame):
         if signal is not None:
             signal.emit(name)
         return True
+
+    # Geri uyum: eski çağrılar/testler `delete_office` diyor; artık arşivler.
+    def delete_office(self, name: str, confirm: bool = True) -> bool:
+        return self.archive_office(name, confirm=confirm)

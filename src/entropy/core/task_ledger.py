@@ -75,6 +75,12 @@ class TaskLedger:
                 # gerçekten bilinmeyen değerle varsayım karışmasın.
                 if "provider" not in cols:
                     conn.execute("ALTER TABLE tasks ADD COLUMN provider TEXT")
+                # Model sütunu (Faz 9.5): kartın `model` alanı yürütmeye hiç
+                # geçmiyordu ve hangi modelin koştuğu defterden okunamadığı için
+                # hata günlerce görünmez kaldı. Göç geriye uyumlu: eski satırlar
+                # NULL kalır, okurken "" varsayılır.
+                if "model" not in cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);"
                 )
@@ -114,6 +120,7 @@ class TaskLedger:
         task_name: str,
         project_path: str,
         provider: str = "agy",
+        model: str = "",
     ) -> None:
         """
         Transition task status to RUNNING and record started_at timestamp.
@@ -133,10 +140,11 @@ class TaskLedger:
                         UPDATE tasks
                         SET task_name = ?, project_path = ?, status = ?, started_at = ?,
                             completed_at = NULL, error = NULL, result_summary = NULL,
-                            provider = ?
+                            provider = ?, model = ?
                         WHERE task_id = ?
                         """,
-                        (task_name, str(project_path), TaskStatus.RUNNING.value, now, provider, task_id)
+                        (task_name, str(project_path), TaskStatus.RUNNING.value, now,
+                         provider, model or "", task_id)
                     )
                 else:
                     conn.execute(
@@ -144,11 +152,12 @@ class TaskLedger:
                         INSERT INTO tasks (
                             task_id, task_name, project_path, status,
                             created_at, started_at, completed_at, error, result_summary,
-                            provider
+                            provider, model
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                         """,
-                        (task_id, task_name, str(project_path), TaskStatus.RUNNING.value, now, now, provider)
+                        (task_id, task_name, str(project_path), TaskStatus.RUNNING.value,
+                         now, now, provider, model or "")
                     )
                 conn.commit()
 
@@ -398,6 +407,8 @@ class TaskLedger:
         d = dict(row)
         if not d.get("provider"):
             d["provider"] = "agy"
+        if "model" in d and d.get("model") is None:
+            d["model"] = ""
         return d
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:

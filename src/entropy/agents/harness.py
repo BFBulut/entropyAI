@@ -40,8 +40,10 @@ from entropy.agents.mailbox import (
     report_to_entropy,
 )
 from entropy.agents.desk_registry import DeskOffice, DeskRegistry
-from entropy.agents.registry import AgentRegistry
+from entropy.agents.compile import resolve_model
+from entropy.agents.registry import VALID_PROVIDERS, AgentRegistry, default_provider
 from entropy.agents.tasks import (
+    ALL_CARDS,
     TaskBoard,
     TaskCard,
     _now,
@@ -139,7 +141,8 @@ def _office_subcard_costs(office: str, board: TaskBoard, ledger=None) -> List[in
             return []
     costs: List[int] = []
     try:
-        cards = board.list()
+        # Ofis kartları artık ofisin kendi kasasında (Faz 9 / B-9.2).
+        cards = board.list(office=office)
     except Exception:
         return []
     for card in cards:
@@ -328,6 +331,35 @@ class OfficeHarness:
         value = (entry.get("conversation_id") or {}).get((provider or "").lower())
         return str(value) if value else None
 
+    def _other_provider_conversation(self, provider: str) -> str:
+        """Ofisin konuşması varsa ama BAŞKA sağlayıcıdaysa o sağlayıcının adı."""
+        entry = self._state().get(OFFICE_STATE_KEY) or {}
+        conv = entry.get("conversation_id") or {}
+        provider = (provider or "").lower()
+        for name, value in conv.items():
+            if value and (name or "").lower() != provider:
+                return str(name)
+        return ""
+
+    def agent_provider(self, spec, office: DeskOffice) -> str:
+        """
+        Bir ofis ajanının koşacağı sağlayıcı.
+
+        Sıra: (1) ajanın kendi geçerli `provider` alanı, (2) OFİSİN varsayılanı
+        — yani orkestratörün sağlayıcısı, (3) genel varsayılan. İkinci basamak
+        şart: değerlendirici sağlayıcısı belirtilmemişken genel varsayılana
+        düşülüyordu ve `config.provider` orkestratörünkinden farklıysa plan
+        turu bir sağlayıcıda, değerlendirme başka bir sağlayıcıda açılıyordu
+        (ofis konuşması sağlayıcı başına anahtarlı olduğu için de sürmüyordu).
+        """
+        provider = ((getattr(spec, "provider", "") if spec else "") or "").strip().lower()
+        if provider in VALID_PROVIDERS:
+            return provider
+        provider = ((office.default_provider if office else "") or "").strip().lower()
+        if provider in VALID_PROVIDERS:
+            return provider
+        return default_provider()
+
     def remember_office_conversation(self, provider: str, conversation_id: str) -> None:
         """
         Kimliği ofis `state.json`'ına ve `ConversationMap`'e yazar.
@@ -485,7 +517,7 @@ class OfficeHarness:
             if child.status != "running":
                 continue
             try:
-                bridge = TaskBoard.bridge_for(child.provider or "agy",
+                bridge = TaskBoard.bridge_for(child.provider or default_provider(),
                                               bridge_factory=self.bridge_factory)
             except Exception:
                 bridge = None
@@ -739,6 +771,10 @@ class OfficeHarness:
             research_schema = (
                 ',\n "research_notes": [{"title": "...", "body": "..."}]'
             )
+        # Şemadaki `provider` örneği KADRODAN türer: sabit "agy" yazıldığında
+        # model, kadroda yalnızca Claude ajanı olsa bile plana `agy` yazmaya
+        # eğilimliydi ve claude-yalnız kurulum sessizce agy'ye düşüyordu.
+        plan_provider = self._roster_provider(office)
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
             f"{project_block}"
@@ -754,12 +790,25 @@ class OfficeHarness:
             "Yalnızca TEK bir ```json kod bloğu yaz, başka hiçbir şey yazma:\n"
             '{"subtasks": [{"title": "...", "goal": "...", "criteria": ["..."], '
             '"agent": "<kadrondaki ya da new_agents ile tanımladığın ad>", '
-            '"provider": "agy", "model": ""}],\n'
+            f'"provider": "{plan_provider}", "model": ""}}],\n'
             ' "new_agents": [{"name": "...", "role": "worker", "description": "...", '
-            '"provider": "agy", "model": "", "tools_policy": "read-write", '
+            f'"provider": "{plan_provider}", "model": "", "tools_policy": "read-write", '
             '"prompt": "..."}]'
             f"{research_schema}" + "}"
         )
+
+    def _roster_provider(self, office: DeskOffice) -> str:
+        """
+        Plan şemasında örneklenecek sağlayıcı: kadrodaki ilk üyenin sağlayıcısı,
+        yoksa ofis varsayılanı, o da yoksa yapılandırma varsayılanı.
+        """
+        for name in office.members or []:
+            spec = self.registry.get(name)
+            provider = (getattr(spec, "provider", "") or "").strip().lower()
+            if provider in VALID_PROVIDERS:
+                return provider
+        provider = (office.default_provider or "").strip().lower()
+        return provider if provider in VALID_PROVIDERS else default_provider()
 
     def _apply_new_agents(self, data: Optional[dict]) -> List[str]:
         """
@@ -788,8 +837,8 @@ class OfficeHarness:
                 role = "worker"
             provider = str(raw.get("provider") or "").strip().lower()
             office = self.office
-            if provider not in ("agy", "claude"):
-                provider = (office.default_provider if office else "agy") or "agy"
+            if provider not in VALID_PROVIDERS:
+                provider = (office.default_provider if office else "") or default_provider()
             policy = str(raw.get("tools_policy") or "read-write").strip().lower()
             spec = AgentSpec(
                 name=name,
@@ -883,8 +932,8 @@ class OfficeHarness:
                 agent = (office.members or [""])[0]
             provider = str(raw.get("provider") or "").strip().lower()
             spec = self.registry.get(agent)
-            if provider not in ("agy", "claude"):
-                provider = (spec.provider if spec else office.default_provider) or "agy"
+            if provider not in VALID_PROVIDERS:
+                provider = (spec.provider if spec else office.default_provider) or default_provider()
             criteria = raw.get("criteria") or []
             if isinstance(criteria, str):
                 criteria = [criteria]
@@ -1331,7 +1380,8 @@ class OfficeHarness:
         board = board or TaskBoard(vault_path=offices.vault_path)
         resumed: List[str] = []
         try:
-            cards = board.list()
+            # İki kök de taranır: yarım kalan zincirin üst kartı ofis kasasında.
+            cards = board.list(office=ALL_CARDS)
         except Exception:
             return resumed
         for card in cards:
@@ -1384,7 +1434,7 @@ class OfficeHarness:
         bir planlama çağrısı ~900k token'a çıkıyordu.
         """
         spec = self.registry.get(agent_name) if agent_name else None
-        provider = ((spec.provider if spec else "") or office.default_provider or "agy").lower()
+        provider = self.agent_provider(spec, office)
         try:
             bridge = TaskBoard.bridge_for(provider, bridge_factory=self.bridge_factory)
         except Exception:
@@ -1428,9 +1478,32 @@ class OfficeHarness:
             existing = self.office_conversation_id(provider)
             if existing:
                 kwargs["conversation_id"] = existing
-        from entropy.agents.tasks import _accepts_kwarg
+            else:
+                # Ofisin konuşması BAŞKA bir sağlayıcıda açılmış olabilir
+                # (ör. orkestratör claude, değerlendirici agy). Oturum
+                # kimlikleri sağlayıcılar arasında taşınmaz; bu bir hata değil,
+                # yalnızca "temiz bağlam" demektir — günlüğe bilgi düşer.
+                other = self._other_provider_conversation(provider)
+                if other:
+                    logger.info(
+                        "Ofis konuşması %s sağlayıcısında; %s çağrısı (%s) temiz "
+                        "bağlamla koşuyor.", other, provider, agent_name or "-",
+                    )
+        from entropy.agents.tasks import _accepts_kwarg, agent_spec_payload
 
-        for optional in ("needs_write", "project_path", "conversation_id"):
+        # Model ve ajan künyesi (agy-1 iki köprüye de ekledi): kart yolu bunları
+        # zaten geçiriyordu, plan/değerlendirme yolu geçirmiyordu — orkestratör
+        # kasadaki `models.<sağlayıcı>` geçersiz kılmasını hiç görmüyordu.
+        if spec is not None:
+            run_model = resolve_model(spec, provider)
+            if run_model:
+                kwargs["model"] = run_model
+            payload = agent_spec_payload(spec)
+            if payload:
+                kwargs["agent_spec"] = payload
+
+        for optional in ("needs_write", "project_path", "conversation_id",
+                         "model", "agent_spec"):
             if not _accepts_kwarg(bridge.send_background_task_async, optional):
                 kwargs.pop(optional, None)
         try:

@@ -745,7 +745,17 @@ def switch_provider(current_bridge, provider: str, cfg=None):
             pass
 
     cfg.provider = name
+    # Sağlayıcıya geçerken model de o sağlayıcınınki olur. Değer DOĞRULANIR
+    # (Faz 9.1): zehirlenmiş bir ayar burada `selected_model`'i de bozuyordu.
     default_model = getattr(cfg, "provider_models", {}).get(name)
+    try:
+        import sys as _sys
+
+        config_mod = _sys.modules["entropy.core.config"]
+        if default_model and not config_mod.is_valid_model_for(name, default_model):
+            default_model = config_mod.DEFAULT_PROVIDER_MODELS.get(name, default_model)
+    except Exception:
+        pass
     if default_model:
         cfg.selected_model = default_model
     try:

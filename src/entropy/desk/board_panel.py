@@ -21,14 +21,14 @@ class BoardPanel(QFrame):
 
     card_selected = Signal(str)
 
-    def __init__(self, parent=None, board: Any = None, office: str = ""):
+    def __init__(self, parent=None, board: Any = None, office: str = "", bridge: Any = None):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.board_widget = TaskBoardWidget(parent=self, board=board, office=office)
+        self.board_widget = TaskBoardWidget(parent=self, board=board, office=office, bridge=bridge)
         self.board_widget.card_selected.connect(self.card_selected)
         layout.addWidget(self.board_widget)
 

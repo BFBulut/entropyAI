@@ -44,12 +44,108 @@ def _paint_dark(widget) -> None:
     except (AttributeError, RuntimeError):
         pass
 
-# Sağlayıcı başına önerilen model listesi. AGY tarafı köprüden dinamik
-# okunur; okunamazsa bu sabit liste devreye girer.
+# Sağlayıcı başına önerilen model listesi. Etkin köprü o sağlayıcıya aitse
+# canlı liste okunur; okunamazsa bu doğrulanmış sabit liste devreye girer.
+#
+# Faz 9: agy listesi UYDURULMUYOR — `agy models` çıktısındaki adlar birebir
+# alındı (2026-09-09; kota harcamayan salt okunur komut). Eski listedeki
+# "gemini-3-pro"/"gemini-2.5-*" adları CLI'da yok, seçilince her koşu
+# geçersiz `--model` ile başlıyordu.
+_AGY_LIVE_MODELS = [
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
+    "gemini-3.6-flash-high",
+    "gemini-3.6-flash-medium",
+    "gemini-3.6-flash-low",
+    "gemini-3.1-pro-high",
+    "gemini-3.1-pro-low",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
+    "gpt-oss-120b-medium",
+]
+
+
+def _claude_fallback_models() -> List[str]:
+    """Claude tarafı: köprünün `CLAUDE_MODELS` + takma adları (tek kaynak)."""
+    try:
+        from entropy.core.claude_bridge import CLAUDE_MODELS, CLAUDE_MODEL_ALIASES
+
+        return list(CLAUDE_MODELS) + sorted(CLAUDE_MODEL_ALIASES.keys())
+    except Exception:
+        return ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
+                "opus", "sonnet", "haiku"]
+
+
 FALLBACK_MODELS: Dict[str, List[str]] = {
-    "agy": ["gemini-3-pro", "gemini-2.5-pro", "gemini-2.5-flash"],
-    "claude": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+    "agy": list(_AGY_LIVE_MODELS),
+    "claude": _claude_fallback_models(),
 }
+
+
+def model_belongs_to(provider: str, name: str) -> bool:
+    """
+    Ad `provider`ın CLI'sine verilebilir mi.
+
+    Doğrulama agy-1'in köprü/config süzgeçlerine devredilir (`getattr` ile
+    aranır: sürüm eskiyse UI çökmez). Bulunamazsa ön ek kuralına düşülür.
+    """
+    name = (name or "").strip()
+    if not name:
+        return True  # boş = "oturumun modelini miras al"
+    provider = (provider or "").strip().lower()
+    try:
+        from entropy.core import config as config_module
+
+        if provider == "claude":
+            checker = getattr(config_module, "is_claude_model_name", None)
+            if checker is not None:
+                return bool(checker(name))
+        elif provider == "agy":
+            checker = getattr(config_module, "is_agy_model_name", None)
+            if checker is not None:
+                extra = list(getattr(config_module.config, "available_models", []) or [])
+                return bool(checker(name, extra=extra))
+    except Exception:
+        pass
+    low = name.lower()
+    if provider == "claude":
+        return low.startswith("claude-") or low.split("[", 1)[0] in {
+            "opus", "sonnet", "haiku", "fable", "best", "default", "opusplan"
+        }
+    if provider == "agy":
+        return low.startswith(("gemini-", "gpt-")) or low in {
+            "claude-sonnet-4-6", "claude-opus-4-6-thinking"
+        }
+    return True
+
+
+def list_cards_for(board: Any, office: str = "") -> List[Any]:
+    """
+    Kart listesi tek yerden okunur (Faz 9 kart kökü ayrımı).
+
+    `TaskBoard.list(office=None)` artık YALNIZCA Entropy kartlarını döndürüyor;
+    ofis kartları `Entropy/Desk/Offices/<ofis>/cards/` altında. Desk panelleri
+    `office=` geçmezse boş görünürdü. Eski/sahte panolar `office` argümanını
+    kabul etmeyebilir; o durumda konumsuz çağrıya düşülür.
+    """
+    if board is None:
+        return []
+    office = (office or "").strip()
+    try:
+        if office:
+            return list(board.list(office=office) or [])
+        return list(board.list() or [])
+    except TypeError:
+        try:
+            return list(board.list() or [])
+        except Exception:
+            return []
+    except Exception:
+        return []
 
 EFFORT_LEVELS = ["low", "medium", "high"]
 
@@ -184,13 +280,22 @@ def spec_field(spec: Any, name: str, default: Any = "") -> Any:
 
 
 def models_for_provider(provider: str, bridge: Any = None) -> List[str]:
-    """Sağlayıcıya göre model listesi; etkin köprüden dinamik okumayı dener."""
+    """
+    Sağlayıcıya göre model listesi.
+
+    Canlı liste YALNIZCA etkin köprü aynı sağlayıcıya aitse kullanılır; köprü
+    başka sağlayıcıdaysa (ör. Claude oturumundayken agy ajanı tanımlanırken)
+    doğrulanmış sabit liste döner. Aksi halde form, o CLI'nin kabul etmediği
+    model adlarını öneriyordu.
+    """
+    provider = (provider or "").strip().lower()
     models: List[str] = []
     if bridge is not None and getattr(bridge, "provider_name", None) == provider:
         try:
             models = [m for m in bridge.fetch_available_models() if m]
         except Exception:
             models = []
+        models = [m for m in models if model_belongs_to(provider, m)]
     if not models:
         models = list(FALLBACK_MODELS.get(provider, []))
     return models
@@ -294,6 +399,11 @@ class AgentEditDialog(QDialog):
             self.model_combo.setCurrentText(current)
         self.model_combo.blockSignals(False)
 
+    def model_choices(self) -> List[str]:
+        """Test için: kutudaki model adları."""
+        return [self.model_combo.itemText(i) for i in range(self.model_combo.count())
+                if self.model_combo.itemText(i)]
+
     def _prefill(self, spec: Any) -> None:
         self.name_input.setText(str(spec_field(spec, "name")))
         self.role_input.setText(str(spec_field(spec, "role")))
@@ -356,9 +466,10 @@ class AssignTaskDialog(QDialog):
 
     def __init__(self, parent=None, agent_name: str = "", skills: Optional[List[str]] = None,
                  provider: str = "", model: str = "", effort: str = "",
-                 budget_tokens: int = 0):
+                 budget_tokens: int = 0, bridge=None):
         super().__init__(parent)
         self.agent_name = agent_name
+        self.bridge = bridge
         self.setWindowTitle(f"Görev Ver — {agent_name}" if agent_name else "Görev Ver")
         self.setMinimumWidth(520)
         self.setStyleSheet(DIALOG_STYLE)
@@ -393,9 +504,14 @@ class AssignTaskDialog(QDialog):
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        self.model_combo.addItem("")
-        self.model_combo.setCurrentText(model or "")
+        self.model_combo.setToolTip(
+            "Model (boş = oturumun modelini miras al). Liste seçili sağlayıcıya göre değişir."
+        )
         form.addRow("Model:", self.model_combo)
+        # Faz 9: model listesi sağlayıcıya bağlı; sağlayıcı değişince tazelenir.
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        self._on_provider_changed(self.provider_combo.currentText())
+        self.model_combo.setCurrentText(model or "")
 
         self.effort_combo = QComboBox()
         self.effort_combo.addItem("")
@@ -433,6 +549,28 @@ class AssignTaskDialog(QDialog):
         self.start_btn.clicked.connect(self._on_start)
         btn_box.addWidget(self.start_btn)
         layout.addLayout(btn_box)
+
+    def _on_provider_changed(self, provider: str) -> None:
+        """Sağlayıcıya ait model listesi; ilk giriş boş = 'oturumun modelini miras al'."""
+        current = self.model_combo.currentText().strip()
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("")
+        provider = (provider or "").strip()
+        if provider:
+            for m in models_for_provider(provider, self.bridge):
+                self.model_combo.addItem(m)
+        # Yeni sağlayıcıya ait olmayan bir ad seçiliyse boşa (miras) düşülür.
+        if current and (not provider or model_belongs_to(provider, current)):
+            self.model_combo.setCurrentText(current)
+        else:
+            self.model_combo.setCurrentText("")
+        self.model_combo.blockSignals(False)
+
+    def model_choices(self) -> List[str]:
+        """Test için: kutudaki adlar (baştaki boş girdi hariç)."""
+        return [self.model_combo.itemText(i) for i in range(self.model_combo.count())
+                if self.model_combo.itemText(i)]
 
     def _on_start(self) -> None:
         if not self.title_input.text().strip() or not self.goal_input.toPlainText().strip():
@@ -816,7 +954,13 @@ class AgentsWidget(QFrame):
         except Exception:
             return []
         if not self.office:
-            return agents
+            # Faz 9 / B-9.5: Entropy kipinde YALNIZCA Entropy kadrosu görünür.
+            # `registry` (AgentRegistry) artık Desk yollarını dışlıyor; yine de
+            # `office` alanı dolu bir kayıt (elle düzenleme, eski sürüm kalıntısı
+            # ya da testin verdiği birleşik defter) sızabilir. Entropy'nin ajan
+            # formunda Desk ajanı görünürse kullanıcı ona görev verir, kart
+            # yanlış köke yazılırdı.
+            return [a for a in agents if not str(spec_field(a, "office", "")).strip()]
         # Ofis süzgeci iki kaynağı birleştirir: ajanın kendi `office` alanı ve
         # ofisin `members` listesi. Yalnızca birine bakılsaydı, dosyayı elle
         # düzenleyen kullanıcı (ya da henüz `office` yazmayan bir sürüm) ajanı
@@ -953,13 +1097,13 @@ class AgentsWidget(QFrame):
         return True
 
     def _reload_cards(self) -> None:
-        if self.board is None:
-            self._card_cache = []
-            return
-        try:
-            self._card_cache = list(self.board.list() or [])
-        except Exception:
-            self._card_cache = []
+        """
+        Kart önbelleği (ajan kartındaki "son görev" satırı).
+
+        Faz 9: ofis kipindeki kadro paneli ofis köküne, Entropy kipi Entropy
+        köküne bakar. Ofis geçilmezse Desk kadrosu hiçbir kart göremezdi.
+        """
+        self._card_cache = list_cards_for(self.board, self.office)
 
     def latest_card_for(self, agent_name: str) -> Optional[Any]:
         """Ajana ait en son görev kartı (created_at sırasına göre)."""
@@ -1148,6 +1292,7 @@ class AgentsWidget(QFrame):
             provider=str(spec_field(spec, "provider", "")) if spec is not None else "",
             model=str(spec_field(spec, "model", "")) if spec is not None else "",
             effort=str(spec_field(spec, "effort", "")) if spec is not None else "",
+            bridge=self.bridge,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1183,5 +1328,17 @@ class AgentsWidget(QFrame):
         if not path.exists():
             bus.terminal_output_received.emit(f"[Ajanlar] Dosya bulunamadı: {path}\n")
             return False
-        bus.report_created.emit(str(path))
+        # Faz 9: eskiden burada `bus.report_created` yayiliyordu. O sinyal
+        # "yeni arastirma raporu uretildi ve bellege islendi" anlamina gelir;
+        # sohbete "Yeni Arastirma Raporu: AGENT / RAG'a islendi" sahte karti
+        # basiyor, bildirim uretiyor ve bilgi grafigini bastan kuruyordu.
+        # Ajan dosyasi acmak bir rapor uretimi degildir: yalnizca okuyucu acilir.
+        try:
+            from entropy.ui.widgets.standalone_report_window import (
+                open_standalone_report_window,
+            )
+
+            open_standalone_report_window(str(path))
+        except Exception:
+            bus.terminal_output_received.emit(f"[Ajanlar] Dosya: {path}\n")
         return True

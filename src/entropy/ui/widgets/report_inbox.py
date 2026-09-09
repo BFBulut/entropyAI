@@ -58,6 +58,7 @@ class ReportInboxStore:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path is not None else inbox_state_path()
         self._items: Dict[str, Dict[str, Any]] = {}
+        self._dirty = False
         self.load()
 
     # ------------------------------------------------------------ kalıcılık
@@ -81,6 +82,7 @@ class ReportInboxStore:
                 json.dumps({"items": self._items}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            self._dirty = False
             return True
         except OSError:
             return False
@@ -105,12 +107,42 @@ class ReportInboxStore:
 
     # ------------------------------------------------------------ değişimler
 
-    def _set(self, path: Any, **changes: Any) -> Dict[str, Any]:
+    def _set(self, path: Any, autosave: bool = True, **changes: Any) -> Dict[str, Any]:
         key = self._key(path)
         item = self._items.setdefault(key, {"first_seen": time.time()})
         item.update(changes)
-        self.save()
+        if autosave:
+            self.save()
+        else:
+            self._dirty = True
         return dict(item)
+
+    # ------------------------------------------------- toplu (tek yazımlı) işlemler
+
+    def set_many(self, paths: Any, **changes: Any) -> int:
+        """Faz 9: N girdiyi tek dosya yazımıyla günceller.
+
+        Eskiden `mark_all_read` her üye için tam JSON yazıyordu (yüzlerce yazım,
+        arayüz kilitleniyordu). Artık tek `save()` var.
+        """
+        count = 0
+        for path in paths:
+            if path is None:
+                continue
+            self._set(path, autosave=False, **changes)
+            count += 1
+        if count:
+            self.save()
+        return count
+
+    def mark_paths_read(self, paths: Any, read: bool = True) -> int:
+        return self.set_many(paths, read=bool(read))
+
+    def flush(self) -> bool:
+        """Bekleyen (autosave=False) değişiklikleri diske yazar."""
+        if not getattr(self, "_dirty", False):
+            return True
+        return self.save()
 
     def mark_read(self, path: Any, read: bool = True) -> Dict[str, Any]:
         return self._set(path, read=bool(read))
@@ -197,6 +229,33 @@ class ReportInboxStore:
         return sum(1 for e in self.inbox_entries(entries, hours=hours, now=now) if not e["read"])
 
 
+#: Faz 9 — süreç genelinde TEK depo.
+#: Zen (`reports_viewer`) ve Chat (`chat_mode`) ayrı `ReportInboxStore()`
+#: örnekleri kuruyordu; her `save()` tüm sözlüğü ezdiği için "son yazan kazanır"
+#: yarışı oluşuyor ve Chat'te "okundu / tümünü okundu / temizle" geri alınıyordu.
+_SHARED_STORE: Optional["ReportInboxStore"] = None
+
+
+def get_shared_store() -> "ReportInboxStore":
+    """Tüm rapor yüzeylerinin paylaştığı tekil okundu/pin/arşiv deposu."""
+    global _SHARED_STORE
+    if _SHARED_STORE is None:
+        _SHARED_STORE = ReportInboxStore()
+    return _SHARED_STORE
+
+
+def reset_shared_store(store: Optional["ReportInboxStore"] = None) -> "ReportInboxStore":
+    """Testler için: tekil depoyu değiştirir/sıfırlar."""
+    global _SHARED_STORE
+    _SHARED_STORE = store if store is not None else ReportInboxStore()
+    return _SHARED_STORE
+
+
+#: Kunye onbellegi: (yol, mtime, boyut) -> `read_report_meta` sonucu.
+_META_CACHE: Dict[tuple, Dict[str, Any]] = {}
+_META_CACHE_MAX = 4000
+
+
 def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
     """
     Kasadan rapor künyelerini toplar (Chat kipi gibi rapor okuyucusu olmayan
@@ -214,18 +273,37 @@ def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
         for report in list(vault.list_reports() or [])[: max(1, int(limit))]:
             path = Path(str(report.get("path", "")))
-            if not path.exists():
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            # Faz 9 - artimli tazeleme: imzasi (mtime, boyut) degismeyen kunye
+            # yeniden okunmaz. Eskiden her `reports_updated` sinyalinde 703
+            # dosya bastan okunuyordu.
+            sig = (str(path), st.st_mtime, st.st_size)
+            cached = _META_CACHE.get(sig)
+            if cached is not None:
+                merged = dict(report)
+                merged.update(cached)
+                for key in ("kind", "office", "importance"):
+                    if not merged.get(key) and report.get(key) is not None:
+                        merged[key] = report.get(key)
+                entries.append(merged)
                 continue
             # `read_report_meta` dosyayi kendi basina okur ve `kind`/`office`
             # gibi YALNIZCA kasa taramasinin bildigi alanlari uretmez. Kunyeyi
             # `list_reports()` sozlugunun uzerine bindiriyoruz: dosyadan okunan
             # baslik/etiket kazanir, tarama alanlari (kind, office, importance)
             # korunur. Duz `read_report_meta(path)` bunlari dusuruyordu.
+            meta = read_report_meta(path)
             merged: Dict[str, Any] = dict(report)
-            merged.update(read_report_meta(path))
+            merged.update(meta)
             for key in ("kind", "office", "importance"):
                 if not merged.get(key) and report.get(key) is not None:
                     merged[key] = report.get(key)
+            if len(_META_CACHE) > _META_CACHE_MAX:
+                _META_CACHE.clear()
+            _META_CACHE[sig] = dict(meta)
             entries.append(merged)
         return entries
     except Exception:
@@ -364,7 +442,7 @@ class ReportInboxStrip(QFrame):
         super().__init__(parent)
         self.setObjectName("inboxStrip")
         self.setMinimumWidth(240)  # dar panelde şerit daralsın, paneli itmesin
-        self.store =store if store is not None else ReportInboxStore()
+        self.store = store if store is not None else get_shared_store()
         self._entries: List[Dict[str, Any]] = []
         self._now_override: Optional[float] = None
 

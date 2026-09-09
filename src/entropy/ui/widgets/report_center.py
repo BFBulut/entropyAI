@@ -23,14 +23,16 @@ parçacığında kullanılmalıdır.
 from __future__ import annotations
 
 import json
+import os
 import math
 import re
 import time
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -39,7 +41,7 @@ from PySide6.QtWidgets import (
 from entropy.core.config import STATE_DIR
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
-from entropy.ui.widgets.report_inbox import ReportInboxStore
+from entropy.ui.widgets.report_inbox import ReportInboxStore, get_shared_store
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
 
 # --------------------------------------------------------------------- ayar
@@ -223,12 +225,34 @@ def extract_summary_and_decision(body: str) -> Tuple[str, str]:
     return summary, decision
 
 
+#: Faz 9 - rapor basi onbellegi. Anahtar: (yol, mtime, boyut, limit).
+#: `refresh()` her cagrildiginda `enrich_entry` her kunye icin dosyayi ikinci
+#: kez okuyordu (703 rapor => 703 disk okumasi/klik). Dosya imzasi degismedigi
+#: surece artik disk'e gidilmez.
+_HEAD_CACHE: Dict[tuple, str] = {}
+_HEAD_CACHE_MAX = 4000
+
+
 def _read_head(path: Any, limit: int = 8192) -> str:
+    key = None
     try:
-        with open(str(path), "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read(limit)
+        st = os.stat(str(path))
+        key = (str(path), st.st_mtime, st.st_size, int(limit))
+        cached = _HEAD_CACHE.get(key)
+        if cached is not None:
+            return cached
     except OSError:
         return ""
+    try:
+        with open(str(path), "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(limit)
+    except OSError:
+        return ""
+    if key is not None:
+        if len(_HEAD_CACHE) > _HEAD_CACHE_MAX:
+            _HEAD_CACHE.clear()
+        _HEAD_CACHE[key] = head
+    return head
 
 
 def detect_source(entry: Dict[str, Any]) -> str:
@@ -860,16 +884,25 @@ class ReportCenterWidget(QFrame):
         # Açık minimum, iç araç çubuğunun panel yerine kendisinin kırpılmasını
         # (ve kaydırma çubuğuyla erişilebilir kalmasını) sağlar.
         self.setMinimumWidth(240)
-        self.store =store if store is not None else ReportInboxStore()
+        self.store = store if store is not None else get_shared_store()
         self.bridge = bridge
         # Testler ve Chat kipi kendi işleyicisini verebilsin diye enjekte edilir;
         # varsayılan yerel `/ask` komutudur.
         self.ask_handler = ask_handler
         self._entries: List[Dict[str, Any]] = []
         self._result: Dict[str, Any] = {"cards": [], "quiet": [], "total": 0}
+        self._cluster_signature: Optional[tuple] = None
+        self._cluster_index: List[List[int]] = []
+        self._enrich_cache: Dict[tuple, Dict[str, Any]] = {}
         self._quiet_expanded = False
         self._mailbox_cache: Optional[List[Dict[str, Any]]] = None
         self.quiet_threshold = load_quiet_threshold()
+        # Faz 9 - kasa tazelemesi icin birlestirme zamanlayicisi ve isci durumu.
+        self._reload_running = False
+        self._reload_again = False
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.timeout.connect(self._start_background_reload)
 
         self.setStyleSheet(
             f"QFrame#reportCenter {{ background-color:{RT['surface_base']};"
@@ -1065,10 +1098,77 @@ class ReportCenterWidget(QFrame):
 
     # ------------------------------------------------------------ görünüm
 
-    def refresh(self) -> None:
-        self._result = build_report_center(
-            self.all_entries(), quiet_threshold=self.quiet_threshold
+    #: `all_entries()` her cagrida depodan tazeledigi alanlar; onbellekten
+    #: gelen zenginlestirmenin uzerine bunlar yeniden yazilir.
+    VOLATILE_FIELDS = ("read", "pinned", "archived")
+
+    def _enrich_cached(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Faz 9: `enrich_entry` sonucunu (yol, mtime) imzasiyla onbellekler.
+
+        700 raporda zenginlestirme sicak onbellekle bile ~230 ms suruyordu;
+        okundu/pin tiklamasi bunu her seferinde odetmemeli.
+        """
+        path = str(entry.get("path", ""))
+        key = (path, float(entry.get("mtime") or 0.0))
+        cached = self._enrich_cache.get(key) if path else None
+        if cached is None:
+            cached = enrich_entry(entry)
+            if path:
+                if len(self._enrich_cache) > 4000:
+                    self._enrich_cache.clear()
+                self._enrich_cache[key] = cached
+        out = dict(cached)
+        for field in self.VOLATILE_FIELDS:
+            if field in entry:
+                out[field] = entry[field]
+        return out
+
+    def _build_signature(self, entries) -> tuple:
+        """Kume hesabinin girdi imzasi: (yol, mtime) cifti + esik."""
+        return (
+            round(float(self.quiet_threshold), 4),
+            tuple((str(e.get("path", "")), float(e.get("mtime") or 0.0)) for e in entries),
         )
+
+    def refresh(self) -> None:
+        # Faz 9: TF-IDF kumelemesi 700 raporda ana is parcacigini ~300 ms
+        # blokluyordu ve `mark_all_read` gibi YALNIZCA okundu bayragini
+        # degistiren eylemlerde bile bastan kosuyordu. Kume BILESIMI girdiler
+        # (yol + mtime) degismedikce ayni kalir; onu onbellege aliyoruz, kartlar
+        # her seferinde taze okundu/pin durumuyla yeniden kuruluyor.
+        entries = self.all_entries()
+        signature = self._build_signature(entries)
+        enriched = [self._enrich_cached(e) for e in entries]
+        for idx, item in enumerate(enriched):
+            item["_idx"] = idx
+        if getattr(self, "_cluster_signature", None) == signature:
+            groups = self._cluster_index
+        else:
+            groups = [
+                [m.get("_idx", 0) for m in cluster]
+                for cluster in cluster_entries(enriched, threshold=DEFAULT_CLUSTER_THRESHOLD)
+            ]
+            self._cluster_index = groups
+            self._cluster_signature = signature
+        threshold = float(self.quiet_threshold)
+        cards = [
+            build_digest([enriched[i] for i in group if i < len(enriched)],
+                         quiet_threshold=threshold)
+            for group in groups
+            if group
+        ]
+
+        def _sort_key(card: Dict[str, Any]):
+            newest = max((float(m.get("mtime", 0.0)) for m in card["members"]), default=0.0)
+            return (not card.get("pinned"), -(card["urgency"] + card["importance"]), -newest)
+
+        cards.sort(key=_sort_key)
+        self._result = {
+            "cards": [c for c in cards if not c["quiet"]],
+            "quiet": [c for c in cards if c["quiet"]],
+            "total": len(enriched),
+            "quiet_threshold": threshold,
+        }
         while self.cards_layout.count() > 1:
             item = self.cards_layout.takeAt(0)
             widget = item.widget() if item else None
@@ -1149,28 +1249,32 @@ class ReportCenterWidget(QFrame):
         self.orchestrator_answer.emit(office, answer)
         return answer
 
+    # Faz 9: asagidaki toplu eylemler tek dosya yazimi yapar (`set_many`).
+    # Eskiden her yol icin ayri `save()` cagriliyordu; "Tumunu okundu say"
+    # yuzlerce tam JSON yazimi uretip ana is parcacigini kilitliyordu.
+
     def mark_paths_read(self, paths: Iterable[str]) -> None:
-        for path in paths:
-            self.store.mark_read(path, True)
+        self.store.set_many(list(paths), read=True)
         self.refresh()
 
     def toggle_pin_paths(self, paths: Iterable[str]) -> bool:
         paths = list(paths)
         target = not all(self.store.is_pinned(p) for p in paths) if paths else False
-        for path in paths:
-            self.store.set_pinned(path, target)
+        self.store.set_many(paths, pinned=target)
         self.refresh()
         return target
 
     def archive_paths(self, paths: Iterable[str]) -> None:
-        for path in paths:
-            self.store.set_archived(path, True)
+        self.store.set_many(list(paths), archived=True, read=True)
         self.refresh()
 
     def mark_all_read(self) -> None:
-        for card in self._result["cards"] + self._result["quiet"]:
-            for member in card.get("members", []):
-                self.store.mark_read(member.get("path"), True)
+        paths = [
+            member.get("path")
+            for card in self._result["cards"] + self._result["quiet"]
+            for member in card.get("members", [])
+        ]
+        self.store.set_many(paths, read=True)
         self.refresh()
 
     def prune_missing(self) -> int:
@@ -1187,7 +1291,9 @@ class ReportCenterWidget(QFrame):
 
     @Slot(str)
     def _on_reports_updated(self, _skill: str) -> None:
-        self.reload_from_vault()
+        # Faz 9: sinyal firtinasinda (bir gorev N rapor yazar) her seferinde
+        # 703 dosyayi okumak yerine 1,5 sn birlestirme + isci is parcacigi.
+        self.schedule_reload()
 
     @Slot(str, str)
     def _on_mailbox_updated(self, _owner_kind: str, _owner_name: str) -> None:
@@ -1200,10 +1306,60 @@ class ReportCenterWidget(QFrame):
     #: kullanicinin "toplam raporlar gorunmuyor" dedigi durumun kok nedeni.
     VAULT_RELOAD_LIMIT = 5000
 
+    #: Sinyal birlestirme penceresi (ms).
+    RELOAD_DEBOUNCE_MS = 1500
+
     def reload_from_vault(self) -> None:
+        """Senkron tazeleme (testler ve ilk yukleme icin)."""
         from entropy.ui.widgets.report_inbox import collect_recent_entries
 
         self.set_entries(collect_recent_entries(limit=self.VAULT_RELOAD_LIMIT))
+
+    def schedule_reload(self) -> None:
+        """Kasadan tazelemeyi geciktirir; ana is parcacigi bloklanmaz."""
+        timer = getattr(self, "_reload_timer", None)
+        if timer is None:
+            self.reload_from_vault()
+            return
+        timer.start(self.RELOAD_DEBOUNCE_MS)
+
+    @Slot()
+    def _start_background_reload(self) -> None:
+        """Debounce doldu: kasa taramasini havuz is parcaciginda kosar."""
+        if self._reload_running:
+            # Kosan tarama bitince yeniden zamanlanir (asagida).
+            self._reload_again = True
+            return
+        self._reload_running = True
+        self._reload_again = False
+        limit = self.VAULT_RELOAD_LIMIT
+        widget = self
+
+        class _ReloadJob(QRunnable):
+            def run(self):  # noqa: D102 - isci is parcacigi
+                from entropy.ui.widgets.report_inbox import collect_recent_entries
+
+                try:
+                    entries = collect_recent_entries(limit=limit)
+                except Exception:
+                    entries = None
+                # Qt nesnelerine yalnizca ana is parcacigindan dokunulur.
+                bus.invoke_on_main(partial(widget._apply_background_reload, entries))
+
+        QThreadPool.globalInstance().start(_ReloadJob())
+
+    def _apply_background_reload(self, entries) -> None:
+        """Isci sonucu ana is parcaciginda uygulanir."""
+        try:
+            self._reload_running = False
+            if entries is not None:
+                self.set_entries(entries)
+            if getattr(self, "_reload_again", False):
+                self._reload_again = False
+                self.schedule_reload()
+        except RuntimeError:
+            # Widget bu arada silinmis olabilir; sessizce cik.
+            return
 
     def closeEvent(self, event):  # noqa: N802
         # Faz 8: tekrarli kapanislarda ayni sinyali yeniden cozmek

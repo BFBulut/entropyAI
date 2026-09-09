@@ -27,7 +27,8 @@ from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
 # Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
 COLUMN_MIN_WIDTH = 190
 from entropy.ui.widgets.agents_widget import (
-    STATUS_COLORS, STATUS_LABELS, call_flex, load_board, spec_field
+    STATUS_COLORS, STATUS_LABELS, call_flex, list_cards_for, load_board,
+    model_belongs_to, models_for_provider, spec_field
 )
 
 # Kanban sütunları: (anahtar, başlık). `failed` ayrı sütun değil, İnceleme'de rozet.
@@ -192,7 +193,11 @@ class TaskDetailPanel(QFrame):
         self.provider_combo.setToolTip("Sağlayıcı (boş = ajanın varsayılanı)")
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
-        self.model_combo.setToolTip("Model (boş = sağlayıcı varsayılanı)")
+        self.model_combo.setToolTip("Model (boş = oturumun modelini miras al)")
+        # Faz 9: model listesi seçili sağlayıcıya bağlı. Kutuda her iki
+        # sağlayıcının adları birlikte durunca kullanıcı agy kartına Claude
+        # modeli yazıyor, koşu geçersiz `--model` ile başlıyordu.
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self.effort_combo = QComboBox()
         self.effort_combo.addItems(["", "low", "medium", "high"])
         self.effort_combo.setToolTip("Efor düzeyi")
@@ -252,6 +257,7 @@ class TaskDetailPanel(QFrame):
             widget.setEnabled(has_card)
         if has_card:
             self.provider_combo.setCurrentText(str(spec_field(card, "provider", "") or ""))
+            self._on_provider_changed(self.provider_combo.currentText())
             self.model_combo.setCurrentText(str(spec_field(card, "model", "") or ""))
             notes = str(spec_field(card, "notes", "") or "")
             effort = str(spec_field(card, "effort", "") or "")
@@ -302,6 +308,28 @@ class TaskDetailPanel(QFrame):
 
     # --------------------------------------------------------- eylemler
 
+    def _on_provider_changed(self, provider: str) -> None:
+        """Sağlayıcıya ait model listesi (ilk girdi boş = oturumun modeli)."""
+        current = self.model_combo.currentText().strip()
+        bridge = getattr(self.board_widget, "bridge", None)
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItem("")
+        provider = (provider or "").strip()
+        if provider:
+            for m in models_for_provider(provider, bridge):
+                self.model_combo.addItem(m)
+        if current and (not provider or model_belongs_to(provider, current)):
+            self.model_combo.setCurrentText(current)
+        else:
+            self.model_combo.setCurrentText("")
+        self.model_combo.blockSignals(False)
+
+    def model_choices(self) -> List[str]:
+        """Test için: kutudaki model adları (boş girdi hariç)."""
+        return [self.model_combo.itemText(i) for i in range(self.model_combo.count())
+                if self.model_combo.itemText(i)]
+
     def settings_payload(self) -> Dict[str, Any]:
         """Formdaki koşum ayarları (test ve uygulama için tek kaynak)."""
         try:
@@ -351,7 +379,8 @@ class TaskBoardWidget(QFrame):
 
     card_selected = Signal(str)
 
-    def __init__(self, parent=None, board: Any = None, compact: bool = False, office: str = ""):
+    def __init__(self, parent=None, board: Any = None, compact: bool = False,
+                 office: str = "", bridge: Any = None):
         """
         `office` verilirse pano yalnızca o ofise ait kartları gösterir (Agent Desk
         Kartlar sekmesi) ve kartlar üst/alt (parent/children) ağacı olarak sıralanır.
@@ -362,6 +391,8 @@ class TaskBoardWidget(QFrame):
         self.board = board if board is not None else load_board()
         self.compact = compact
         self.office = office or ""
+        # Etkin köprü (varsa): detay panelindeki model listesi canlı okunur.
+        self.bridge = bridge
         self.selected_id: str = ""
         # Faz 7: Projeler sekmesinin kart süzgeci ("" = süzgeç yok).
         self.project_filter: str = ""
@@ -471,12 +502,9 @@ class TaskBoardWidget(QFrame):
         self.refresh_cards()
 
     def list_cards(self) -> List[Any]:
-        if self.board is None:
-            return []
-        try:
-            cards = list(self.board.list() or [])
-        except Exception:
-            return []
+        # Faz 9: kartlar iki kökte. Ofissiz pano = Entropy kapsamı (Zen
+        # "Görevler" sekmesi), ofisli pano = yalnızca o ofisin kart klasörü.
+        cards = list_cards_for(self.board, self.office)
         if self.office:
             cards = [c for c in cards if str(spec_field(c, "office", "")) == self.office]
         # Faz 7: Projeler sekmesinden gelen süzgeç. Boşsa tüm kartlar görünür.
@@ -714,10 +742,13 @@ class TaskBoardWidget(QFrame):
 class CompactTaskListWidget(QFrame):
     """Chat modu için kompakt görev listesi + açık görev rozeti."""
 
-    def __init__(self, parent=None, board: Any = None):
+    def __init__(self, parent=None, board: Any = None, office: str = ""):
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.board = board if board is not None else load_board()
+        # Chat kipinde kompakt liste Entropy kapsamındadır (office=""); Desk
+        # bir gün bu listeyi kullanırsa ofis adı geçilir.
+        self.office = office or ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -754,13 +785,11 @@ class CompactTaskListWidget(QFrame):
     def _on_cards_updated(self, _payload: str = "") -> None:
         self.refresh_cards()
 
+    def list_cards(self) -> List[Any]:
+        return list_cards_for(self.board, self.office)
+
     def open_count(self) -> int:
-        cards = []
-        if self.board is not None:
-            try:
-                cards = list(self.board.list() or [])
-            except Exception:
-                cards = []
+        cards = self.list_cards()
         return sum(
             1 for c in cards
             if str(spec_field(c, "status", "")) in {"backlog", "running", "review", "failed"}
@@ -773,12 +802,7 @@ class CompactTaskListWidget(QFrame):
             if widget is not None:
                 widget.setParent(None)
                 widget.deleteLater()
-        cards = []
-        if self.board is not None:
-            try:
-                cards = list(self.board.list() or [])
-            except Exception:
-                cards = []
+        cards = self.list_cards()
         open_n = self.open_count()
         color = RT["accent_warn"] if open_n else RT["text_dim"]
         self.count_badge.setText(

@@ -28,7 +28,7 @@ from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
 from entropy.ui.widgets.report_inbox import InboxBadge
 from entropy.ui.widgets.command_palette import install_command_palette
-from entropy.ui.widgets.flow_layout import FlowHeaderFrame
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame, fit_combo_to_contents
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
@@ -42,6 +42,10 @@ from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 from entropy.ui.widgets.tasks_widget import TasksWidget
 from entropy.ui.widgets.skills_widget import SkillsWidget
 from entropy.ui.widgets.notification_pill import NotificationPillWidget
+from entropy.ui.widgets.slash_prompt import (
+    CLI_PASSTHROUGH, close_matches, strip_skill_tokens, unknown_slash_html,
+    unknown_slash_token,
+)
 from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
@@ -187,12 +191,11 @@ class ZenModeWindow(QMainWindow):
         # yan yana kalıyor, araya sanki bir ayraç düşmüş gibi görünüyordu.
         # Boşken ne olduğunu yazan bir yer tutucu koyarız (işlev değişmez).
         apply_model_placeholder(self.model_combo, models)
-        # Faz 8: en uzun model adi combo'yu 300 px'e sisiriyordu.
-        self.model_combo.setMaximumWidth(180)
-        self.model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.model_combo.setMinimumContentsLength(10)
+        # Faz 9: sabit 180 px yerine en uzun model adina gore olcu (Chat ile ayni kural).
+        fit_combo_to_contents(self.model_combo, min_width=180)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
+        fit_combo_to_contents(self.provider_combo)
 
         # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
         self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
@@ -480,6 +483,11 @@ class ZenModeWindow(QMainWindow):
         # Chat Browser
         self.chat_browser = QTextBrowser()
         self.chat_browser.setOpenExternalLinks(False)
+        # Faz 9: `setOpenLinks(False)` olmadan QTextBrowser `entropy-report://`
+        # bağlantısını kendi belgesi sanıp yüklemeye çalışıyor; günlüğe
+        # "No document for entropy-report://..." uyarısı basıyor ve sohbet
+        # görünümünü boşaltabiliyordu. Bağlantıyı yalnızca biz açıyoruz.
+        self.chat_browser.setOpenLinks(False)
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
@@ -587,6 +595,8 @@ class ZenModeWindow(QMainWindow):
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)
+        # Ek-1 (Faz 9): koprunun ayrintili token sozlugu (oturum/tur/onbellek).
+        bus.token_usage_detail.connect(self._on_token_detail)
         bus.core_state_changed.connect(self._update_status)
         bus.node_selected.connect(self._on_node_selected)
         bus.agent_turn_started.connect(self._on_turn_started)
@@ -781,8 +791,15 @@ class ZenModeWindow(QMainWindow):
             self.badge_model.setText(f"[{clean_name}]")
 
     def _on_model_selected(self, model_name: str):
+        # Faz 9: kutu serbest metin kabul ediyor; yalnızca ETKİN sağlayıcıya
+        # ait bir ad köprüye geçirilir. Köprünün yazma kapısı (set_model)
+        # reddederse kutu eski değerine döner — aksi halde arayüz seçili
+        # görünen ama hiç uygulanmayan bir model gösteriyordu.
         if model_name and model_name != self.bridge.selected_model:
-            self.bridge.set_model(model_name)
+            from entropy.ui.widgets.ui_polish import accept_model_selection
+
+            if not accept_model_selection(self.bridge, self.model_combo, model_name):
+                return
         if hasattr(self, "badge_model"):
             clean_name = (model_name or config.model_fallback_name).strip("[]")
             self.badge_model.setText(f"[{clean_name}]")
@@ -810,6 +827,8 @@ class ZenModeWindow(QMainWindow):
             self.model_combo.setCurrentText(self.bridge.selected_model)
         finally:
             self.model_combo.blockSignals(False)
+        # Faz 9: yeni saglayicinin model adlari daha uzun olabilir; kutuyu yeniden olc.
+        fit_combo_to_contents(self.model_combo, min_width=180)
 
 
     @Slot(int)
@@ -822,6 +841,12 @@ class ZenModeWindow(QMainWindow):
         self.tokens_badge.setText(text)
         self.tokens_badge.setToolTip(tip)
         self._apply_context_badge()
+
+    @Slot(dict)
+    def _on_token_detail(self, detail: dict):
+        """Koprunun `usage_badge_fields()` sozluguyle rozeti tazeler."""
+        self._last_token_detail = dict(detail or {})
+        self._update_tokens(int(self._last_token_detail.get("session", 0) or 0))
 
     @Slot(float)
     def _on_context_pressure(self, ratio: float):
@@ -1054,6 +1079,8 @@ class ZenModeWindow(QMainWindow):
         # Check slash command handling (supports multiple slash commands in prompt)
         matched_cmds: List[SlashCommand] = []
         active_skill = None
+        # Faz 9: istemden temizlenecek yetenek slash token'ları.
+        skill_tokens_used: List[str] = []
         slash_tokens = re.findall(r'(?:^|\s)/([a-zA-Z0-9_\-:]+)', prompt)
 
         if slash_tokens:
@@ -1110,6 +1137,18 @@ class ZenModeWindow(QMainWindow):
                     if c.category == "skill":
                         detected_skill = c.metadata.get("skill_name") or tok
                         active_skill = detected_skill
+                        skill_tokens_used.append(tok)
+
+            # Faz 9: bilinmeyen slash CLI'a gitmesin (bkz. slash_prompt).
+            unknown = unknown_slash_token(prompt, set(cmds_by_token), CLI_PASSTHROUGH)
+            if unknown:
+                self._append_chat_message(
+                    "Entropy AI",
+                    unknown_slash_html(unknown, close_matches(unknown, cmds_by_token)),
+                    is_system=True,
+                )
+                self.chat_input.clear()
+                return
 
             if matched_cmds:
                 status_parts = []
@@ -1165,6 +1204,18 @@ class ZenModeWindow(QMainWindow):
         self._clear_staged_images()
 
         actual_prompt = prompt
+        # Faz 9: yetenek slash'ı arayüzde tüketildi; token istemde kalırsa CLI
+        # onu komut sanıp "Unknown command" döndürüyor.
+        if skill_tokens_used:
+            actual_prompt = strip_skill_tokens(actual_prompt, skill_tokens_used)
+            if not actual_prompt:
+                self._append_chat_message(
+                    "Entropy AI",
+                    f"🎯 <b>Yetenek etkin:</b> {active_skill or skill_tokens_used[0]}"
+                    " — şimdi ne yapmasını istediğinizi yazın.",
+                    is_system=True,
+                )
+                return
         if images_to_send:
             actual_prompt += "\n" + "\n".join([f"[Eklenen Görsel Dosyası: {p}]" for p in images_to_send])
 
@@ -1299,6 +1350,7 @@ class ZenModeWindow(QMainWindow):
         signals = [
             (bus.model_detected, self._update_model_badge),
             (bus.token_usage_updated, self._update_tokens),
+            (bus.token_usage_detail, self._on_token_detail),
             (bus.core_state_changed, self._update_status),
             (bus.node_selected, self._on_node_selected),
             (bus.agent_turn_started, self._on_turn_started),

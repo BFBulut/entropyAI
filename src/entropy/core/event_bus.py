@@ -19,6 +19,12 @@ class EntropyEventBus(QObject):
     token_chunk_received = Signal(str)   # streaming text chunk
     terminal_output_received = Signal(str) # stdout/stderr line
     token_usage_updated = Signal(int)    # total tokens consumed
+    # Token kaleminin AYRIŞTIRILMIŞ hâli (Faz 9 / Ek-1). Anahtarlar:
+    # session (oturum ham toplamı), turn (YALNIZCA son tur), cache_read
+    # (önbellek okumasının oturum toplamı), cost_weighted (cache_read 0,1×
+    # sayılan maliyet toplamı). Tek `int` sinyali "77k (+77k)" gibi yanıltıcı
+    # bir rozet üretiyordu; ayrıştırma köprüde yapılır, arayüz yalnızca basar.
+    token_usage_detail = Signal(dict)
     agent_turn_started = Signal(str)     # prompt
     agent_turn_completed = Signal(str)   # final response
 

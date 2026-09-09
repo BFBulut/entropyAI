@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tempfile
 from typing import List, Optional
 from pathlib import Path
 
@@ -129,6 +130,135 @@ DEFAULT_PROVIDER_EFFORT = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Model adı doğrulama (Faz 9.1 — üç kapı)
+#
+# Doğrulama köprülerde DEĞİL burada: `load_settings()` açılışta zehirli
+# `provider_models` değerlerini onarabilmeli, ama köprüleri içe aktaramaz
+# (döngüsel içe aktarım). Köprüler bu yardımcıları çağırır; canlı model listesi
+# (ör. `agy models`) varsa `extra` parametresiyle genişletilir.
+# ---------------------------------------------------------------------------
+
+# `claude --model` tam adları.
+CLAUDE_MODEL_NAMES = ("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5")
+
+# `claude --model` takma adları (belge: code.claude.com/docs/en/model-config).
+CLAUDE_MODEL_ALIAS_NAMES = (
+    "opus", "sonnet", "haiku", "fable", "best", "default", "opusplan",
+)
+
+# agy'nin sunduğu, adı "claude-" ile başlayan modeller. Bu adlar HEM agy hem
+# Claude süzgecinden geçebilir; ayrım `agy models` canlı listesiyle yapılır,
+# liste yoksa bu sabit devreye girer (yoksa agy ayarı yanlışlıkla onarılırdı).
+AGY_CLAUDE_MODEL_NAMES = (
+    "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
+)
+
+# agy model adlarının bilinen ön ekleri (canlı liste alınamadığında).
+AGY_MODEL_PREFIXES = ("gemini-", "gpt-")
+
+
+def _strip_context_suffix(name: str) -> str:
+    """`opus[1m]` gibi bağlam penceresi ekini ayırır."""
+    low = (name or "").strip().lower()
+    if low.endswith("[1m]"):
+        low = low[:-4]
+    return low
+
+
+def is_claude_model_name(name: str) -> bool:
+    """Ad `claude --model`e verilebilir mi (tam ad, takma ad ya da `[1m]` eki)."""
+    low = _strip_context_suffix(name)
+    if not low:
+        return False
+    if low in CLAUDE_MODEL_ALIAS_NAMES:
+        return True
+    # Tam adlar: "claude-" ile başlayan her ad kabul edilir; CLI yeni sürüm
+    # adlarını da tanır ve burada beyaz liste tutmak her model çıkışında
+    # Entropy'yi kilitlerdi.
+    return low.startswith("claude-")
+
+
+def is_agy_model_name(name: str, extra: Optional[List[str]] = None) -> bool:
+    """Ad `agy --model`e verilebilir mi (canlı liste + bilinen ön ekler)."""
+    low = (name or "").strip().lower()
+    if not low:
+        return False
+    for m in extra or []:
+        if low == str(m).strip().lower():
+            return True
+    if low.startswith(AGY_MODEL_PREFIXES):
+        return True
+    return low in AGY_CLAUDE_MODEL_NAMES
+
+
+def is_valid_model_for(provider: str, name: str, extra: Optional[List[str]] = None) -> bool:
+    """Sağlayıcıya göre model adı süzgeci (bilinmeyen sağlayıcı: her ad geçer)."""
+    p = (provider or "").strip().lower()
+    if p == "claude":
+        return is_claude_model_name(name)
+    if p == "agy":
+        return is_agy_model_name(name, extra=extra)
+    return bool(name)
+
+
+def default_provider() -> str:
+    """
+    Yeni kart/ajan/ofis için varsayılan sağlayıcı — tek gerçek kaynak.
+
+    Sabit `"agy"` yerine bunu çağırın: agy kurulu değilken doğan her kayıt
+    `provider: agy` ile doğup ilk koşuda ölüyordu (Faz 9 araştırması §1.9).
+    """
+    p = (getattr(config, "provider", "") or "").strip().lower()
+    return p if p in ("agy", "claude") else "agy"
+
+
+def claude_workspace_path() -> Path:
+    """
+    Claude Code'un koşacağı NÖTR çalışma dizini (Faz 9.2).
+
+    Claude Code proje kimliğini (bellek dizini, `.claude/agents`, git durumu)
+    literal cwd'den değil GIT KÖKÜNDEN çözüyor; depo içindeki bir alt klasör
+    kaçış sağlamıyor. Bu yüzden dizin bir git deposunun DIŞINDA olmalı: üst
+    dizinlerde `.git` görülürse geçici dizine düşülür.
+    """
+    raw = (getattr(config, "claude_workspace_dir", "") or "").strip()
+    base = Path(raw) if raw else (Path.home() / ".entropy" / "workspace")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        base = Path(tempfile.gettempdir()) / "entropy_workspace"
+        base.mkdir(parents=True, exist_ok=True)
+    if path_is_inside_git_repo(base):
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "Claude çalışma dizini bir git deposunun içinde (%s); "
+            "geçici dizine düşülüyor. Claude Code proje kimliğini git kökünden "
+            "çözdüğü için depo içi dizin izolasyonu bozar.",
+            base,
+        )
+        base = Path(tempfile.gettempdir()) / "entropy_workspace"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return base
+
+
+def path_is_inside_git_repo(path: Path) -> bool:
+    """Yolun kendisinde ya da üst dizinlerinden birinde `.git` var mı."""
+    try:
+        p = Path(path).resolve()
+    except OSError:
+        return False
+    for candidate in [p, *p.parents]:
+        if (candidate / ".git").exists():
+            return True
+    return False
+
+
 class EntropyConfig(BaseModel):
     app_name: str = "Entropy AI"
     # Aktif CLI sağlayıcısı: "agy" (Antigravity) veya "claude" (Claude Code).
@@ -144,6 +274,16 @@ class EntropyConfig(BaseModel):
     # kullanıcının profili kullanılır — çünkü izole profile geçmek yeniden giriş
     # demektir ve bu kullanıcının açık kararı olmalı.
     claude_config_dir: str = ""
+    # "Entropy Saf Kip" (Faz 9.2): Claude Code kullanıcının kendi kurulumundan
+    # yalıtılır — varsayılan sistem istemi DEĞİŞTİRİLİR (eklenmez), kullanıcının
+    # MCP sunucuları/ayar dosyaları/yetenek kataloğu yüklenmez ve süreç git
+    # deposunun dışında koşar. Kapatıldığında Faz 8 davranışına
+    # (`--append-system-prompt-file` + proje dizininde cwd) dönülür; geri dönüş
+    # yolu bilinçli olarak tek ayar.
+    claude_isolated: bool = True
+    # Saf kipte Claude'un cwd'si. Boş = %USERPROFILE%\.entropy\workspace.
+    # Bir git deposunun içinde OLMAMALI (bkz. claude_workspace_path).
+    claude_workspace_dir: str = ""
     obsidian_vault_path: Path = Field(default_factory=_default_obsidian_vault)
     default_project_path: Path = Field(default_factory=lambda: APP_ROOT)
     default_mode: str = "floating"  # "floating", "zen", "chat"
@@ -186,6 +326,41 @@ class EntropyConfig(BaseModel):
         "gpt-oss-120b-medium",
     ]
 
+    def repair_provider_models(self) -> dict:
+        """
+        Zehirli `provider_models` girdilerini onarır (Faz 9.1 — göç kapısı).
+
+        Kullanıcının üst çubuktaki serbest metinli model kutusu, agy modelini
+        `provider_models["claude"]` alanına yazabiliyordu. Köprünün yedek değeri
+        de buradan okunduğu için yabancı-model koruması boşa çıkıyor ve her
+        Claude koşusu `unrecognized_model` ile ölüyordu. Onarım dönüş değeri
+        {sağlayıcı: (eski, yeni)}; boşsa hiçbir şey değişmedi.
+        """
+        repaired: dict = {}
+        models = self.provider_models if isinstance(self.provider_models, dict) else {}
+        for provider, default in DEFAULT_PROVIDER_MODELS.items():
+            current = str(models.get(provider) or "").strip()
+            if not current:
+                continue
+            if is_valid_model_for(provider, current):
+                continue
+            repaired[provider] = (current, default)
+            models[provider] = default
+        if repaired:
+            self.provider_models = models
+            import logging as _logging
+
+            for provider, (old, new) in repaired.items():
+                _logging.getLogger(__name__).warning(
+                    "Ayarlardaki model onarıldı: provider_models[%r] = %r "
+                    "(%r bu sağlayıcıya ait değil).", provider, new, old
+                )
+            try:
+                self.save_settings()
+            except Exception:
+                pass
+        return repaired
+
     def save_settings(self):
         """Persist user preferences to disk."""
         try:
@@ -203,6 +378,8 @@ class EntropyConfig(BaseModel):
                 "desk_geometry": self.desk_geometry,
                 "desk_auto_resume": self.desk_auto_resume,
                 "claude_config_dir": self.claude_config_dir,
+                "claude_isolated": self.claude_isolated,
+                "claude_workspace_dir": self.claude_workspace_dir,
             }
             # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
             # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
@@ -252,6 +429,11 @@ class EntropyConfig(BaseModel):
                     self.desk_auto_resume = data["desk_auto_resume"]
                 if isinstance(data.get("claude_config_dir"), str):
                     self.claude_config_dir = data["claude_config_dir"]
+                if isinstance(data.get("claude_isolated"), bool):
+                    self.claude_isolated = data["claude_isolated"]
+                if isinstance(data.get("claude_workspace_dir"), str):
+                    self.claude_workspace_dir = data["claude_workspace_dir"]
+                self.repair_provider_models()
         except Exception as e:
             print(f"[Entropy Config] Ayarlar okunamadı ({SETTINGS_FILE}): {e}", file=sys.stderr)
 

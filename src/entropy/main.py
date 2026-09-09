@@ -35,6 +35,13 @@ def main():
     app.setApplicationName(config.app_name)
     app.setQuitOnLastWindowClosed(False)
 
+    # Faz 9: uygulama font zincirine emoji yedegi. Kullanicinin sisteminde
+    # "Segoe UI Emoji" OpenType olarak cozulemedigi icin (gunlukte 176 satir
+    # `OpenType support missing`) rozetlerdeki emojiler ici bos kutu (tofu)
+    # ciziliyordu -- ust cubuktaki "bos kirmizi kare" buydu.
+    from entropy.ui.widgets.ui_polish import apply_emoji_font_fallback
+    apply_emoji_font_fallback(app)
+
     # Tek kopya: zaten çalışan bir kopya varsa onu öne getirip çık. Pencere
     # kapatılınca süreç tepside yaşadığı için ikinci başlatmalar aynı belleği
     # paylaşan kopyalar üretiyor ve donmaya yol açıyordu.

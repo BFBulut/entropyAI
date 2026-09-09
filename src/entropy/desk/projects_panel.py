@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
-from entropy.ui.widgets.agents_widget import load_board, spec_field
+from entropy.ui.widgets.agents_widget import list_cards_for, load_board, spec_field
 
 
 def load_desk_registry() -> Optional[Any]:
@@ -143,12 +143,12 @@ class ProjectsPanel(QFrame):
     def card_counts(self) -> Dict[str, Dict[str, int]]:
         """Proje -> {toplam, calisan, biten} sayaçları."""
         out: Dict[str, Dict[str, int]] = {}
-        if self.board is None:
+        if self.board is None or not self.office:
             return out
-        try:
-            cards = list(self.board.list() or [])
-        except Exception:
-            return out
+        # Faz 9: ofis kartları `Entropy/Desk/Offices/<ofis>/cards/` altında;
+        # `list()` (ofissiz) yalnızca Entropy kartlarını döndürdüğü için
+        # sayaçlar sıfır görünüyordu.
+        cards = list_cards_for(self.board, self.office)
         for card in cards:
             if self.office and str(spec_field(card, "office", "")) != self.office:
                 continue

@@ -113,6 +113,184 @@ def find_ghost_offices(vault_path: Optional[Path] = None) -> List[Dict[str, Any]
     return out
 
 
+def office_residue(
+    office: str, vault_path: Optional[Path] = None
+) -> Dict[str, List[str]]:
+    """
+    Bir ofisin, ofis klasörü DIŞINDA kalan izleri: wiki sorgu sayfaları + posta.
+
+    Teşhis §8: `dogrulama` ofisi arşive taşındıktan sonra
+    `Entropy/Wiki/queries/2026-09-09-dogrulama-readme-ozeti.md` geride kaldı ve
+    rapor taraması onu hâlâ rapor sayıyordu (wiki sorgu sayfaları `query`
+    türünde künye üretir). Ofis arşivlenirken bu izler de taşınmalı.
+
+    Eşleşme kuralı bilerek dar: dosya adı **tire ile ayrılmış bir alan** olarak
+    ofis adını içermeli (`-<ofis>-`, `<ofis>-…`, `…-<ofis>`). Kullanıcının elle
+    yazdığı, ofis adını cümle içinde geçiren sayfalar taşınmaz.
+    """
+    root = _entropy_dir(vault_path)
+    name = str(office or "").strip().lower()
+    out: Dict[str, List[str]] = {"queries": [], "mail": []}
+    if not name:
+        return out
+
+    queries_dir = root / "Wiki" / "queries"
+    if queries_dir.is_dir():
+        for page in sorted(queries_dir.glob("*.md")):
+            if f"-{name}-" in f"-{page.stem.lower()}-":
+                out["queries"].append(str(page))
+
+    inbox_dir = root / "Inbox"
+    if inbox_dir.is_dir():
+        import json as _json
+
+        for msg in sorted(inbox_dir.glob("*.json")):
+            try:
+                data = _json.loads(msg.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            parties = {
+                str(data.get("from") or "").strip().lower(),
+                str(data.get("to") or "").strip().lower(),
+            }
+            if name in parties:
+                out["mail"].append(str(msg))
+    return out
+
+
+def archive_office(
+    office: Any,
+    vault_path: Optional[Path] = None,
+    dry_run: bool = True,
+    date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bir ofisi arşive alır: ofis klasörü + wiki sorgu sayfaları + posta kayıtları.
+
+    `office` ofis adı ya da `find_*` çıktısındaki sözlük olabilir. Ofis klasörü
+    `archive_stale` ile taşınır (kuralları aynen geçerli: kasa dışı yol, zaten
+    arşivde olan yol ve künyesi doğan "gerçek ofis" reddedilir). Dosya izleri
+    ise `_archive/<tarih>/<ofis>-residue/{queries,mail}/` altına taşınır —
+    ofisin klasörünün İÇİNE değil, çünkü ofis klasörü hiç taşınmamış olabilir
+    (künyesi varsa `archive_stale` onu atlar) ve izler o durumda da temizlenmeli.
+    """
+    from entropy.memory.office_graph import desk_offices_dir
+
+    if isinstance(office, dict):
+        name = str(office.get("name") or "").strip()
+        office_path = Path(str(office.get("path") or "")) if office.get("path") else None
+    else:
+        name = str(office or "").strip()
+        office_path = None
+    if not name:
+        return {
+            "office": "",
+            "dry_run": bool(dry_run),
+            "folder": {"planned": [], "moved": [], "skipped": []},
+            "residue": {"planned": [], "moved": [], "skipped": []},
+            "count": 0,
+        }
+    if office_path is None:
+        office_path = desk_offices_dir(vault_path) / name
+
+    folder = archive_stale(
+        [str(office_path)] if office_path.is_dir() else [],
+        vault_path=vault_path,
+        dry_run=dry_run,
+        date=date,
+    )
+
+    root = _entropy_dir(vault_path)
+    stamp = date or datetime.date.today().isoformat()
+    residue_root = root / ARCHIVE_DIRNAME / stamp / f"{name}-residue"
+
+    residue = office_residue(name, vault_path=vault_path)
+    planned: List[Dict[str, str]] = []
+    skipped: List[Dict[str, str]] = []
+    for bucket, files in (("queries", residue["queries"]), ("mail", residue["mail"])):
+        for raw in files:
+            src = Path(raw)
+            if not src.is_file():
+                skipped.append({"path": raw, "reason": "dosya_degil"})
+                continue
+            if ARCHIVE_DIRNAME in src.resolve().parts:
+                skipped.append({"path": raw, "reason": "zaten_arsivde"})
+                continue
+            dst = residue_root / bucket / src.name
+            n = 2
+            while dst.exists() or any(p["dst"] == str(dst) for p in planned):
+                dst = residue_root / bucket / f"{src.stem}-{n}{src.suffix}"
+                n += 1
+            planned.append({"src": str(src), "dst": str(dst), "bucket": bucket})
+
+    moved: List[Dict[str, str]] = []
+    if not dry_run:
+        for plan in planned:
+            try:
+                Path(plan["dst"]).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(plan["src"], plan["dst"])
+                moved.append(plan)
+            except OSError as exc:  # pragma: no cover - dosya kilidi/izin
+                logger.warning("İz arşive taşınamadı (%s): %s", plan["src"], exc)
+                skipped.append({"path": plan["src"], "reason": f"tasima_hatasi: {exc}"})
+        # Wiki dizini taşınan sorgu sayfalarına ATIFTA bulunmayı sürdürüyordu:
+        # `Entropy/Wiki/index.md` içindeki `[[...]]` bağı arşive giden dosyaya
+        # işaret ediyor, Obsidian'da kırık bağ olarak duruyordu. `log.md` bir
+        # OLAY günlüğüdür (geçmiş kayıt), bilerek dokunulmaz.
+        pruned = prune_wiki_index(
+            [Path(m["src"]).stem for m in moved if m["bucket"] == "queries"],
+            vault_path=vault_path,
+        )
+        if pruned:
+            logger.info("Wiki dizininden %d kırık bağ temizlendi.", len(pruned))
+
+    return {
+        "office": name,
+        "archive_dir": str(root / ARCHIVE_DIRNAME / stamp),
+        "dry_run": bool(dry_run),
+        "folder": folder,
+        "residue": {"planned": planned, "moved": moved, "skipped": skipped},
+        "count": (len(folder.get("moved") or []) if not dry_run else len(folder.get("planned") or []))
+        + (len(moved) if not dry_run else len(planned)),
+    }
+
+
+def prune_wiki_index(slugs: Sequence[str], vault_path: Optional[Path] = None) -> List[str]:
+    """
+    `Entropy/Wiki/index.md` icinden verilen sorgu sayfalarinin baglarini siler.
+
+    Sorgu sayfasi arsive tasindiginda dizindeki `[[slug]]` satiri kaliyor ve
+    Obsidian'da kirik bag uretiyordu. Yalnizca ILGILI satirlar silinir; dosya
+    yoksa ya da eslesme yoksa hicbir sey yazilmaz.
+    """
+    wanted = {str(s).strip() for s in (slugs or []) if str(s).strip()}
+    if not wanted:
+        return []
+    index = _entropy_dir(vault_path) / "Wiki" / "index.md"
+    if not index.is_file():
+        return []
+    try:
+        lines = index.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return []
+    kept, removed = [], []
+    for line in lines:
+        hit = next((w for w in wanted if f"[[{w}]]" in line), None)
+        if hit is not None:
+            removed.append(hit)
+            continue
+        kept.append(line)
+    if not removed:
+        return []
+    try:
+        index.write_text("".join(kept), encoding="utf-8")
+    except OSError:
+        return []
+    return removed
+
+
 def archive_stale(
     paths: Sequence[Any],
     vault_path: Optional[Path] = None,

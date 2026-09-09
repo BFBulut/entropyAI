@@ -119,6 +119,59 @@ CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE = True
 SYSTEM_PROMPT_FILE_FLAG = "--append-system-prompt-file"
 SYSTEM_CONTEXT_BLOCK_HEADER = "[SİSTEM BAĞLAMI]"
 
+# "Entropy Saf Kip" bayrağı: varsayılan sistem istemini EKLEMEZ, DEĞİŞTİRİR.
+# `--help` çıktısında belgesiz ama ikilide gerçek; kontrol probuyla ayrıldı:
+#   claude -p x --system-prompt-file /yok.txt
+#     -> "Error: System prompt file not found: ..."   (bayrak TANINIYOR)
+#   claude --zzz-bogus-flag
+#     -> "error: unknown option '--zzz-bogus-flag'"   (tanınmayan bayrak)
+# Prob model çağırmadan hata verdiği için kota harcamaz.
+REPLACE_SYSTEM_PROMPT_FILE_FLAG = "--system-prompt-file"
+
+# Saf kipte argv'ye giren izolasyon bayrakları (hepsi `claude --help` ile
+# doğrulandı; alıntılar Faz 9 araştırma raporu §2.2'de):
+#   --strict-mcp-config   "Only use MCP servers from --mcp-config, ignoring all
+#                          other MCP configurations"
+#   --setting-sources     "Comma-separated list of setting sources to load
+#                          (user, project, local)."  -> "" = hiçbiri
+#   --disable-slash-commands  "Disable all skills"  (32 yetenek kataloğu ~3.8k tok)
+#   --tools               "Specify the list of available tools from the built-in
+#                          set. Use \"\" to disable all tools, \"default\" ..."
+#   --disallowedTools     "Comma or space-separated list of tool names to deny";
+#                          "mcp__*" her MCP aracını kaldırır
+#   --agents <json>       "JSON object defining custom agents"
+#   --fallback-model      "Enable automatic fallback to specified model(s) when
+#                          the default model is overloaded or not available"
+# `--bare` BİLEREK KULLANILMAZ: abonelik oturumunu (OAuth/keychain) hiç okumaz,
+# ANTHROPIC_API_KEY ister. Kullanıcının kimliği claude.ai aboneliği olduğu için
+# saf kip `--bare` ile kurulamaz.
+ISOLATION_FORBIDDEN_FLAGS = ("--bare",)
+
+# Sohbet turunun araç seti. Salt okuma varsayılan; yazma niyeti tespit edilen
+# turda düzenleme araçları eklenir. Varsayılan sistem istemi düştüğü için araç
+# kümesini daraltmak modelin yanlış araç seçmesini de engelliyor.
+CHAT_TOOLS_READONLY = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]
+CHAT_TOOLS_WRITE = ["Edit", "Write", "Bash"]
+
+# Kart izin kipine göre araç seti (`tools_policy` eşlemesiyle aynı anlam).
+# Anahtarlar `normalize_permission_mode` ÇIKTISIDIR (CLI'ın kabul ettiği adlar).
+CARD_TOOLS_BY_MODE = {
+    "plan": CHAT_TOOLS_READONLY,
+    "acceptEdits": CHAT_TOOLS_READONLY + CHAT_TOOLS_WRITE,
+    "auto": CHAT_TOOLS_READONLY + CHAT_TOOLS_WRITE,
+    "manual": CHAT_TOOLS_READONLY + CHAT_TOOLS_WRITE,
+    "dontAsk": CHAT_TOOLS_READONLY + CHAT_TOOLS_WRITE,
+    "bypassPermissions": CHAT_TOOLS_READONLY + CHAT_TOOLS_WRITE,
+}
+
+# Ana model kullanılamadığında otomatik düşülecek model.
+CLAUDE_FALLBACK_MODEL = "claude-sonnet-5"
+
+# `cache_read` token'ının maliyet ağırlığı. Anthropic önbellek okumasını taban
+# girdi fiyatının onda birine yakın fiyatlıyor; tek toplamda tam fiyat sayılınca
+# rozet 40k'lık bir önbellek okumasını 40k'lık taze girdi gibi gösteriyordu.
+CACHE_READ_COST_WEIGHT = 0.1
+
 # `claude --effort <level>`: --help çıktısında "Effort level for the current
 # session (low, medium, high, xhigh, max)" olarak belgeli.
 CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
@@ -152,6 +205,12 @@ CLAUDE_MODEL_ALIASES = {
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5",
+    # Belgeli ek takma adlar (code.claude.com/docs/en/model-config). `--model`
+    # bunları doğrudan kabul ediyor; Entropy tam ada çevirmez, geçerli sayar.
+    "fable": "claude-fable-5-1",
+    "best": "claude-opus-5",
+    "default": "claude-opus-5",
+    "opusplan": "claude-opus-5",
 }
 
 
@@ -263,9 +322,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        default_model = (
-            getattr(config, "provider_models", {}).get("claude") or CLAUDE_MODELS[0]
-        )
+        # OKUMA KAPISI (Faz 9.1). Yedek değerin KENDİSİ de doğrulanır: ayar
+        # dosyası zehirlendiğinde (`provider_models["claude"] = "gemini-…"`)
+        # yabancı-model koruması yedeğe düşüyor, yedek de zehirli olduğu için
+        # `--model gemini-3.1-pro-high` argv'ye giriyor ve her koşu
+        # `unrecognized_model` ile ölüyordu.
+        default_model = getattr(config, "provider_models", {}).get("claude") or ""
+        if not self._is_claude_model(default_model):
+            default_model = CLAUDE_MODELS[0]
         current = getattr(config, "selected_model", "") or ""
         # Ayarlardaki model başka bir sağlayıcıya aitse (ör. gemini-*) buraya
         # taşınmaz: geçersiz --model değeri süreci başlatmadan hataya düşürür.
@@ -290,6 +354,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         self.latest_cache_creation_tokens: int = 0
         self.session_total_tokens: int = 0
         self.session_cache_tokens: int = 0
+        # Maliyet ağırlıklı oturum toplamı: `cache_read` indirimli (0,1×) sayılır.
+        self.session_cost_tokens: int = 0
         self.session_turn_count: int = 0
         self.last_cumulative_usage: Dict[str, int] = {
             "input_tokens": 0,
@@ -318,6 +384,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._context_pressure_announced = False
+        # Son turda kullanılan sistem isteminin parmak izi (Faz 9.9). Değişirse
+        # `--resume` yapılmaz: snapshot açık olduğu için süren oturum eski
+        # istemi aynen taşır ve saf kip canlıda etkisiz görünürdü.
+        self._system_prompt_signature: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Yardımcılar
@@ -325,10 +395,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
     @staticmethod
     def _is_claude_model(name: str) -> bool:
-        if not name:
-            return False
-        low = name.lower()
-        return low.startswith("claude-") or low in CLAUDE_MODEL_ALIASES
+        """
+        Ad `claude --model`e verilebilir mi (Faz 9.1 — üç kapının süzgeci).
+
+        Gerçek karar `config.is_claude_model_name`'de: aynı süzgeci açılışta
+        `load_settings()` de kullanıyor ve köprüyü oradan içe aktaramaz.
+        Takma adlar (`opus`, `fable`, `best`, `opusplan`) ve `opus[1m]` gibi
+        bağlam ekleri de geçerli sayılır.
+        """
+        return config_module.is_claude_model_name(name)
 
     def find_claude_executable(self) -> str:
         """Claude Code CLI ikilisini PATH'te ya da npm global kurulumunda bulur."""
@@ -442,16 +517,45 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "raw": data,
         }
 
-    def set_model(self, model_name: str) -> None:
-        self.selected_model = model_name
-        self.current_model = model_name
-        config.selected_model = model_name
+    def set_model(self, model_name: str) -> bool:
+        """
+        YAZMA KAPISI (Faz 9.1): sağlayıcıya ait olmayan adı reddeder.
+
+        Üst çubuğun model kutusu düzenlenebilir; oraya elle yazılan bir agy
+        modeli eskiden doğrudan `provider_models["claude"]`e yazılıyordu ve
+        ayar dosyasını kalıcı olarak zehirliyordu. Reddedilen ad ayara YAZILMAZ,
+        köprünün modeli değişmez; kullanıcı yalnızca bir uyarı görür.
+        """
+        name = (model_name or "").strip()
+        if not self._is_claude_model(name):
+            bus.terminal_output_received.emit(
+                f"\n[Model Reddedildi]: '{model_name}' bir Claude modeli değil; "
+                f"seçim '{self.selected_model}' olarak kaldı.\n"
+            )
+            return False
+        self.selected_model = name
+        self.current_model = name
+        config.selected_model = name
         try:
-            config.provider_models["claude"] = model_name
+            config.provider_models["claude"] = name
         except Exception:
             pass
         config.save_settings()
-        bus.model_detected.emit(model_name)
+        bus.model_detected.emit(name)
+        return True
+
+    def model_for_run(self, model_name: Optional[str]) -> str:
+        """
+        Bu koşuda kullanılacak `--model` değeri (kart modeli > oturum modeli).
+
+        Kartın `model` alanı yürütmeye hiç geçmiyordu (araştırma §1.4); köprü
+        üst çubuğun modelini kullanıyordu. Yabancı ad buraya kadar gelirse
+        sessizce oturum modeline düşülür — argv'ye asla geçersiz ad girmez.
+        """
+        name = (model_name or "").strip()
+        if name and self._is_claude_model(name):
+            return name
+        return self.selected_model
 
     @staticmethod
     def describe_launch_error(exc: BaseException) -> str:
@@ -515,8 +619,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         self.latest_cache_read_tokens = 0
         self.session_total_tokens = 0
         self.session_cache_tokens = 0
+        self.session_cost_tokens = 0
         self.session_turn_count = 0
         self._context_pressure_announced = False
+        self._system_prompt_signature = None
         self._prompt_queue.clear()
         bus.token_usage_updated.emit(0)
         bus.chat_history_cleared.emit()
@@ -538,6 +644,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         append_system_prompt: Optional[str] = None,
         mcp_config: Optional[str] = None,
         max_steps: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        tools: Optional[List[str]] = None,
+        agents_json: Optional[str] = None,
     ) -> List[str]:
         """
         Başsız bir Claude Code çağrısının argv'sini kurar.
@@ -546,7 +656,25 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         birleştiğinde CLI ara olayları yalnızca ayrıntılı kipte yayınlar; onsuz
         akıştan tek bir `result` satırı gelir ve araç/düşünce telemetrisi hiç
         görünmez.
+
+        `system_prompt` (Faz 9.2) varsayılan sistem istemini DEĞİŞTİRİR
+        (`--system-prompt-file`); `append_system_prompt` ise ona EKLER. İkisi
+        birlikte verilirse — CLI da bunu reddeder — değiştirme kazanır ve ek
+        metin onun sonuna eklenir. Değiştirme yalnızca `config.claude_isolated`
+        açıkken uygulanır; kapalıyken Faz 8 davranışı (ekleme) aynen sürer, geri
+        dönüş yolu bilinçli olarak tek ayar.
         """
+        isolated = bool(getattr(config, "claude_isolated", False))
+        if system_prompt and not isolated:
+            # İzolasyon kapalı: değiştirme yerine eski ekleme yoluna dön.
+            append_system_prompt = system_prompt if not append_system_prompt else (
+                f"{system_prompt}\n\n{append_system_prompt}"
+            )
+            system_prompt = None
+        elif system_prompt and append_system_prompt:
+            system_prompt = f"{system_prompt}\n\n{append_system_prompt}"
+            append_system_prompt = None
+
         cmd = [
             self.find_claude_executable(),
             "-p", prompt,
@@ -554,14 +682,39 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "--verbose",
             "--permission-mode", normalize_permission_mode(mode),
         ]
-        if self.selected_model:
-            cmd.extend(["--model", self.selected_model])
+        run_model = self.model_for_run(model)
+        if run_model:
+            cmd.extend(["--model", run_model])
+            if isolated:
+                # Ana model aşırı yüklendiğinde tur ölmesin; belge: "Enable
+                # automatic fallback ... when the default model is overloaded
+                # or not available".
+                cmd.extend(["--fallback-model", CLAUDE_FALLBACK_MODEL])
         if project_dir is not None:
             cmd.extend(["--add-dir", str(project_dir)])
         for d in extra_dirs or []:
             cmd.extend(["--add-dir", str(d)])
         if agent:
             cmd.extend(["--agent", agent])
+        if system_prompt:
+            # DEĞİŞTİRME yolu: Claude Code'un kendi 12.4k karakterlik istemi
+            # (ve içindeki `# auto memory` bloğu) hiç gelmez. Metin her zaman
+            # dosyaya yazılır — argv'de taşınırsa `claude.CMD` sarmalayıcısı çok
+            # satırlı argümanı ilk satır sonunda keser.
+            path = (
+                self.write_system_prompt_file(system_prompt)
+                if CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE
+                else None
+            )
+            if path:
+                cmd.extend([REPLACE_SYSTEM_PROMPT_FILE_FLAG, str(path)])
+            elif len(system_prompt) <= SYSTEM_PROMPT_ARGV_LIMIT and "\n" not in system_prompt:
+                cmd.extend(["--system-prompt", system_prompt])
+            else:
+                # Yedek yol: dosya yazılamadı ve metin argv'ye sığmıyor. Kimliği
+                # kaybetmektense kullanıcı mesajının başına blok olarak göm.
+                p_idx = cmd.index("-p")
+                cmd[p_idx + 1] = build_system_context_block(system_prompt, cmd[p_idx + 1])
         if append_system_prompt:
             # Uzun sistem istemi argv'ye HİÇ girmez: bilişsel bağlam + ajan
             # manifesti buradan geçtiği için "command line is too long" hatası
@@ -581,7 +734,26 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     cmd.extend(["--append-system-prompt", append_system_prompt])
             else:
                 cmd.extend(["--append-system-prompt", append_system_prompt])
-        if mcp_config:
+        if isolated:
+            # Kullanıcının genel MCP sunucuları gelmez; yalnızca Entropy'nin
+            # kendi yapılandırması verilirse yüklenir. Entropy MCP'si yoksa
+            # araç ad alanı ayrıca `--disallowedTools "mcp__*"` ile kapatılır:
+            # ölçümde 119 araç adı ~2.4k token tutuyordu.
+            cmd.append("--strict-mcp-config")
+            if mcp_config:
+                cmd.extend(["--mcp-config", mcp_config])
+            else:
+                cmd.extend(["--disallowedTools", "mcp__*"])
+            # Kullanıcının user/project/local ayar dosyaları yüklenmez.
+            cmd.extend(["--setting-sources", ""])
+            # 32 yeteneklik katalog (~3.8k token) gelmez; Entropy yeteneklerini
+            # kendisi yönlendiriyor, CLI'ın slash ad alanına ihtiyacı yok.
+            cmd.append("--disable-slash-commands")
+            tool_list = list(tools) if tools else list(CHAT_TOOLS_READONLY)
+            cmd.extend(["--tools", ",".join(tool_list)])
+            if agents_json:
+                cmd.extend(["--agents", agents_json])
+        elif mcp_config:
             cmd.extend(["--mcp-config", mcp_config])
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
@@ -607,6 +779,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         effort = effort_m.group(1).lower() if effort_m else self.selected_effort
         if effort in CLAUDE_EFFORT_LEVELS:
             cmd.extend(["--effort", effort])
+        # Son süzgeç: `--bare` argv'ye ASLA girmez. Kullanıcının kimliği
+        # claude.ai aboneliği; bare kip OAuth/keychain okumaz ve
+        # ANTHROPIC_API_KEY ister, yani her tur ücretli API'ye kayardı.
+        for flag in ISOLATION_FORBIDDEN_FLAGS:
+            while flag in cmd:
+                cmd.remove(flag)
         return cmd
 
     # ------------------------------------------------------------------
@@ -618,6 +796,23 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         base = Path(tempfile.gettempdir()) / "entropy_claude_prompts"
         base.mkdir(parents=True, exist_ok=True)
         return base
+
+    def entropy_agents_json(self) -> Optional[str]:
+        """
+        `--agents` yükü: Entropy'nin kendi kadrosu (Desk ajanları hariç).
+
+        İzole kipte `--setting-sources ""` verildiği için CLI kullanıcının ve
+        projenin `.claude/agents` dosyalarını okumaz; derlenmiş kadro yalnızca
+        bu bayrakla o tura girer. Kadro boşsa None döner ve bayrak eklenmez:
+        boş bir JSON nesnesi bile argv'de gereksiz yer tutuyordu.
+        """
+        try:
+            from entropy.agents.compile import claude_agents_json
+
+            return claude_agents_json() or None
+        except Exception:
+            # Kadro okunamadıysa tur yine de koşar: `--agents` sadece bir ek.
+            return None
 
     def write_system_prompt_file(self, text: str) -> Optional[Path]:
         """
@@ -637,10 +832,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
     @staticmethod
     def system_prompt_file_in(cmd: List[str]) -> Optional[str]:
         """argv'de sistem istemi dosyası varsa yolunu verir (temizlik için)."""
-        try:
-            return cmd[cmd.index(SYSTEM_PROMPT_FILE_FLAG) + 1]
-        except (ValueError, IndexError):
-            return None
+        for flag in (SYSTEM_PROMPT_FILE_FLAG, REPLACE_SYSTEM_PROMPT_FILE_FLAG):
+            try:
+                return cmd[cmd.index(flag) + 1]
+            except (ValueError, IndexError):
+                continue
+        return None
 
     @classmethod
     def system_prompt_text_in(cls, cmd: List[str]) -> str:
@@ -651,10 +848,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         konumda arayan her çağıran (testler, tanılama) tek bir yerden okusun
         diye burada çözülür.
         """
-        try:
-            return cmd[cmd.index("--append-system-prompt") + 1]
-        except (ValueError, IndexError):
-            pass
+        for flag in ("--append-system-prompt", "--system-prompt"):
+            try:
+                return cmd[cmd.index(flag) + 1]
+            except (ValueError, IndexError):
+                continue
         path = cls.system_prompt_file_in(cmd)
         if path:
             try:
@@ -691,6 +889,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         try:
             sp_idx = cmd.index("--append-system-prompt")
         except ValueError:
+            self._drop_agents_json_if_too_long(cmd)
             return
         system_prompt = cmd[sp_idx + 1]
         if CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE:
@@ -698,6 +897,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             if path:
                 cmd[sp_idx] = SYSTEM_PROMPT_FILE_FLAG
                 cmd[sp_idx + 1] = str(path)
+                self._drop_agents_json_if_too_long(cmd)
                 return
         # Yedek yol: bayrak yok (ya da dosya yazılamadı) -> sistem istemi
         # kullanıcı mesajının başına gömülür, argv'de hiç metin kalmaz.
@@ -705,8 +905,42 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         try:
             p_idx = cmd.index("-p")
         except ValueError:
+            self._drop_agents_json_if_too_long(cmd)
             return
         cmd[p_idx + 1] = build_system_context_block(system_prompt, cmd[p_idx + 1])
+        self._drop_agents_json_if_too_long(cmd)
+
+    @staticmethod
+    def _drop_agents_json_if_too_long(cmd: List[str]) -> bool:
+        """
+        Sinir hala asiliyorsa `--agents <json>` argv'den dusurulur (Ek-2, Faz 9).
+
+        `--agents` yuku `claude_agents_json()` ile uretilir ve kadro buyudukce
+        binlerce karaktere cikar; `argv_length` onu sayiyor ama
+        `enforce_argv_limit` yalnizca sistem istemini bosaltiyordu. Kadro tek
+        basina siniri asinca islem "command line is too long" ile oluyordu.
+        Alt ajan cagrisi bir EK'tir: dusurulunce tur yine kosar, yalnizca
+        `--agents` kadrosu gelmez. Dusurme gunluge yazilir.
+        """
+        if not argv_too_long(cmd):
+            return False
+        try:
+            idx = cmd.index("--agents")
+        except ValueError:
+            return False
+        dropped = cmd[idx + 1] if idx + 1 < len(cmd) else ""
+        del cmd[idx : idx + 2]
+        try:
+            import logging
+
+            logging.getLogger("entropy.claude_bridge").warning(
+                "argv siniri asildi: --agents yuku dusuruldu (%d karakter, "
+                "kalan argv %d/%d)",
+                len(dropped), argv_length(cmd), ARGV_TOTAL_SAFE_LIMIT,
+            )
+        except Exception:
+            pass
+        return True
 
     def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
         """
@@ -911,6 +1145,35 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
     # Token muhasebesi
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def weighted_turn_tokens(usage: Dict[str, int]) -> int:
+        """
+        Turun MALİYET ağırlıklı token toplamı (`cache_read` 0,1×).
+
+        Ham toplam kullanıcıyı yanıltıyordu: ölçülen bir turda 42k'lık toplamın
+        34,9k'sı önbellek okumasıydı ve önbellek okuması taban girdi fiyatının
+        onda birine yakın. Rozet ham toplamı göstermeye devam eder; bu değer
+        "gerçek maliyet" satırı içindir.
+        """
+        cache_read = int(usage.get("cache_read_tokens", 0) or 0)
+        total = int(usage.get("total_tokens", 0) or 0)
+        return int(round(max(0, total - cache_read) + cache_read * CACHE_READ_COST_WEIGHT))
+
+    def usage_badge_fields(self) -> Dict[str, int]:
+        """
+        Rozetin okuyacağı token alanları (tek yerde, tek anlam).
+
+        `session` oturum toplamı, `turn` YALNIZCA son tur, `cache_read` önbellek
+        okumasının oturum toplamı, `cost_weighted` indirimli toplam.
+        """
+        with self._state_lock:
+            return {
+                "session": int(self.session_total_tokens),
+                "turn": int(self.total_tokens_used),
+                "cache_read": int(self.session_cache_tokens),
+                "cost_weighted": int(self.session_cost_tokens),
+            }
+
     def _apply_chat_usage(self, usage: Dict[str, int], cost: float) -> None:
         if not usage:
             return
@@ -926,7 +1189,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             turn_total = usage.get("total_tokens", 0)
             self.session_total_tokens += turn_total
             self.session_cache_tokens += usage.get("cache_read_tokens", 0)
-            self.total_tokens_used = self.session_total_tokens
+            # `total_tokens_used` SON TURUN toplamıdır (Ek-1). Eskiden oturum
+            # toplamına eşitleniyordu; rozetteki "(+son tur)" kalemi tanım gereği
+            # oturum toplamının kopyasıydı ve "77k (+77k)" gibi anlamsız bir
+            # satır çıkıyordu.
+            self.total_tokens_used = turn_total
+            # Maliyet ağırlıklı toplam: önbellek OKUMASI taban girdi fiyatının
+            # onda birine yakın. Tam fiyat sayıldığında 40k'lık bir önbellek
+            # okuması 40k'lık taze girdi gibi görünüyordu.
+            self.session_cost_tokens += self.weighted_turn_tokens(usage)
             self.session_turn_count += 1
             self.last_cumulative_usage = {
                 "input_tokens": usage.get("input_tokens", 0),
@@ -943,6 +1214,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         except Exception:
             pass
         bus.token_usage_updated.emit(self.session_total_tokens)
+        try:
+            bus.token_usage_detail.emit(self.usage_badge_fields())
+        except Exception:
+            pass
 
     def _save_chat_turn(self, user_prompt: str, assistant_resp: str) -> None:
         try:
@@ -1043,6 +1318,148 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "yanıtını onlara dayandır:\n" + "\n".join(lines)
         )
         return directive, dirs
+
+    # ------------------------------------------------------------------
+    # Entropy Saf Kip: tek sistem istemi kurucusu (sohbet + kart)
+    # ------------------------------------------------------------------
+
+    def entropy_system_prompt(
+        self,
+        kind: str,
+        *,
+        project_path: Optional[str] = None,
+        agent_spec: Optional[dict] = None,
+        query: str = "",
+        history_summary: str = "",
+        fallback: str = "",
+    ) -> str:
+        """
+        Varsayılan istemin YERİNE geçecek Entropy kimliğini kurar (Faz 9.2/9.4).
+
+        Gerçek metin `entropy.memory.system_prompt.build_system_prompt`'tan
+        gelir; o modül henüz yoksa ya da patlarsa buradaki yedek devreye girer.
+        Guard bilinçli: kimliksiz koşmak (bugünkü kart davranışı) saf kipte çok
+        daha kötü olurdu — varsayılan istem de düştüğü için model tamamen
+        yönergesiz kalırdı.
+        """
+        try:
+            from entropy.memory.system_prompt import build_system_prompt
+
+            text = build_system_prompt(
+                kind,
+                provider=self.provider_name,
+                project_path=project_path,
+                agent_spec=agent_spec,
+                query=query,
+                history_summary=history_summary,
+            )
+            if text and str(text).strip():
+                return str(text)
+        except Exception:
+            pass
+        return fallback or self._fallback_system_prompt(kind, agent_spec=agent_spec)
+
+    @staticmethod
+    def _fallback_system_prompt(kind: str, agent_spec: Optional[dict] = None) -> str:
+        """
+        Kimlik + araç sözleşmesi yedeği.
+
+        Araç sözleşmesi AÇIKÇA yazılı: saf kipte Claude Code'un kendi araç
+        kuralları da düştüğü için "önce oku, sonra düzenle" gibi davranışlar
+        modele burada söylenmezse hiç söylenmiş olmaz.
+        """
+        parts = [
+            "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim "
+            "sistemisin. Kullanıcıya daima Türkçe, net ve profesyonel bir "
+            "üslupla yanıt ver. Kendi hafıza sisteminden, Obsidian notlarından "
+            "ve geçmiş kararlarından haberdarsın.",
+            "ARAÇ SÖZLEŞMESİ:\n"
+            "- Bir dosyayı düzenlemeden önce mutlaka Read ile oku.\n"
+            "- Dosya ararken Glob/Grep kullan; tüm depoyu okumaya çalışma.\n"
+            "- Bash'i yalnızca gerçekten gerektiğinde ve tek seferlik komutlar "
+            "için kullan; etkileşimli komut çalıştırma.\n"
+            "- Emin olmadığın bir yolu uydurma; önce varlığını doğrula.",
+        ]
+        if kind == "card":
+            parts.append(
+                "GÖREV KİPİ: Arka planda bir görev kartını yürütüyorsun. "
+                "Kullanıcıya soru soramazsın; eksik bilgi varsa makul bir "
+                "varsayım yapıp varsayımını çıktında açıkça yaz. Sonunda ne "
+                "yaptığını ve bulgularını özetle."
+            )
+        if isinstance(agent_spec, dict):
+            name = str(agent_spec.get("name") or "").strip()
+            role = str(agent_spec.get("role") or "").strip()
+            body = str(agent_spec.get("prompt") or agent_spec.get("description") or "").strip()
+            if name:
+                header = f"AJAN: {name}" + (f" ({role})" if role else "")
+                parts.append(f"{header}\n{body}".strip())
+        return "\n\n".join(p for p in parts if p)
+
+    def _forget_stale_session(self, system_prompt: str) -> bool:
+        """
+        Sistem istemi değiştiyse süren sohbet oturumunu düşürür (Faz 9.9).
+
+        `--system-prompt-snapshot` varsayılan olarak `on`: bir konuşmanın ilk
+        isteğinde kaydedilen istem sonraki her `--resume`'de aynen gönderilir,
+        sonraki koşuş farklı metin verse bile. Bu yüzden istem değiştiğinde tek
+        doğru davranış oturumu bırakmak.
+        """
+        try:
+            from entropy.core.identity import ConversationMap, conversation_map
+        except Exception:
+            return False
+        signature = ConversationMap.prompt_signature(system_prompt)
+        previous = self._system_prompt_signature
+        self._system_prompt_signature = signature
+        if not previous or previous == signature:
+            return False
+        self.current_session_id = None
+        conversation_id = getattr(config, "last_conversation_id", None)
+        if conversation_id:
+            try:
+                conversation_map.forget(str(conversation_id))
+            except Exception:
+                pass
+        bus.terminal_output_received.emit(
+            "\n[Entropy] Sistem istemi değişti; temiz bir Claude oturumu açılıyor.\n"
+        )
+        return True
+
+    def run_cwd(self, project_dir: Optional[Path]) -> Optional[str]:
+        """
+        Sürecin çalışma dizini.
+
+        Saf kipte NÖTR ve git deposunun DIŞINDA bir dizin
+        (`%USERPROFILE%\\.entropy\\workspace`): Claude Code proje kimliğini —
+        bellek dizini, `.claude/agents`, git durumu — literal cwd'den değil GİT
+        KÖKÜNDEN çözüyor, bu yüzden depo içindeki bir alt klasör izolasyon
+        sağlamıyor. Projeye dosya erişimi `--add-dir` ile verilir.
+        """
+        if bool(getattr(config, "claude_isolated", False)):
+            try:
+                return str(config_module.claude_workspace_path())
+            except Exception:
+                pass
+        if project_dir is not None and Path(project_dir).exists():
+            return str(project_dir)
+        return None
+
+    @staticmethod
+    def tools_for(mode: str, needs_write: bool = False) -> List[str]:
+        """Bu koşuda `--tools` ile verilecek araç listesi (izin kipine göre)."""
+        tools = CARD_TOOLS_BY_MODE.get(normalize_permission_mode(mode))
+        if tools is None:
+            tools = list(CHAT_TOOLS_READONLY)
+            if needs_write:
+                tools = tools + CHAT_TOOLS_WRITE
+            return tools
+        result = list(tools)
+        if needs_write:
+            for extra in CHAT_TOOLS_WRITE:
+                if extra not in result:
+                    result.append(extra)
+        return result
 
     def build_chat_system_prompt(
         self,
@@ -1159,8 +1576,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             attachment_directive, extra_dirs = self.build_attachment_directive(
                 image_attachments, pdf_attachments
             )
+            isolated = bool(getattr(config, "claude_isolated", False))
             resuming = bool(self.current_session_id)
-            append_system_prompt = self.build_chat_system_prompt(
+            context_prompt = self.build_chat_system_prompt(
                 prompt,
                 target_skill=target_skill,
                 skill_banner=skill_banner,
@@ -1168,14 +1586,38 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 resuming=resuming,
             )
 
+            system_prompt = None
+            if isolated:
+                # Saf kip: Claude Code'un varsayılan istemi DEĞİŞTİRİLİR.
+                # Kimlik + araç sözleşmesi tek kurucudan gelir, o turun bilişsel
+                # bağlamı sonuna eklenir.
+                identity_prompt = self.entropy_system_prompt(
+                    "chat",
+                    project_path=str(project_dir),
+                    query=prompt,
+                )
+                system_prompt = "\n\n".join(
+                    p for p in (identity_prompt, context_prompt) if p
+                )
+                append_system_prompt = None
+                # `--system-prompt-snapshot` açık olduğu için süren oturum eski
+                # istemi taşır; imza değiştiyse oturum düşürülüp yenisi açılır.
+                if resuming and self._forget_stale_session(system_prompt):
+                    resuming = False
+            else:
+                append_system_prompt = context_prompt
+
             cmd = self.build_command(
                 prompt,
                 mode=mode,
                 project_dir=project_dir,
                 agent=agent,
-                resume=True,
+                resume=resuming,
                 extra_dirs=extra_dirs,
                 append_system_prompt=append_system_prompt,
+                system_prompt=system_prompt,
+                tools=self.tools_for(mode, needs_write=is_write),
+                agents_json=self.entropy_agents_json() if isolated else None,
             )
             stdin_payload = self._apply_stdin_prompt(cmd)
             proc = subprocess.Popen(
@@ -1189,7 +1631,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 errors="replace",
                 creationflags=self._creationflags(),
                 env=self.process_env(),
-                cwd=str(project_dir) if project_dir.exists() else None,
+                cwd=self.run_cwd(project_dir),
             )
             writer = self._feed_stdin(proc, stdin_payload)
             with self._lock:
@@ -1283,6 +1725,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
         max_steps: Optional[int] = None,
+        model: Optional[str] = None,
+        agent_spec: Optional[dict] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
@@ -1309,7 +1753,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write, conversation_id, max_steps),
+                  save_report, agent, needs_write, conversation_id, max_steps,
+                  model, agent_spec),
             daemon=True,
         ).start()
 
@@ -1341,6 +1786,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
         max_steps: Optional[int] = None,
+        model: Optional[str] = None,
+        agent_spec: Optional[dict] = None,
     ) -> None:
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -1349,11 +1796,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             except Exception:
                 pass
 
+        # Defterde MODEL de yazılı: kartın modeli yürütmeye geçmediğinde hata
+        # (üst çubuğun modeliyle koşma) hiçbir kayıtta görünmüyordu.
         task_ledger.record_task_start(
             task_id=task_id,
             task_name=task_name,
             project_path=str(project_dir),
             provider=self.provider_name,
+            model=self.model_for_run(model),
         )
 
         # Kilit türü: çağıran açıkça söylediyse o, yoksa prompt/moddan çıkarım.
@@ -1388,14 +1838,43 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             )
             bus.core_pulse_triggered.emit(0.7)
 
+            # KİMLİK (Faz 9.4). Arka plan kartları eskiden sistem istemi HİÇ
+            # almıyordu (ölçüm: kart oturumlarında Entropy payı 0 karakter);
+            # sohbet alıyordu. İki yol artık tek kurucudan besleniyor.
+            card_system_prompt = self.entropy_system_prompt(
+                "card",
+                project_path=str(project_dir),
+                agent_spec=agent_spec,
+                query=prompt,
+            )
+            resume_id = conversation_id
+            if resume_id:
+                # Snapshot açık: süren oturum eski (kimliksiz) istemi taşır.
+                try:
+                    from entropy.core.identity import conversation_map
+
+                    if conversation_map.sync_prompt(
+                        str(conversation_id), self.provider_name, card_system_prompt
+                    ):
+                        resume_id = None
+                except Exception:
+                    pass
+
             cmd = self.build_command(
                 prompt,
                 mode=mode,
                 project_dir=project_dir,
                 agent=agent,
                 skip_permissions=True,
-                resume_id=conversation_id,
+                resume_id=resume_id,
                 max_steps=max_steps,
+                system_prompt=card_system_prompt,
+                model=model,
+                tools=self.tools_for(mode, needs_write=bool(needs_write)),
+                agents_json=(
+                    self.entropy_agents_json()
+                    if getattr(config, "claude_isolated", False) else None
+                ),
             )
 
             result: Dict[str, object] = {}
@@ -1425,7 +1904,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     errors="replace",
                     creationflags=self._creationflags(),
                     env=self.process_env(),
-                    cwd=str(project_dir) if project_dir.exists() else None,
+                    cwd=self.run_cwd(project_dir),
                 )
                 writer = self._feed_stdin(proc, stdin_payload)
                 with self._lock:

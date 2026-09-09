@@ -139,3 +139,30 @@ class FlowHeaderFrame(QFrame):
 
     def heightForWidth(self, width: int) -> int:  # noqa: N802
         return self._flow.heightForWidth(width)
+
+
+def fit_combo_to_contents(combo, min_width: int = 60, extra: int = 0) -> int:
+    """Açılır kutuyu en uzun öğesini kırpmadan gösterecek genişliğe sabitler.
+
+    Faz 9 kök nedeni: Chat üst çubuğunda model kutusuna
+    `setMaximumWidth(170)` + `AdjustToMinimumContentsLength` verilmişti; 636 px
+    genişlikte "claude-opus-5" bile "laude-opus-5" diye kırpılıyordu. Akan
+    yerleşim (FlowLayout) öğe genişliğini `sizeHint()` üzerinden alır, yani
+    kutuyu daraltmak yerine alt satıra kaydırabiliriz: doğru çözüm kutuya
+    metnin gerektirdiği asgari genişliği vermek.
+
+    Dönen değer uygulanan piksel genişliğidir.
+    """
+    metrics = combo.fontMetrics()
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    texts.append(combo.currentText())
+    line_edit = combo.lineEdit() if combo.isEditable() else None
+    if line_edit is not None:
+        texts.append(line_edit.placeholderText())
+    widest = max((metrics.horizontalAdvance(t or "") for t in texts), default=0)
+    # Çerçeve + iç dolgu + açılır ok payı (stil sayfasından bağımsız güvenli pay).
+    chrome = 44 + extra
+    width = max(min_width, widest + chrome)
+    combo.setMinimumWidth(width)
+    combo.setMaximumWidth(width)
+    return width

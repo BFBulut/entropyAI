@@ -333,8 +333,33 @@ def test_report_center_live_on_reports_updated(center, tmp_path, monkeypatch):
         lambda limit=60: [meta(path)],
     )
     bus.reports_updated.emit("")
+    # Faz 9: sinyal artık 1,5 sn birleştirilir ve tarama işçi iş parçacığında
+    # koşar (ana iş parçacığı bloklanmaz). Testte debounce'u elle boşaltıyoruz.
+    assert center._reload_timer.isActive()
+    center._reload_timer.stop()
+    center._start_background_reload()
+    _wait_for(lambda: bool(center.cards() or center.quiet_cards()))
     titles = [c["title"] for c in center.cards() + center.quiet_cards()]
     assert any("Canlı" in t for t in titles), titles
+
+
+def _wait_for(predicate, timeout_s: float = 5.0) -> bool:
+    """İşçi iş parçacığı sonucunu bekler; olay döngüsünü döndürerek."""
+    import time as _time
+
+    from PySide6.QtCore import QThreadPool
+    from PySide6.QtWidgets import QApplication
+
+    deadline = _time.time() + timeout_s
+    while _time.time() < deadline:
+        QThreadPool.globalInstance().waitForDone(50)
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        if predicate():
+            return True
+        _time.sleep(0.01)
+    return predicate()
 
 
 def test_mailbox_report_messages_become_entries():
@@ -592,10 +617,12 @@ def test_provider_badge_colors_and_login_hint(qapp):
         badge.set_status("claude", {"logged_in": False, "last_error": "oturum yok"})
         agy_html = badge.labels["agy"].text()
         claude_html = badge.labels["claude"].text()
-        assert "Pro" in agy_html and "3 sa" in agy_html
+        # Faz 9: rozet kompakt ("AGY ✓ Pro"); oturum penceresi/kota ipucunda.
+        assert "Pro" in agy_html and "✓" in agy_html
+        assert "3 sa" in badge.labels["agy"].toolTip()
         assert COLOR_OK in agy_html
         assert COLOR_BAD in claude_html
-        assert "giriş yok" in claude_html
+        assert "✕" in claude_html
         # Düşünce (ipucu) kullanıcıya ne yapacağını söyler.
         assert "/login claude" in badge.labels["claude"].toolTip()
         assert status_color(None) not in (COLOR_OK,)

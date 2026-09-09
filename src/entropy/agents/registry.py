@@ -43,6 +43,12 @@ from typing import Dict, List, Optional
 # hem de manifest'e yazılan "şuraya dosya koy" yönergesi buradan okur.
 AGENTS_SUBDIR = "Entropy/Agents"
 
+# Desk'in kasa kökü. Burada yalnızca DIŞLAMA için var: Entropy'nin ajan listesi
+# `Entropy/Desk/**` altındaki hiçbir tanımı içeremez (Ek-1, Faz 9). Gerçek Desk
+# yolları `entropy.agents.desk_registry` içinde tanımlı; buraya import etmek
+# döngüsel bağımlılık olurdu.
+DESK_ROOT_SUBDIR = "Entropy/Desk"
+
 # Hangi tohum tanımların bir kez yazıldığını tutan işaret dosyası. Ajanlar ve
 # ofisler aynı deseni kullanır (her biri kendi klasöründe).
 SEED_MARKER_FILENAME = ".seeded.json"
@@ -94,6 +100,26 @@ AGENT_FILENAME = "AGENT.md"
 
 VALID_PROVIDERS = ("agy", "claude")
 
+# Sabit "agy" varsayılanı yerine tek kaynak (Faz 9 / B-9.5). Kullanıcı yalnızca
+# Claude aboneliğiyle çalışmak istediğinde yeni ofis/ajan/kart varsayılanları da
+# Claude olmalı; eskiden 14+ noktada sabit "agy" yazıyordu ve sistem sessizce
+# agy'ye düşüyordu.
+_PROVIDER_FALLBACK = "agy"
+
+
+def default_provider() -> str:
+    """Yapılandırmadaki varsayılan sağlayıcı; okunamazsa `agy`."""
+    value = ""
+    try:
+        from entropy.core.config import config
+
+        getter = getattr(config, "default_provider", None)
+        value = getter() if callable(getter) else getattr(config, "provider", "")
+    except Exception:
+        value = ""
+    value = str(value or "").strip().lower()
+    return value if value in VALID_PROVIDERS else _PROVIDER_FALLBACK
+
 # Ofis içindeki görev tipi. `role` alanı serbest metin olarak kaldı (mevcut
 # ajanlarda "research", "report writing" gibi açıklayıcı değerler var ve onları
 # tek kelimeye indirmek kullanıcının yazdığı dosyaları bozardı); bu üç değer
@@ -113,7 +139,7 @@ class AgentSpec:
     name: str
     role: str = ""
     description: str = ""
-    provider: str = "agy"
+    provider: str = field(default_factory=default_provider)
     model: str = ""
     effort: str = ""
     skills: List[str] = field(default_factory=list)
@@ -146,7 +172,7 @@ class AgentSpec:
             "name": self.name,
             "role": self.role,
             "description": self.description,
-            "provider": self.provider if self.provider in VALID_PROVIDERS else "agy",
+            "provider": self.provider if self.provider in VALID_PROVIDERS else default_provider(),
             "model": self.model,
             "effort": self.effort,
             "skills": list(self.skills or []),
@@ -273,7 +299,6 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-only",
         memory_path="Entropy/AgentMemory/arastirmaci.md",
-        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin araştırmacı ajanısın. Görevin bir soruyu kaynaklarıyla "
             "birlikte yanıtlamak.\n\n"
@@ -298,7 +323,6 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-write",
         memory_path="Entropy/AgentMemory/analist.md",
-        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin analist ajanısın. Görevin ham bulguyu karara "
             "dönüştürmek.\n\n"
@@ -321,7 +345,6 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-write",
         memory_path="Entropy/AgentMemory/yazar.md",
-        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin yazar ajanısın. Görevin dağınık bulguyu tek parça, "
             "okunur bir metne çevirmek.\n\n"
@@ -344,7 +367,6 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-only",
         memory_path="Entropy/AgentMemory/orkestrator.md",
-        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin orkestratör ajanısın. Görevin bir işi yapmak değil, "
             "yapılabilir alt görevlere bölmek.\n\n"
@@ -374,7 +396,6 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-only",
         memory_path="Entropy/AgentMemory/degerlendirici.md",
-        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin değerlendirici ajanısın. Üretmezsin, notlarsın.\n\n"
             "Çalışma biçimin:\n"
@@ -427,6 +448,21 @@ class AgentRegistry:
 
     # -- okuma ---------------------------------------------------------
 
+    def _is_desk_path(self, path: Path) -> bool:
+        """
+        Yol Desk'in kasasının (`Entropy/Desk`) altında mı?
+
+        Ek-1 (Faz 9): Entropy'nin kadrosu ofis ajanlarını ASLA içermez. Dizin
+        ayrımı zaten bunu sağlıyor, ama bağlantı (junction/symlink) ya da elle
+        taşınmış bir klasör ayrımı sessizce deliyordu; kural artık açık.
+        """
+        try:
+            resolved = path.resolve()
+            desk_root = (self.vault_path / DESK_ROOT_SUBDIR).resolve()
+        except OSError:
+            return False
+        return desk_root == resolved or desk_root in resolved.parents
+
     def list(self) -> List[AgentSpec]:
         """Diskteki tüm ajanlar (ada göre sıralı); bozuk dosyalar atlanır."""
         specs: List[AgentSpec] = []
@@ -434,7 +470,7 @@ class AgentRegistry:
             if not self.agents_dir.is_dir():
                 return specs
             for child in sorted(self.agents_dir.iterdir()):
-                if not child.is_dir():
+                if not child.is_dir() or self._is_desk_path(child):
                     continue
                 spec = self._read(child / AGENT_FILENAME)
                 if spec is not None:
@@ -444,7 +480,10 @@ class AgentRegistry:
         return specs
 
     def get(self, name: str) -> Optional[AgentSpec]:
-        return self._read(self.agent_file(name))
+        path = self.agent_file(name)
+        if self._is_desk_path(path):
+            return None
+        return self._read(path)
 
     def _read(self, path: Path) -> Optional[AgentSpec]:
         try:
@@ -460,7 +499,7 @@ class AgentRegistry:
         skills = front.get("skills") or []
         if isinstance(skills, str):
             skills = [s.strip() for s in skills.split(",") if s.strip()]
-        provider = str(front.get("provider") or "agy").strip().lower()
+        provider = str(front.get("provider") or default_provider()).strip().lower()
         # Çift model: nested `models: {agy: ..., claude: ...}` (PyYAML varsa) ya
         # da düz `model_agy` / `model_claude` anahtarları. İkisi de desteklenir
         # çünkü yerleşik ayrıştırıcı iç içe eşleme okuyamıyor.
@@ -483,7 +522,7 @@ class AgentRegistry:
             name=name,
             role=str(front.get("role") or ""),
             description=str(front.get("description") or ""),
-            provider=provider if provider in VALID_PROVIDERS else "agy",
+            provider=provider if provider in VALID_PROVIDERS else default_provider(),
             model=str(front.get("model") or ""),
             effort=str(front.get("effort") or ""),
             skills=[str(s) for s in skills],

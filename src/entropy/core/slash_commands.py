@@ -622,6 +622,16 @@ def _handle_offices(_args: str = "") -> str:
     )
 
 
+def _is_seed_leftover(offices, spec) -> bool:
+    """`is_seed_leftover` için güvenli sarmalayıcı (hata listeyi düşürmesin)."""
+    try:
+        from entropy.agents.desk_registry import is_seed_leftover
+
+        return bool(is_seed_leftover(spec, offices))
+    except Exception:
+        return False
+
+
 def _desk_usage() -> str:
     """Tek yerde tutulan `/desk` kullanım metni (hata yollarının hepsi buraya döner)."""
     return (
@@ -631,7 +641,8 @@ def _desk_usage() -> str:
         "<code>/desk agent add|edit|rm &lt;ofis&gt; &lt;ad&gt; :: &lt;açıklama&gt;</code><br/>"
         "<code>/desk project add &lt;ofis&gt; &lt;ad&gt; :: &lt;hedef&gt;</code><br/>"
         "<code>/desk task &lt;ofis&gt; [@proje] &lt;başlık&gt; :: &lt;hedef&gt;</code> · "
-        "<code>/desk stop &lt;kart&gt;</code>"
+        "<code>/desk stop &lt;kart&gt;</code><br/>"
+        "<code>/desk msg &lt;ofis&gt; :: &lt;talimat&gt;</code>"
     )
 
 
@@ -771,8 +782,8 @@ def _handle_desk(args: str) -> str:
         rows = []
         for spec in offices.list():
             active = [
-                c for c in board.list()
-                if c.office == spec.name and not c.parent and c.status in ("running", "review")
+                c for c in board.list(office=spec.name)
+                if not c.parent and c.status in ("running", "review")
             ]
             harness = OfficeHarness(spec.name, board=board, offices=offices)
             parts = []
@@ -802,6 +813,11 @@ def _handle_desk(args: str) -> str:
             extra = f" · ✉️ {unread} okunmamış" if unread else ""
             if last:
                 extra += f" · son olay: {_html_escape(str(last[0].get('status')))}"
+            # Ek-2: eski build tohumundan kalan ofisler işaretlenir (silinmez).
+            # İşaretin TEK ölçütü `OFFICE.md`'deki `seed: true`; ad tabanlı sezgi
+            # kullanıcının kendi açtığı ofisi yanlışlıkla tohum gösteriyordu.
+            if _is_seed_leftover(offices, spec):
+                extra += " · ⚠️ eski tohum"
             rows.append(
                 f"🏢 <b>{_html_escape(spec.name)}</b> — {_html_escape(spec.purpose or '-')}<br/>"
                 f"<span style='color:#8B949E;font-size:11px;'>{state}{extra}</span>"
@@ -822,6 +838,36 @@ def _handle_desk(args: str) -> str:
 
     if verb in ("office", "agent", "project"):
         return _handle_desk_admin(verb, rest, offices)
+
+    if verb == "msg":
+        # Faz 9 / B-9.3: Entropy → orkestratör talimat yolu. Model ÇAĞIRMAZ;
+        # talimat ofisin kutusuna düşer ve bir sonraki planlamada prompt'un
+        # [TALİMAT] bölümüne girer. `/ask` ile ayrımı bilinçli: soru yanıtlanır,
+        # talimat plana dönüşür.
+        from entropy.agents.mailbox import instruct_office, office_mailbox
+
+        head, sep, instruction = rest.partition("::")
+        office_name = head.strip()
+        instruction = instruction.strip() if sep else ""
+        if not office_name or not instruction:
+            return ("<b>🏢 Ofise Talimat</b><br/>Kullanım: "
+                    "<code>/desk msg &lt;ofis&gt; :: &lt;talimat&gt;</code>")
+        if offices.get(office_name) is None:
+            known = ", ".join(s.name for s in offices.list()) or "(yok)"
+            return (f"<b>🏢 Ofise Talimat</b><br/>'{_html_escape(office_name)}' adında ofis yok.<br/>"
+                    f"Mevcut: {_html_escape(known)}")
+        try:
+            msg = instruct_office(office_name, instruction)
+        except Exception as exc:
+            return f"<b>🏢 Ofise Talimat</b><br/>Yazılamadı: {_html_escape(exc)}"
+        unread = office_mailbox(office_name).unread_count()
+        return (
+            f"<b>🏢 Talimat Bırakıldı</b><br/>{_html_escape(office_name)}: "
+            f"{_html_escape(instruction)}<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>Mesaj: "
+            f"<code>{_html_escape(msg.id)}</code> · kutuda {unread} okunmamış · "
+            f"orkestratör bir sonraki planlamada [TALİMAT] bölümünde görür.</span>"
+        )
 
     if verb == "stop":
         if not rest:

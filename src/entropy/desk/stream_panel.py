@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT, reading_css
-from entropy.ui.widgets.agents_widget import spec_field
+from entropy.ui.widgets.agents_widget import list_cards_for, spec_field
 
 # Akışta tutulan en fazla karakter: uzun koşularda panel sınırsız büyümesin.
 MAX_STREAM_CHARS = 40_000
@@ -117,10 +117,8 @@ class StreamPanel(QFrame):
     def cards_for_agent(self) -> List[Any]:
         if self.board is None or not self.agent:
             return []
-        try:
-            cards = list(self.board.list() or [])
-        except Exception:
-            return []
+        # Faz 9: ofis kartları ayrı kökte; ofis geçilmezse panel boş kalırdı.
+        cards = list_cards_for(self.board, self.office)
         owned = [c for c in cards if str(spec_field(c, "agent", "")) == self.agent]
         if self.office:
             owned = [c for c in owned if str(spec_field(c, "office", "")) in ("", self.office)]

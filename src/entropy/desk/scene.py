@@ -201,7 +201,12 @@ class OfficeScene(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None, office=None):
         super().__init__(parent)
-        self.setMinimumSize(520, 330)
+        # Faz 9 / B-9.7: eski asgari (520x330) %200 ölçekte Desk penceresinin
+        # mantıksal asgari yüksekliğini 712 px'e çıkarıyordu (hedef ≤540).
+        # Sahne `fit_to_view` ile küçülebiliyor (bkz. `_view_transform`), bu
+        # yüzden asgari boyut "okunur en küçük ofis" değerine indirildi;
+        # varsayılan pencere boyutu değişmedi.
+        self.setMinimumSize(360, 200)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMouseTracking(True)
 

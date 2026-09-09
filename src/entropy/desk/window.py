@@ -22,8 +22,8 @@ from typing import Any, Optional
 from PySide6.QtCore import QRect, Qt, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QSplitter, QTabWidget,
-    QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QSplitter,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from entropy.core.config import config
@@ -229,6 +229,37 @@ class AgentDeskWindow(QMainWindow):
             self.provider_badge = None
         root.addLayout(header)
 
+        # --- Faz 9 / B-9.3: "Ofise talimat" kutusu ------------------------
+        # Entropy'den ofise yön vermenin arayüzdeki tek yüzeyi. Talimat
+        # `instruct_office` ile ofisin posta kutusuna düşer; orkestratör bir
+        # sonraki planından önce okur. Model ÇAĞRILMAZ, kota harcanmaz.
+        instruct = QHBoxLayout()
+        instruct.setContentsMargins(4, 0, 4, 0)
+        instruct.setSpacing(6)
+        self.instruct_input = QLineEdit()
+        self.instruct_input.setPlaceholderText(
+            "Ofise talimat… (orkestratörün bir sonraki planına girer)"
+        )
+        self.instruct_input.setClearButtonEnabled(True)
+        self.instruct_input.returnPressed.connect(self.send_instruction)
+        instruct.addWidget(self.instruct_input, 1)
+        self.instruct_btn = QPushButton("Talimat gönder")
+        self.instruct_btn.setFixedHeight(26)
+        self.instruct_btn.setToolTip(
+            "Talimatı seçili ofisin posta kutusuna bırakır; koşu başlatmaz."
+        )
+        self.instruct_btn.clicked.connect(self.send_instruction)
+        instruct.addWidget(self.instruct_btn)
+        self.instruct_badge = QLabel("")
+        self.instruct_badge.setStyleSheet("background: transparent; border: none;")
+        self.instruct_badge.setToolTip("Ofisin okunmamış mesaj sayısı")
+        instruct.addWidget(self.instruct_badge)
+        self.instruct_status = QLabel("")
+        self.instruct_status.setStyleSheet("background: transparent; border: none;")
+        self.instruct_status.setWordWrap(False)
+        instruct.addWidget(self.instruct_status)
+        root.addLayout(instruct)
+
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- sol: ofisler
@@ -250,7 +281,7 @@ class AgentDeskWindow(QMainWindow):
         center_splitter.addWidget(self.scene)
 
         self.tabs = QTabWidget()
-        self.board_panel = BoardPanel(parent=self, board=self.board, office="")
+        self.board_panel = BoardPanel(parent=self, board=self.board, office="", bridge=self.bridge)
         self.stream_panel = StreamPanel(parent=self, board=self.board, office="")
         self.projects_panel = ProjectsPanel(parent=self, office="", board=self.board)
         self.projects_panel.project_filter_changed.connect(self._on_project_filter)
@@ -290,13 +321,19 @@ class AgentDeskWindow(QMainWindow):
         # Qt düzeni açık minimumu örtük `minimumSizeHint`in önüne alır; aksi
         # halde akış paneli 535 px, projeler 880 px isteyip orta sütunu
         # şişiriyordu. Toplam: 180 + 240 + 380 = 800 px.
-        self.board_panel.setMinimumWidth(220)
-        self.stream_panel.setMinimumWidth(220)
-        self.projects_panel.setMinimumWidth(220)
-        self.memory_panel.setMinimumWidth(220)
+        # Faz 9 / B-9.7: AÇIK asgari YÜKSEKLİKLER de verilir. Panellerin örtük
+        # `minimumSizeHint`i (bellek 278, projeler 114 …) sekme yığınını 306 px
+        # istemeye zorluyor, sahne ile birlikte pencerenin mantıksal asgari
+        # yüksekliği %200 ölçekte 712 px'e çıkıyordu. Panel içerikleri kendi
+        # kaydırma alanlarında daralır.
+        for panel in (self.board_panel, self.stream_panel,
+                      self.projects_panel, self.memory_panel):
+            panel.setMinimumWidth(220)
+            panel.setMinimumHeight(120)
         center.setMinimumWidth(320)
         center_splitter.setChildrenCollapsible(True)
         self.tabs.setMinimumWidth(240)
+        self.tabs.setMinimumHeight(160)
         self.splitter.setSizes([250, 770, ROSTER_MIN_WIDTH])
         root.addWidget(self.splitter, 1)
 
@@ -330,6 +367,11 @@ class AgentDeskWindow(QMainWindow):
         self.projects_panel.set_office(self.current_office)
         self.refresh_memory()
         self.refresh_spend()
+        self.instruct_status.setText("")
+        has_office = bool(self.current_office)
+        self.instruct_input.setEnabled(has_office)
+        self.instruct_btn.setEnabled(has_office)
+        self.refresh_unread()
         title = self.current_office or "ofis seçilmedi"
         self.header_label.setText(
             f"<b style='color:{RT['accent']}; font-size:15px;'>🏢 ENTROPY AGENT DESK</b>"
@@ -362,6 +404,68 @@ class AgentDeskWindow(QMainWindow):
             f"<span style='color:{RT['text_dim']}; font-size:11px;'>{text}</span>"
         )
         self.spend_label.setVisible(True)
+
+    # -------------------------------------------------------- talimat
+
+    def unread_count(self) -> int:
+        """Seçili ofisin okunmamış mesaj sayısı (sözleşme yoksa 0)."""
+        if not self.current_office:
+            return 0
+        try:
+            from entropy.agents.mailbox import office_mailbox
+
+            return int(office_mailbox(self.current_office).unread_count() or 0)
+        except Exception:
+            return 0
+
+    def refresh_unread(self) -> None:
+        count = self.unread_count()
+        if not count:
+            self.instruct_badge.setText("")
+            self.instruct_badge.setVisible(False)
+            return
+        self.instruct_badge.setText(
+            f"<span style='color:{RT['accent_warn']}; font-size:11px; font-weight:600;'>"
+            f"✉ {count} okunmamış</span>"
+        )
+        self.instruct_badge.setVisible(True)
+
+    @Slot()
+    def send_instruction(self) -> bool:
+        """
+        Kutudaki metni seçili ofise talimat olarak yollar.
+
+        Boş metin sessizce reddedilir (mailbox `ValueError` atıyor; kullanıcıya
+        istisna değil, kısa bir uyarı gösterilir). Başarıda kutu temizlenir ve
+        "orkestratörün bir sonraki planına girecek" bilgisi yazılır.
+        """
+        text = self.instruct_input.text().strip()
+        if not self.current_office:
+            self._set_instruct_status("Önce bir ofis seçin.", ok=False)
+            return False
+        if not text:
+            self._set_instruct_status("Talimat boş olamaz.", ok=False)
+            return False
+        try:
+            from entropy.agents.mailbox import instruct_office
+
+            instruct_office(self.current_office, text)
+        except Exception as exc:
+            self._set_instruct_status(f"Gönderilemedi: {exc}", ok=False)
+            return False
+        self.instruct_input.clear()
+        self._set_instruct_status(
+            "Talimat kutuya bırakıldı; orkestratörün bir sonraki planına girecek.",
+            ok=True,
+        )
+        self.refresh_unread()
+        return True
+
+    def _set_instruct_status(self, text: str, ok: bool = True) -> None:
+        color = RT["accent_alt"] if ok else RT["accent_warn"]
+        self.instruct_status.setText(
+            f"<span style='color:{color}; font-size:11px;'>{text}</span>"
+        )
 
     @Slot(str)
     def _on_project_filter(self, project: str) -> None:

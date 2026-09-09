@@ -280,6 +280,8 @@ class IdentityLayer:
         self._statuses: Dict[str, ProviderStatus] = {}
         self._lock = threading.RLock()
         self._timer = None
+        # Sağlayıcı otomatik seçimi yalnızca ilk yenilemede koşar.
+        self._provider_autoselected = False
 
     # -- okuma ------------------------------------------------------------
 
@@ -308,7 +310,21 @@ class IdentityLayer:
         return status
 
     def refresh_all(self, runner: Optional[Callable] = None) -> Dict[str, ProviderStatus]:
-        return {name: self.refresh(name, runner=runner) for name in PROVIDERS}
+        statuses = {name: self.refresh(name, runner=runner) for name in PROVIDERS}
+        # AÇILIŞTA BİR KEZ: etkin sağlayıcının oturumu yoksa ve diğerininki
+        # varsa varsayılan sağlayıcı düzeltilir (Faz 9 / Ek-2). Yalnızca ilk
+        # turda: kullanıcı sonradan bilerek sağlayıcı değiştirmişse periyodik
+        # yenileme onu geri almamalı.
+        if not self._provider_autoselected:
+            self._provider_autoselected = True
+            try:
+                auto_select_provider(
+                    claude_status=statuses.get("claude"),
+                    agy_status=statuses.get("agy"),
+                )
+            except Exception:
+                logger.warning("Sağlayıcı otomatik seçimi başarısız", exc_info=True)
+        return statuses
 
     def refresh_async(self) -> None:
         threading.Thread(target=self.refresh_all, daemon=True).start()
@@ -353,6 +369,49 @@ class IdentityLayer:
 
 
 identity = IdentityLayer()
+
+
+def auto_select_provider(
+    claude_status: Optional[ProviderStatus] = None,
+    agy_status: Optional[ProviderStatus] = None,
+) -> Optional[str]:
+    """
+    Açılışta sağlayıcıyı canlı duruma göre düzeltir (Faz 9 / Ek-2).
+
+    Kural: yalnızca ETKİN sağlayıcının oturumu yokken ve DİĞERİNİNKİ varken
+    geçilir. Tek yönlü değil çünkü agy'siz makinede her yeni kart/ajan/ofis
+    `provider: agy` ile doğup ilk koşuda ölüyordu (araştırma §1.9). Sessiz
+    düşme yok: geçiş tek satırlık bilgi olarak terminale de yazılır.
+
+    Dönüş: yeni sağlayıcı adı, ya da değişiklik yoksa None.
+    """
+    from entropy.core.config import config
+
+    current = (getattr(config, "provider", "") or "agy").strip().lower()
+    other = "claude" if current == "agy" else "agy"
+    statuses = {
+        "claude": claude_status if claude_status is not None else probe_claude(),
+        "agy": agy_status if agy_status is not None else probe_agy(),
+    }
+    if statuses[current].logged_in or not statuses[other].logged_in:
+        return None
+    config.provider = other
+    try:
+        config.save_settings()
+    except Exception:
+        pass
+    message = (
+        f"[Entropy] Varsayılan sağlayıcı '{other}' olarak ayarlandı: "
+        f"'{current}' oturumu bulunamadı."
+    )
+    logger.info(message)
+    try:
+        from entropy.core.event_bus import bus
+
+        bus.terminal_output_received.emit(f"\n{message}\n")
+    except Exception:
+        pass
+    return other
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +495,66 @@ class ConversationMap:
         if not session or not flag:
             return []
         return [flag, session]
+
+    @staticmethod
+    def prompt_signature(text: str) -> str:
+        """Sistem isteminin kısa parmak izi (eşlemede saklanır)."""
+        import hashlib
+
+        return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:16]
+
+    def sync_prompt(self, conversation_id: str, provider: str, system_prompt: str) -> bool:
+        """
+        Sistem istemi ya da sağlayıcı değiştiyse eşlemeyi düşürür (Faz 9.9).
+
+        Neden gerekli: `claude --system-prompt-snapshot` varsayılan olarak açık
+        ve belgesi net — *"Record the system prompt once per conversation and
+        reuse it verbatim on every request and resume… even when a later launch
+        passes different text."* Yani süren bir oturum `--resume` ile
+        sürdürülürse ESKİ (kirli, Claude Code varsayılanını içeren) istemi
+        taşımaya devam eder; saf kip canlıda etkisiz görünürdü. Eşleme
+        düşürülünce köprü `--resume` vermez ve yeni oturum temiz istemle açılır.
+
+        Dönüş: eşleme düşürüldüyse True.
+        """
+        provider = (provider or "").strip().lower()
+        if not conversation_id or not provider:
+            return False
+        signature = self.prompt_signature(system_prompt)
+        with self._lock:
+            data = self._load()
+            entry = data.get(conversation_id)
+            if not isinstance(entry, dict) or not entry.get(provider):
+                return False
+            previous = str(entry.get("prompt_signature") or "")
+            if previous == signature:
+                return False
+            if previous:
+                logger.info(
+                    "Sistem istemi değişti; '%s' konuşması yeniden açılacak.",
+                    conversation_id,
+                )
+                data.pop(conversation_id, None)
+                self._save(data)
+                return True
+            # İlk kayıt: imza yoktu, yalnızca yazılır (eski eşlemeler düşmesin).
+            entry["prompt_signature"] = signature
+            data[conversation_id] = entry
+            self._save(data)
+            return False
+
+    def set_prompt_signature(self, conversation_id: str, system_prompt: str) -> None:
+        """Yeni oturum açıldıktan sonra imzayı kaydeder."""
+        if not conversation_id:
+            return
+        signature = self.prompt_signature(system_prompt)
+        with self._lock:
+            data = self._load()
+            entry = dict(data.get(conversation_id) or {})
+            entry["prompt_signature"] = signature
+            entry["updated_at"] = _now()
+            data[conversation_id] = entry
+            self._save(data)
 
     def forget(self, conversation_id: str) -> bool:
         with self._lock:

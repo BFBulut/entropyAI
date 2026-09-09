@@ -57,7 +57,6 @@ class EffortSelector(QComboBox):
         self.setObjectName("effortCombo")
         self.setToolTip("Modelin düşünme/çaba düzeyi. Seçim kalıcıdır.")
         self.setStyleSheet(EFFORT_COMBO_STYLE)
-        self.setMaximumWidth(110)
         self.setFixedHeight(24)
 
         levels: List[str] = []
@@ -66,6 +65,10 @@ class EffortSelector(QComboBox):
         except Exception:
             levels = []
         self.addItems(levels)
+        # Faz 9: sabit 110 px ust sinir uzun efor adlarini kirpiyordu; kutu
+        # en uzun secenege gore olculur (Chat/Zen ile ayni kural).
+        from entropy.ui.widgets.flow_layout import fit_combo_to_contents
+        fit_combo_to_contents(self, min_width=70)
 
         current = str(getattr(bridge, "selected_effort", "") or "")
         if current in levels:

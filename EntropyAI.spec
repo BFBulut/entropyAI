@@ -70,6 +70,9 @@ a = Analysis(
         # Faz 8 pencere/yerlesim yardimcilari.
         'entropy.ui.widgets.frameless',
         'entropy.ui.widgets.flow_layout',
+        # Faz 9 slash istem paleti ve izole sistem istemi olusturucu.
+        'entropy.ui.widgets.slash_prompt',
+        'entropy.memory.system_prompt',
         'entropy.agents',
         # Faz 5 posta kutusu ve kimlik
         'entropy.agents.mailbox',

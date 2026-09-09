@@ -23,6 +23,7 @@ AgentsWatcher, agy'nin kendi keşfi) için sonsuz bir olay döngüsü üretirdi.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -43,6 +44,71 @@ CLAUDE_FALLBACK_MODEL = "inherit"          # Claude derlemesi: oturumun modelini
 AGY_FALLBACK_MODEL = "gemini-3.8-flash-high"  # agy derlemesi: güvenli varsayılan
 
 
+# Serbest metin model adları (kullanıcı OFFICE.md'ye "fable 5.1 high effort"
+# yazıyor) sağlayıcıya verilebilir bir kimliğe çevrilir. Sıra ÖNEMLİ: "fable"
+# önce bakılır, aksi hâlde "claude-fable-5-1" içindeki başka bir ipucu kazanır.
+_CLAUDE_TEXT_RULES = (
+    ("fable", "fable"),
+    ("opus", "claude-opus-5"),
+    ("sonnet", "claude-sonnet-5"),
+    ("haiku", "claude-haiku-4-5-20251001"),
+)
+_AGY_TEXT_RULES = (
+    ("flash", "gemini-3.8-flash-high"),
+    ("pro", "gemini-3.1-pro-high"),
+    ("gemini", "gemini-3.8-flash-high"),
+)
+
+# Efor sözcükleri; metinde tek başına geçen ilki alınır.
+_EFFORT_WORDS = ("low", "medium", "high", "xhigh", "max")
+
+# Tam kimliğe açılacak çıplak takma adlar ("fable" hariç: onun tam karşılığı
+# zaten takma adın kendisi).
+_BARE_ALIASES = ("opus", "sonnet", "haiku")
+
+
+def normalize_model_text(text: str, provider: str) -> tuple:
+    """
+    Serbest metin model tanımını `(model, effort|None)` ikilisine çevirir.
+
+    Neden: ofis `default_model` alanını kullanıcı elle yazıyor ("fable 5.1 high
+    effort") ve bu dizge doğrudan `--model` argümanına geçince CLI
+    `unrecognized_model` ile ölüyordu. Metin küçük harfe indirilip
+    boşluk/nokta/tire farkları yok sayılarak sağlayıcının bildiği bir kimliğe
+    eşlenir; tanınmayan metin sağlayıcının güvenli varsayılanına düşer.
+    """
+    provider = (provider or "").strip().lower()
+    raw = (text or "").strip()
+    fallback = CLAUDE_FALLBACK_MODEL if provider == "claude" else (
+        AGY_FALLBACK_MODEL if provider == "agy" else "")
+    if not raw:
+        return ("", None)
+
+    low = raw.lower()
+    tokens = [t for t in re.split(r"[^a-z0-9]+", low) if t]
+    effort = next((t for t in tokens if t in _EFFORT_WORDS), None)
+
+    # Zaten geçerli bir TAM kimlikse dokunulmaz (yeni model adları beyaz listeye
+    # eklenmeden de çalışsın diye). Çıplak takma adlar (`opus`) bunun dışında:
+    # CLI onları kabul etse de kart/ofis kayıtlarında tam kimlik istiyoruz ki
+    # kayıt hangi modeli koştuğunu belgelesin.
+    if low not in _BARE_ALIASES:
+        try:
+            from entropy.core.config import is_valid_model_for
+
+            if is_valid_model_for(provider, raw):
+                return (raw, effort)
+        except Exception:
+            pass
+
+    rules = _CLAUDE_TEXT_RULES if provider == "claude" else (
+        _AGY_TEXT_RULES if provider == "agy" else ())
+    for needle, model in rules:
+        if needle in low:
+            return (model, effort)
+    return (fallback, effort)
+
+
 def resolve_model(spec: AgentSpec, provider: str) -> str:
     """
     Bir ajanın verilen sağlayıcıda kullanacağı ham model adı.
@@ -55,18 +121,21 @@ def resolve_model(spec: AgentSpec, provider: str) -> str:
     if explicit:
         return explicit
     model = (spec.model or "").strip()
-    low = model.lower()
-    if provider == "claude":
-        if any(m in low for m in _CLAUDE_MARKERS):
+    if not model or provider not in ("claude", "agy"):
+        return model
+    # Serbest metin ("fable 5.1 high effort") ve yabancı ad (gemini-* bir Claude
+    # koşusunda) aynı kapıdan geçer: sağlayıcıya verilebilir bir kimlik değilse
+    # normalize edilir. Eskiden yalnızca YABANCI ad yakalanıyordu; kullanıcının
+    # elle yazdığı metin olduğu gibi `--model`e gidiyordu.
+    try:
+        from entropy.core.config import is_valid_model_for
+
+        if is_valid_model_for(provider, model):
             return model
-        if any(m in low for m in _GEMINI_MARKERS):
-            return CLAUDE_FALLBACK_MODEL
+    except Exception:
         return model
-    if provider == "agy":
-        if any(m in low for m in _CLAUDE_MARKERS):
-            return AGY_FALLBACK_MODEL
-        return model
-    return model
+    normalized, _ = normalize_model_text(model, provider)
+    return normalized or model
 
 # tools_policy -> Claude `tools` listesi. Politika adı sağlayıcıdan bağımsız
 # tutulur ki kasa dosyası tek biçim konuşsun; eşleme burada yapılır.
@@ -136,12 +205,67 @@ def render_claude_agent(spec: AgentSpec) -> str:
     tools = _TOOLS_BY_POLICY.get(policy)
     if tools:
         front["tools"] = tools
+    return f"{render_frontmatter(front)}\n\n{_claude_body(spec)}\n"
+
+
+def _claude_body(spec: AgentSpec) -> str:
+    """Claude tarafındaki ajan gövdesi: istem + kural bloğu."""
     body = (spec.prompt or "").strip()
     rules = _rules_lines(spec)
     if rules:
         # Claude ön bilgisinde `rules` alanı yok; kurallar gövdeye eklenir.
         body = body + "\n\n## Kurallar\n" + "\n".join(f"- {r}" for r in rules)
-    return f"{render_frontmatter(front)}\n\n{body.strip()}\n"
+    return body.strip()
+
+
+def claude_tools_list(spec: AgentSpec) -> List[str]:
+    """Ajanın Claude araç listesi (politika + orkestratör yasağı)."""
+    policy = "read-only" if is_orchestrator(spec) else (spec.tools_policy or "").lower()
+    tools = _TOOLS_BY_POLICY.get(policy, "")
+    return [t.strip() for t in tools.split(",") if t.strip()]
+
+
+def claude_agents_json(vault_path: Optional[Path | str] = None) -> str:
+    """
+    `claude --agents <json>` yükü: Entropy'nin KENDİ kadrosu.
+
+    İzole kipte CLI kullanıcının `.claude/agents` klasörünü okumaz
+    (`--setting-sources ""`), yani derlenmiş dosyalar görünmez olur; kadro o
+    turda yalnızca bu bayrakla taşınabilir.
+
+    Desk ofis ajanları ASLA girmez: kadro yalnızca `AgentRegistry.list()`ten
+    gelir ve o da kasadaki `Entropy/Desk` altını (bağlantı/junction dâhil)
+    ayıklar. Bir ofis ajanının Entropy'nin turunda seçilebilmesi, "Entropy'yi
+    bilmeyen" bir ajanın Entropy adına konuşması demekti. Künyedeki `office`
+    alanına BAKILMAZ: Entropy'nin kendi tohum ajanları da bir ofis adı taşıyor.
+
+    Kadro boşsa `"{}"` değil BOŞ DİZE döner: çağıranlar bayrağı hiç eklemesin.
+    """
+    import json
+
+    from entropy.agents.registry import AgentRegistry
+
+    try:
+        specs = AgentRegistry(vault_path=vault_path).list()
+    except Exception:
+        return ""
+    payload: Dict[str, dict] = {}
+    for spec in specs:
+        name = (spec.name or "").strip()
+        if not name:
+            continue
+        entry = {
+            "description": " ".join((spec.description or spec.role or name).split()),
+            "prompt": _claude_body(spec),
+            "tools": claude_tools_list(spec),
+        }
+        model = resolve_model(spec, "claude")
+        if model:
+            entry["model"] = model
+        payload[name] = entry
+    if not payload:
+        return ""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 # Orkestratör derlemesine düşen sert yasaklar. agy'nin ön bilgi şemasında araç

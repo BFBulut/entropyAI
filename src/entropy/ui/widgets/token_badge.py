@@ -40,7 +40,13 @@ def format_token_badge(bridge: Any) -> Tuple[str, str]:
     last_bg = dict(getattr(bridge, "last_background_usage", {}) or {})
     last_bg_total = int(last_bg.get("total_tokens", 0) or 0)
 
+    # Ek-1 (Faz 9): `total_tokens_used` artik YALNIZCA son turun toplami
+    # (claude_bridge._apply_chat_usage). Oturum toplami `session_total_tokens`.
+    # Onbellek okumasi ayri kalem olarak gosterilir; oturumun buyuk kismi
+    # onbellekten geliyorsa "Sohbet: 77k" rakami pahali sanilmasin.
     chat_part = f"Sohbet: {_k(sess)}" + (f" (+{_k(turn_total)})" if turn_total > 0 else "")
+    if sess_cache > 0:
+        chat_part += f"  ·  önbellek {_k(sess_cache)}"
     bg_part = f"Arka plan: {_k(bg_total)}" + (f" (son {_k(last_bg_total)})" if last_bg_total > 0 else "")
 
     if sess == 0 and bg_total == 0:
@@ -158,3 +164,34 @@ def format_context_badge(bridge: Any, pressure: float = None):
         lines.append("Doluluk %60'ı aştı — /handoff önerilir.")
         lines.append("Aktarım geçmişi özetleyip bağlamı boşaltır.")
     return text, "\n".join(lines), color
+
+
+def format_token_badge_from_detail(detail: Any) -> Tuple[str, str]:
+    """
+    `bus.token_usage_detail` sozlugunden rozet metni (Faz 9).
+
+    Kopru sinyali `{"session", "turn", "cache_read", "cost_weighted"}` yayar
+    (`ClaudeCodeBridge.usage_badge_fields`). Rozet bu tek kaynagi okur; koprunun
+    ic alanlarini widget'lardan tek tek okumak, `total_tokens_used`in anlami
+    degistiginde (oturum -> son tur) sessiz yanlis sayilara yol acmisti.
+    """
+    d = dict(detail or {})
+    sess = int(d.get("session", 0) or 0)
+    turn = int(d.get("turn", 0) or 0)
+    cache = int(d.get("cache_read", 0) or 0)
+    weighted = int(d.get("cost_weighted", 0) or 0)
+
+    if sess == 0 and turn == 0:
+        text = "Tokens: 0"
+    else:
+        text = f"Sohbet: {_k(sess)}" + (f" (+{_k(turn)})" if turn > 0 else "")
+        if cache > 0:
+            text += f"  ·  önbellek {_k(cache)}"
+    tooltip = (
+        "SOHBET (bu konusma)\n"
+        f"• Oturum toplamı: {sess:,} token\n"
+        f"• Son tur: {turn:,}\n"
+        f"• Önbellek okuması (oturum): {cache:,}\n"
+        f"• Maliyet ağırlıklı toplam: {weighted:,}\n"
+    )
+    return text, tooltip

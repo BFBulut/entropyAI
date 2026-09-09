@@ -251,8 +251,18 @@ def test_claude_chat_injects_context_via_append_system_prompt(tmp_path, monkeypa
     captured = _run_chat(b, monkeypatch)
     cmd = captured["cmd"]
 
-    # Uzun bağlam argv'ye yazılmaz: --append-system-prompt-file ile dosyadan gider.
-    assert "--append-system-prompt" in cmd or "--append-system-prompt-file" in cmd
+    # Uzun bağlam argv'ye yazılmaz, dosyadan gider. Faz 9'da saf kip açıkken
+    # bayrak `--system-prompt-file` (varsayılan istemi DEĞİŞTİRİR), kapalıyken
+    # eski `--append-system-prompt[-file]`; ikisi de kabul.
+    assert any(
+        f in cmd
+        for f in (
+            "--append-system-prompt",
+            "--append-system-prompt-file",
+            "--system-prompt",
+            "--system-prompt-file",
+        )
+    )
     system_prompt = captured["system_prompt"]
     assert "Entropy AI" in system_prompt
     assert "[AJANLAR]" in system_prompt          # ajan farkındalığı sohbete de girer
@@ -381,6 +391,36 @@ def test_claude_chat_passes_agent_flag(tmp_path, monkeypatch, registry):
 
     captured = _run_chat(b, monkeypatch, agent="arastirmaci")
     assert captured["cmd"][captured["cmd"].index("--agent") + 1] == "arastirmaci"
+
+
+def test_claude_chat_carries_the_roster_in_agents_flag(tmp_path, monkeypatch, registry):
+    """Saf kip açıkken sohbet argv'si Entropy kadrosunu `--agents` ile taşır."""
+    import json as _json
+
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "claude_isolated", True)
+    b = ClaudeCodeBridge()
+    b.active_project_dir = tmp_path
+    _isolate_chat_history(monkeypatch)
+
+    cmd = _run_chat(b, monkeypatch)["cmd"]
+    assert "--agents" in cmd
+    payload = _json.loads(cmd[cmd.index("--agents") + 1])
+    assert "arastirmaci" in payload
+    assert payload["arastirmaci"]["prompt"]
+
+
+def test_claude_chat_without_isolation_has_no_agents_flag(tmp_path, monkeypatch, registry):
+    """Saf kip kapalıyken CLI zaten `.claude/agents` okur; bayrak eklenmez."""
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "claude_isolated", False)
+    b = ClaudeCodeBridge()
+    b.active_project_dir = tmp_path
+    _isolate_chat_history(monkeypatch)
+
+    assert "--agents" not in _run_chat(b, monkeypatch)["cmd"]
 
 
 def test_send_prompt_async_queues_attachments(tmp_path, monkeypatch):

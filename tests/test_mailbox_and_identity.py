@@ -217,7 +217,8 @@ def test_invalid_kind_status_and_terminal_are_rejected(vault):
 
 def test_corrupt_message_file_does_not_break_the_box(vault):
     box = entropy_mailbox(vault_path=vault)
-    box.send(Message(from_="x", parts=[text_part("saglam")]))
+    # Entropy kutusu yalnizca report/status kabul eder (Faz 9 yon kilidi).
+    box.send(Message(from_="x", kind="report", parts=[text_part("saglam")]))
     (box.inbox_dir / "20260101-000000-bozuk.json").write_text("{yarim", encoding="utf-8")
     msgs = box.list()
     assert len(msgs) == 1 and msgs[0].text == "saglam"
@@ -290,7 +291,7 @@ def test_pending_instructions_marks_read_and_builds_section(vault, offices):
     msgs = pending_instructions("arastirma-ofisi", vault_path=vault)
     assert len(msgs) == 1
     section = instructions_section(msgs)
-    assert "POSTA KUTUSU" in section and "önce maliyeti çıkar" in section
+    assert "[SORU" in section and "önce maliyeti çıkar" in section
     # İkinci okuma boş: aynı yön ikinci planlamaya tekrar enjekte edilmemeli.
     assert pending_instructions("arastirma-ofisi", vault_path=vault) == []
 
@@ -303,7 +304,7 @@ def test_plan_prompt_contains_mailbox_instructions(vault, offices, agents):
     harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices)
     prompt = harness.build_plan_prompt(harness.office, card)
     assert "yalnızca 2026 kaynaklarını kullan" in prompt
-    assert prompt.index("POSTA KUTUSU") < prompt.index("[ÜST KART]")
+    assert prompt.index("[SORU") < prompt.index("[ÜST KART]")
 
 
 # ---------------------------------------------------------------------------

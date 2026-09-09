@@ -47,23 +47,42 @@ def status_color(status: Optional[Dict[str, Any]]) -> str:
     return COLOR_OK
 
 
-def status_text(provider: str, label: str, status: Optional[Dict[str, Any]]) -> str:
-    """Rozetin tek satırlık metni: `AGY · Pro · 3 sa`."""
+#: Faz 9 - kompakt durum imleri. Eski rozet uzun bir cumle basiyordu
+#: ("AGY · antigravity-cli · belirtec ... (suresi doldu (yenilenecek))"),
+#: ust cubugun yarisini yiyor ve akan yerlesimde ikinci satira dokuluyordu.
+#: Ayrinti artik ipucunda; rozet yalnizca im + kisa plan tasir.
+MARK_OK = "✓"
+MARK_WARN = "⟳"
+MARK_BAD = "✕"
+
+
+def status_mark(status: Optional[Dict[str, Any]]) -> str:
+    """Rozet imi: girisli ✓, hatali/yenilenecek ⟳, girissiz ✕, bilinmeyen ?."""
     if not status:
-        return f"{label} · ?"
+        return "?"
     if not status.get("logged_in"):
-        return f"{label} · giriş yok"
-    bits: List[str] = [label]
-    plan = str(status.get("plan") or "").strip()
-    if plan:
-        bits.append(plan)
-    window = str(status.get("session_window") or "").strip()
-    if window:
-        bits.append(window)
-    quota = str(status.get("quota_hint") or "").strip()
-    if quota and quota.lower() not in ("bilinmiyor", "unknown", "?"):
-        bits.append(quota)
-    return " · ".join(bits)
+        return MARK_BAD
+    if status.get("last_error"):
+        return MARK_WARN
+    return MARK_OK
+
+
+#: Rozet basina hedef azami genislik (px). Iki rozet + bosluk <= 160 px.
+MAX_BADGE_WIDTH = 76
+
+#: Kisa plan etiketinde gosterilecek azami karakter.
+PLAN_CHARS = 5
+
+
+def status_text(provider: str, label: str, status: Optional[Dict[str, Any]]) -> str:
+    """Rozetin kompakt metni: `AGY ✓`, `Claude ✓ max`, `AGY ✕`."""
+    mark = status_mark(status)
+    bits: List[str] = [f"{label} {mark}"]
+    if status and status.get("logged_in"):
+        plan = str(status.get("plan") or "").strip()
+        if plan and plan.lower() not in ("bilinmiyor", "unknown", "?"):
+            bits.append(plan[:PLAN_CHARS])
+    return " ".join(bits)
 
 
 def status_tooltip(provider: str, status: Optional[Dict[str, Any]]) -> str:
@@ -137,6 +156,10 @@ class ProviderStatusBadge(QFrame):
             color = status_color(status)
             text = status_text(provider, label, status)
             widget = self.labels[provider]
+            # Bos metin geride yalnizca renkli bir cerceve birakiyordu ("bos
+            # kirmizi kare" ikincil adayi); metin yoksa etiket gizlenir.
+            widget.setVisible(bool(text.strip()))
+            widget.setMaximumWidth(MAX_BADGE_WIDTH)
             widget.setText(
                 f"<span style='color:{color}; border:1px solid {color};"
                 f" border-radius:8px; padding:2px 8px; font-size:{LABEL_PX}px;"

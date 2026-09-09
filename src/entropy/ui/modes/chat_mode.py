@@ -26,7 +26,7 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STY
 from entropy.ui.widgets.command_palette import install_command_palette
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
-from entropy.ui.widgets.flow_layout import FlowHeaderFrame
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame, fit_combo_to_contents
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
 from entropy.ui.widgets.report_center import ReportCenterWidget
 from entropy.ui.widgets.timeline_panel import TimelinePanel
@@ -34,13 +34,17 @@ from entropy.ui.widgets.report_inbox import (
     InboxBadge, ReportInboxStrip, collect_recent_entries,
 )
 from entropy.ui.widgets.effort_selector import install_effort_selector
-from entropy.ui.widgets.ui_polish import apply_model_placeholder
+from entropy.ui.widgets.ui_polish import apply_model_placeholder, emoji_or_text
 from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html, render_markdown_to_html
 from entropy.ui.window_sizing import fit_window_to_screen
 from entropy.core.slash_commands import SlashCommandRegistry, invalidate_command_cache
 from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.widgets.notification_pill import NotificationPillWidget
 from entropy.ui.widgets.slash_command_popup import SlashCommandPopupWidget
+from entropy.ui.widgets.slash_prompt import (
+    CLI_PASSTHROUGH, close_matches, strip_skill_tokens, unknown_slash_html,
+    unknown_slash_token,
+)
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 
 class ChatInputField(QLineEdit):
@@ -326,12 +330,12 @@ class ChatModeWindow(QMainWindow):
         # duruyordu; boşken ne anlama geldiğini yazan yer tutucu konur.
         apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
-        # Faz 8: en uzun model adi combo'yu 300 px'e sisiriyordu; acilir liste
-        # tam adi gosterir, kapali kutu 170 px'e sinirlanir.
-        self.model_combo.setMaximumWidth(170)
-        self.model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.model_combo.setMinimumContentsLength(10)
+        # Faz 9: 170 px'lik ust sinir "claude-opus-5"i bile kirpiyordu. Kutu
+        # artik en uzun model adina gore olculur; dar pencerede akan yerlesim
+        # kutuyu alt satira tasir, metni kesmez.
+        fit_combo_to_contents(self.model_combo)
         h_layout.addWidget(self.model_combo)
+        fit_combo_to_contents(self.provider_combo)
 
         # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
         self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
@@ -368,7 +372,7 @@ class ChatModeWindow(QMainWindow):
         # Durum rozeti: Zen'deki çekirdek durum etiketiyle aynı bus sinyaline bağlı.
         # Arka plan görevi / damıtma haberleri de buraya düşer, böylece Chat modunda
         # da "arkada ne çalışıyor?" sorusu yanıtsız kalmaz.
-        self.state_badge = QLabel("🟢 HAZIR")
+        self.state_badge = QLabel(f"{emoji_or_text('🟢', '●')} HAZIR")
         self.state_badge.setToolTip("Entropy AI çekirdek durumu")
         self.state_badge.setStyleSheet(
             "color:#00FF9D; background:#05070A; border:1px solid #1F2B42; border-radius:4px;"
@@ -504,6 +508,11 @@ class ChatModeWindow(QMainWindow):
         # 2. Chat history browser
         self.chat_browser = QTextBrowser()
         self.chat_browser.setOpenExternalLinks(False)
+        # Faz 9: `setOpenLinks(False)` olmadan QTextBrowser `entropy-report://`
+        # bağlantısını kendi belgesi sanıp yüklemeye çalışıyor; günlüğe
+        # "No document for entropy-report://..." uyarısı basıyor ve sohbet
+        # görünümünü boşaltabiliyordu. Bağlantıyı yalnızca biz açıyoruz.
+        self.chat_browser.setOpenLinks(False)
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
@@ -604,6 +613,8 @@ class ChatModeWindow(QMainWindow):
         self._bus_connected = True
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)
+        # Ek-1 (Faz 9): koprunun ayrintili token sozlugu (oturum/tur/onbellek).
+        bus.token_usage_detail.connect(self._on_token_detail)
         bus.agent_turn_started.connect(self._on_turn_started)
         bus.agent_turn_completed.connect(self._on_turn_completed)
         bus.token_chunk_received.connect(self._on_chunk)
@@ -627,10 +638,13 @@ class ChatModeWindow(QMainWindow):
     def _update_state_badge(self, state: str):
         """Çekirdek durumunu başlıktaki rozete yansıtır (Zen'deki core_status_lbl karşılığı)."""
         mapping = {
-            "thinking": ("🔵 DÜŞÜNÜYOR", "#00F0FF"),
-            "executing": ("🟡 YÜRÜTÜLÜYOR", "#FFB300"),
-            "error": ("🔴 HATA", "#FF4D4D"),
-            "idle": ("🟢 HAZIR", "#00FF9D"),
+            # Faz 9: emoji TEK BASINA durum tasimaz; glif cizilemezse (tofu)
+            # geriye bos kutu kaliyordu. `emoji_or_text` fontu yoksa monokrom
+            # daireye duser, metin ve renk her durumda okunur kalir.
+            "thinking": (f"{emoji_or_text('🔵', '●')} DÜŞÜNÜYOR", "#00F0FF"),
+            "executing": (f"{emoji_or_text('🟡', '●')} YÜRÜTÜLÜYOR", "#FFB300"),
+            "error": (f"{emoji_or_text('🔴', '●')} HATA", "#FF4D4D"),
+            "idle": (f"{emoji_or_text('🟢', '●')} HAZIR", "#00FF9D"),
         }
         text, color = mapping.get(state, mapping["idle"])
         self.state_badge.setText(text)
@@ -641,17 +655,18 @@ class ChatModeWindow(QMainWindow):
 
     @Slot(str, str)
     def _on_task_triggered(self, task_id: str, task_name: str):
-        self.state_badge.setText(f"⏰ GÖREV: {task_name[:18]}")
+        self.state_badge.setText(f"{emoji_or_text('⏰', '⏱')} GÖREV: {task_name[:18]}")
         self.state_badge.setToolTip(f"Arka plan görevi çalışıyor: {task_name} ({task_id})")
 
     @Slot(str, bool)
     def _on_task_completed(self, task_id: str, success: bool):
-        self.state_badge.setText("🟢 HAZIR" if success else "🔴 GÖREV HATASI")
+        dot = emoji_or_text("🟢", "●") if success else emoji_or_text("🔴", "●")
+        self.state_badge.setText(f"{dot} HAZIR" if success else f"{dot} GÖREV HATASI")
         self.state_badge.setToolTip("Entropy AI çekirdek durumu")
 
     @Slot(str, int, int)
     def _on_distill_progress(self, skill_name: str, done: int, total: int):
-        self.state_badge.setText(f"📘 DAMITMA {done}/{total}")
+        self.state_badge.setText(f"{emoji_or_text('📘', '▤')} DAMITMA {done}/{total}")
         self.state_badge.setToolTip(f"'{skill_name}' için yordam damıtma sürüyor: {done}/{total} rapor")
 
     # ------------------------------------------------ görev & yetenek paneli
@@ -1137,8 +1152,12 @@ class ChatModeWindow(QMainWindow):
             self.model_combo.setCurrentText(model_name)
 
     def _on_model_selected(self, model_name: str):
+        # Faz 9: yalnızca etkin sağlayıcıya ait ad köprüye geçer; reddedilirse
+        # kutu eski değerine döner (bkz. ui_polish.accept_model_selection).
         if model_name and model_name != self.bridge.selected_model:
-            self.bridge.set_model(model_name)
+            from entropy.ui.widgets.ui_polish import accept_model_selection
+
+            accept_model_selection(self.bridge, self.model_combo, model_name)
 
     def _on_provider_selected(self, provider: str):
         """Sağlayıcı listesinden seçim: köprüyü yönetici üzerinden değiştirir."""
@@ -1167,6 +1186,8 @@ class ChatModeWindow(QMainWindow):
             apply_model_placeholder(self.model_combo)
         finally:
             self.model_combo.blockSignals(False)
+        # Faz 9: yeni saglayicinin model adlari daha uzun olabilir; kutuyu yeniden olc.
+        fit_combo_to_contents(self.model_combo)
 
     @Slot(int)
     def _update_tokens(self, tokens: int):
@@ -1177,6 +1198,12 @@ class ChatModeWindow(QMainWindow):
         self.tokens_badge.setText(text)
         self.tokens_badge.setToolTip(tip)
         self._apply_context_badge()
+
+    @Slot(dict)
+    def _on_token_detail(self, detail: dict):
+        """Koprunun `usage_badge_fields()` sozluguyle rozeti tazeler."""
+        self._last_token_detail = dict(detail or {})
+        self._update_tokens(int(self._last_token_detail.get("session", 0) or 0))
 
     @Slot(float)
     def _on_context_pressure(self, ratio: float):
@@ -1220,6 +1247,8 @@ class ChatModeWindow(QMainWindow):
 
         # Check slash command handling (supports multiple slash commands in prompt)
         matched_cmds = []
+        # Faz 9: istemden temizlenecek yetenek slash token'ları.
+        skill_tokens_used: list = []
         slash_tokens = re.findall(r'(?:^|\s)/([a-zA-Z0-9_\-:]+)', prompt)
 
         if slash_tokens and prompt.strip().startswith("/desk"):
@@ -1281,6 +1310,19 @@ class ChatModeWindow(QMainWindow):
                         idx = self.skill_combo.findData(chosen_skill_name)
                         if idx >= 0:
                             self.skill_combo.setCurrentIndex(idx)
+                        skill_tokens_used.append(tok)
+
+            # Faz 9: bilinmeyen slash sağlayıcı CLI'ına gitmemeli; CLI onu kendi
+            # ad alanında arayıp "Unknown command" döndürüyordu.
+            unknown = unknown_slash_token(prompt, set(cmds_by_token), CLI_PASSTHROUGH)
+            if unknown:
+                self._append_message(
+                    "Entropy AI",
+                    unknown_slash_html(unknown, close_matches(unknown, cmds_by_token)),
+                    is_system=True,
+                )
+                self.input_field.clear()
+                return
 
         chosen_skill = self.skill_combo.currentData()
         escaped_prompt = html.escape(prompt).replace('\n', '<br/>')
@@ -1319,6 +1361,19 @@ class ChatModeWindow(QMainWindow):
         self._clear_staged_images()
 
         actual_prompt = prompt
+        # Faz 9: yetenek slash'ı arayüzde tüketildi (kombo ayarlandı); token
+        # istemde kalırsa CLI onu komut sanıp "Unknown command" döndürüyor.
+        if skill_tokens_used:
+            actual_prompt = strip_skill_tokens(actual_prompt, skill_tokens_used)
+            if not actual_prompt:
+                # Yalnızca "/<yetenek>" yazıldı: iş yok, sadece yeteneği seç.
+                self._append_message(
+                    "Entropy AI",
+                    f"🎯 <b>Yetenek etkin:</b> {html.escape(str(chosen_skill or skill_tokens_used[0]))}"
+                    " — şimdi ne yapmasını istediğinizi yazın.",
+                    is_system=True,
+                )
+                return
         if images_to_send:
             actual_prompt += "\n" + "\n".join([f"[Eklenen Görsel Dosyası: {p}]" for p in images_to_send])
 
@@ -1373,6 +1428,7 @@ class ChatModeWindow(QMainWindow):
         signals = [
             (bus.model_detected, self._update_model_badge),
             (bus.token_usage_updated, self._update_tokens),
+            (bus.token_usage_detail, self._on_token_detail),
             (bus.agent_turn_started, self._on_turn_started),
             (bus.agent_turn_completed, self._on_turn_completed),
             (bus.token_chunk_received, self._on_chunk),

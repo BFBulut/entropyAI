@@ -54,6 +54,10 @@ OWNER_KINDS = ("office", "agent", "entropy")
 
 MESSAGE_KINDS = ("instruction", "report", "question", "status")
 
+# Entropy'nin gelen kutusunun kabul ettiği türler (Faz 9 / B-9.4 yön kilidi).
+# Talimat ve soru yalnızca AŞAĞI yönde (Entropy → ofis) geçerlidir.
+ENTROPY_INBOX_KINDS = ("report", "status")
+
 # A2A görev durumları. "auth_required"/"rejected" bilerek dışarıda: Entropy'de
 # karşılığı olan bir yol yok ve şemaya yazılınca doğrulama gevşerdi.
 MESSAGE_STATUSES = (
@@ -220,8 +224,11 @@ class Mailbox:
         """
         if message is None:
             message = Message(**fields)
-        self._check_scope(message, sender_office)
+        # Şema doğrulaması kapsam/yön kilidinden ÖNCE: geçersiz bir tür
+        # ("gossip") yön hatası değil, şema hatasıdır ve çağıran ValueError
+        # bekliyor.
         self._validate(message)
+        self._check_scope(message, sender_office)
 
         target = self.inbox_dir
         try:
@@ -237,7 +244,25 @@ class Mailbox:
         return message
 
     def _check_scope(self, message: Message, sender_office: Optional[str]) -> None:
-        """Ajanlar arası doğrudan mesaj yalnızca aynı ofis içinde."""
+        """
+        Yön kilidi + ajanlar arası kapsam.
+
+        (1) YÖN (Faz 9 / B-9.4): Entropy'nin kutusuna yalnızca `report` ve
+        `status` girer. Desk → Entropy tek yönlü bir RAPOR hattıdır; bir ofis
+        ajanının Entropy'ye `instruction`/`question` yazabilmesi kuralı teamüle
+        bırakıyordu. `report_to_entropy` (report), `emit_terminal` (status) ve
+        `AgenticChat` yanıtı (report) etkilenmez.
+        (2) KAPSAM: ajanlar arası doğrudan mesaj yalnızca aynı ofis içinde.
+        """
+        if self.owner_kind == "entropy":
+            if message.kind not in ENTROPY_INBOX_KINDS:
+                raise MailboxScopeError(
+                    f"Entropy'nin gelen kutusuna '{message.kind}' yazılamaz: "
+                    f"yalnızca {', '.join(ENTROPY_INBOX_KINDS)} kabul edilir "
+                    f"(gönderen: {message.from_ or '?'}). Yön tek: ofis → Entropy "
+                    f"rapordur; Entropy → ofis talimatı `instruct_office` ile gider."
+                )
+            return
         if self.owner_kind != "agent":
             return
         sender = (message.from_ or "").strip()
@@ -409,7 +434,20 @@ def ask_office(office: str, question: str, task_id: str = "", vault_path=None) -
 
 
 def instruct_office(office: str, instruction: str, task_id: str = "", vault_path=None) -> Message:
-    """Entropy'nin ofise talimatı; harness planlamadan önce okur."""
+    """
+    Entropy → ofis TALİMATI; harness bir sonraki planlamadan önce okur.
+
+    Faz 9 / B-9.3: Entropy'den ofise yön vermenin TEK yüzeyi budur. `/desk msg
+    <ofis> :: <talimat>` ve Desk penceresindeki "Ofise talimat" kutusu aynı
+    fonksiyonu çağırır; iki ayrı yazma yolu olsaydı biri `read` işaretlemesini
+    ya da bütçeyi kaçırırdı. Model ÇAĞIRMAZ, kota harcamaz.
+
+    Ters yön (ofis → Entropy talimatı) `Mailbox._check_scope` tarafından
+    engellenir; Entropy'nin kutusu yalnızca `report`/`status` kabul eder.
+    """
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise ValueError("Talimat boş olamaz.")
     return office_mailbox(office, vault_path=vault_path).send(
         Message(
             task_id=task_id,
@@ -519,23 +557,37 @@ def pending_instructions(office: str, vault_path=None, mark: bool = True) -> Lis
 
 
 def instructions_section(messages: Iterable[Message]) -> str:
-    """Planlama prompt'una eklenen "[POSTA KUTUSU]" bölümü (bütçeli)."""
-    rows: List[str] = []
+    """
+    Planlama prompt'una eklenen posta bölümü (bütçeli).
+
+    Talimat ve soru AYRI başlıklar altında verilir: `[TALİMAT]` bağlayıcı bir
+    yöndür (plana dönüşmesi beklenir), `[SORU]` yanıtlanır. Tek bir liste
+    hâlindeyken orkestratör ikisini aynı ağırlıkta okuyordu.
+    """
+    instructions: List[str] = []
+    questions: List[str] = []
     total = 0
+    truncated = False
     for msg in messages:
         text = " ".join((msg.text or "").split())
         if not text:
             continue
-        label = "SORU" if msg.kind == "question" else "TALİMAT"
-        row = f"- [{label}] {msg.from_ or '?'}: {text}"
+        row = f"- {msg.from_ or '?'}: {text}"
         if total + len(row) > INSTRUCTION_CHAR_BUDGET:
-            rows.append("- … (kalan mesajlar posta kutusunda)")
+            truncated = True
             break
-        rows.append(row)
+        (questions if msg.kind == "question" else instructions).append(row)
         total += len(row)
-    if not rows:
+    blocks: List[str] = []
+    if instructions:
+        blocks.append("[TALİMAT — kullanıcıdan gelen bağlayıcı yön]\n" + "\n".join(instructions))
+    if questions:
+        blocks.append("[SORU — kullanıcıdan gelen soru]\n" + "\n".join(questions))
+    if not blocks:
         return ""
-    return "[POSTA KUTUSU — kullanıcıdan gelen yön]\n" + "\n".join(rows)
+    if truncated:
+        blocks.append("- … (kalan mesajlar posta kutusunda)")
+    return "\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +614,8 @@ def office_status(office: str, vault_path=None) -> Dict[str, object]:
     running: List[Dict[str, object]] = []
     spent_total = 0
     try:
-        cards = board.list()
+        # Faz 9 / B-9.2: ofis kartlari artik ofisin kendi kasasinda.
+        cards = board.list(office=office)
     except Exception:
         cards = []
     for card in cards:

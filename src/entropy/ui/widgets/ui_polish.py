@@ -148,6 +148,66 @@ def is_model_placeholder(text: str) -> bool:
     return (text or "").strip() == MODEL_PLACEHOLDER
 
 
+def accept_model_selection(bridge, combo, model_name: str) -> bool:
+    """
+    Üst çubuk model seçimini köprüye uygular; geçersizse kutuyu geri alır.
+
+    Faz 9 / B-9.2: model kutusu serbest metin. Yabancı bir ad (Claude
+    oturumundayken `gemini-…`) köprüye geçince her koşu geçersiz `--model`
+    ile başlıyor, kullanıcı ise kutuda o adı seçili görüyordu. Doğrulama
+    köprünün kendi süzgecine bırakılır (`_is_claude_model`/`_is_agy_model`,
+    `getattr` ile aranır); yoksa ön ek kuralına düşülür. Reddedilirse kutu
+    köprünün gerçek modeline döner ve ipucu güncellenir.
+
+    True = seçim uygulandı.
+    """
+    name = (model_name or "").strip()
+    if not name or is_model_placeholder(name):
+        return False
+    provider = str(getattr(bridge, "provider_name", "") or "")
+    checker = getattr(bridge, "_is_claude_model", None) if provider == "claude" else None
+    if checker is None and provider == "agy":
+        checker = getattr(bridge, "_is_agy_model", None)
+    valid = True
+    if checker is not None:
+        try:
+            valid = bool(checker(name))
+        except Exception:
+            valid = True
+    else:
+        low = name.lower()
+        if provider == "claude":
+            valid = low.startswith("claude-") or low.split("[", 1)[0] in {
+                "opus", "sonnet", "haiku", "fable", "best", "default", "opusplan"
+            }
+        elif provider == "agy":
+            valid = low.startswith(("gemini-", "gpt-")) or low.startswith("claude-")
+    if valid:
+        try:
+            valid = bool(bridge.set_model(name))
+        except Exception:
+            valid = False
+    if valid:
+        return True
+    # Geri alma: sinyaller bloklanır, yoksa bu geri yazma yeniden tetiklerdi.
+    current = str(getattr(bridge, "selected_model", "") or "")
+    try:
+        combo.blockSignals(True)
+        combo.setCurrentText(current)
+        combo.setToolTip(
+            f"'{name}' {provider or 'etkin'} sağlayıcısının modeli değil; "
+            f"seçim '{current}' olarak kaldı."
+        )
+    except (AttributeError, RuntimeError):
+        pass
+    finally:
+        try:
+            combo.blockSignals(False)
+        except (AttributeError, RuntimeError):
+            pass
+    return False
+
+
 def body_style(color_key: str = "text_body", size_px: int = BODY_PX, bold: bool = False) -> str:
     """Tasarım sisteminden gövde metni stil dizesi (tek kaynak)."""
     weight = "600" if bold else "400"
@@ -184,3 +244,81 @@ def icon_button_style(accent: Optional[str] = None) -> str:
         QPushButton:hover {{ border-color:{color}; background-color:{RT['accent_soft']}; }}
         QPushButton:disabled {{ color:{RT['text_dim']}; border-color:{RT['divider_soft']}; }}
     """
+
+
+# --------------------------------------------------------------- emoji yedeği
+
+#: Emoji/simge glifleri için font zinciri (Faz 9).
+#: Kullanıcının günlüğünde 176 satır `OpenType support missing for
+#: "Segoe UI Emoji"/"Segoe UI Symbol"` vardı; renkli emoji ailesi çözülemeyince
+#: `🔴` gibi glifler **içi boş kutu** (tofu) olarak çiziliyor — kullanıcının
+#: "üst çubukta boş kırmızı kare" dediği şey budur.
+EMOJI_FALLBACK_FAMILIES = (
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Color Emoji",
+    "Apple Color Emoji",
+    "DejaVu Sans",
+)
+
+#: Emoji yerine kullanılacak metin/monokrom eşlenikler (font hiç yoksa).
+EMOJI_TEXT_FALLBACK = {
+    "🟢": "●", "🔴": "●", "🟡": "●", "🟠": "●", "⚪": "○", "⚫": "●",
+    "✅": "✓", "❌": "✕", "⚠️": "!", "⏰": "⏱", "📘": "▤", "📥": "▼",
+    "🎯": "◎", "📑": "▤", "🧠": "◇", "🔌": "▸", "🏢": "▣", "🌐": "◍",
+}
+
+
+_EMOJI_AVAILABLE = None
+
+
+def emoji_font_available(families=EMOJI_FALLBACK_FAMILIES) -> bool:
+    """Sistemde kullanılabilir bir emoji ailesi var mı? (sonuç önbelleklenir)"""
+    global _EMOJI_AVAILABLE
+    if _EMOJI_AVAILABLE is not None and families is EMOJI_FALLBACK_FAMILIES:
+        return _EMOJI_AVAILABLE
+    try:
+        from PySide6.QtGui import QFontDatabase
+
+        installed = {f.lower() for f in QFontDatabase.families()}
+    except Exception:
+        return False
+    found = any(str(f).lower() in installed for f in families)
+    if families is EMOJI_FALLBACK_FAMILIES:
+        _EMOJI_AVAILABLE = found
+    return found
+
+
+def apply_emoji_font_fallback(app) -> bool:
+    """Uygulama font zincirine emoji yedeklerini ekler.
+
+    `QFont.setFamilies([...])` Qt'ye glif bulunamadığında sırayla denemesi
+    gereken aileleri söyler; tek `setFamily` ile bu zincir kurulmuyor ve emoji
+    tofu kutusuna düşüyordu. Emoji ailesi hiç yoksa `False` döner — çağıran
+    taraf `emoji_or_text()` ile metin eşleniğine düşebilir.
+    """
+    try:
+        from PySide6.QtGui import QFont
+
+        base = app.font()
+        primary = base.family() or "Segoe UI"
+        families = [primary] + [f for f in EMOJI_FALLBACK_FAMILIES if f != primary]
+        font = QFont(base)
+        font.setFamilies(families)
+        app.setFont(font)
+    except Exception:
+        return False
+    return emoji_font_available()
+
+
+def emoji_or_text(emoji: str, fallback: Optional[str] = None) -> str:
+    """Emoji fontu yoksa monokrom/metin eşleniğini döndürür.
+
+    Durum göstergeleri emojiye TEK BAŞINA güvenmemeli: rozetlerde emoji yanında
+    her zaman metin ve renk bulunur, böylece glif çizilemese de durum okunur.
+    """
+    if emoji_font_available():
+        return emoji
+    if fallback is not None:
+        return fallback
+    return EMOJI_TEXT_FALLBACK.get(emoji, "")

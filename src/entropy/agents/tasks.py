@@ -44,11 +44,28 @@ from typing import Callable, Dict, List, Optional
 from entropy.agents.mailbox import emit_terminal
 from entropy.agents.registry import (
     AgentRegistry,
+    default_provider,
     parse_frontmatter,
     render_frontmatter,
 )
 
 TASKS_SUBDIR = "Entropy/Tasks"
+
+# Faz 9 / B-9.2 — kart deposu ikiye ayrıldı. Entropy'nin KENDİ kartları
+# `Entropy/Tasks` altında kalır; ofis kartları ofisin kendi kasasında,
+# `Entropy/Desk/Offices/<ofis>/cards/` altında durur. Ayrım eskiden yalnızca
+# kart ön bilgisindeki `office:` alanındaydı; aynı klasörde durdukları için
+# Obsidian'da, yedeklemede ve panolarda iki dünya karışıyordu.
+DESK_OFFICES_SUBDIR = "Entropy/Desk/Offices"
+OFFICE_CARDS_DIRNAME = "cards"
+
+# Taşıma günlüğü: geri alınabilirlik için her taşınan kartın eski/yeni yolu.
+MIGRATION_LOG_SUBPATH = "Entropy/Desk/_migrations.log"
+
+# `list(office=ALL_CARDS)` iki kökü de tarar. Varsayılan (`office=None`)
+# YALNIZCA Entropy kartlarını döndürür: Entropy'nin panosu ofis kartlarını
+# kendi işi sanmasın diye süzme artık depo düzeyinde.
+ALL_CARDS = "*"
 
 STATUSES = ("backlog", "running", "review", "done", "failed")
 
@@ -84,7 +101,7 @@ class TaskCard:
     title: str = ""
     status: str = "backlog"
     agent: str = ""
-    provider: str = "agy"
+    provider: str = field(default_factory=default_provider)
     model: str = ""
     skill: str = ""
     goal: str = ""
@@ -269,6 +286,51 @@ def _accepts_kwarg(func, name: str) -> bool:
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+def resolve_card_model(card: "TaskCard", agent_spec=None, provider: str = "") -> str:
+    """
+    Kartın bu koşuda kullanacağı ham model adı (Faz 9.5).
+
+    Sıra: (1) kartın `model` alanı, (2) ajan tanımının modeli. İki durumda da ad
+    `compile.resolve_model` tablosundan geçirilir; sağlayıcıya ait olmayan bir ad
+    (ör. `provider: claude` + `model: gemini-3.1-pro-high`) o sağlayıcının
+    karşılığına çevrilir. Boş dönüş = "oturumun modelini miras al".
+
+    Eskiden kartın `model` alanı hiçbir yere aktarılmıyordu; köprü üst çubuğun
+    modelini kullanıyor ve claude kartları `unrecognized_model` ile ölüyordu.
+    """
+    from entropy.agents.compile import CLAUDE_FALLBACK_MODEL, resolve_model
+    from entropy.agents.registry import AgentSpec
+
+    provider = (provider or "").strip().lower()
+    raw = (card.model or "").strip()
+    spec = agent_spec
+    if raw:
+        # Kart modeli ajan tanımını geçersiz kılar; tabloyu kullanabilmek için
+        # geçici bir spec'e sarılır (resolve_model spec üzerinden çalışıyor).
+        spec = AgentSpec(name=card.agent or card.id, model=raw)
+    if spec is None:
+        return ""
+    resolved = (resolve_model(spec, provider) or "").strip()
+    if not resolved or resolved.lower() == CLAUDE_FALLBACK_MODEL:
+        # "inherit": köprü kendi oturum modelinde kalsın.
+        return ""
+    return resolved
+
+
+def agent_spec_payload(agent_spec) -> Optional[dict]:
+    """Ajan tanımının sistem istemine giren, sağlayıcıdan bağımsız özeti."""
+    if agent_spec is None:
+        return None
+    return {
+        "name": getattr(agent_spec, "name", "") or "",
+        "role": getattr(agent_spec, "role", "") or "",
+        "description": getattr(agent_spec, "description", "") or "",
+        "prompt": getattr(agent_spec, "prompt", "") or "",
+        "tools_policy": getattr(agent_spec, "tools_policy", "") or "",
+        "office": getattr(agent_spec, "office", "") or "",
+    }
+
+
 def card_needs_write(card: "TaskCard", agent_spec=None) -> bool:
     """
     Kart proje dizininde YAZMA kilidi gerektiriyor mu?
@@ -316,23 +378,88 @@ class TaskBoard:
             vault_path = config.obsidian_vault_path
         self.vault_path = Path(vault_path)
         self.tasks_dir = self.vault_path / TASKS_SUBDIR
+        self.desk_offices_dir = self.vault_path / DESK_OFFICES_SUBDIR
+        self._migrate_office_cards_once()
+
+    # -- yollar --------------------------------------------------------
+
+    def office_cards_dir(self, office: str) -> Path:
+        """Bir ofisin kart klasörü (`Entropy/Desk/Offices/<ofis>/cards`)."""
+        return self.desk_offices_dir / str(office).strip() / OFFICE_CARDS_DIRNAME
+
+    def _office_card_dirs(self) -> List[Path]:
+        """Diskte var olan tüm ofis kart klasörleri."""
+        out: List[Path] = []
+        try:
+            if not self.desk_offices_dir.is_dir():
+                return out
+            for child in sorted(self.desk_offices_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                cards = child / OFFICE_CARDS_DIRNAME
+                if cards.is_dir():
+                    out.append(cards)
+        except OSError:
+            return out
+        return out
 
     # -- okuma ---------------------------------------------------------
 
-    def card_file(self, task_id: str) -> Path:
-        return self.tasks_dir / f"{task_id}.md"
+    def card_file(self, task_id: str, office: Optional[str] = None) -> Path:
+        """
+        Kartın dosya yolu.
 
-    def list(self, status: Optional[str] = None) -> List[TaskCard]:
+        `office` verilmişse doğrudan o ofisin kart klasörü kullanılır (yazma
+        yolu bunu kullanır: kart hangi ofise aitse oraya yazılır). Verilmemişse
+        önce Entropy kökü, sonra ofis kökleri aranır; hiçbirinde yoksa Entropy
+        kökü döner — yani "yeni kart" varsayılan olarak Entropy'nindir.
+        """
+        office = (office or "").strip()
+        if office:
+            return self.office_cards_dir(office) / f"{task_id}.md"
+        entropy_path = self.tasks_dir / f"{task_id}.md"
+        if entropy_path.is_file():
+            return entropy_path
+        for cards_dir in self._office_card_dirs():
+            candidate = cards_dir / f"{task_id}.md"
+            if candidate.is_file():
+                return candidate
+        return entropy_path
+
+    def list(self, status: Optional[str] = None,
+             office: Optional[str] = None) -> List[TaskCard]:
+        """
+        Kartlar. `office=None` → YALNIZCA Entropy kartları,
+        `office="<ad>"` → yalnızca o ofisin kartları,
+        `office=ALL_CARDS` → iki kök birden.
+        """
         cards: List[TaskCard] = []
-        try:
-            if not self.tasks_dir.is_dir():
-                return cards
-            for path in sorted(self.tasks_dir.glob("*.md")):
-                card = self._read(path)
-                if card is not None and (status is None or card.status == status):
+        scope = (office or "").strip()
+        if scope == ALL_CARDS:
+            roots = [self.tasks_dir] + self._office_card_dirs()
+        elif scope:
+            roots = [self.office_cards_dir(scope)]
+        else:
+            roots = [self.tasks_dir]
+        for root in roots:
+            try:
+                if not root.is_dir():
+                    continue
+                for path in sorted(root.glob("*.md")):
+                    card = self._read(path)
+                    if card is None:
+                        continue
+                    if status is not None and card.status != status:
+                        continue
+                    # Entropy kökündeki bir kart `office:` taşıyorsa (taşıma
+                    # yapılamamış kalıntı) Entropy listesine KARIŞTIRILMAZ.
+                    if not scope and card.office:
+                        continue
+                    if scope and scope != ALL_CARDS and card.office != scope:
+                        continue
                     cards.append(card)
-        except OSError:
-            return cards
+            except OSError:
+                continue
         return cards
 
     def get(self, task_id: str) -> Optional[TaskCard]:
@@ -372,7 +499,7 @@ class TaskBoard:
             title=str(front.get("title") or path.stem),
             status=status if status in STATUSES else "backlog",
             agent=str(front.get("agent") or ""),
-            provider=str(front.get("provider") or "agy"),
+            provider=str(front.get("provider") or default_provider()),
             model=str(front.get("model") or ""),
             skill=str(front.get("skill") or ""),
             goal=sections.get(SECTION_GOAL, "").strip(),
@@ -402,7 +529,7 @@ class TaskBoard:
             card = replace(card, id=new_task_id(card.title))
         if not card.created_at:
             card = replace(card, created_at=_now())
-        if self.card_file(card.id).exists():
+        if self.card_file(card.id, office=card.office).exists() or self.get(card.id) is not None:
             raise FileExistsError(f"'{card.id}' kimlikli kart zaten var.")
         return self._write(card)
 
@@ -410,7 +537,17 @@ class TaskBoard:
         return self._write(card)
 
     def _write(self, card: TaskCard) -> TaskCard:
-        path = self.card_file(card.id)
+        # Kartın kökü `office` alanından türer: ofis kartı ofisin kasasına,
+        # Entropy kartı `Entropy/Tasks` altına yazılır.
+        path = self.card_file(card.id, office=card.office)
+        # Kart ofis kazandıysa (ya da kaybettiyse) eski kökteki kopya silinir;
+        # aksi hâlde aynı kimlikle iki dosya kalır ve iki kaynaklı gerçek olur.
+        old = self.card_file(card.id)
+        if old != path and old.is_file():
+            try:
+                old.unlink()
+            except OSError:
+                pass
         path.parent.mkdir(parents=True, exist_ok=True)
         criteria = "\n".join(f"- {c}" for c in (card.criteria or [])) or "-"
         body = (
@@ -433,6 +570,153 @@ class TaskBoard:
             return False
         self._notify(task_id)
         return True
+
+    # -- taşıma (Faz 9 / B-9.2) ------------------------------------------
+
+    # Kasa başına tek kez koşar: her `TaskBoard()` kurulumunda diski taramak
+    # gereksiz; taşıma zaten idempotent ama ucuz olmalı.
+    _migrated_vaults: set = set()
+    _migrate_lock = threading.Lock()
+
+    def _migrate_office_cards_once(self) -> None:
+        key = str(self.vault_path.resolve() if self.vault_path.exists() else self.vault_path)
+        with TaskBoard._migrate_lock:
+            if key in TaskBoard._migrated_vaults:
+                return
+            TaskBoard._migrated_vaults.add(key)
+        try:
+            self.migrate_office_cards()
+        except Exception:
+            logging.getLogger(__name__).warning("Ofis kartı taşıması yapılamadı.", exc_info=True)
+
+    def migrate_office_cards(self) -> List[str]:
+        """
+        `Entropy/Tasks` altında kalmış OFİS kartlarını ofis kasasına taşır.
+
+        Tek işlemde, doğrulamalı ve idempotent: hedefte aynı içerik zaten
+        varsa kaynak silinir, hedef farklıysa kaynak DOKUNULMADAN bırakılır
+        (iki kaynaklı gerçeği sessizce çözmek veri kaybı riskiydi). Her adım
+        `Entropy/Desk/_migrations.log` dosyasına yazılır.
+        """
+        moved: List[str] = []
+        entries: List[str] = []
+        try:
+            if not self.tasks_dir.is_dir():
+                return moved
+            candidates = sorted(self.tasks_dir.glob("*.md"))
+        except OSError:
+            return moved
+        desk_offices = self._desk_agent_offices()
+        with TaskBoard._migrate_lock:
+            for path in candidates:
+                card = self._read(path)
+                if card is None:
+                    continue
+                if not card.office:
+                    # Ofissiz ama ajanı bir DESK ofisine ait olan kart: kullanıcı
+                    # `/task ... Alfa` yazarken "ofise iş vermek" istiyordu, kart
+                    # ise Entropy kökünde ofissiz doğuyor ve `run()` kadro
+                    # kontrolüne takılıp `failed` oluyordu. Niyet ajandan
+                    # okunabildiği için kart o ofise devredilir.
+                    if self._claim_card_for_office(path, card, desk_offices, moved, entries):
+                        continue
+                    continue
+                target = self.office_cards_dir(card.office) / path.name
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                try:
+                    if target.is_file():
+                        if target.read_text(encoding="utf-8") == text:
+                            path.unlink()
+                            entries.append(f"tekrar\t{path}\t{target}")
+                        else:
+                            entries.append(f"çakışma\t{path}\t{target}")
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text, encoding="utf-8")
+                    # Doğrulama: hedef okunabiliyor ve aynı kimliği taşıyor mu?
+                    check = self._read(target)
+                    if check is None or check.id != card.id:
+                        entries.append(f"doğrulanamadı\t{path}\t{target}")
+                        continue
+                    path.unlink()
+                    moved.append(card.id)
+                    entries.append(f"taşındı\t{path}\t{target}")
+                except OSError as exc:
+                    entries.append(f"hata\t{path}\t{target}\t{exc}")
+        if entries:
+            self._append_migration_log(entries)
+        if moved:
+            logging.getLogger(__name__).info("Ofis kartı taşındı (%d): %s", len(moved), ", ".join(moved))
+            self._notify("")
+        return moved
+
+    def _desk_agent_offices(self) -> Dict[str, str]:
+        """`{ajan adı: ofis}` — Desk ofislerinin tüm kadrosu (orkestratör dâhil)."""
+        try:
+            from entropy.agents.desk_registry import DeskRegistry
+
+            desk = DeskRegistry(vault_path=self.vault_path)
+            out: Dict[str, str] = {}
+            for office in desk.list():
+                for name in office.roster():
+                    out.setdefault(name, office.name)
+            return out
+        except Exception:
+            return {}
+
+    def _claim_card_for_office(self, path: Path, card: "TaskCard",
+                               desk_offices: Dict[str, str],
+                               moved: List[str], entries: List[str]) -> bool:
+        """
+        Ofissiz kartı, ajanının ofisine devreder. Devredilirse True.
+
+        Koşan kart DOKUNULMAZ (yürütmenin altından dosya çekmek sonucu
+        kaybettirirdi) ve hedefte aynı adlı bir kart varsa çakışma yazılıp
+        kaynak bırakılır. Yazma doğrulanamazsa kaynak geri konur.
+        """
+        office = desk_offices.get((card.agent or "").strip())
+        if not office or card.status == "running":
+            return False
+        target = self.office_cards_dir(office) / path.name
+        try:
+            source_text = path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if target.is_file():
+            entries.append(f"çakışma\t{path}\t{target}")
+            return False
+        try:
+            self._write(replace(card, office=office))
+        except OSError as exc:
+            entries.append(f"hata\t{path}\t{target}\t{exc}")
+            return False
+        check = self._read(target)
+        if check is None or check.id != card.id or check.office != office:
+            # Geri al: kaynak dosya `_write` sırasında silinmiş olabilir.
+            try:
+                path.write_text(source_text, encoding="utf-8")
+                target.unlink()
+            except OSError:
+                pass
+            entries.append(f"doğrulanamadı\t{path}\t{target}")
+            return False
+        moved.append(card.id)
+        entries.append(f"ofise-atandı\t{path}\t{target}\t{office}")
+        return True
+
+    def _append_migration_log(self, entries: List[str]) -> None:
+        path = self.vault_path / MIGRATION_LOG_SUBPATH
+        stamp = _now()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                for row in entries:
+                    fh.write(f"{stamp}\t{row}\n")
+        except OSError:
+            logging.getLogger(__name__).warning("Taşıma günlüğü yazılamadı: %s", path)
 
     @staticmethod
     def _notify(task_id: str) -> None:
@@ -584,10 +868,36 @@ class TaskBoard:
         # kadrosunda değil, ofisin kendi `agents/` klasöründedir (Faz 6).
         registry = agent_registry or AgentRegistry(vault_path=self.vault_path)
         agent_spec = registry.get(card.agent) if card.agent else None
-        provider = (card.provider or (agent_spec.provider if agent_spec else "agy") or "agy").lower()
+        # Ek-1 (Faz 9): Entropy kartı (office boş) YALNIZCA Entropy kadrosundaki
+        # bir ajana koşar. Bir ofis orkestratörünün adı Entropy kartına
+        # yazıldığında kart sessizce genel bir asistanla koşuyordu; iki kadro
+        # birbirine karışmasın diye bu artık açık bir hata.
+        if card.agent and not card.office and agent_spec is None:
+            self._write(replace(
+                card,
+                status="failed",
+                finished_at=_now(),
+                summary=f"Koşulmadı: '{card.agent}' ajanı Entropy kadrosunda değil.",
+            ))
+            emit_terminal(f"card-{card.id}", card.agent, "failed",
+                          summary=f"'{card.agent}' ajanı Entropy kadrosunda değil.",
+                          vault_path=self.vault_path)
+            return None
+        provider = (
+            card.provider
+            or (agent_spec.provider if agent_spec else "")
+            or default_provider()
+        ).lower()
         bridge = self.bridge_for(provider, bridge_factory=bridge_factory)
         if bridge is None:
             return None
+
+        # MODEL (Faz 9.5). Kartın `model` alanı yürütmeye HİÇ geçmiyordu: köprü
+        # üst çubuğun modeliyle koşuyor, `provider: claude` olan bir kart
+        # `gemini-3.1-pro-high` ile başlatılıp `unrecognized_model` ile ölüyordu.
+        # Ad `resolve_model` ile sağlayıcıya çevrilir (gemini-* -> claude-opus-5)
+        # ve o koşuya `model=` olarak geçirilir.
+        run_model = resolve_card_model(card, agent_spec=agent_spec, provider=provider)
 
         prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
@@ -619,6 +929,10 @@ class TaskBoard:
             # Adım tavanı yaptırımı: istemdeki "en çok N adım" ricası
             # tutmadığında köprü akıştaki araç olaylarını sayıp süreci öldürür.
             max_steps=MAX_STEPS_PER_CARD,
+            # Kartın modeli o koşuya uygulanır; boşsa köprü oturum modelinde kalır.
+            model=run_model or None,
+            # Ajanın kimliği kartın sistem istemine girer (Faz 9.4).
+            agent_spec=agent_spec_payload(agent_spec),
         )
         # Ofis kartı kendi çalışma dizininde koşar; derlenmiş ajan tanımı orada.
         if project_path:
@@ -627,7 +941,7 @@ class TaskBoard:
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
-        for optional in ("needs_write", "project_path", "max_steps"):
+        for optional in ("needs_write", "project_path", "max_steps", "model", "agent_spec"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):

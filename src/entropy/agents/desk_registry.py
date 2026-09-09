@@ -30,14 +30,17 @@ from __future__ import annotations
 import datetime
 import logging
 import shutil
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from entropy.agents.compile import normalize_model_text
 from entropy.agents.registry import (
     AGENT_FILENAME,
     VALID_PROVIDERS,
     AgentSpec,
+    default_provider,
     parse_frontmatter,
     render_frontmatter,
 )
@@ -59,6 +62,10 @@ logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_AGENT = "orkestrator"
 ORCHESTRATOR_ROLE = "orchestrator"
+
+# Geçiş günlüğü: kasada kendiliğinden yapılan her onarım buraya yazılır
+# (kart taşıması `tasks.py`, orkestratör politikası bu dosya).
+MIGRATION_LOG_SUBPATH = "Entropy/Desk/_migrations.log"
 
 DEFAULT_MAX_PARALLEL = 2
 DEFAULT_BUDGET_TOKENS = 120000
@@ -86,9 +93,11 @@ ORCHESTRATOR_PROMPT = (
     "Çıktı şeman:\n"
     "```json\n"
     '{"subtasks": [{"title": "...", "goal": "...", "criteria": ["..."], '
-    '"agent": "<kadrondaki ad>", "provider": "agy", "model": ""}],\n'
+    '"agent": "<kadrondaki ad>", '
+    '"provider": "<o ajanın sağlayıcısı>", "model": ""}],\n'
     ' "new_agents": [{"name": "...", "role": "worker", "description": "...", '
-    '"provider": "agy", "model": "", "tools_policy": "read-write", '
+    '"provider": "<ofisin varsayılan sağlayıcısı>", "model": "", '
+    '"tools_policy": "read-write", '
     '"prompt": "..."}]}\n'
     "```\n"
     "`new_agents` yalnızca gerçekten eksik bir uzmanlık varsa yazılır; "
@@ -125,8 +134,11 @@ class DeskOffice:
     orchestrator: str = ORCHESTRATOR_AGENT
     evaluator: str = ""
     members: List[str] = field(default_factory=list)
-    default_provider: str = "agy"
+    default_provider: str = field(default_factory=default_provider)
     default_model: str = ""
+    # Ofisin varsayılan efor düzeyi (low|medium|high|xhigh|max). `default_model`
+    # serbest metinse ("fable 5.1 high effort") oradan ayrıştırılır.
+    default_effort: str = ""
     max_parallel: int = DEFAULT_MAX_PARALLEL
     # Ofis düzeyi token tavanı. 0 = SINIRSIZ (harness `_budget`/`_can_afford`
     # sıfırı zaten "tavan yok" olarak okuyor).
@@ -144,8 +156,9 @@ class DeskOffice:
             "orchestrator": self.orchestrator or ORCHESTRATOR_AGENT,
             "evaluator": self.evaluator,
             "members": list(self.members or []),
-            "default_provider": self.default_provider or "agy",
+            "default_provider": self.default_provider or default_provider(),
             "default_model": self.default_model,
+            "default_effort": self.default_effort,
             "max_parallel": self.max_parallel,
             "budget_tokens": self.budget_tokens,
             "workdir": self.workdir,
@@ -220,7 +233,7 @@ class OfficeAgents:
         skills = front.get("skills") or []
         if isinstance(skills, str):
             skills = [s.strip() for s in skills.split(",") if s.strip()]
-        provider = str(front.get("provider") or "agy").strip().lower()
+        provider = str(front.get("provider") or default_provider()).strip().lower()
         models: Dict[str, str] = {}
         nested = front.get("models")
         if isinstance(nested, dict):
@@ -240,7 +253,7 @@ class OfficeAgents:
             name=name,
             role=str(front.get("role") or ""),
             description=str(front.get("description") or ""),
-            provider=provider if provider in VALID_PROVIDERS else "agy",
+            provider=provider if provider in VALID_PROVIDERS else default_provider(),
             model=str(front.get("model") or ""),
             effort=str(front.get("effort") or ""),
             skills=[str(s) for s in skills],
@@ -312,6 +325,7 @@ class DeskRegistry:
             vault_path = config.obsidian_vault_path
         self.vault_path = Path(vault_path)
         self.offices_dir = self.vault_path / DESK_SUBDIR
+        self._migrate_orchestrator_policies_once()
 
     # -- yollar --------------------------------------------------------
 
@@ -411,18 +425,28 @@ class DeskRegistry:
         name = str(front.get("name") or path.parent.name).strip()
         if not name:
             return None
-        provider = str(front.get("default_provider") or "agy").strip().lower()
+        provider = str(front.get("default_provider") or default_provider()).strip().lower()
         try:
             updated = datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
         except OSError:
             updated = ""
+        # `default_model` kullanıcı tarafından elle yazılıyor ve serbest metin
+        # olabiliyor ("fable 5.1 high effort"). Bu dizge doğrudan `--model`e
+        # geçince CLI `unrecognized_model` ile ölüyordu; okuma sırasında
+        # sağlayıcıya göre normalize edilir ve efor sözcüğü ayrıştırılıp
+        # `default_effort` alanına düşer (ön bilgideki açık efor önceliklidir).
+        office_provider = provider if provider in VALID_PROVIDERS else default_provider()
+        raw_model = str(front.get("default_model") or "")
+        raw_effort = str(front.get("default_effort") or "").strip().lower()
+        model, parsed_effort = normalize_model_text(raw_model, office_provider)
         spec = DeskOffice(
             name=name,
             purpose=str(front.get("purpose") or ""),
             orchestrator=str(front.get("orchestrator") or ORCHESTRATOR_AGENT),
             evaluator=str(front.get("evaluator") or ""),
-            default_provider=provider if provider in VALID_PROVIDERS else "agy",
-            default_model=str(front.get("default_model") or ""),
+            default_provider=office_provider,
+            default_model=model,
+            default_effort=raw_effort or (parsed_effort or ""),
             max_parallel=self._int(front.get("max_parallel"), DEFAULT_MAX_PARALLEL),
             budget_tokens=self._int(front.get("budget_tokens"), DEFAULT_BUDGET_TOKENS,
                                     allow_zero=True),
@@ -507,15 +531,16 @@ class DeskRegistry:
         if role == ORCHESTRATOR_ROLE:
             # Ofisin tek orkestratörü vardır ve o `ensure_orchestrator` ile doğar.
             role = "worker"
-        provider = (provider or office.default_provider or "agy").strip().lower()
+        provider = (provider or office.default_provider or default_provider()).strip().lower()
         if provider not in VALID_PROVIDERS:
-            provider = "agy"
+            provider = default_provider()
         return agents.update(AgentSpec(
             name=name,
             role=role,
             description=description or f"{office_name} ofisi üyesi",
             provider=provider,
             model=model or office.default_model or "",
+            effort=office.default_effort or "",
             tools_policy=(tools_policy or "read-write").strip().lower(),
             memory_path=f"memory/{name}.md",
             prompt=prompt,
@@ -561,6 +586,74 @@ class DeskRegistry:
         self._notify(name)
         return not target.exists()
 
+    # -- geçişler --------------------------------------------------------
+
+    # Kasa başına tek kez: her `DeskRegistry()` kurulumunda tüm ofisleri okumak
+    # pahalı ve gereksiz; geçiş zaten idempotent.
+    _policy_migrated_vaults: set = set()
+    _policy_lock = threading.Lock()
+
+    def _migrate_orchestrator_policies_once(self) -> None:
+        key = str(self.vault_path)
+        with DeskRegistry._policy_lock:
+            if key in DeskRegistry._policy_migrated_vaults:
+                return
+            DeskRegistry._policy_migrated_vaults.add(key)
+        try:
+            self.migrate_orchestrator_policies()
+        except Exception:
+            logger.warning("Orkestratör araç politikası geçişi yapılamadı.", exc_info=True)
+
+    def migrate_orchestrator_policies(self) -> List[str]:
+        """
+        Kayıtlı ofislerin orkestratörlerini `read-only` politikaya çeker.
+
+        Neden: sözleşme "orkestratör kod yazmaz" diyor ama kasadaki eski/elle
+        yazılmış tanımlarda (canlı ofiste `Alfa`: `tools_policy: full`) politika
+        yazma araçlarını açıyordu. Claude derlemesi rolü görünce araç listesini
+        zaten kısıyor; agy tarafında ise KAYNAK politika okunuyor, yani yasak
+        sağlayıcıya göre değişiyordu. Kaynak dosya tek gerçek olsun diye AGENT.md
+        güncellenir, derlenmiş kopyalar yeniden üretilir ve
+        `Entropy/Desk/_migrations.log`'a satır düşer. İdempotent: politika zaten
+        `read-only` ise dosyaya dokunulmaz.
+        """
+        changed: List[str] = []
+        entries: List[str] = []
+        for office in self.list():
+            name = office.orchestrator or ORCHESTRATOR_AGENT
+            agents = self.agents(office.name)
+            spec = agents.get(name)
+            if spec is None:
+                continue
+            policy = (spec.tools_policy or "").strip().lower()
+            if policy == "read-only":
+                continue
+            try:
+                agents.update(replace(spec, tools_policy="read-only"))
+            except Exception as exc:
+                entries.append(f"hata\torkestratör-politika\t{office.name}\t{name}\t{exc}")
+                continue
+            changed.append(f"{office.name}/{name}")
+            entries.append(
+                f"orkestratör-politika\t{office.name}\t{name}\t{policy or '-'}\tread-only"
+            )
+        if entries:
+            self._append_migration_log(entries)
+        if changed:
+            logger.info("Orkestratör politikası normalize edildi: %s", ", ".join(changed))
+        return changed
+
+    def _append_migration_log(self, entries: List[str]) -> None:
+        path = self.vault_path / MIGRATION_LOG_SUBPATH
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                for row in entries:
+                    fh.write(f"{stamp}\t{row}\n")
+        except OSError:
+            logger.warning("Geçiş günlüğü yazılamadı: %s", path)
+
     # -- orkestratör ----------------------------------------------------
 
     def orchestrator_spec(self, office: DeskOffice) -> AgentSpec:
@@ -578,9 +671,11 @@ class DeskRegistry:
             name=name,
             role=ORCHESTRATOR_ROLE,
             description=ORCHESTRATOR_DESCRIPTION,
-            provider=office.default_provider or "agy",
+            provider=office.default_provider or default_provider(),
             model=office.default_model or "",
-            effort="medium",
+            # Ofis eforu (OFFICE.md'deki serbest metinden ayrıştırılmış olabilir)
+            # orkestratöre miras kalır; yoksa "medium".
+            effort=office.default_effort or "medium",
             tools_policy="read-only",
             memory_path=f"{MEMORY_DIRNAME}/{name}.md",
             prompt=ORCHESTRATOR_PROMPT,
@@ -784,6 +879,33 @@ def _roster_rows() -> List[Dict[str, object]]:
         except Exception:
             pass
     return desk_roster()
+
+
+def is_seed_leftover(office, desk: Optional[DeskRegistry] = None) -> bool:
+    """
+    Bu ofis eski bir build tohumundan mı kalmış (Ek-2, Faz 9)?
+
+    TEK ölçüt `OFFICE.md` ön bilgisindeki `seed: true`. Ad tabanlı sezgi
+    (`KNOWN_SEED_OFFICES`) kaldırıldı: kullanıcının kendi açtığı "Araştırma
+    Ofisi" o listedeki adla eşleşiyor ve `/desk` çıktısında canlı ofis "eski
+    tohum" diye işaretleniyordu. Bir ofisin tohum olduğunu yalnızca onu YAZAN
+    taraf bilebilir, adı bilemez. SİLME YOK — kural yalnızca işaretlemek için;
+    kullanıcının kendi açtığı ofisle eski tohumu ayırt edebilmesi gerekiyor,
+    ama bir ofisi otomatik silmek geri alınamaz bir karardı (arşivleme QA'nın
+    işi). `find_ghost_offices` bilerek genişletilmedi: o bellek katmanının
+    dosyası ve "hayalet" kavramı (kaydı olmayan klasör) bundan başkadır.
+    """
+    name = getattr(office, "name", office)
+    name = str(name or "").strip()
+    if not name:
+        return False
+    desk = desk if desk is not None else DeskRegistry()
+    try:
+        text = desk.office_file(name).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    front, _ = parse_frontmatter(text)
+    return str(front.get("seed") or "").strip().lower() in ("true", "1", "evet", "yes")
 
 
 def desk_manifest(desk: Optional[DeskRegistry] = None) -> str:

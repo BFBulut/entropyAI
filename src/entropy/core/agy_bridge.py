@@ -196,7 +196,14 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
-        self.selected_model: str = config.selected_model
+        # OKUMA KAPISI (Faz 9.1): ayardaki model başka sağlayıcıya aitse (ör.
+        # `claude-opus-5`) argv'ye geçirilmez; yedek değerin KENDİSİ de
+        # doğrulanır, aksi hâlde zehirli ayar korumayı boşa çıkarıyordu.
+        _default = getattr(config, "provider_models", {}).get("agy") or ""
+        if not self._is_agy_model(_default):
+            _default = config_module.DEFAULT_PROVIDER_MODELS["agy"]
+        _current = config.selected_model or ""
+        self.selected_model: str = _current if self._is_agy_model(_current) else _default
         self.current_model: str = self.selected_model or config.model_fallback_name
         # Akıl yürütme eforu ayardan gelir; geçersiz değer güvenli varsayılana
         # düşer (geçersiz --effort değeri turu hiç başlatmaz).
@@ -361,13 +368,51 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         # bilinçli isteğiyle sıfırlanır.
         bus.chat_history_cleared.emit()
 
-    def set_model(self, model_name: str):
-        """Update active model dynamically and persist to configuration."""
-        self.selected_model = model_name
-        self.current_model = model_name
-        config.selected_model = model_name
+    @staticmethod
+    def _is_agy_model(name: str) -> bool:
+        """
+        Ad `agy --model`e verilebilir mi (Faz 9.1).
+
+        Canlı liste tek doğru kaynak: `fetch_available_models()` `agy models`
+        çıktısını `config.available_models`'a yazıyor (kota harcamaz). Liste
+        alınamamışsa bilinen `gemini-*`/`gpt-*` ön ekleri ve agy'nin sunduğu
+        claude adları devreye girer.
+        """
+        return config_module.is_agy_model_name(
+            name, extra=list(getattr(config, "available_models", []) or [])
+        )
+
+    def set_model(self, model_name: str) -> bool:
+        """
+        YAZMA KAPISI (Faz 9.1): agy'ye ait olmayan adı reddeder.
+
+        Üst çubuğun model kutusu serbest metin kabul ediyor; yabancı ad ayara
+        yazıldığında sonraki her koşu geçersiz `--model` ile başlıyordu.
+        """
+        name = (model_name or "").strip()
+        if not self._is_agy_model(name):
+            bus.terminal_output_received.emit(
+                f"\n[Model Reddedildi]: '{model_name}' bir AGY modeli değil; "
+                f"seçim '{self.selected_model}' olarak kaldı.\n"
+            )
+            return False
+        self.selected_model = name
+        self.current_model = name
+        config.selected_model = name
+        try:
+            config.provider_models["agy"] = name
+        except Exception:
+            pass
         config.save_settings()
-        bus.model_detected.emit(model_name)
+        bus.model_detected.emit(name)
+        return True
+
+    def model_for_run(self, model_name: Optional[str]) -> str:
+        """Bu koşuda kullanılacak `--model` (kart modeli > oturum modeli)."""
+        name = (model_name or "").strip()
+        if name and self._is_agy_model(name):
+            return name
+        return self.selected_model
 
     def effort_levels(self) -> List[str]:
         """`agy --effort` seviyeleri (`agy -p --help` ile doğrulandı)."""
@@ -608,6 +653,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
         max_steps: Optional[int] = None,
+        model: Optional[str] = None,
+        agent_spec: Optional[dict] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
@@ -655,7 +702,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         thread = threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write, conversation_id, max_steps),
+                  save_report, agent, needs_write, conversation_id, max_steps,
+                  model, agent_spec),
             daemon=True
         )
         thread.start()
@@ -706,6 +754,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
         max_steps: Optional[int] = None,
+        model: Optional[str] = None,
+        agent_spec: Optional[dict] = None,
     ):
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -720,6 +770,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             task_name=task_name,
             project_path=str(project_dir),
             provider=self.provider_name,
+            model=self.model_for_run(model),
         )
 
         # Kilit türü: çağıran açıkça söylediyse o, yoksa prompt/moddan çıkarım.
@@ -781,8 +832,10 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 "--dangerously-skip-permissions",
                 "--add-dir", str(project_dir),
             ]
-            if self.selected_model and self.selected_model != config.model_fallback_name:
-                cmd.extend(["--model", self.selected_model])
+            # Kartın modeli bu koşuya uygulanır (Faz 9.5); yoksa oturum modeli.
+            run_model = self.model_for_run(model)
+            if run_model and run_model != config.model_fallback_name:
+                cmd.extend(["--model", run_model])
             if agent:
                 cmd.extend(["--agent", agent])
             if conversation_id:

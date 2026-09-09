@@ -146,16 +146,63 @@ class AgentsWatcher(_VaultWatcher):
 
 
 class TasksWatcher(_VaultWatcher):
-    """`<kasa>/Entropy/Tasks/*.md` → `bus.task_cards_updated`."""
+    """
+    Görev kartı izleyicisi — İKİ kök (Faz 9 kart kökü ayrımı).
+
+    1. `<kasa>/Entropy/Tasks/*.md`                       — Entropy kartları
+    2. `<kasa>/Entropy/Desk/Offices/<ofis>/cards/*.md`   — ofis kartları
+
+    Ofis kökü eklenmeseydi bir ofis kartı elle (Obsidian'dan ya da harness
+    tarafından) düzenlendiğinde `task_cards_updated` yayılmaz, Desk'in Kartlar
+    sekmesi kullanıcı "Yenile"ye basana kadar eski durumu gösterirdi.
+    """
 
     subdir = TASKS_SUBDIR
     signal_name = "task_cards_updated"
 
-    def _md_files(self) -> List[Path]:
+    def __init__(self, vault_path=None, poll_interval_ms: int = 5000, parent=None):
+        # `_VaultWatcher.__init__` imzayı hesaplarken `desk_offices_root`'a
+        # bakacağı için kök, super() çağrısından ÖNCE kurulur.
+        if vault_path is None:
+            from entropy.core.config import config
+
+            vault_path = config.obsidian_vault_path
         try:
-            return [p for p in self.root.glob("*.md") if p.is_file()]
+            from entropy.agents.tasks import DESK_OFFICES_SUBDIR, OFFICE_CARDS_DIRNAME
+        except Exception:  # sözleşme eski sürümdeyse tek kökle çalış
+            DESK_OFFICES_SUBDIR, OFFICE_CARDS_DIRNAME = "Entropy/Desk/Offices", "cards"
+        self.desk_offices_root = Path(vault_path) / DESK_OFFICES_SUBDIR
+        self._office_cards_dirname = OFFICE_CARDS_DIRNAME
+        super().__init__(vault_path, poll_interval_ms, parent)
+
+    def office_card_dirs(self) -> List[Path]:
+        """Diskte var olan ofis kart klasörleri."""
+        out: List[Path] = []
+        try:
+            for child in sorted(self.desk_offices_root.iterdir()):
+                cards = child / self._office_cards_dirname
+                if cards.is_dir():
+                    out.append(cards)
         except OSError:
-            return []
+            return out
+        return out
+
+    def _watch_targets(self) -> List[Path]:
+        # Ofis kökünün KENDİSİ de izlenir: yeni bir ofis klasörü açıldığında
+        # (henüz cards/ yokken) izleyici uyanıp listeyi tazelesin.
+        targets = super()._watch_targets()
+        targets.append(self.desk_offices_root)
+        targets.extend(self.office_card_dirs())
+        return targets
+
+    def _md_files(self) -> List[Path]:
+        files: List[Path] = []
+        for root in [self.root] + self.office_card_dirs():
+            try:
+                files.extend(p for p in root.glob("*.md") if p.is_file())
+            except OSError:
+                continue
+        return files
 
 
 _agents_watcher: Optional[AgentsWatcher] = None

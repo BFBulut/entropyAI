@@ -158,3 +158,121 @@ def test_no_forbidden_brand_in_sources_and_spec():
         if FORBIDDEN_BRAND in spec.read_text(encoding="utf-8", errors="ignore").lower():
             hits.append(str(spec))
     assert hits == [], f"kaynaklarda marka kalintisi: {hits}"
+
+
+# ======================================================================
+# Faz 9 ek kurallari: kart/posta/argv/istem ayrimi.
+# ======================================================================
+
+def test_task_board_list_does_not_return_office_cards(tmp_path):
+    """
+    Kural (a): `TaskBoard.list()` varsayilaniyla Entropy kartlarini dondurur.
+
+    Ofis kartlari `Entropy/Desk/Offices/<ofis>/Tasks` altinda ayri kokte durur;
+    Entropy panosunda gorunurlerse kullanici ofisin ic isini kendi gorevi
+    sanar ve iki kadro birbirine karisir.
+    """
+    from entropy.agents.tasks import ALL_CARDS, TaskCard, TaskBoard
+
+    board = TaskBoard(vault_path=tmp_path)
+    board.create(TaskCard(id="entropy-1", title="Entropy karti"))
+    board.create(TaskCard(id="ofis-1", title="Ofis karti", office="finans"))
+
+    ids = [c.id for c in board.list()]
+    assert ids == ["entropy-1"], f"ofis karti Entropy panosuna sizdi: {ids}"
+
+    office_ids = [c.id for c in board.list(office="finans")]
+    assert office_ids == ["ofis-1"]
+
+    all_ids = sorted(c.id for c in board.list(office=ALL_CARDS))
+    assert all_ids == ["entropy-1", "ofis-1"]
+
+
+def test_entropy_inbox_rejects_instruction_and_question(tmp_path):
+    """
+    Kural (b): Entropy kutusuna yalnizca `report`/`status` girer.
+
+    Yon tek yonludur: Entropy orkestratorlere talimat verir ve soru sorar;
+    orkestratorler yalnizca rapor ve durum dondurur.
+    """
+    from entropy.agents.mailbox import (
+        ENTROPY_INBOX_KINDS,
+        ENTROPY_OWNER,
+        Mailbox,
+        MailboxScopeError,
+        Message,
+        text_part,
+    )
+
+    box = Mailbox(owner_kind="entropy", vault_path=tmp_path)
+    for kind in ("instruction", "question"):
+        with pytest.raises(MailboxScopeError):
+            box.send(Message(
+                from_="finans", to=ENTROPY_OWNER, kind=kind,
+                parts=[text_part("deneme")],
+            ))
+    for kind in ENTROPY_INBOX_KINDS:
+        box.send(Message(
+            from_="finans", to=ENTROPY_OWNER, kind=kind,
+            parts=[text_part("deneme")],
+        ))
+
+
+def test_isolated_claude_argv_shape(tmp_path, monkeypatch):
+    """
+    Kural (c): izole argv'de `--bare` YOK; `--system-prompt-file` +
+    `--strict-mcp-config` VAR; cwd git deposunun disinda.
+    """
+    from entropy.core import claude_bridge as cb
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "claude_isolated", True, raising=False)
+    bridge = cb.ClaudeCodeBridge()
+    monkeypatch.setattr(bridge, "find_claude_executable", lambda: "claude")
+    cmd = bridge.build_command("merhaba", system_prompt="Sen Entropy'sin.")
+
+    assert "--bare" not in cmd, "desteklenmeyen --bare bayragi argv'de"
+    assert "--strict-mcp-config" in cmd
+    assert cb.REPLACE_SYSTEM_PROMPT_FILE_FLAG in cmd, cmd
+    assert "--append-system-prompt" not in cmd
+
+    cwd = bridge.run_cwd(None)
+    assert cwd, "izole kipte cwd verilmedi"
+    cwd_path = Path(cwd).resolve()
+    repo = Path(__file__).resolve().parents[1]
+    assert not cwd_path.is_relative_to(repo), f"cwd git deposunun icinde: {cwd}"
+    assert not (cwd_path / ".git").exists()
+
+
+def test_system_prompt_has_no_brand_and_orchestrator_ignores_entropy(tmp_path):
+    """Kural (d): marka adi istemde gecmez; orkestrator istemi Entropy'yi anmaz."""
+    from entropy.memory.system_prompt import build_system_prompt
+
+    text = build_system_prompt("chat", provider="claude", query="merhaba")
+    assert FORBIDDEN_BRAND not in text.lower(), "sistem isteminde yasakli marka"
+
+    desk, office = _office(tmp_path)
+    spec = desk.orchestrator_spec(office)
+    blob = " ".join([
+        spec.prompt or "", spec.description or "", spec.role or "",
+        spec.memory_path or "",
+    ]).lower()
+    assert "entropy" not in blob, f"orkestrator istemi Entropy'yi aniyor: {spec.name}"
+
+
+def test_entropy_agents_are_not_bound_to_any_desk_office(tmp_path):
+    """
+    Kural (e): Entropy kadrosundaki hicbir AGENT.md `office:` tasimaz.
+
+    Faz 3'te tohum ajanlar `office: arastirma-ofisi` ile yaziliyordu; ofis
+    silinse bile alan kasada kaliyor ve ajan yetim bir ofise bagli gorunuyordu.
+    """
+    from entropy.agents.registry import DEFAULT_AGENTS, AgentRegistry
+
+    bound = [a.name for a in DEFAULT_AGENTS if (getattr(a, "office", "") or "").strip()]
+    assert bound == [], f"DEFAULT_AGENTS tohumunda office alani: {bound}"
+
+    reg = AgentRegistry(vault_path=tmp_path)
+    reg.seed_defaults() if hasattr(reg, "seed_defaults") else None
+    written = [a.name for a in reg.list() if (getattr(a, "office", "") or "").strip()]
+    assert written == [], f"kasadaki Entropy ajaninda office alani: {written}"

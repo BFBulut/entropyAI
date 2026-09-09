@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from dataclasses import replace
+
 from entropy.agents.desk_registry import DeskOffice as OfficeSpec, DeskRegistry
 from entropy.agents.harness import (
     OFFICE_STATE_KEY,
@@ -78,8 +80,11 @@ def seeded(offices):
     agents = offices.agents("arastirma-ofisi")
     agents.update(AgentSpec(name="arastirmaci", role="worker", description="araştırır",
                             provider="agy", tools_policy="read-only"))
+    # Değerlendiriciye SAĞLAYICI YAZILMAZ: ofisin varsayılanını (orkestratörün
+    # sağlayıcısını) miras alır. Sabit "agy" yazılsaydı `config.provider`
+    # claude iken plan claude'da, değerlendirme agy'de açılırdı.
     agents.update(AgentSpec(name="degerlendirici", role="evaluator",
-                            description="notlar", provider="agy", tools_policy="read-only"))
+                            description="notlar", tools_policy="read-only"))
     return offices.get("arastirma-ofisi")
 
 
@@ -408,6 +413,84 @@ def test_second_office_call_resumes_the_conversation(board, offices, seeded):
     child_id = board.get(card.id).children[0]
     assert calls[f"card-{child_id}"]["conversation_id"] is None
     assert plan_task is None
+
+
+class _KwargBridge(_RecordingBridge):
+    """`model` / `agent_spec` dâhil TÜM kwargs'ları kaydeden köprü."""
+
+    def send_background_task_async(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        reply = self.replies.pop(0) if self.replies else ("", False)
+        if kwargs.get("on_result") is not None:
+            kwargs["on_result"](reply[0], reply[1])
+
+
+def test_office_calls_carry_model_and_agent_spec(board, offices, seeded):
+    """Plan/değerlendirme çağrıları da kart yolu gibi model + künye taşır."""
+    agents = offices.agents("arastirma-ofisi")
+    orchestrator = agents.get(seeded.orchestrator)
+    agents.update(replace(orchestrator, models={seeded.default_provider: "ozel-model-1"}))
+
+    bridge = _KwargBridge([
+        (_plan_json("Kaynak tara"), True),
+        ("alt çıktı", True),
+        ('```json\n{"grades": []}\n```', True),
+    ])
+    harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices,
+                            bridge_factory=lambda p: bridge)
+    card = _office_card(board)
+    harness.start(card.id)
+    assert _wait_until(lambda: board.get(card.id).status in ("review", "failed"))
+
+    plan = {c["task_id"]: c for c in bridge.calls}[f"office-plan-{card.id}"]
+    assert plan["model"] == "ozel-model-1"
+    assert plan["agent_spec"]["name"] == seeded.orchestrator
+    assert plan["agent_spec"]["tools_policy"] == "read-only"
+
+
+def test_evaluator_on_another_provider_does_not_resume_but_does_not_fail(board, offices,
+                                                                          seeded, caplog):
+    """
+    Değerlendirici BAŞKA sağlayıcıdaysa: konuşma sürdürülmez, hata da olmaz.
+
+    Oturum kimlikleri sağlayıcılar arasında taşınmaz; tek doğru davranış temiz
+    bağlamla koşup günlüğe bilgi düşmek.
+    """
+    orchestrator_provider = seeded.default_provider
+    other = "claude" if orchestrator_provider == "agy" else "agy"
+    agents = offices.agents("arastirma-ofisi")
+    agents.update(AgentSpec(name="degerlendirici", role="evaluator", description="notlar",
+                            provider=other, tools_policy="read-only"))
+
+    bridge = _RecordingBridge([
+        (_plan_json("Kaynak tara"), True),
+        ("alt çıktı", True),
+        ('```json\n{"grades": []}\n```', True),
+    ])
+    harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices,
+                            bridge_factory=lambda p: bridge)
+    card = _office_card(board)
+    bridge.conversation_ids[f"office-plan-{card.id}"] = "konusma-42"
+    harness.start(card.id)
+    assert _wait_until(lambda: board.get(card.id).status in ("review", "failed"))
+
+    calls = {c["task_id"]: c for c in bridge.calls}
+    # Plan kimliği orkestratörün sağlayıcısı altında saklandı...
+    assert harness.office_conversation_id(orchestrator_provider) == "konusma-42"
+    # ...ve diğer sağlayıcıdaki değerlendirmeye TAŞINMADI.
+    assert calls[f"office-eval-{card.id}"]["conversation_id"] is None
+    # Kart yine de normal aktı: hata yok.
+    assert board.get(card.id).status in ("review", "failed")
+
+
+def test_evaluator_without_provider_inherits_the_office_provider(board, offices, seeded):
+    """Sağlayıcısı yazılmamış değerlendirici genel varsayılana değil OFİSE uyar."""
+    harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices)
+    spec = offices.agents("arastirma-ofisi").get("degerlendirici")
+    office = offices.get("arastirma-ofisi")
+    blank = AgentSpec(name="bos", role="evaluator", provider="")
+    assert harness.agent_provider(blank, office) == office.default_provider
+    assert harness.agent_provider(spec, office) == office.default_provider
 
 
 def test_office_conversation_is_persisted_and_keyed_by_office(board, offices, seeded,

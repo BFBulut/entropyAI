@@ -6,7 +6,9 @@ import json
 import math
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Set, Tuple
-from PySide6.QtCore import Qt, QTimer, Slot
+from functools import partial
+
+from PySide6.QtCore import QRunnable, Qt, QThreadPool, QTimer, Slot
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QComboBox
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
@@ -3188,8 +3190,10 @@ class KnowledgeGraphWidget(QFrame):
         # gecikmeli yenilemede toplanır.
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setSingleShot(True)
-        self._refresh_timer.setInterval(1200)
-        self._refresh_timer.timeout.connect(self.refresh_graph)
+        self._refresh_timer.setInterval(1500)
+        self._graph_job_running = False
+        self._graph_job_again = False
+        self._refresh_timer.timeout.connect(self.refresh_graph_async)
 
         # Auto-refresh on signals
         bus.report_created.connect(self._on_report_created)
@@ -4029,9 +4033,46 @@ class KnowledgeGraphWidget(QFrame):
         return data
 
     def refresh_graph(self):
-        """Re-generate unified graph JSON and update WebEngine canvas and Scope Selector."""
-        graph_data = self.build_unified_graph()
+        """Grafi yeniden kurar ve kanvasi tazeler (senkron; ilk yukleme/testler)."""
+        self._render_graph(self.build_unified_graph())
 
+    @Slot()
+    def refresh_graph_async(self):
+        """Faz 9: pahali graf insasini (Louvain dahil ~2,5 sn) isci is parcaciginda kosar.
+
+        `build_unified_graph` + `enrich_graph` saf veri isidir, Qt nesnesine
+        dokunmaz; sonuc `bus.invoke_on_main` ile ana is parcaciginda cizilir.
+        """
+        if getattr(self, "_graph_job_running", False):
+            self._graph_job_again = True
+            return
+        self._graph_job_running = True
+        self._graph_job_again = False
+        widget = self
+
+        class _GraphJob(QRunnable):
+            def run(self):  # isci is parcacigi
+                try:
+                    data = widget.build_unified_graph()
+                except Exception:
+                    data = None
+                bus.invoke_on_main(partial(widget._apply_async_graph, data))
+
+        QThreadPool.globalInstance().start(_GraphJob())
+
+    def _apply_async_graph(self, data):
+        try:
+            self._graph_job_running = False
+            if data is not None:
+                self._render_graph(data)
+            if getattr(self, "_graph_job_again", False):
+                self._graph_job_again = False
+                self._refresh_timer.start()
+        except RuntimeError:
+            return
+
+    def _render_graph(self, graph_data):
+        """Kanvas + kapsam combosu guncellemesi (YALNIZCA ana is parcacigi)."""
         # Update Scope Selector combo box without resetting if selection still valid
         prev_data = self.scope_combo.currentData() or self.current_scope
         self.scope_combo.blockSignals(True)
