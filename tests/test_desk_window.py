@@ -244,11 +244,10 @@ def test_geometry_saved_and_restored(qapp, window, monkeypatch):
     from PySide6.QtGui import QGuiApplication
 
     available = QGuiApplication.primaryScreen().availableGeometry()
-    # Faz 6: kayitli boyut da ekran kuralina uyar (kullanilabilir alanin %88'i).
-    from entropy.desk.window import DESK_SCREEN_RATIO
-
-    assert other.width() == min(1000, int(available.width() * DESK_SCREEN_RATIO))
-    assert other.height() == min(700, int(available.height() * DESK_SCREEN_RATIO))
+    # Faz 7: kullanicinin kaydettigi GECERLI geometri korunur; yalnizca ekranin
+    # kullanilabilir alanini asan olculer kirpilir (Faz 6'daki %88 tavani yok).
+    assert other.width() == min(1000, available.width())
+    assert other.height() == min(700, available.height())
     other.close()
     other.deleteLater()
 

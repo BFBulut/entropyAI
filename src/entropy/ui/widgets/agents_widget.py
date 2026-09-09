@@ -354,7 +354,9 @@ class AgentEditDialog(QDialog):
 class AssignTaskDialog(QDialog):
     """Bir ajana görev verme formu: başlık, hedef, kabul ölçütleri."""
 
-    def __init__(self, parent=None, agent_name: str = "", skills: Optional[List[str]] = None):
+    def __init__(self, parent=None, agent_name: str = "", skills: Optional[List[str]] = None,
+                 provider: str = "", model: str = "", effort: str = "",
+                 budget_tokens: int = 0):
         super().__init__(parent)
         self.agent_name = agent_name
         self.setWindowTitle(f"Görev Ver — {agent_name}" if agent_name else "Görev Ver")
@@ -374,6 +376,39 @@ class AssignTaskDialog(QDialog):
         for s in (skills or []):
             self.skill_combo.addItem(s)
         form.addRow("Yetenek:", self.skill_combo)
+
+        # Faz 7: görev başına sağlayıcı/model/efor/bütçe. Boş bırakılırsa ajanın
+        # (ya da ofisin) varsayılanı geçerlidir; kullanıcı tek bir pahalı görev
+        # için modeli değiştirmek isteyip ajan tanımını bozmak zorunda kalmasın.
+        self.provider_combo = QComboBox()
+        try:
+            from entropy.core.provider import PROVIDERS as _PROVIDERS
+        except Exception:
+            _PROVIDERS = ("agy", "claude")
+        self.provider_combo.addItem("")
+        for p in _PROVIDERS:
+            self.provider_combo.addItem(p)
+        self.provider_combo.setCurrentText(provider or "")
+        form.addRow("Sağlayıcı:", self.provider_combo)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.addItem("")
+        self.model_combo.setCurrentText(model or "")
+        form.addRow("Model:", self.model_combo)
+
+        self.effort_combo = QComboBox()
+        self.effort_combo.addItem("")
+        for e in EFFORT_LEVELS:
+            self.effort_combo.addItem(e)
+        self.effort_combo.setCurrentText(effort or "")
+        form.addRow("Efor:", self.effort_combo)
+
+        self.budget_input = QLineEdit()
+        self.budget_input.setPlaceholderText("0 = ofis bütçesi")
+        self.budget_input.setText(str(int(budget_tokens or 0)))
+        form.addRow("Bütçe (token):", self.budget_input)
+
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Hedef:"))
@@ -409,13 +444,33 @@ class AssignTaskDialog(QDialog):
         criteria = [
             line.strip() for line in self.criteria_input.toPlainText().splitlines() if line.strip()
         ]
-        return {
+        try:
+            budget = max(0, int(str(self.budget_input.text()).strip() or "0"))
+        except ValueError:
+            budget = 0
+        data: Dict[str, Any] = {
             "title": self.title_input.text().strip(),
             "goal": self.goal_input.toPlainText().strip(),
             "criteria": criteria,
             "agent": self.agent_name,
             "skill": self.skill_combo.currentText().strip(),
+            "budget_tokens": budget,
         }
+        # Boş sağlayıcı/model, "ajanın varsayılanını kullan" demektir; sözlüğe
+        # boş yazılırsa apply_task_assignment'taki setdefault devreye girmez.
+        provider = self.provider_combo.currentText().strip()
+        model = self.model_combo.currentText().strip()
+        effort = self.effort_combo.currentText().strip()
+        if provider:
+            data["provider"] = provider
+        if model:
+            data["model"] = model
+        if effort:
+            # TaskCard'da efor alanı yok; not olarak taşınır ve köprü
+            # istem başlığında görünür.
+            data["effort"] = effort
+            data["notes"] = f"effort: {effort}"
+        return data
 
 
 def discover_skill_names() -> List[str]:
@@ -465,6 +520,23 @@ class AgentCard(QFrame):
         )
         title.setToolTip(f"{self.agent_name} ({spec_field(spec, 'role')})")
         text_col.addWidget(title)
+
+        # Faz 7: orkestratörün kendi kurduğu ajanlar rozetle ayrılır; kullanıcı
+        # kadroya kimin eklendiğini görsün (rozet düzenlemeyi engellemez).
+        self.origin_badge: Optional[QLabel] = None
+        try:
+            created = panel.orchestrator_created_names()
+        except Exception:
+            created = set()
+        if self.agent_name in created:
+            self.origin_badge = QLabel(
+                f"<span style='color:{RT['accent_alt']}; font-size:{LABEL_PX}px;'>"
+                "🤖 orkestratör oluşturdu</span>"
+            )
+            self.origin_badge.setToolTip(
+                "Bu ajanı ofisin orkestratörü tanımladı; düzenleyebilir ya da silebilirsiniz."
+            )
+            text_col.addWidget(self.origin_badge)
 
         provider = spec_field(spec, "provider", "agy") or "agy"
         # Model boş dizge olabilir (sağlayıcı varsayılanı kullanılıyor demektir).
@@ -940,8 +1012,74 @@ class AgentsWidget(QFrame):
             # Roster panelinden eklenen ajan doğrudan bu ofisin üyesi olur.
             data.setdefault("office", self.office)
             data["office"] = self.office
+        if self.office and self._create_office_member(data):
+            self.ensure_office_member(str(data.get("name", "")))
+            return
         if self.apply_agent_save(data, original_name=None) and self.office:
             self.ensure_office_member(str(data.get("name", "")))
+
+    def _create_office_member(self, data: Dict[str, Any]) -> bool:
+        """
+        Yeni ajanı ofisin KENDİ `agents/` klasörüne yazar (Faz 7).
+
+        `DeskRegistry.create_member` varsa o kullanılır (dosyayı yazar ve ofis
+        çalışma dizinine derler); yoksa False dönülür ve çağıran genel
+        `DeskAgentsView` yoluna düşer.
+        """
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return False
+        try:
+            from entropy.agents.desk_registry import DeskRegistry  # type: ignore
+
+            desk = DeskRegistry()
+            creator = getattr(desk, "create_member", None)
+            if creator is None:
+                return False
+            spec = creator(
+                self.office,
+                name,
+                role=str(data.get("role", "worker") or "worker"),
+                description=str(data.get("description", "")),
+                provider=str(data.get("provider", "")),
+                model=str(data.get("model", "")),
+                tools_policy=str(data.get("tools_policy", "read-write") or "read-write"),
+                prompt=str(data.get("prompt", "")),
+            )
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Roster] Ofis üyesi yazılamadı: {exc}\n")
+            return False
+        if spec is None:
+            return False
+        self.refresh_agents()
+        signal = getattr(bus, "agents_updated", None)
+        if signal is not None:
+            signal.emit(name)
+        return True
+
+    def orchestrator_created_names(self) -> set:
+        """
+        Orkestratörün kendi kurduğu ajanların adları.
+
+        Provenance alanı sözleşmede yok; çıkarım şu: ofisin `agents/` klasöründe
+        DOSYASI olan ama ofisin `members` ön bilgisinde YER ALMAYAN ajanı
+        kullanıcı eklemedi — arayüzden eklenen ajan `ensure_office_member` ile
+        listeye yazılır, orkestratörün `new_agents` yolu yazmaz.
+        """
+        if not self.office:
+            return set()
+        members = set(self.office_members())
+        office = self.current_office_spec()
+        for key in ("orchestrator", "evaluator"):
+            value = str(spec_field(office, key, "")) if office is not None else ""
+            if value:
+                members.add(value)
+        out = set()
+        for spec in self.list_agents():
+            name = str(spec_field(spec, "name", ""))
+            if name and name not in members:
+                out.add(name)
+        return out
 
     def edit_agent(self, spec: Any) -> None:
         dialog = AgentEditDialog(parent=self, spec=spec, bridge=self.bridge)
@@ -1003,7 +1141,14 @@ class AgentsWidget(QFrame):
                 spec = candidate
                 break
         skills = list(spec_field(spec, "skills", []) or []) if spec is not None else []
-        dialog = AssignTaskDialog(parent=self, agent_name=agent_name, skills=skills)
+        dialog = AssignTaskDialog(
+            parent=self,
+            agent_name=agent_name,
+            skills=skills,
+            provider=str(spec_field(spec, "provider", "")) if spec is not None else "",
+            model=str(spec_field(spec, "model", "")) if spec is not None else "",
+            effort=str(spec_field(spec, "effort", "")) if spec is not None else "",
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.apply_task_assignment(dialog.get_data(), spec)

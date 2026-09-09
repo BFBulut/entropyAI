@@ -34,6 +34,11 @@ TILE_EMPTY = 255
 Cell = Tuple[int, int]
 
 
+def _cheb(a: Cell, b: Cell) -> int:
+    """Chebyshev uzaklığı: 1 ise iki hücre (çapraz dahil) komşudur."""
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+
 @dataclass
 class Seat:
     """Bir ajanın oturacağı hücre ve baktığı yön."""
@@ -128,11 +133,11 @@ class Layout:
         occupied = self.occupied_cells()
 
         for placed in self.furniture:
-            seat = self._seat_for(placed, occupied)
-            if seat is None or seat.cell in taken:
-                continue
-            taken.add(seat.cell)
-            seats.append(seat)
+            for seat in self._seats_for(placed, occupied):
+                if seat.cell in taken:
+                    continue
+                taken.add(seat.cell)
+                seats.append(seat)
 
         center = self.center_cell()
         # Önce gerçek masalar (bilgisayarlı çalışma yeri), sonra sandalyeler;
@@ -147,21 +152,56 @@ class Layout:
         return seats
 
     def _seat_for(self, placed: PlacedFurniture, occupied: Set[Cell]) -> Optional[Seat]:
+        """Geriye dönük tek yer: mobilyanın ilk (birincil) oturma yeri."""
+        seats = self._seats_for(placed, occupied)
+        return seats[0] if seats else None
+
+    def _seats_for(self, placed: PlacedFurniture, occupied: Set[Cell]) -> List[Seat]:
+        """
+        Bir mobilyanın ürettiği TÜM oturma yerleri.
+
+        Faz 7: eskiden yalnızca DESK_* ve sandalyeler yer üretiyordu; 10 ajanlı
+        ofiste herkes birkaç masanın çevresine yığılıyordu. Artık:
+        - TABLE_* : masanın dört yanı (sol/sağ/üst/alt) ayrı birer yer,
+        - SOFA_*  : koltuğun kapladığı her hücre bir yer.
+        """
         variant = placed.variant
         vid = variant.variant_id
         w, h = variant.footprint_w, variant.footprint_h
 
+        side_facing = {
+            "front": DIR_DOWN,
+            "back": DIR_UP,
+            "side": DIR_LEFT if placed.mirrored else DIR_RIGHT,
+        }.get(variant.orientation, DIR_DOWN)
+
         if "CHAIR" in vid or "BENCH" in vid:
             # Sandalyenin kendi hücresi oturma yeri; yön sandalyenin yönü.
-            facing = {
-                "front": DIR_DOWN,
-                "back": DIR_UP,
-                "side": DIR_LEFT if placed.mirrored else DIR_RIGHT,
-            }.get(variant.orientation, DIR_DOWN)
-            return Seat(placed.col, placed.row, facing, source="chair")
+            return [Seat(placed.col, placed.row, side_facing, source="chair")]
+
+        if "SOFA" in vid:
+            # Koltuk çok hücreli olabilir; her hücresine bir ajan oturabilir.
+            return [
+                Seat(c, r, side_facing, source="chair")
+                for (c, r) in placed.cells()
+                if self.tile(c, r) != TILE_EMPTY
+            ]
+
+        if "TABLE" in vid:
+            # Toplantı/kahve masası: dört yanı da oturulur.
+            out: List[Seat] = []
+            for cell, facing in (
+                ((placed.col - 1, placed.row + h // 2), DIR_RIGHT),
+                ((placed.col + w, placed.row + h // 2), DIR_LEFT),
+                ((placed.col + w // 2, placed.row - 1), DIR_DOWN),
+                ((placed.col + w // 2, placed.row + h), DIR_UP),
+            ):
+                if self.is_floor(*cell) and cell not in occupied:
+                    out.append(Seat(cell[0], cell[1], facing, source="desk"))
+            return out
 
         if not vid.startswith("DESK"):
-            return None
+            return []
 
         # Masa: ajan masaya BAKAN komşu hücrede oturur.
         if variant.orientation == "side":
@@ -179,26 +219,59 @@ class Layout:
             facing = DIR_DOWN
 
         if not self.is_floor(*cell) or cell in occupied:
-            return None
-        return Seat(cell[0], cell[1], facing, source="desk")
+            return []
+        return [Seat(cell[0], cell[1], facing, source="desk")]
 
     def seats_for(self, count: int) -> List[Seat]:
-        """`count` adet oturma yeri; masalar yetmezse boş zeminden tamamlar."""
-        seats = self.seats()
-        if len(seats) >= count:
-            return seats[:count]
+        """
+        `count` adet oturma yeri; ajanlar ofise YAYILARAK yerleştirilir.
 
-        occupied = self.occupied_cells() | {s.cell for s in seats}
+        Kural (Faz 7):
+        1. İlk yer orkestratörün: merkeze en yakın masa (`seats()[0]`).
+        2. Sonrakiler "en uzak boş yer önce" ile seçilir (farthest-point
+           sampling, Chebyshev): iki karakter komşu hücrelere düşmez.
+        3. Mobilya yerleri biterse boş zeminden en az 2 hücre aralıklı
+           yedekler eklenir; ancak o da yetmezse aralık gevşetilir (kimse
+           görünmez kalmasın).
+        """
+        if count <= 0:
+            return []
+        pool = self.seats()
+        chosen: List[Seat] = []
+        if pool:
+            chosen.append(pool[0])
+            remaining = pool[1:]
+            while remaining and len(chosen) < count:
+                best = max(
+                    remaining,
+                    key=lambda s: (
+                        min(_cheb(s.cell, c.cell) for c in chosen),
+                        -(abs(s.col - self.center_cell()[0]) + abs(s.row - self.center_cell()[1])),
+                    ),
+                )
+                remaining.remove(best)
+                chosen.append(best)
+        if len(chosen) >= count:
+            return chosen[:count]
+
+        # Zemin yedekleri: önce 2 hücre aralık şartıyla, sonra gevşeterek.
+        occupied = self.occupied_cells() | {s.cell for s in chosen}
         center = self.center_cell()
         spare = sorted(
             (cell for cell in self.floor_cells() if cell not in occupied),
             key=lambda cell: (abs(cell[0] - center[0]) + abs(cell[1] - center[1]), cell[1], cell[0]),
         )
-        for cell in spare:
-            if len(seats) >= count:
+        for spacing in (2, 1):
+            for cell in list(spare):
+                if len(chosen) >= count:
+                    break
+                if chosen and min(_cheb(cell, s.cell) for s in chosen) < spacing:
+                    continue
+                spare.remove(cell)
+                chosen.append(Seat(cell[0], cell[1], DIR_DOWN, source="floor"))
+            if len(chosen) >= count:
                 break
-            seats.append(Seat(cell[0], cell[1], DIR_DOWN, source="floor"))
-        return seats[:count]
+        return chosen[:count]
 
 
 # --------------------------------------------------------------- yükleme

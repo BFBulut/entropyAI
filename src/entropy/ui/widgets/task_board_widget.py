@@ -16,8 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
-    QSplitter, QVBoxLayout, QWidget
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QScrollArea, QSplitter, QVBoxLayout, QWidget
 )
 
 from entropy.core.event_bus import bus
@@ -182,6 +182,33 @@ class TaskDetailPanel(QFrame):
         self.outputs_layout.setSpacing(3)
         layout.addWidget(self.outputs_container)
 
+        # Faz 7: kart detayında koşum ayarları (sağlayıcı/model/efor/bütçe).
+        # Kart panoda dururken bunlar değiştirilemiyordu; kullanıcı pahalı bir
+        # kartı ucuz modelle yeniden koşmak için kartı silip yeniden yaratıyordu.
+        settings = QHBoxLayout()
+        settings.setSpacing(4)
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["", "agy", "claude"])
+        self.provider_combo.setToolTip("Sağlayıcı (boş = ajanın varsayılanı)")
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setToolTip("Model (boş = sağlayıcı varsayılanı)")
+        self.effort_combo = QComboBox()
+        self.effort_combo.addItems(["", "low", "medium", "high"])
+        self.effort_combo.setToolTip("Efor düzeyi")
+        self.budget_input = QLineEdit()
+        self.budget_input.setPlaceholderText("bütçe")
+        self.budget_input.setFixedWidth(72)
+        self.budget_input.setToolTip("Kart token bütçesi (0 = ofis bütçesi)")
+        self.apply_btn = QPushButton("Uygula")
+        self.apply_btn.setToolTip("Koşum ayarlarını karta yaz")
+        self.apply_btn.clicked.connect(self._on_apply_settings)
+        for widget in (self.provider_combo, self.model_combo, self.effort_combo,
+                       self.budget_input, self.apply_btn):
+            settings.addWidget(widget)
+        settings.addStretch()
+        layout.addLayout(settings)
+
         layout.addStretch()
 
         actions = QHBoxLayout()
@@ -220,6 +247,18 @@ class TaskDetailPanel(QFrame):
         has_card = card is not None
         for btn in (self.run_btn, self.stop_btn, self.done_btn, self.contract_btn, self.delete_btn):
             btn.setEnabled(has_card)
+        for widget in (self.provider_combo, self.model_combo, self.effort_combo,
+                       self.budget_input, self.apply_btn):
+            widget.setEnabled(has_card)
+        if has_card:
+            self.provider_combo.setCurrentText(str(spec_field(card, "provider", "") or ""))
+            self.model_combo.setCurrentText(str(spec_field(card, "model", "") or ""))
+            notes = str(spec_field(card, "notes", "") or "")
+            effort = str(spec_field(card, "effort", "") or "")
+            if not effort and "effort:" in notes:
+                effort = notes.split("effort:", 1)[1].strip().split()[0] if notes.split("effort:", 1)[1].strip() else ""
+            self.effort_combo.setCurrentText(effort)
+            self.budget_input.setText(str(int(spec_field(card, "budget_tokens", 0) or 0)))
         while self.outputs_layout.count():
             item = self.outputs_layout.takeAt(0)
             widget = item.widget() if item else None
@@ -263,6 +302,26 @@ class TaskDetailPanel(QFrame):
 
     # --------------------------------------------------------- eylemler
 
+    def settings_payload(self) -> Dict[str, Any]:
+        """Formdaki koşum ayarları (test ve uygulama için tek kaynak)."""
+        try:
+            budget = max(0, int(str(self.budget_input.text()).strip() or "0"))
+        except ValueError:
+            budget = 0
+        return {
+            "provider": self.provider_combo.currentText().strip(),
+            "model": self.model_combo.currentText().strip(),
+            "effort": self.effort_combo.currentText().strip(),
+            "budget_tokens": budget,
+        }
+
+    def _on_apply_settings(self):
+        if self.card is None:
+            return False
+        return self.board_widget.update_card_settings(
+            str(spec_field(self.card, "id", "")), self.settings_payload()
+        )
+
     def _on_run(self):
         self.board_widget.run_card(str(spec_field(self.card, "id", "")))
 
@@ -304,6 +363,8 @@ class TaskBoardWidget(QFrame):
         self.compact = compact
         self.office = office or ""
         self.selected_id: str = ""
+        # Faz 7: Projeler sekmesinin kart süzgeci ("" = süzgeç yok).
+        self.project_filter: str = ""
         self.column_layouts: Dict[str, QVBoxLayout] = {}
         self.column_headers: Dict[str, QLabel] = {}
         self.card_widgets: List[TaskCardWidget] = []
@@ -373,9 +434,23 @@ class TaskBoardWidget(QFrame):
             # üzerinden yeniden boyutlanır.
             column.setMinimumWidth(COLUMN_MIN_WIDTH)
             columns_layout.addWidget(column, 1)
-        splitter.addWidget(columns_host)
+
+        # Faz 7: dört sütunun örtük asgarisi (4x190 + detay) panoyu 1400 px'e
+        # zorluyordu; yarım ekran Desk'te (≈900 px) orta sütun kırpılıyordu.
+        # Sütunlar yatay kaydırılabilir bir alana konur: dar pencerede pano
+        # daralır, sütunlar okunur genişliğini korur.
+        self.columns_scroll = QScrollArea()
+        self.columns_scroll.setWidgetResizable(True)
+        self.columns_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.columns_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        self.columns_scroll.setWidget(columns_host)
+        self.columns_scroll.setMinimumWidth(200)
+        splitter.addWidget(self.columns_scroll)
 
         self.detail_panel = TaskDetailPanel(self)
+        self.detail_panel.setMinimumWidth(180)
+        # Pano da dar sütunda yaşayabilsin: örtük asgari yerine açık asgari.
+        self.setMinimumWidth(220)
         if not compact:
             splitter.addWidget(self.detail_panel)
             splitter.setSizes([700, 320])
@@ -404,11 +479,22 @@ class TaskBoardWidget(QFrame):
             return []
         if self.office:
             cards = [c for c in cards if str(spec_field(c, "office", "")) == self.office]
+        # Faz 7: Projeler sekmesinden gelen süzgeç. Boşsa tüm kartlar görünür.
+        if getattr(self, "project_filter", ""):
+            cards = [c for c in cards
+                     if str(spec_field(c, "project", "")) == self.project_filter]
         return cards
+
+    def set_project_filter(self, project: str) -> None:
+        """Kartları tek projeye süzer ('' = süzgeç yok)."""
+        self.project_filter = project or ""
+        self.selected_id = ""
+        self.refresh_cards()
 
     def set_office(self, office: str) -> None:
         self.office = office or ""
         self.selected_id = ""
+        self.project_filter = ""
         self.title_label.setText(
             f"<b style='color:{RT['accent']}; font-size:13px;'>🗂 AJAN GÖREV PANOSU</b>"
             + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
@@ -532,6 +618,40 @@ class TaskBoardWidget(QFrame):
 
             return self.board.update(replace(current, status=status))
         return call_flex(self.board.update, {"status": status}, card_id)
+
+    def update_card_settings(self, card_id: str, settings: Dict[str, Any]) -> bool:
+        """
+        Kartın koşum ayarlarını (sağlayıcı/model/efor/bütçe) yazar.
+
+        `effort` TaskCard'da alan değil: `notes` içine `effort: <düzey>` satırı
+        olarak taşınır. Dataclass'ta olmayan anahtarlar sessizce atılır ki
+        sözleşme değişince arayüz kırılmasın.
+        """
+        if self.board is None or not card_id:
+            return False
+        payload = {k: v for k, v in (settings or {}).items() if v not in ("", None)}
+        effort = str(payload.pop("effort", "") or "")
+        if effort:
+            payload["notes"] = f"effort: {effort}"
+        payload["budget_tokens"] = int((settings or {}).get("budget_tokens", 0) or 0)
+        try:
+            current = self.board.get(card_id)
+        except Exception:
+            current = self.get_card(card_id)
+        try:
+            if current is not None and hasattr(current, "__dataclass_fields__"):
+                from dataclasses import replace
+
+                fields = getattr(current, "__dataclass_fields__", {})
+                clean = {k: v for k, v in payload.items() if k in fields}
+                self.board.update(replace(current, **clean))
+            else:
+                call_flex(self.board.update, payload, card_id)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Pano] Kart ayarı yazılamadı: {exc}\n")
+            return False
+        self._emit_updated(card_id)
+        return True
 
     def run_card(self, card_id: str) -> bool:
         if self.board is None or not card_id:

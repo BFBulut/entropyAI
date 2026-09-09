@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from entropy.core.config import STATE_DIR, config
 
@@ -38,6 +38,87 @@ _VAULT_GROUP_TO_TYPE: Dict[str, str] = {
     "Daily": "episode",
     "community": "community",
 }
+
+
+# --- rapor akışı: türe göre toplama ------------------------------------------
+#
+# Faz 7/A2: rapor toplama YOLA değil TÜRE bağlıdır. Eskiden `list_reports`
+# yalnızca `"Reports" in p.parts` filtresini uyguluyordu; bu yüzden
+# `wiki.write_query_page` ile yazılan sorgu sayfaları (`.../wiki/queries/`) ve
+# ofis raporları (`Desk/Offices/<ofis>/reports/`, KÜÇÜK harf) Rapor Merkezi'ne
+# hiç girmiyordu. Artık tür şu sırayla belirlenir:
+#   1) YAML ön bilgisindeki `type:` alanı (query | office_report | session | report)
+#   2) dizin kuralı (Reports/, reports/, wiki/queries/, Desk/Offices/*/reports/)
+REPORT_KINDS: Tuple[str, ...] = ("report", "query", "office_report", "session")
+
+# Ön bilgideki `type:` değeri -> rapor türü. Bilinmeyen değer normal rapordur.
+_FM_TYPE_TO_KIND: Dict[str, str] = {
+    "query": "query",
+    "sorgu": "query",
+    "office_report": "office_report",
+    "ofis_raporu": "office_report",
+    "session": "session",
+    "daily": "session",
+    "gunluk": "session",
+    "report": "report",
+    "rapor": "report",
+}
+
+# Tür -> taban önem. `graph_store` aynı dosya için bir düğüm tutuyorsa onun
+# `importance` değeri bu tabanı ezer (bkz. `_importance_by_provenance`).
+KIND_IMPORTANCE: Dict[str, float] = {
+    "office_report": 0.80,
+    "query": 0.60,
+    "report": 0.45,
+    "session": 0.40,
+}
+
+# Rapor taramasının hiç girmediği alt ağaçlar: arşiv, eski AgentDesk artıkları
+# ve ofis grafının kendi not deposu (bunlar rapor değildir).
+_REPORT_SCAN_SKIP_DIRS = frozenset({"_archive", "AgentDesk", ".obsidian", ".trash"})
+
+
+def _report_kind_from_path(file: Path) -> str:
+    """Dizin kuralından rapor türü; kural tutmazsa boş dizge."""
+    parts = [p for p in file.parts]
+    lower = [p.lower() for p in parts]
+    parent = lower[-2] if len(lower) >= 2 else ""
+    grand = lower[-3] if len(lower) >= 3 else ""
+    if parent == "queries" and grand in ("wiki",):
+        return "query"
+    if parent == "reports" and "offices" in lower:
+        return "office_report"
+    if parent == "reports":
+        return "report"
+    if "reports" in lower:
+        return "report"
+    # DailyNotes dizin kuralıyla rapor sayılmaz: günlük oturum notları rapor
+    # akışını boğardı. Bir oturum notunun akışa girmesi isteniyorsa ön bilgide
+    # `type: session` yazması yeterlidir (aşağıdaki tür eşlemesi yakalar).
+    return ""
+
+
+def _read_frontmatter(file: Path, limit: int = 4096) -> Dict[str, str]:
+    """Dosyanın ilk `limit` baytındaki YAML ön bilgisi (yoksa boş sözlük)."""
+    try:
+        with open(file, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(limit)
+    except OSError:
+        return {}
+    head = head.lstrip("﻿")
+    if not head.startswith("---"):
+        return {}
+    body = head[3:]
+    end = body.find("\n---")
+    if end == -1:
+        return {}
+    out: Dict[str, str] = {}
+    for line in body[:end].splitlines():
+        if ":" not in line or line.startswith(" "):
+            continue
+        key, _, value = line.partition(":")
+        out[key.strip().lower()] = value.strip().strip('"').strip("'")
+    return out
 
 
 def _graph_node_type(group: str) -> str:
@@ -372,35 +453,121 @@ class ObsidianVaultManager:
         except Exception:
             return None
 
-    def get_research_reports(self) -> List[Dict[str, str]]:
-        """Recursively collect all research reports across all subfolders (global, project-scoped, skill-scoped)."""
-        reports = []
-        seen_paths = set()
+    def _importance_by_provenance(self) -> Dict[str, float]:
+        """
+        Graf deposundaki dosya kaynaklı düğümlerin önem değerleri (yol -> puan).
 
-        candidate_files: List[Path] = []
-        if self.entropy_dir.exists():
-            for p in self.entropy_dir.rglob("*.md"):
-                # Matches files in Reports/, Projects/*/Reports/, Skills/*/Reports/
-                if "Reports" in p.parts:
-                    candidate_files.append(p)
+        Tek SQL ile alınır; graf yoksa/okunamıyorsa boş sözlük döner (rapor
+        listesi bir veritabanı hatasında çökmemeli, yalnızca taban puana düşer).
+        """
+        try:
+            import sqlite3
 
-        # Sort by mtime descending
-        candidate_files.sort(key=lambda f: f.stat().st_mtime if f.exists() else 0, reverse=True)
+            # Veritabanı yolu doğrudan kurulur: `CognitiveMemorySystem()`
+            # kurmak gömme modelini yüklüyor (yüzlerce ms) — rapor listesi için
+            # tek bir salt-okunur SQL sorgusu yeter.
+            db_path = Path.home() / ".entropy" / "cognitive_memory.db"
+            if not db_path.exists():
+                return {}
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                rows = conn.execute(
+                    "SELECT provenance, importance FROM nodes"
+                    " WHERE provenance IS NOT NULL AND provenance LIKE '%.md'"
+                ).fetchall()
+            return {
+                str(prov): float(imp)
+                for prov, imp in rows
+                if prov and imp is not None
+            }
+        except Exception:
+            return {}
 
-        for file in candidate_files:
-            if file in seen_paths or not file.is_file():
+    def iter_report_files(self) -> List[Tuple[Path, str]]:
+        """
+        Kasadaki rapor benzeri dosyalar ve türleri: `(yol, kind)`.
+
+        Tür önce ön bilgideki `type:` alanından, o yoksa dizin kuralından
+        gelir. Ön bilgi yalnızca dizin kuralı tutan ya da `type:` taşıyabilecek
+        dosyalar için okunur (OneDrive'da her dosyayı açmak pahalıdır).
+        """
+        if not self.entropy_dir.exists():
+            return []
+        out: List[Tuple[Path, str]] = []
+        for file in self.entropy_dir.rglob("*.md"):
+            if _REPORT_SCAN_SKIP_DIRS.intersection(file.parts):
                 continue
-            seen_paths.add(file)
-            reports.append({
+            path_kind = _report_kind_from_path(file)
+            in_daily = "DailyNotes" in file.parts
+            if not path_kind and not in_daily:
+                continue
+            fm_type = _read_frontmatter(file).get("type", "").strip().lower()
+            kind = _FM_TYPE_TO_KIND.get(fm_type, path_kind)
+            if not kind:
+                # Günlük not yalnızca kendini `type:` ile ilan ederse akışa girer.
+                continue
+            out.append((file, kind))
+        return out
+
+    def get_research_reports(
+        self, kinds: Optional[Sequence[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Kasadaki tüm rapor benzeri künyeleri toplar (genel, proje, yetenek,
+        ofis raporu ve wiki sorgu sayfaları dahil).
+
+        `kinds` verilmezse hepsi döner (geriye uyumlu). Her künye:
+        `title, path, modified, mtime, kind, office, skill, importance`.
+        """
+        wanted = {str(k).strip().lower() for k in kinds} if kinds else None
+        importance_map = self._importance_by_provenance()
+
+        entries: List[Dict[str, Any]] = []
+        seen: Set[Path] = set()
+        for file, kind in self.iter_report_files():
+            if file in seen or not file.is_file():
+                continue
+            if wanted is not None and kind not in wanted:
+                continue
+            seen.add(file)
+            try:
+                mtime = file.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            parts = file.parts
+            office = ""
+            skill = ""
+            if "Offices" in parts:
+                idx = parts.index("Offices")
+                if len(parts) > idx + 1:
+                    office = parts[idx + 1]
+            if "Skills" in parts:
+                idx = parts.index("Skills")
+                if len(parts) > idx + 1:
+                    skill = parts[idx + 1]
+            entries.append({
                 "title": file.stem.replace("_", " "),
                 "path": str(file),
-                "modified": datetime.datetime.fromtimestamp(file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+                "modified": datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+                "mtime": mtime,
+                "kind": kind,
+                "office": office,
+                "skill": skill,
+                "importance": round(
+                    importance_map.get(str(file), KIND_IMPORTANCE.get(kind, 0.45)), 3
+                ),
             })
-        return reports
 
-    def list_reports(self) -> List[Dict[str, str]]:
-        """List all research reports available in the vault across all subfolders."""
-        return self.get_research_reports()
+        entries.sort(key=lambda e: e["mtime"], reverse=True)
+        return entries
+
+    def list_reports(
+        self, kinds: Optional[Sequence[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Kasadaki rapor künyeleri. İmza geriye uyumlu: `list_reports()` eskisi
+        gibi hepsini döndürür, `list_reports(kinds=["office_report"])` süzer.
+        """
+        return self.get_research_reports(kinds=kinds)
 
     def list_all_notes(self) -> List[Path]:
         """List all markdown notes across all subdirectories of the Obsidian exocortex."""

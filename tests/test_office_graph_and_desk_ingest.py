@@ -123,8 +123,13 @@ def test_view_data_and_export_markdown(office):
 
     view = g.to_view_data()
     ids = {n["id"] for n in view["nodes"]}
-    assert ids == {a["id"], b["id"]}
-    assert view["links"][0]["source"] == a["id"] and view["links"][0]["type"] == "produced"
+    # Faz 7: gerçek düğümlerin yanına ajan/rapor/ofis sanal düğümleri de eklenir
+    # (küçük ofiste sekme boş görünmesin diye); gerçek düğümler yine listede.
+    assert {a["id"], b["id"]} <= ids
+    real = {n["id"] for n in view["nodes"] if not n.get("virtual")}
+    assert real == {a["id"], b["id"]}
+    produced = [l for l in view["links"] if l["type"] == "produced"]
+    assert produced and produced[0]["source"] == a["id"]
     assert all("group" in n and "kind" in n for n in view["nodes"])
 
     md = g.export_markdown()

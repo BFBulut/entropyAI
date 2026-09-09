@@ -108,7 +108,10 @@ def test_fitted_geometry_is_centered_on_secondary_screen_origin():
 
 def test_desk_window_uses_screen_ratio_constant():
     from entropy.desk import window as desk_window
-    assert desk_window.DESK_SCREEN_RATIO == pytest.approx(0.88)
+    # Faz 7: tek monitörde Desk ekranın sağ YARISINI kaplar (%50 genişlik);
+    # ikinci monitör varsa orada %88.
+    assert desk_window.DESK_SCREEN_RATIO == pytest.approx(0.5)
+    assert desk_window.DESK_SECONDARY_RATIO == pytest.approx(0.88)
     assert desk_window.DESK_MIN_SIZE[0] <= 1366
     assert desk_window.DESK_MIN_SIZE[1] <= 728
 

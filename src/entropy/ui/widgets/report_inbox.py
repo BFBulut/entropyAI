@@ -216,7 +216,17 @@ def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
             path = Path(str(report.get("path", "")))
             if not path.exists():
                 continue
-            entries.append(read_report_meta(path))
+            # `read_report_meta` dosyayi kendi basina okur ve `kind`/`office`
+            # gibi YALNIZCA kasa taramasinin bildigi alanlari uretmez. Kunyeyi
+            # `list_reports()` sozlugunun uzerine bindiriyoruz: dosyadan okunan
+            # baslik/etiket kazanir, tarama alanlari (kind, office, importance)
+            # korunur. Duz `read_report_meta(path)` bunlari dusuruyordu.
+            merged: Dict[str, Any] = dict(report)
+            merged.update(read_report_meta(path))
+            for key in ("kind", "office", "importance"):
+                if not merged.get(key) and report.get(key) is not None:
+                    merged[key] = report.get(key)
+            entries.append(merged)
         return entries
     except Exception:
         return []
@@ -353,7 +363,8 @@ class ReportInboxStrip(QFrame):
     def __init__(self, parent=None, store: Optional[ReportInboxStore] = None):
         super().__init__(parent)
         self.setObjectName("inboxStrip")
-        self.store = store if store is not None else ReportInboxStore()
+        self.setMinimumWidth(240)  # dar panelde şerit daralsın, paneli itmesin
+        self.store =store if store is not None else ReportInboxStore()
         self._entries: List[Dict[str, Any]] = []
         self._now_override: Optional[float] = None
 
@@ -369,7 +380,10 @@ class ReportInboxStrip(QFrame):
         head.setSpacing(8)
         self.header_label = QLabel("")
         self.header_label.setStyleSheet("background: transparent; border: none;")
-        head.addWidget(self.header_label)
+        # Zengin metin başlığın doğal minimumu (~540 px) şeridi ve onu barındıran
+        # Zen sol sekmesini dar panelde kırpıyordu; daralmaya izin ver.
+        self.header_label.setMinimumWidth(110)
+        head.addWidget(self.header_label, 1)
         head.addStretch()
         self.mark_all_btn = QPushButton("Tümünü okundu say")
         self.mark_all_btn.setFixedHeight(24)

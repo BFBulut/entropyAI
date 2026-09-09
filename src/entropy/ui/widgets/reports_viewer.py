@@ -14,7 +14,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
-    QTextBrowser, QVBoxLayout, QWidget
+    QSizePolicy, QTextBrowser, QVBoxLayout, QWidget
 )
 
 from entropy.core.config import config
@@ -160,7 +160,11 @@ class ReportsViewerWidget(QFrame):
         # Header
         header = QHBoxLayout()
         title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>📚 ARAŞTIRMA VE BELLEK DOSYALARI</b>")
-        header.addWidget(title_label)
+        # Başlık dar panelde daralabilsin; yoksa üstteki araç çubuğu satırı
+        # panelin minimumunu ~676 px'e çıkarıp Zen sol sekmesini kırpıyor.
+        title_label.setMinimumWidth(100)
+        title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        header.addWidget(title_label, 1)
 
         header.addStretch()
 
@@ -301,7 +305,7 @@ class ReportsViewerWidget(QFrame):
         left_layout.addWidget(self.list_count_lbl)
 
         self.list_widget = QListWidget()
-        self.list_widget.setMinimumWidth(160)
+        self.list_widget.setMinimumWidth(120)
         self.list_widget.setStyleSheet(f"""
             QListWidget {{
                 background-color: {CYBER_THEME['bg_terminal']};
@@ -366,18 +370,22 @@ class ReportsViewerWidget(QFrame):
         list_action_bar.addWidget(self.btn_open_standalone)
         left_layout.addLayout(list_action_bar)
 
-        left_container.setMinimumWidth(160)
+        # Dar Zen panelinde okuyucu bolunmesi de daralabilmeli (bkz. Faz 7).
+        left_container.setMinimumWidth(120)
         self.splitter.addWidget(left_container)
 
         # Right container: RAG Status Bar + Markdown Text Browser
         right_container = QWidget()
-        right_container.setMinimumWidth(220)
+        right_container.setMinimumWidth(160)
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
 
         # RAG / Memory Status & Reading Tools Banner
         self.rag_status_bar = QFrame()
+        # Okuma araç çubuğu (durum + A+/A-/🔗/📁) doğal olarak ~514 px istiyordu;
+        # dar panelde çubuğun kendisi kırpılsın, panel genişlemesin.
+        self.rag_status_bar.setMinimumWidth(200)
         self.rag_status_bar.setStyleSheet("""
             QFrame {
                 background-color: #141C2C;

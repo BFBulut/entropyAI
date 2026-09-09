@@ -716,28 +716,31 @@ def _handle_desk_admin(verb: str, rest: str, offices) -> str:
         return _desk_usage()
     from dataclasses import replace as _replace
 
-    from entropy.agents.registry import AgentSpec
-
     existing = agents.get(agent_name)
     if action == "add" and existing is not None:
         return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(agent_name)}' bu ofiste zaten var."
     if action == "edit" and existing is None:
         return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(agent_name)}' bu ofiste yok."
-    office = offices.get(office_name)
-    spec = existing or AgentSpec(
-        name=agent_name,
-        role="worker",
-        provider=(office.default_provider if office else "agy"),
-        model=(office.default_model if office else ""),
-        tools_policy="read-write",
-        memory_path=f"memory/{agent_name}.md",
-    )
-    if detail:
-        spec = _replace(spec, description=detail, prompt=(spec.prompt or detail))
-    try:
-        agents.update(spec)
-    except Exception as exc:
-        return f"<b>🤖 Ofis Ajanı</b><br/>Yazılamadı: {_html_escape(exc)}"
+    # `add` yolu `create_member` üzerinden geçer: ofis üyeliği tanım DOSYASIYLA
+    # doğar, `members` ön bilgisine ad yazmakla değil (Faz 7 / QA bulgusu).
+    if existing is None:
+        try:
+            spec = offices.create_member(
+                office_name, agent_name, role="worker",
+                description=detail or "", prompt=detail or "",
+            )
+        except Exception as exc:
+            return f"<b>🤖 Ofis Ajanı</b><br/>Yazılamadı: {_html_escape(exc)}"
+        if spec is None:
+            return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(office_name)}' ofisi okunamadı."
+    else:
+        spec = existing
+        if detail:
+            spec = _replace(spec, description=detail, prompt=(spec.prompt or detail))
+        try:
+            agents.update(spec)
+        except Exception as exc:
+            return f"<b>🤖 Ofis Ajanı</b><br/>Yazılamadı: {_html_escape(exc)}"
     return (
         f"<b>🤖 Ofis Ajanı</b><br/>{_html_escape(office_name)} / "
         f"{_html_escape(agent_name)} kaydedildi ve derlendi.<br/>"

@@ -984,6 +984,19 @@ class CognitiveMemorySystem:
         except Exception:
             pass
 
+        # Faz 7: Desk ofis belleğinin Entropy grafına akışı da rüya döngüsünde
+        # tetiklenir (modelsiz, kota harcamaz). Ayrı bir kullanıcı komutu yok;
+        # başarısız olursa rüya döngüsü etkilenmez.
+        try:
+            from entropy.memory.graph_store import GraphStore
+            from entropy.memory.office_graph import schedule_office_ingest
+
+            # Depo bu bellek örneğine bağlanır: testlerdeki geçici veritabanı
+            # yerine üretim grafına yazılmasın.
+            schedule_office_ingest(store=GraphStore(memory=self), background=False)
+        except Exception:
+            pass
+
         return synthesized_rules
 
     _PLACEHOLDER_RE = re.compile(r"^Konsolide Bilişsel Özet \(\d{4}-\d{2}-\d{2}\): \d+ bölümsel etkileşimden damıtıldı\.?$")

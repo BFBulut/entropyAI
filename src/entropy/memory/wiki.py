@@ -261,6 +261,17 @@ def write_query_page(skill: str, title: str, body: str, meta: dict) -> Path:
             write_office_report_summary(office, title, path, masked, meta, sources)
         except Exception as exc:  # pragma: no cover - özet sayfayı düşürmemeli
             logger.warning("Ofis raporu özeti yazılamadı (%s): %s", office, exc)
+        # Faz 7: yeni ofis raporu = ofis belleğinin Entropy grafına akma anı.
+        # Modelsiz, kota harcamayan alım; arka planda ve aralık kısıtlı.
+        # `vault_path` verilmişse (test/izolasyon) tetiklenmez: izole bir kasanın
+        # içeriği üretim grafına yazılmamalı.
+        try:
+            if not vault_path:
+                from entropy.memory.office_graph import schedule_office_ingest
+
+                schedule_office_ingest(background=True)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Ofis alımı tetiklenemedi (%s): %s", office, exc)
 
     _store_query_node(path, skill, title, masked, meta, sources)
     return path

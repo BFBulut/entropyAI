@@ -362,7 +362,15 @@ class OfficeGraph:
         return [(nid, round(s, 4)) for nid, s in scored[:k] if s > 0]
 
     def to_view_data(self) -> Dict[str, List[Dict[str, Any]]]:
-        """Desk "Bellek" sekmesi için düğüm/kenar JSON'u (mini-graf çizimi)."""
+        """
+        Desk "Bellek" sekmesi için düğüm/kenar JSON'u (mini-graf çizimi).
+
+        Graf boş olsa bile boş dönmez: ofisin `agents/<ad>` klasörlerinden
+        ajan düğümleri ve `reports/*.md` dosyalarından rapor düğümleri HER
+        ZAMAN eklenir (`virtual: True`). Yeni kurulmuş küçük bir ofiste
+        sekmenin bomboş görünmesi, belleğin çalışmadığı izlenimi veriyordu.
+        Sanal düğümler yalnızca görünümdedir; `graph.json`'a yazılmaz.
+        """
         nodes_out = [
             {
                 "id": n["id"],
@@ -384,6 +392,52 @@ class OfficeGraph:
             for e in self.edges
             if e["src"] in self.nodes and e["dst"] in self.nodes
         ]
+
+        existing = {n["id"] for n in nodes_out}
+        office_id = f"ofis-{_slug(self.office)}"
+        virtual: List[Dict[str, Any]] = []
+
+        def _add_virtual(node_id: str, name: str, kind: str, note: str = "") -> None:
+            if node_id in existing:
+                return
+            existing.add(node_id)
+            virtual.append({
+                "id": node_id, "name": name, "group": kind, "kind": kind,
+                "office": self.office, "created_at": 0.0, "note": note,
+                "degree": 0, "virtual": True,
+            })
+
+        agents_dir = self.root / "agents"
+        if agents_dir.is_dir():
+            for child in sorted(p for p in agents_dir.iterdir() if p.is_dir()):
+                _add_virtual(f"ajan-{_slug(child.name)}", child.name, "ajan",
+                             note=f"agents/{child.name}")
+        reports_dir = self.root / "reports"
+        if reports_dir.is_dir():
+            for report in sorted(reports_dir.glob("*.md"), key=lambda p: p.name, reverse=True):
+                _add_virtual(f"rapor-{_slug(report.stem)}", report.stem, "rapor",
+                             note=f"reports/{report.name}")
+
+        if virtual:
+            # Sanal düğümler ofis merkezine bağlanır ki serbest nokta bulutu
+            # değil, okunur bir yıldız çizilsin.
+            _add_virtual(office_id, self.office, "ofis")
+            for node in virtual:
+                if node["id"] == office_id:
+                    continue
+                links_out.append({
+                    "source": node["id"], "target": office_id, "type": "member_of",
+                    "alias": "member_of", "weight": 0.5, "virtual": True,
+                })
+            nodes_out.extend(virtual)
+            degrees: Dict[str, int] = {}
+            for link in links_out:
+                degrees[link["source"]] = degrees.get(link["source"], 0) + 1
+                degrees[link["target"]] = degrees.get(link["target"], 0) + 1
+            for node in nodes_out:
+                if node.get("virtual"):
+                    node["degree"] = degrees.get(node["id"], 0)
+
         return {"nodes": nodes_out, "links": links_out}
 
     def export_markdown(self) -> str:
@@ -466,35 +520,117 @@ class OfficeGraph:
 # --- orkestratör bağlamı (Entropy'den habersiz) ------------------------------
 
 
+ORCHESTRATOR_CONTEXT_MAX_TOKENS = 1200
+_CHARS_PER_TOKEN = 4
+
+
+def _est_tokens(text: str) -> int:
+    """Kaba token tahmini (playbook.estimate_tokens ile aynı 4 karakter kuralı)."""
+    return max(0, len(text or "")) // _CHARS_PER_TOKEN
+
+
 def orchestrator_context(
-    office: str, task: str = "", k: int = 6, vault_path: Optional[Path] = None
+    office: str,
+    task: str = "",
+    k: int = 6,
+    vault_path: Optional[Path] = None,
+    recent_reports: int = 3,
+    max_tokens: int = ORCHESTRATOR_CONTEXT_MAX_TOKENS,
 ) -> str:
     """
-    Ofis orkestratörü için istem bağlamı — **yalnızca ofis grafından** üretilir.
+    Ofis orkestratörü için istem bağlamı — **yalnızca ofis dosyalarından** üretilir.
+
+    Üç bölüm, toplam <= `max_tokens` (varsayılan 1200):
+      1. Göreve en yakın graf düğümleri (`task` boşsa en yeni `k` düğüm),
+      2. O düğümlerin graf komşuları (karar/bulgu zinciri kopmasın diye),
+      3. Ofisin son `recent_reports` raporu (`reports/*.md`, tarih önekli
+         ada göre; OneDrive'da mtime güvenilmez).
 
     Orkestratörler Entropy AI'dan habersizdir: burada ne Entropy grafı okunur
     ne de "Entropy" dizgesi çıktıya girer (son adımda süzülür; mutlak yol da
-    basılmaz).
+    basılmaz). İmza geriye uyumludur: yeni parametreler varsayılanlıdır.
     """
     graph = OfficeGraph(office, vault_path)
-    if not graph.nodes:
-        return ""
-    if (task or "").strip():
+
+    if (task or "").strip() and graph.nodes:
         picked = [nid for nid, _ in graph.query(task, k=k)]
+        if not picked:
+            picked = [
+                n["id"] for n in sorted(
+                    graph.nodes.values(), key=lambda x: -x.get("created_at", 0.0)
+                )[:k]
+            ]
     else:
         picked = [
             n["id"] for n in sorted(
                 graph.nodes.values(), key=lambda x: -x.get("created_at", 0.0)
             )[:k]
         ]
-    lines = [f"# Ofis Belleği ({office})", ""]
-    for nid in picked:
-        node = graph.nodes.get(nid)
-        if not node:
-            continue
-        body = " ".join((node.get("body") or "").split())[:220]
-        lines.append(f"- ({node.get('kind')}) {node.get('title')}{(': ' + body) if body else ''}")
-    text = "\n".join(lines) + "\n"
+
+    def _line(node: Dict[str, Any], limit: int = 220) -> str:
+        body = " ".join((node.get("body") or "").split())[:limit]
+        return f"- ({node.get('kind')}) {node.get('title')}{(': ' + body) if body else ''}"
+
+    lines: List[str] = [f"# Ofis Belleği ({office})", ""]
+    if (task or "").strip():
+        lines.append(f"Görev: {' '.join(str(task).split())[:200]}")
+        lines.append("")
+
+    if picked:
+        lines.append("## İlgili notlar")
+        for nid in picked:
+            node = graph.nodes.get(nid)
+            if node:
+                lines.append(_line(node))
+        lines.append("")
+
+        # Komşular: seçilen düğümlerin bir adım ötesi, yinelemesiz.
+        seen = set(picked)
+        neighbor_lines: List[str] = []
+        for nid in picked:
+            for node in graph.neighbors(nid, depth=1):
+                if node["id"] in seen:
+                    continue
+                seen.add(node["id"])
+                neighbor_lines.append(_line(node, limit=140))
+        if neighbor_lines:
+            lines.append("## Bağlantılı")
+            lines.extend(neighbor_lines[: max(0, k)])
+            lines.append("")
+
+    # Son raporlar: graf boş olsa bile bağlam üretilebilsin.
+    reports_dir = desk_office_dir(office, vault_path) / "reports"
+    if recent_reports > 0 and reports_dir.is_dir():
+        names = sorted(reports_dir.glob("*.md"), key=lambda p: p.name, reverse=True)
+        report_lines: List[str] = []
+        for report in names[: max(0, int(recent_reports))]:
+            try:
+                text = report.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            body = re.sub(r"(?s)^---.*?---", "", text).strip()
+            summary = " ".join(body.split())[:260]
+            report_lines.append(f"- {report.stem}{(': ' + summary) if summary else ''}")
+        if report_lines:
+            lines.append("## Son raporlar")
+            lines.extend(report_lines)
+            lines.append("")
+
+    # Hiçbir içerik bölümü yoksa boş dize: bağlamsız istem, başlıklı boş
+    # bloktan iyidir (orkestratör "ofis belleği var" sanmasın).
+    if not any(line.startswith("## ") for line in lines):
+        return ""
+
+    # Bütçe: satır satır kırpılır; başlık satırları içerikten önce gelir.
+    out: List[str] = []
+    total = 0
+    for line in lines:
+        cost = _est_tokens(line) + 1
+        if total + cost > max_tokens:
+            break
+        out.append(line)
+        total += cost
+    text = "\n".join(out).rstrip() + "\n"
     # Güvenlik ağı: kasadan gelen bir metin "Entropy" içerse bile istem taşımaz.
     return re.sub(r"[Ee]ntrop[iy][A-Za-zİıĞğŞşÖöÇçÜü]*", "sistem", text)
 
@@ -563,18 +699,62 @@ def ingest_office_into_entropy(
 
     # Ofis projeleri de Entropy'nin belleğine akar (klasör adı = proje).
     projects_dir = desk_office_dir(office, vault_path) / "projects"
+    stats["done_projects"] = 0
     if projects_dir.is_dir():
         for proj in sorted(p for p in projects_dir.iterdir() if p.is_dir()):
+            fm = _front_matter(proj / "PROJECT.md")
+            status = (fm.get("status") or "").strip().lower()
+            title = fm.get("title") or fm.get("name") or proj.name
             nid = f"desk-{_slug(office)}-proje-{_slug(proj.name)}"
+            body = f"{office} ofisi projesi: {title}"
+            if status:
+                body += f" (durum: {status})"
             st.upsert_node(
-                nid, "task", proj.name, body=f"{office} ofisi projesi: {proj.name}",
+                nid, "task", title, body=body,
                 scope=scope, provenance=str(proj),
-                metadata={"desk_office": office, "desk_kind": "proje"},
+                metadata={
+                    "desk_office": office, "desk_kind": "proje", "status": status,
+                    "done": status == "done",
+                },
             )
             if not st.get_edges(src=nid, dst=office_id, edge_type="member_of"):
                 st.add_edge(nid, office_id, "member_of", provenance=office)
                 stats["edges"] += 1
             stats["nodes"] += 1
+
+            # Biten proje bir çıktıdır: ofis raporlarına `produced` kenarıyla
+            # bağlanır ki "bu proje ne üretti" sorusu grafta cevaplanabilsin.
+            if status != "done":
+                continue
+            stats["done_projects"] += 1
+            produced: List[str] = []
+            proj_reports = proj / "reports"
+            for folder in (proj_reports, reports_dir):
+                if not folder.is_dir():
+                    continue
+                for report in sorted(folder.glob("*.md")):
+                    rid = f"desk-{_slug(office)}-report-{_slug(report.stem)}"
+                    text = ""
+                    try:
+                        text = report.read_text(encoding="utf-8", errors="ignore")[:8000]
+                    except OSError:
+                        pass
+                    fm_r = _front_matter(report)
+                    # Ofis kökündeki rapor yalnızca bu projeye aitse bağlanır.
+                    if folder is reports_dir:
+                        owner = (fm_r.get("project") or "").strip()
+                        if _slug(owner) != _slug(proj.name):
+                            continue
+                    st.upsert_node(
+                        rid, "report", report.stem, body=text, scope=scope,
+                        provenance=str(report),
+                        metadata={"desk_office": office, "project": proj.name},
+                    )
+                    produced.append(rid)
+            for rid in produced:
+                if not st.get_edges(src=nid, dst=rid, edge_type="produced"):
+                    st.add_edge(nid, rid, "produced", provenance=office)
+                    stats["edges"] += 1
     return stats
 
 
@@ -589,6 +769,78 @@ def ingest_all_offices(
     for child in sorted(p for p in base.iterdir() if p.is_dir()):
         out.append(ingest_office_into_entropy(child.name, store=store, vault_path=vault_path))
     return out
+
+
+# Ofis alımı tetikleyicisinin son koşum damgası. Kota harcamayan (modelsiz)
+# bir iş olsa da OneDrive taraması pahalıdır: aralık altındaki çağrılar atlanır.
+OFFICE_INGEST_STATE_FILE = "office_ingest.state.json"
+OFFICE_INGEST_MIN_INTERVAL = 300.0
+
+
+def _office_ingest_state_path() -> Path:
+    from entropy.core.config import STATE_DIR
+
+    return Path(STATE_DIR) / OFFICE_INGEST_STATE_FILE
+
+
+def schedule_office_ingest(
+    store: Optional[Any] = None,
+    vault_path: Optional[Path] = None,
+    min_interval: float = OFFICE_INGEST_MIN_INTERVAL,
+    force: bool = False,
+    background: bool = False,
+) -> Dict[str, Any]:
+    """
+    Ofis belleğini Entropy grafına akıtan **tek tetikleyici**.
+
+    `ingest_all_offices()` + `GraphStore.ingest_desk_memory()` bugüne kadar
+    hiçbir yerden çağrılmıyordu (bağlanmamış API). Bunları bir kullanıcı
+    komutuna (`/desk ingest`) değil, zaten var olan iki olaya bağlıyoruz:
+      * rüya/konsolidasyon döngüsü (`cognitive_memory.dream_and_consolidate`),
+      * ofis raporu yazımı (`wiki.write_query_page`, OFFICE_REPORT_CATEGORY).
+
+    Model çağrısı yoktur, AGY kotası harcamaz. `min_interval` saniyeden sık
+    çağrılırsa iş atlanır (`{"skipped": "debounce"}`). `background=True` ile
+    daemon iş parçacığında koşar (UI/yazım yolunu bloklamaz).
+    """
+    state_path = _office_ingest_state_path()
+    now = time.time()
+    if not force:
+        try:
+            last = float(json.loads(state_path.read_text(encoding="utf-8")).get("last_run", 0.0))
+        except (OSError, ValueError, AttributeError):
+            last = 0.0
+        if now - last < max(0.0, float(min_interval)):
+            return {"ran": False, "skipped": "debounce", "last_run": last}
+
+    def _run() -> Dict[str, Any]:
+        result: Dict[str, Any] = {"ran": True, "offices": [], "desk_memory": {}}
+        try:
+            result["offices"] = ingest_all_offices(store=store, vault_path=vault_path)
+        except Exception as exc:  # pragma: no cover - alım bir yan iştir
+            result["error"] = f"offices: {exc}"
+        try:
+            from entropy.memory.graph_store import GraphStore
+
+            st = store if store is not None else GraphStore()
+            result["desk_memory"] = st.ingest_desk_memory(vault_path=vault_path)
+        except Exception as exc:  # pragma: no cover
+            result["error"] = f"{result.get('error', '')} desk_memory: {exc}".strip()
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps({"last_run": time.time()}, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return result
+
+    if background:
+        import threading
+
+        threading.Thread(target=_run, name="office-ingest", daemon=True).start()
+        return {"ran": True, "background": True}
+    return _run()
 
 
 def desk_scopes(vault_path: Optional[Path] = None) -> List[str]:

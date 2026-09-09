@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass, field, replace
@@ -61,6 +62,9 @@ SECTION_RESULT = "Sonuç"
 # (`agy -p --help`: yalnızca --effort ve --print-timeout), bu yüzden sınır
 # prompt sözleşmesiyle konuyor.
 MAX_STEPS_PER_CARD = 20
+
+# Alt kart istemine giren proje dosya listesi tavanı (Faz 7 / C2d).
+PROJECT_FILE_LIST_LIMIT = 40
 
 COST_DISCIPLINE = (
     "[MALİYET DİSİPLİNİ]\n"
@@ -473,7 +477,51 @@ class TaskBoard:
             cls._bridge_cache[provider] = bridge
             return bridge
 
-    def build_prompt(self, card: TaskCard, agent_spec=None) -> str:
+    @staticmethod
+    def project_file_section(project_path: Optional[str], limit: int = PROJECT_FILE_LIST_LIMIT) -> str:
+        """
+        Alt kart istemine giren PROJE DOSYA LİSTESİ (ilk `limit` yol).
+
+        Faz 7 (C2d): alt ajan kendi başına depoyu taramasın diye istemde hazır
+        bir dosya haritası verilir. Liste bilerek kısa ve göreli: tam ağaç
+        tek başına on binlerce token ediyordu ve mutlak yollar istemde kasa
+        konumunu sızdırıyordu. Gizli klasörler (`.git`, `__pycache__`, `node_modules`)
+        atlanır: gürültüden başka bir şey taşımıyorlar.
+        """
+        if not project_path:
+            return ""
+        root = Path(project_path)
+        skip = {".git", "__pycache__", "node_modules", ".venv", "venv", ".mypy_cache",
+                ".pytest_cache", "dist", "build", ".idea", ".vscode"}
+        paths: List[str] = []
+        try:
+            if not root.is_dir():
+                return ""
+            for current, dirs, files in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if d not in skip and not d.startswith("."))
+                for name in sorted(files):
+                    if name.startswith("."):
+                        continue
+                    try:
+                        rel = str(Path(current, name).relative_to(root))
+                    except ValueError:
+                        continue
+                    paths.append(rel.replace("\\", "/"))
+                    if len(paths) >= limit:
+                        break
+                if len(paths) >= limit:
+                    break
+        except OSError:
+            return ""
+        if not paths:
+            return ""
+        return (
+            "[PROJE DOSYALARI]\n"
+            f"(ilk {len(paths)} yol; kök: proje dizini)\n"
+            + "\n".join(f"- {p}" for p in paths)
+        )
+
+    def build_prompt(self, card: TaskCard, agent_spec=None, project_path: Optional[str] = None) -> str:
         """
         Ajanın gövdesi + görev sözleşmesi + kabul ölçütleri.
 
@@ -499,6 +547,9 @@ class TaskBoard:
             # bir alt kart tek başına ofisin bütçesini bitiriyordu.
             f"{COST_DISCIPLINE}"
         )
+        files_block = self.project_file_section(project_path)
+        if files_block:
+            parts.append(files_block)
         if card.notes:
             parts.append(f"[NOTLAR]\n{card.notes}")
         return "\n\n".join(parts)
@@ -538,7 +589,7 @@ class TaskBoard:
         if bridge is None:
             return None
 
-        prompt = self.build_prompt(card, agent_spec=agent_spec)
+        prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
         task_id = f"card-{card.id}"
         card = replace(card, status="running", started_at=_now(), provider=provider)
@@ -565,6 +616,9 @@ class TaskBoard:
             # Okuma niyetli kart paylaşımlı kilitle koşar; aksi hâlde aynı
             # proje dizinindeki ikinci alt kart 60 sn bekleyip ölüyordu.
             needs_write=needs_write,
+            # Adım tavanı yaptırımı: istemdeki "en çok N adım" ricası
+            # tutmadığında köprü akıştaki araç olaylarını sayıp süreci öldürür.
+            max_steps=MAX_STEPS_PER_CARD,
         )
         # Ofis kartı kendi çalışma dizininde koşar; derlenmiş ajan tanımı orada.
         if project_path:
@@ -573,7 +627,7 @@ class TaskBoard:
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
-        for optional in ("needs_write", "project_path"):
+        for optional in ("needs_write", "project_path", "max_steps"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):

@@ -686,7 +686,11 @@ class DigestCardWidget(QFrame):
         self.center = center
         self.setObjectName("digestCard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        accent = RT["accent_warn"] if card.get("unread") else RT["divider"]
+        # Kart içindeki uzun başlık/özet etiketleri kartın minimumunu ~580 px'e
+        # itiyor, o da kaydırma alanı üzerinden panelin minimumu oluyordu.
+        # Kart daralabilsin; metin kendi içinde kırpılır/sarılır.
+        self.setMinimumWidth(180)
+        accent =RT["accent_warn"] if card.get("unread") else RT["divider"]
         self.setStyleSheet(
             f"""
             QFrame#digestCard {{
@@ -849,7 +853,12 @@ class ReportCenterWidget(QFrame):
     ):
         super().__init__(parent)
         self.setObjectName("reportCenter")
-        self.store = store if store is not None else ReportInboxStore()
+        # Panel dar Zen sol sekmesinde de yaşayabilmeli: başlık satırındaki
+        # düğmeler ve kartlar toplamda 1400 px'lik örtük bir minimum üretiyordu.
+        # Açık minimum, iç araç çubuğunun panel yerine kendisinin kırpılmasını
+        # (ve kaydırma çubuğuyla erişilebilir kalmasını) sağlar.
+        self.setMinimumWidth(240)
+        self.store =store if store is not None else ReportInboxStore()
         self.bridge = bridge
         # Testler ve Chat kipi kendi işleyicisini verebilsin diye enjekte edilir;
         # varsayılan yerel `/ask` komutudur.
@@ -873,7 +882,15 @@ class ReportCenterWidget(QFrame):
         self.header_label = QLabel("")
         self.header_label.setTextFormat(Qt.TextFormat.RichText)
         self.header_label.setStyleSheet("background:transparent; border:none;")
-        head.addWidget(self.header_label)
+        # Zengin metin başlık tek satırda ~666 px minimumSizeHint üretiyordu; bu da
+        # Rapor Merkezi'nin (ve onu barındıran Zen sol sekmesinin) minimumunu
+        # 1400 px'in üstüne çıkarıp dar panelde araç çubuğunu kırpıyordu. Açık
+        # küçük minimum vererek satırın daralmasına izin veriyoruz.
+        self.header_label.setMinimumWidth(120)
+        self.header_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        head.addWidget(self.header_label, 1)
         head.addStretch()
         self.mark_all_btn = DigestCardWidget._action_btn(
             "Tümünü okundu say", "Rapor Merkezi'ndeki bütün raporları okundu işaretle"
@@ -925,6 +942,12 @@ class ReportCenterWidget(QFrame):
 
         self.quiet_btn = DigestCardWidget._action_btn("", "Yüksek güvenli rutin raporlar")
         self.quiet_btn.clicked.connect(self.toggle_quiet)
+        # Uzun etiket ("Sessiz bölüm — N yüksek güvenli rutin küme") panelin
+        # minimumunu 548 px'e çekiyordu; dar panelde metin kırpılsın, panel değil.
+        self.quiet_btn.setMinimumWidth(120)
+        self.quiet_btn.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         root.addWidget(self.quiet_btn)
 
         self.empty_label = QLabel("")

@@ -67,6 +67,38 @@ GRADE_THRESHOLD = 0.6
 MAX_SUBTASKS = 5
 MAX_ATTEMPTS = 2  # ilk koşu + bir retry
 
+# Bir alt kartın BEKLENEN maliyeti (Faz 7 / C1b). Kontrol çağrıdan ÖNCE
+# yapılabilsin diye gerekli: gerçek maliyet ancak çağrı bitince biliniyor ve
+# "harca, sonra bak" düzeni her seferinde bütçeyi bir alt kart boyu aşıyordu.
+# Değer ölçüme dayanıyor: agy alt kartları tipik olarak 20–40k token yakıyor.
+SUBCARD_TOKEN_ESTIMATE = 30_000
+
+# Orkestratör çıktısında kod üretimi izi (A9). Alt ajanlar için GEÇERSİZ:
+# yalnızca plan/rapor üretmesi gereken orkestratöre uygulanır.
+ORCHESTRATOR_NO_CODE_RETRY = 1
+_CODE_TRACE_RE = re.compile(
+    r"```(?:py|python|js|ts|tsx|jsx|java|c|cpp|cs|go|rs|rb|php|sh|bash|ps1|sql|html|css|yaml|yml|diff|patch)\b"
+    r"|^diff --git\b"
+    r"|\bdosyaya\s+yazd[ıi]m\b"
+    r"|\bdosyay[ıi]\s+(?:olu[şs]turdum|g[üu]ncelledim|yazd[ıi]m)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Planlama bağlamına giren ofis raporu sayısı ve rapor başına karakter (B1).
+CONTEXT_REPORT_COUNT = 3
+CONTEXT_REPORT_CHARS = 1200
+
+
+def orchestrator_produced_code(text: str) -> bool:
+    """
+    Orkestratör çıktısı araç yasağını çiğnemiş mi (kod bloğu/diff/yazma izi)?
+
+    ```json bloğu KASITLI olarak ihlal sayılmaz: planın kendisi o biçimde
+    isteniyor. Yalnızca dil etiketli kod blokları, `diff --git` başlıkları ve
+    "dosyaya yazdım" gibi açık yazma beyanları ihlaldir.
+    """
+    return bool(_CODE_TRACE_RE.search(text or ""))
+
 # Aşama adları (bus.office_progress ikinci argümanı).
 PHASE_PLANNING = "planning"
 PHASE_RUNNING = "running"
@@ -258,6 +290,27 @@ class OfficeHarness:
         budget = self._budget(card_id)
         return not (budget and entry.get("tokens", 0) > budget)
 
+    def _remaining_budget(self, card_id: str) -> Optional[int]:
+        """Kalan token bütçesi; tavan tanımsızsa None (sınırsız)."""
+        budget = self._budget(card_id)
+        if not budget:
+            return None
+        return int(budget) - int(self._card_state(card_id).get("tokens", 0))
+
+    def _can_afford(self, card_id: str, estimate: int = SUBCARD_TOKEN_ESTIMATE) -> bool:
+        """
+        Bir sonraki alt kart çağrısı bütçeye SIĞIYOR mu (çağrıdan ÖNCE)?
+
+        Faz 7 (C1b): eski düzen "harca, sonra bak"tı — maliyet ancak çağrı
+        bitince bilindiği için bütçe her seferinde bir alt kart boyu aşılıyordu.
+        Kalan bütçe alt kart tahminine eşit ya da altındaysa çağrı hiç
+        başlatılmaz.
+        """
+        remaining = self._remaining_budget(card_id)
+        if remaining is None:
+            return True
+        return remaining > int(estimate)
+
     def _terminate_children(self, card_id: str) -> List[str]:
         """Süren alt kartların köprü süreçlerini öldürür; durdurulan kimlikler."""
         stopped: List[str] = []
@@ -370,6 +423,97 @@ class OfficeHarness:
             self._fail(card_id, "Planlama başlatılamadı (orkestratör ajanı ya da köprü yok).")
         return ok
 
+    # -- B1: bilgi tazeleme -------------------------------------------
+
+    def _memory_context(self, task: str) -> str:
+        """
+        Ofis belleğinden planlama bağlamı (`orchestrator_context`).
+
+        İmza sabittir: `orchestrator_context(office, task)`. Bellek katmanı
+        yoksa/patlarsa boş döner — ajan katmanı bellek katmanına bağımlı olamaz.
+        """
+        try:
+            from entropy.memory.office_graph import orchestrator_context  # type: ignore
+        except Exception:
+            return ""
+        try:
+            return (orchestrator_context(self.office_name, task) or "").strip()
+        except Exception:
+            logger.warning("Ofis bağlamı okunamadı: %s", self.office_name)
+            return ""
+
+    def _recent_reports(self, count: int = CONTEXT_REPORT_COUNT) -> str:
+        """Ofisin son `count` raporundan kısa özet bloğu."""
+        try:
+            reports_dir = self.offices.reports_dir(self.office_name)
+            files = sorted(
+                (p for p in reports_dir.glob("*.md") if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )[:count]
+        except OSError:
+            return ""
+        blocks = []
+        for path in files:
+            try:
+                body = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            blocks.append(f"### {path.stem}\n{trim_to_sections(body, CONTEXT_REPORT_CHARS)}")
+        return "\n\n".join(blocks)
+
+    def _can_web_search(self) -> bool:
+        """Kadroda web araması yapabilen (read-only / full) bir ajan var mı?"""
+        office = self.office
+        if office is None:
+            return False
+        for name in office.members or []:
+            spec = self.registry.get(name)
+            if spec is None:
+                continue
+            if (spec.tools_policy or "").strip().lower() in ("read-only", "readonly", "full"):
+                return True
+        return False
+
+    def _write_research_notes(self, card: TaskCard, data: Optional[dict]) -> List[str]:
+        """
+        Plandaki `research_notes` alanını ofis grafına `kind="bulgu"` notu yazar.
+
+        Bellek API'si guard altında: `OfficeGraph` yoksa notlar sessizce
+        atlanır ve planlama yine ilerler.
+        """
+        raw = (data or {}).get("research_notes") if isinstance(data, dict) else None
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list) or not raw:
+            return []
+        try:
+            from entropy.memory.office_graph import OfficeGraph  # type: ignore
+        except Exception:
+            return []
+        try:
+            graph = OfficeGraph(self.office_name, self.board.vault_path)
+        except Exception:
+            return []
+        written: List[str] = []
+        for item in raw:
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("note") or "").strip()
+                body = str(item.get("body") or item.get("detail") or "").strip()
+            else:
+                title = str(item or "").strip()
+                body = ""
+            if not title:
+                continue
+            try:
+                graph.add_note(kind="bulgu", title=title[:160], body=body,
+                               source=f"plan:{card.id}")
+            except Exception:
+                logger.warning("Araştırma notu yazılamadı: %s", title[:60])
+                continue
+            written.append(title)
+        return written
+
     def build_plan_prompt(self, office: DeskOffice, card: TaskCard) -> str:
         members = []
         for name in office.members or []:
@@ -404,22 +548,53 @@ class OfficeHarness:
                     f"[PROJE — {project.name}]\n{project.goal}\n"
                     f"{(project.charter or '').strip()}\n\n"
                 )
+        # B1 — bilgi tazeleme: orkestratör planlamadan ÖNCE ofis belleğini ve
+        # son raporları görür. Eskiden her planlama sıfır bağlamla başlıyor ve
+        # aynı iş turlarca yeniden keşfediliyordu.
+        context_block = ""
+        memory_ctx = self._memory_context(card.goal or card.title or "")
+        reports_ctx = self._recent_reports()
+        if memory_ctx or reports_ctx:
+            parts = ["[BİLGİ TAZELEME]"]
+            if memory_ctx:
+                parts.append(memory_ctx)
+            if reports_ctx:
+                parts.append(f"[SON RAPORLAR]\n{reports_ctx}")
+            context_block = "\n\n".join(parts) + "\n\n"
+        # Araştırma notu alt adımı yalnızca kadroda WebSearch yetkili ajan
+        # varsa istenir; yoksa orkestratör dolduramayacağı bir alan uyduruyordu.
+        research_block = ""
+        research_schema = ""
+        if self._can_web_search():
+            research_block = (
+                "[ARAŞTIRMA NOTU]\nPlanlamadan önce bilgini tazele: kadronda "
+                "WebSearch yetkili ajan var. Bulgularını `research_notes` "
+                "alanına kısa maddeler hâlinde yaz; bunlar ofis belleğine "
+                "'bulgu' notu olarak kaydedilecek.\n\n"
+            )
+            research_schema = (
+                ',\n "research_notes": [{"title": "...", "body": "..."}]'
+            )
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
             f"{project_block}"
+            f"{context_block}"
             f"{inbox_block}"
+            f"{research_block}"
             f"[ÜST KART]\nBaşlık: {card.title}\nHedef: {card.goal or card.title}\n"
             f"Kabul ölçütleri:\n{criteria}\n\n"
             f"[KADRON]\n" + ("\n".join(members) or "- (henüz alt ajan yok)") + "\n\n"
             f"[İSTENEN ÇIKTI]\nEn çok {MAX_SUBTASKS} alt görev. Kadronda uygun ajan "
             "yoksa `new_agents` ile yeni alt ajan tanımla ve görevi ona ata. "
+            "Sen kod YAZMAZSIN, dosya değiştirmezsin: yalnızca plan üretirsin. "
             "Yalnızca TEK bir ```json kod bloğu yaz, başka hiçbir şey yazma:\n"
             '{"subtasks": [{"title": "...", "goal": "...", "criteria": ["..."], '
             '"agent": "<kadrondaki ya da new_agents ile tanımladığın ad>", '
             '"provider": "agy", "model": ""}],\n'
             ' "new_agents": [{"name": "...", "role": "worker", "description": "...", '
             '"provider": "agy", "model": "", "tools_policy": "read-write", '
-            '"prompt": "..."}]}'
+            '"prompt": "..."}]'
+            f"{research_schema}" + "}"
         )
 
     def _apply_new_agents(self, data: Optional[dict]) -> List[str]:
@@ -480,6 +655,34 @@ class OfficeHarness:
         if not ok:
             self._fail(card_id, "Planlama çağrısı başarısız oldu.")
             return
+        # A9 — araç yasağı yaptırımı. Orkestratörün tanımı `read-only`, ama
+        # sağlayıcı bunu her zaman uygulamıyor: çıktıda kod bloğu/diff/yazma
+        # beyanı varsa çıktı REDDEDİLİR ve bir kez uyarıyla yeniden istenir.
+        if orchestrator_produced_code(text or ""):
+            retries = int(self._card_state(card_id).get("no_code_retries") or 0)
+            if retries >= ORCHESTRATOR_NO_CODE_RETRY:
+                self._fail(card_id, "Orkestratör kod üretti; araç yasağı iki kez çiğnendi.")
+                return
+            self._save_card_state(card_id, no_code_retries=retries + 1)
+            card = self.board.get(card_id)
+            office = self.office
+            if card is None or office is None:
+                return
+            warning = (
+                "[UYARI — ARAÇ YASAĞI]\nÖnceki yanıtında kod bloğu / diff / dosya "
+                "yazma izi vardı. Sen yalnızca PLAN ve RAPOR üretirsin: kod yazmaz, "
+                "dosya değiştirmezsin. Yalnızca istenen JSON planını üret.\n\n"
+            )
+            if not self._call_agent(
+                agent_name=office.orchestrator,
+                office=office,
+                task_id=f"office-plan-{card_id}",
+                task_name=f"{self.office_name}: planlama (yeniden)",
+                prompt=warning + self.build_plan_prompt(office, card),
+                on_result=lambda t, o, _c=card_id: self._on_plan(_c, t, o),
+            ):
+                self._fail(card_id, "Planlama yeniden başlatılamadı.")
+            return
         data = extract_json_block(text or "")
         subtasks = (data or {}).get("subtasks") if isinstance(data, dict) else None
         if not isinstance(subtasks, list) or not subtasks:
@@ -497,6 +700,10 @@ class OfficeHarness:
         created_agents = self._apply_new_agents(data)
         if created_agents:
             office = self.office or office
+
+        # B1 — plandaki araştırma notları ofis belleğine `bulgu` olarak düşer;
+        # bir sonraki planlama bunları `orchestrator_context` üzerinden görür.
+        self._write_research_notes(card, data)
 
         children: List[str] = []
         for raw in subtasks[:MAX_SUBTASKS]:
@@ -583,6 +790,17 @@ class OfficeHarness:
                 self._evaluate(card_id)
                 return
         for child in to_start:
+            # ÇAĞRI ÖNCESİ kontrol: kalan bütçe bir alt kartı taşımıyorsa
+            # süreç hiç başlatılmaz (C1b).
+            if not self._can_afford(card_id):
+                remaining = self._remaining_budget(card_id)
+                self._terminate_children(card_id)
+                self._fail(
+                    card_id,
+                    f"Bütçe yetersiz: kalan ≈ {remaining} token, alt kart tahmini "
+                    f"{SUBCARD_TOKEN_ESTIMATE} token. Yeni alt kart başlatılmadı.",
+                )
+                return
             if not self._spend(card_id, _estimate_tokens(child.goal, *(child.criteria or []))):
                 self._fail_budget(card_id, "yürütme")
                 return

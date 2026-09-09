@@ -213,9 +213,29 @@ class TaskLedger:
                     ).fetchone()
         return {"input_tokens": row[0], "output_tokens": row[1], "total_tokens": row[2], "tasks_with_usage": row[3]}
 
-    def record_task_failure(self, task_id: str, error: str, task_name: str = "", project_path: str = "") -> None:
-        """Mark task as failed with error details."""
+    def _record_terminal(
+        self,
+        task_id: str,
+        status: str,
+        detail: str,
+        task_name: str,
+        project_path: str,
+        usage: Optional[Dict[str, int]],
+    ) -> None:
+        """
+        FAILED/CANCELLED satırını yazar; usage biliniyorsa token sütunlarını da.
+
+        Faz 7 (A7a): eskiden yalnızca `record_task_success` usage yazıyordu.
+        Süreç yarıda ölünce satırın `total_tokens` sütunu NULL kalıyor, ofis
+        harness'ı gerçek maliyeti okuyamıyor ve karakter/4 tahminine düşüyordu —
+        yani en pahalı senaryoda (yanıt vermeden ölen agy) bütçe koruması kör
+        oluyordu. Akıştan okunan SON usage burada da yazılır.
+        """
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        u = usage or {}
+        tok_in = u.get("input_tokens")
+        tok_out = u.get("output_tokens")
+        tok_total = u.get("total_tokens")
         with self._lock:
             with self._get_connection() as conn:
                 cur = conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,))
@@ -223,51 +243,98 @@ class TaskLedger:
                     conn.execute(
                         """
                         UPDATE tasks
-                        SET status = ?, completed_at = ?, error = ?
+                        SET status = ?, completed_at = ?, error = ?,
+                            input_tokens = COALESCE(?, input_tokens),
+                            output_tokens = COALESCE(?, output_tokens),
+                            total_tokens = COALESCE(?, total_tokens)
                         WHERE task_id = ?
                         """,
-                        (TaskStatus.FAILED.value, now, str(error), task_id)
+                        (status, now, detail, tok_in, tok_out, tok_total, task_id)
                     )
                 else:
                     conn.execute(
                         """
                         INSERT INTO tasks (
                             task_id, task_name, project_path, status,
-                            created_at, started_at, completed_at, error, result_summary
+                            created_at, started_at, completed_at, error, result_summary,
+                            input_tokens, output_tokens, total_tokens
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
                         """,
-                        (task_id, task_name or task_id, str(project_path), TaskStatus.FAILED.value, now, now, now, str(error))
+                        (task_id, task_name or task_id, str(project_path), status,
+                         now, now, now, detail, tok_in, tok_out, tok_total)
                     )
                 conn.commit()
 
-    def record_task_cancelled(self, task_id: str, reason: str = "", task_name: str = "", project_path: str = "") -> None:
-        """Mark task as cancelled with optional reason."""
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with self._lock:
-            with self._get_connection() as conn:
-                cur = conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,))
-                if cur.fetchone():
-                    conn.execute(
-                        """
-                        UPDATE tasks
-                        SET status = ?, completed_at = ?, error = ?
-                        WHERE task_id = ?
-                        """,
-                        (TaskStatus.CANCELLED.value, now, str(reason), task_id)
-                    )
-                else:
-                    conn.execute(
-                        """
-                        INSERT INTO tasks (
-                            task_id, task_name, project_path, status,
-                            created_at, started_at, completed_at, error, result_summary
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-                        """,
-                        (task_id, task_name or task_id, str(project_path), TaskStatus.CANCELLED.value, now, now, now, str(reason))
-                    )
-                conn.commit()
+    def record_task_failure(
+        self,
+        task_id: str,
+        error: str,
+        task_name: str = "",
+        project_path: str = "",
+        usage: Optional[Dict[str, int]] = None,
+    ) -> None:
+        """Mark task as failed with error details (and last known token usage)."""
+        self._record_terminal(
+            task_id, TaskStatus.FAILED.value, str(error), task_name, project_path, usage
+        )
+
+    def record_task_cancelled(
+        self,
+        task_id: str,
+        reason: str = "",
+        task_name: str = "",
+        project_path: str = "",
+        usage: Optional[Dict[str, int]] = None,
+    ) -> None:
+        """Mark task as cancelled with optional reason (and last known token usage)."""
+        self._record_terminal(
+            task_id, TaskStatus.CANCELLED.value, str(reason), task_name, project_path, usage
+        )
+
+    @staticmethod
+    def card_id_for(task_id: str) -> str:
+        """
+        Ledger görev kimliğinden kart kimliğini çıkarır.
+
+        Köprü kimlikleri `card-<id>`, `office-plan-<id>`, `office-eval-<id>`
+        biçiminde; terminal olay kartın kimliğiyle yayılmalı ki kanban ve
+        `office_status` mesajı bulabilsin.
+        """
+        for prefix in ("card-", "office-plan-", "office-eval-"):
+            if task_id.startswith(prefix):
+                return task_id[len(prefix):]
+        return task_id
+
+    def _emit_terminal_events(self, task_ids: List[str], status: str, reason: str) -> None:
+        """
+        Toplu geçişlerden sonra her görev için terminal olay yayar.
+
+        Faz 7 (A8): `mark_orphans_failed`/`cancel_active` yalnızca SQLite satırını
+        çeviriyordu; posta kutusunda terminal olay olmadığı için kanban ve
+        `office_status` kartı sonsuza dek "çalışıyor" gösteriyordu. Ajan katmanı
+        çekirdeğe bağımlı olmasın diye içe aktarma GEÇ ve korumalı: posta kutusu
+        yoksa ledger yine de doğru çalışır.
+        """
+        if not task_ids:
+            return
+        try:
+            from entropy.agents.mailbox import emit_terminal
+        except Exception:
+            return
+        for task_id in task_ids:
+            try:
+                emit_terminal(self.card_id_for(task_id), "desk", status, reason)
+            except Exception:
+                continue
+
+    def _active_task_ids(self, conn) -> List[str]:
+        return [
+            row[0] for row in conn.execute(
+                "SELECT task_id FROM tasks WHERE status IN (?, ?)",
+                (TaskStatus.RUNNING.value, TaskStatus.PENDING.value),
+            ).fetchall()
+        ]
 
     def mark_orphans_failed(self, reason: str = "Önceki oturum bu görev sürerken kapandı; sonuç alınamadı.") -> int:
         """
@@ -281,6 +348,7 @@ class TaskLedger:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._lock:
             with self._get_connection() as conn:
+                orphans = self._active_task_ids(conn)
                 cur = conn.execute(
                     """
                     UPDATE tasks SET status = ?, completed_at = ?, error = ?
@@ -289,7 +357,9 @@ class TaskLedger:
                     (TaskStatus.FAILED.value, now, reason, TaskStatus.RUNNING.value, TaskStatus.PENDING.value),
                 )
                 conn.commit()
-                return cur.rowcount or 0
+                count = cur.rowcount or 0
+        self._emit_terminal_events(orphans, "failed", reason)
+        return count
 
     def cancel_active(self, reason: str = "Uygulama kapandı; görev yarıda kesildi.") -> int:
         """
@@ -303,6 +373,7 @@ class TaskLedger:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._lock:
             with self._get_connection() as conn:
+                active = self._active_task_ids(conn)
                 cur = conn.execute(
                     """
                     UPDATE tasks SET status = ?, completed_at = ?, error = ?
@@ -311,7 +382,9 @@ class TaskLedger:
                     (TaskStatus.CANCELLED.value, now, reason, TaskStatus.RUNNING.value, TaskStatus.PENDING.value),
                 )
                 conn.commit()
-                return cur.rowcount or 0
+                count = cur.rowcount or 0
+        self._emit_terminal_events(active, "canceled", reason)
+        return count
 
     @staticmethod
     def _row_to_dict(row) -> Dict[str, Any]:

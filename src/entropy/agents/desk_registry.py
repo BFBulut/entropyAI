@@ -28,6 +28,7 @@ Kurallar (kullanıcı sözleşmesi):
 from __future__ import annotations
 
 import datetime
+import logging
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -53,6 +54,8 @@ INBOX_DIRNAME = "inbox"
 MEMORY_DIRNAME = "memory"
 MEMORY_FILENAME = "MEMORY.md"
 LAYOUT_FILENAME = "layout.json"
+
+logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_AGENT = "orkestrator"
 ORCHESTRATOR_ROLE = "orchestrator"
@@ -442,9 +445,69 @@ class DeskRegistry:
         """
         if self.office_file(spec.name).exists():
             raise FileExistsError(f"'{spec.name}' adında bir ofis zaten var.")
+        requested_members = list(spec.members or [])
         spec = self._write(spec)
         self.ensure_orchestrator(spec.name)
+        # Faz 7 (QA): `members` alanı yalnızca bir DİLEK listesidir. Ofisin
+        # gerçek kadrosu `agents/` altındaki tanım dosyalarından okunur
+        # (bkz. `_read`), bu yüzden tanımsız bir üye adı sessizce kayboluyordu.
+        # Alan kaldırılmıyor (kullanıcı niyetini taşıyor) ama uyarı veriliyor;
+        # üyeyi gerçekten kadroya almak için `create_member` kullanılmalı.
+        missing = [n for n in requested_members if self.agents(spec.name).get(n) is None]
+        if missing:
+            logger.warning(
+                "Ofis '%s': tanım dosyası olmayan üye adları kadroya alınmadı: %s "
+                "(create_member ile tanımlayın).",
+                spec.name, ", ".join(missing),
+            )
         return self.get(spec.name) or spec
+
+    def create_member(
+        self,
+        office_name: str,
+        name: str,
+        role: str = "worker",
+        description: str = "",
+        provider: str = "",
+        model: str = "",
+        tools_policy: str = "read-write",
+        prompt: str = "",
+    ) -> Optional[AgentSpec]:
+        """
+        Ofise gerçek bir üye ekler (`agents/<ad>/AGENT.md` yazar ve derler).
+
+        Ofis üyeliği DOSYAYLA tanımlıdır: `members` ön bilgisine ad yazmak üye
+        yaratmaz. `/desk agent add` ve orkestratörün `new_agents` bölümü aynı
+        yoldan geçer. Var olan üye EZİLMEZ; mevcut tanım döner.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("Üye adı boş olamaz.")
+        office = self.get(office_name)
+        if office is None:
+            return None
+        agents = self.agents(office_name)
+        existing = agents.get(name)
+        if existing is not None:
+            return existing
+        role = (role or "worker").strip().lower()
+        if role == ORCHESTRATOR_ROLE:
+            # Ofisin tek orkestratörü vardır ve o `ensure_orchestrator` ile doğar.
+            role = "worker"
+        provider = (provider or office.default_provider or "agy").strip().lower()
+        if provider not in VALID_PROVIDERS:
+            provider = "agy"
+        return agents.update(AgentSpec(
+            name=name,
+            role=role,
+            description=description or f"{office_name} ofisi üyesi",
+            provider=provider,
+            model=model or office.default_model or "",
+            tools_policy=(tools_policy or "read-write").strip().lower(),
+            memory_path=f"memory/{name}.md",
+            prompt=prompt,
+            office=office_name,
+        ))
 
     def update(self, spec: DeskOffice) -> DeskOffice:
         return self._write(spec)

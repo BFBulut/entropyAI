@@ -22,7 +22,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QRect, Qt, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QMainWindow, QSplitter, QTabWidget, QTextBrowser,
+    QHBoxLayout, QLabel, QMainWindow, QSplitter, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -36,14 +36,22 @@ from entropy.desk.offices_panel import (
 )
 from entropy.desk.roster_panel import RosterPanel
 from entropy.desk.scene import OfficeScene
+from entropy.desk.memory_panel import OfficeMemoryPanel
+from entropy.desk.projects_panel import ProjectsPanel
 from entropy.desk.stream_panel import StreamPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
-from entropy.ui.window_sizing import fit_window_to_screen
 
 WINDOW_TITLE = "Entropy Agent Desk"
 DEFAULT_SIZE = (1400, 880)
-DESK_SCREEN_RATIO = 0.88
-DESK_MIN_SIZE = (900, 560)
+# Faz 7 pencere profili:
+#   tek monitör  -> ekranın SAĞ yarısı (%50 genişlik, %90 yükseklik); Zen sola
+#                   sığsın diye. Faz 6'daki %88 tek ekranda Zen'in üstünü
+#                   kapatıyordu.
+#   ikinci ekran -> orada kullanılabilir alanın %88'i, ortalanmış.
+DESK_SCREEN_RATIO = 0.5          # tek monitörde genişlik oranı
+DESK_HEIGHT_RATIO = 0.9          # tek monitörde yükseklik oranı
+DESK_SECONDARY_RATIO = 0.88      # ikinci monitörde kaplama oranı
+DESK_MIN_SIZE = (860, 540)
 
 # Kadro sütununun en küçük okunur genişliği: ajan kartındaki 3x2 ikon
 # düğme ızgarası artı kimlik metni bu genişlik altında kırpılıyordu.
@@ -51,7 +59,65 @@ ROSTER_MIN_WIDTH = 380
 
 TAB_CARDS = 0
 TAB_STREAM = 1
-TAB_MEMORY = 2
+TAB_PROJECTS = 2
+TAB_MEMORY = 3
+
+
+def office_spend(office: str) -> Optional[dict]:
+    """
+    Ofis harcama panosu (`office_status`); sözleşme yoksa None → rozet gizlenir.
+
+    Tek üretici kuralı: `/desk` ile aynı veri okunur. Faz 7'de sözleşme
+    `agents.harness` altında aranır, orada yoksa `agents.mailbox`'a düşülür
+    (uygulama oraya taşındı); ikisi de yoksa rozet hiç gösterilmez — uydurma
+    bir harcama sayısı göstermek yanlış güven verirdi.
+    """
+    if not office:
+        return None
+    getter = None
+    for module_path in ("entropy.agents.harness", "entropy.agents.mailbox"):
+        try:
+            import importlib
+
+            getter = getattr(importlib.import_module(module_path), "office_status", None)
+        except Exception:
+            getter = None
+        if getter is not None:
+            break
+    if getter is None:
+        return None
+    try:
+        return dict(getter(office) or {})
+    except Exception:
+        return None
+
+
+def desk_target_screen() -> Optional[Any]:
+    """Desk'in açılacağı ekran: ikinci monitör varsa o, yoksa birincil."""
+    screens = list(QGuiApplication.screens())
+    primary = QGuiApplication.primaryScreen()
+    for screen in screens:
+        if screen is not primary:
+            return screen
+    return primary
+
+
+def desk_default_geometry(screen: Any = None) -> QRect:
+    """Faz 7 pencere profili: ikinci ekranda %88, tek ekranda sağ yarı."""
+    from entropy.ui.window_sizing import available_geometry, fitted_geometry, half_screen_geometry
+
+    target = screen if screen is not None else desk_target_screen()
+    area = available_geometry(target)
+    primary = QGuiApplication.primaryScreen()
+    if target is not None and primary is not None and target is not primary:
+        return fitted_geometry(area, ratio=DESK_SECONDARY_RATIO, min_size=DESK_MIN_SIZE)
+    return half_screen_geometry(
+        area,
+        width_ratio=DESK_SCREEN_RATIO,
+        height_ratio=DESK_HEIGHT_RATIO,
+        side="right",
+        min_size=DESK_MIN_SIZE,
+    )
 
 
 def load_office_memory(office_name: str) -> str:
@@ -104,8 +170,16 @@ class AgentDeskWindow(QMainWindow):
         # alanin en cok %88'ini kaplar ve ortalanir; kayitli geometri varsa
         # _restore_geometry() bunun uzerine yazar (o da alana kirpilir).
         self.resize(*DEFAULT_SIZE)
-        fit_window_to_screen(self, ratio=DESK_SCREEN_RATIO,
-                             min_size=DESK_MIN_SIZE, keep_preferred=True)
+        target = desk_target_screen()
+        geom = desk_default_geometry(target)
+        self.setMinimumSize(min(DESK_MIN_SIZE[0], geom.width()),
+                            min(DESK_MIN_SIZE[1], geom.height()))
+        if target is not None:
+            try:
+                self.windowHandle() and self.windowHandle().setScreen(target)
+            except Exception:
+                pass
+        self.setGeometry(geom)
 
         self.office_registry = office_registry if office_registry is not None else load_office_registry()
         # Kadro paneli Desk'in KENDİ ajanlarını gösterir; Entropy'nin
@@ -140,6 +214,19 @@ class AgentDeskWindow(QMainWindow):
         header.setContentsMargins(4, 0, 4, 0)
         header.addWidget(self.header_label)
         header.addStretch()
+
+        # Faz 7: harcama rozeti (veri yoksa gizli) + iki sağlayıcı kimlik rozeti.
+        self.spend_label = QLabel("")
+        self.spend_label.setStyleSheet("background: transparent; border: none;")
+        self.spend_label.setVisible(False)
+        header.addWidget(self.spend_label)
+        try:
+            from entropy.ui.widgets.provider_badge import ProviderStatusBadge
+
+            self.provider_badge = ProviderStatusBadge(parent=self)
+            header.addWidget(self.provider_badge)
+        except Exception:
+            self.provider_badge = None
         root.addLayout(header)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -165,15 +252,16 @@ class AgentDeskWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.board_panel = BoardPanel(parent=self, board=self.board, office="")
         self.stream_panel = StreamPanel(parent=self, board=self.board, office="")
-        self.memory_view = QTextBrowser()
-        self.memory_view.setStyleSheet(
-            f"QTextBrowser {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; padding:10px; font-size:{RT['font_size_small']}; }}"
-        )
+        self.projects_panel = ProjectsPanel(parent=self, office="", board=self.board)
+        self.projects_panel.project_filter_changed.connect(self._on_project_filter)
+        self.memory_panel = OfficeMemoryPanel(parent=self, office="")
+        # Geri uyum: eski çağrılar (ve testler) `memory_view` ile MEMORY.md
+        # metnine bakıyor; panelin alt bölmesi aynı nesnedir.
+        self.memory_view = self.memory_panel.memory_view
         self.tabs.addTab(self.board_panel, "Kartlar")
         self.tabs.addTab(self.stream_panel, "Akış")
-        self.tabs.addTab(self.memory_view, "Bellek")
+        self.tabs.addTab(self.projects_panel, "Projeler")
+        self.tabs.addTab(self.memory_panel, "Bellek")
         center_splitter.addWidget(self.tabs)
         center_splitter.setSizes([420, 380])
         center_layout.addWidget(center_splitter)
@@ -198,6 +286,14 @@ class AgentDeskWindow(QMainWindow):
         # splitter oranlari serbest kalir, panel icerikleri kendi kaydirma
         # alanlarinda daralir.
         self.offices_panel.setMinimumWidth(180)
+        # Faz 7: yarım ekran Desk (≈900 px) için AÇIK asgari genişlikler.
+        # Qt düzeni açık minimumu örtük `minimumSizeHint`in önüne alır; aksi
+        # halde akış paneli 535 px, projeler 880 px isteyip orta sütunu
+        # şişiriyordu. Toplam: 180 + 240 + 380 = 800 px.
+        self.board_panel.setMinimumWidth(220)
+        self.stream_panel.setMinimumWidth(220)
+        self.projects_panel.setMinimumWidth(220)
+        self.memory_panel.setMinimumWidth(220)
         center.setMinimumWidth(320)
         center_splitter.setChildrenCollapsible(True)
         self.tabs.setMinimumWidth(240)
@@ -220,6 +316,8 @@ class AgentDeskWindow(QMainWindow):
     @Slot(str)
     def _on_offices_updated(self, _name: str = "") -> None:
         self.refresh_memory()
+        self.projects_panel.refresh()
+        self.refresh_spend()
 
     def set_office(self, name: str) -> None:
         """Seçili ofisi bütün panellere uygular."""
@@ -229,28 +327,50 @@ class AgentDeskWindow(QMainWindow):
         self.board_panel.set_office(self.current_office)
         self.roster_panel.set_office(self.current_office)
         self.stream_panel.set_office(self.current_office)
+        self.projects_panel.set_office(self.current_office)
         self.refresh_memory()
+        self.refresh_spend()
         title = self.current_office or "ofis seçilmedi"
         self.header_label.setText(
             f"<b style='color:{RT['accent']}; font-size:15px;'>🏢 ENTROPY AGENT DESK</b>"
             f" <span style='color:{RT['text_dim']}; font-size:12px;'>· {title}</span>"
         )
-        self.setWindowTitle(f"{WINDOW_TITLE} — {title}")
+        # Faz 7: başlık her yerde aynı biçimde ("· <ofis>"), pencere adı ile
+        # üst şerit birbirini tutsun.
+        self.setWindowTitle(f"{WINDOW_TITLE} · {title}")
 
     def refresh_memory(self) -> None:
-        text = load_office_memory(self.current_office)
-        if not text:
-            self.memory_view.setHtml(
-                f"<div style='color:{RT['text_dim']};'>Bu ofis için MEMORY.md henüz yok. "
-                "Ofis bir kart tamamladığında bellek yazılır.</div>"
-            )
-            return
-        try:
-            from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
+        """Bellek sekmesi: mini graf + MEMORY.md metni birlikte tazelenir."""
+        self.memory_panel.set_office(self.current_office)
 
-            self.memory_view.setHtml(render_markdown_to_html(text))
-        except Exception:
-            self.memory_view.setPlainText(text)
+    def refresh_spend(self) -> None:
+        """Ofis harcama rozeti; `office_status` yoksa rozet gizlenir."""
+        info = office_spend(self.current_office)
+        if not info:
+            self.spend_label.setVisible(False)
+            self.spend_label.setText("")
+            return
+        spent = int(info.get("spent_tokens", info.get("tokens", 0)) or 0)
+        budget = int(info.get("budget_tokens", info.get("budget", 0)) or 0)
+        running = len(info.get("running", []) or [])
+        text = f"⛽ {spent:,} token".replace(",", ".")
+        if budget:
+            text += f" / {budget:,}".replace(",", ".")
+        if running:
+            text += f" · {running} çalışan"
+        self.spend_label.setText(
+            f"<span style='color:{RT['text_dim']}; font-size:11px;'>{text}</span>"
+        )
+        self.spend_label.setVisible(True)
+
+    @Slot(str)
+    def _on_project_filter(self, project: str) -> None:
+        """Projeler sekmesindeki süzgeci Kartlar sekmesine uygular."""
+        widget = getattr(self.board_panel, "board_widget", None)
+        setter = getattr(widget, "set_project_filter", None)
+        if setter is not None:
+            setter(project)
+        self.tabs.setCurrentIndex(TAB_CARDS)
 
     @Slot(str)
     def _on_agent_clicked(self, agent: str) -> None:
@@ -315,11 +435,11 @@ class AgentDeskWindow(QMainWindow):
             return True
 
         available: QRect = target.availableGeometry()
-        # Kayitli boyut da ekran kuralina uyar: en cok kullanilabilir alanin %88'i.
-        max_w = int(available.width() * DESK_SCREEN_RATIO)
-        max_h = int(available.height() * DESK_SCREEN_RATIO)
-        width = max(640, min(width, max_w))
-        height = max(480, min(height, max_h))
+        # Faz 7: kullanicinin kaydettigi GECERLI geometri korunur; yalnizca
+        # ekranin kullanilabilir alanini asan olculer kirpilir. (Faz 6'daki
+        # %88 tavani, kullanici pencereyi buyuttuyse her acilista kucultuyordu.)
+        width = max(640, min(width, available.width()))
+        height = max(480, min(height, available.height()))
         if str(data.get("screen", "")) != target.name() or not available.contains(x, y):
             # Kayıtlı ekran yok ya da konum bu ekranın dışında: ortala.
             x = available.x() + (available.width() - width) // 2

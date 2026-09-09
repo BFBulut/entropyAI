@@ -27,6 +27,14 @@ from entropy.core.project_lock import LOCK_TIMEOUT_MARKER, project_lock_manager
 # Arka plan görevinin proje kilidini bekleyeceği süre (sn). Modül düzeyinde:
 # testler gerçek kilit çakışmasını makul sürede sürebilsin diye.
 BACKGROUND_LOCK_TIMEOUT = 60.0
+
+# Arka plan görevi başına araç adımı tavanı (Faz 7 / C2c). `send_background_task_async`
+# `max_steps` almazsa sayaç KAPALIDIR: yalnızca kart koşumları (ofis alt kartları)
+# açıkça sınır verir; etkileşimli sohbetin uzun araç zincirini kesmek istemiyoruz.
+# İstem içindeki "en çok N araç adımı" kuralı bir ricadır ve model onu düzenli
+# olarak aşıyordu; bu sayaç yaptırımdır.
+DEFAULT_MAX_TOOL_STEPS = 20
+MAX_STEPS_MARKER = "[ADIM SINIRI]"
 from entropy.core.masking import mask_tool_output
 from entropy.core.provider import (
     ProviderCommonMixin,
@@ -592,9 +600,14 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
+
+        max_steps: akıştaki araç çağrısı olaylarının tavanı. Aşılırsa süreç
+        `terminate_background_task` ile öldürülür ve görev `failed` biter.
+        None ise sayaç kapalıdır (etkileşimli/serbest görevler).
 
         conversation_id: agy'nin `--conversation <id>` bayrağı. Verilirse çağrı
         AYNI agy konuşmasını sürdürür; Entropy'nin konuşma kimliği ile sağlayıcı
@@ -635,7 +648,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         thread = threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write, conversation_id),
+                  save_report, agent, needs_write, conversation_id, max_steps),
             daemon=True
         )
         thread.start()
@@ -662,6 +675,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ):
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -692,6 +706,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         # yazımı sırasında patlayan bir istisna geri çağrıyı ikinci kez
         # tetiklemesin, hiç ulaşılamayan bir çıkış da onu atlamasın.
         notified = {"done": False}
+        # Dış `except` de son usage'ı yazabilsin diye burada bağlanır; iç blok
+        # akıştan okudukça günceller.
+        task_usage: Dict[str, int] = {}
         try:
             if project_lock_manager.is_write_locked(project_dir):
                 bus.terminal_output_received.emit(
@@ -772,7 +789,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             full_response_acc = []
             ret_code = -1
             execution_error = None
-            task_usage: Dict[str, int] = {}
+            # Araç adımı sayacı (C2c) ve son görülen usage (A7a). `task_usage`
+            # yalnızca `result` olayında dolarken, süreç yanıt vermeden ölünce
+            # ledger'a NULL yazılıyordu; ara olaylardaki usage de saklanır.
+            tool_steps = 0
+            step_limit_hit = False
             # Popen'in kendisi hata verirse (agy bulunamadı) finally bloğu yine
             # çalışır; proc tanımsız kalmasın diye önceden bağlanıyor.
             proc = None
@@ -823,6 +844,39 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             step = data.get("step_update", {})
                             step_type = step.get("step_type")
                             text_delta = step.get("text_delta")
+
+                            # Ara olaydaki kümülatif usage saklanır: süreç
+                            # `result` yayınlamadan ölürse ledger'a yazılacak
+                            # tek maliyet kaydı budur.
+                            step_usage = step.get("usage") or data.get("usage")
+                            if isinstance(step_usage, dict):
+                                s_in = int(step_usage.get("input_tokens", 0) or 0)
+                                s_out = int(step_usage.get("output_tokens", 0) or 0)
+                                task_usage = {
+                                    "input_tokens": s_in,
+                                    "output_tokens": s_out,
+                                    "thinking_tokens": int(step_usage.get("thinking_tokens", 0) or 0),
+                                    "cache_read_tokens": int(step_usage.get("cache_read_tokens", 0) or 0),
+                                    "total_tokens": int(step_usage.get("total_tokens", s_in + s_out) or 0),
+                                }
+
+                            # Adım sayacı: agy iki ayrı biçimde araç olayı
+                            # yayınlıyor (`step_type == "tool"` ve `tool_call`),
+                            # ikisi de sayılır. Sınır aşılınca süreç öldürülür;
+                            # istemdeki "en çok N adım" ricası yaptırımsızdı.
+                            if max_steps and not step_limit_hit:
+                                if (step_type == "tool" and step.get("state", "ACTIVE") == "ACTIVE") \
+                                        or step.get("tool_call"):
+                                    tool_steps += 1
+                                if tool_steps > int(max_steps):
+                                    step_limit_hit = True
+                                    execution_error = (
+                                        f"{MAX_STEPS_MARKER} Araç adımı sınırı aşıldı "
+                                        f"({tool_steps} > {int(max_steps)}); görev durduruldu."
+                                    )
+                                    bus.terminal_output_received.emit(f"\n[{execution_error}]\n")
+                                    self.terminate_background_task(task_id)
+                                    break
 
                             # 1. Tool execution handling
                             if step_type == "tool":
@@ -979,7 +1033,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 task_ledger.record_task_success(task_id=task_id, summary=masked_text[:300], usage=task_usage or None)
             elif not self._shutting_down:
                 err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
-                task_ledger.record_task_failure(task_id=task_id, error=err_detail)
+                # usage ile: başarısız görev de token yaktı; sütun NULL kalırsa
+                # ofis bütçesi bu maliyeti hiç görmüyordu (A7a).
+                task_ledger.record_task_failure(
+                    task_id=task_id, error=err_detail, usage=task_usage or None
+                )
             # Kapanışta süreci biz öldürdük: işçi burada "başarısız" yazsaydı
             # shutdown()'ın koyduğu CANCELLED'ın üstüne biner ve kullanıcı her
             # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
@@ -1057,7 +1115,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             try:
                 task_rec = task_ledger.get_task(task_id)
                 if (not self._shutting_down) and task_rec and task_rec.get("status") == TaskStatus.RUNNING.value:
-                    task_ledger.record_task_failure(task_id=task_id, error=str(outer_err))
+                    task_ledger.record_task_failure(
+                        task_id=task_id, error=str(outer_err), usage=task_usage or None
+                    )
             except Exception:
                 pass
             if not notified["done"]:

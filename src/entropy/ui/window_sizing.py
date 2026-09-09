@@ -50,6 +50,34 @@ def fitted_geometry(
     return QRect(x, y, width, height)
 
 
+def half_screen_geometry(
+    area: QRect,
+    width_ratio: float = 0.5,
+    height_ratio: float = 0.9,
+    side: str = "right",
+    min_size: Tuple[int, int] = (900, 560),
+) -> QRect:
+    """Alanın bir yarısını kaplayan, dikey ortalanmış dikdörtgen (Faz 7).
+
+    Tek monitörlü kurulumda Agent Desk ekranın sağ yarısında, Zen solda
+    durabilsin diye: genişlik alanın `width_ratio` katı, yükseklik
+    `height_ratio` katı. `min_size` alanı aşmayacak biçimde kırpılır.
+    """
+    width = max(1, int(area.width() * width_ratio))
+    height = max(1, int(area.height() * height_ratio))
+    width = max(width, min(min_size[0], area.width()))
+    height = max(height, min(min_size[1], area.height()))
+    width = min(width, area.width())
+    height = min(height, area.height())
+
+    if str(side).lower() == "left":
+        x = area.x()
+    else:
+        x = area.x() + area.width() - width
+    y = area.y() + (area.height() - height) // 2
+    return QRect(x, y, width, height)
+
+
 def fit_window_to_screen(
     window,
     ratio: float = 0.92,

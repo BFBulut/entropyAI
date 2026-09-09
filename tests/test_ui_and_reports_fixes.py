@@ -64,7 +64,12 @@ def test_reports_viewer_flexible_resizing_and_buttons(qapp):
     
     # List widget width is flexible (not fixed at 200)
     assert viewer.list_widget.maximumWidth() > 400
-    assert viewer.list_widget.minimumWidth() >= 160
+    # Faz 7: minimumlar 160 -> 120 dusuruldu ki dar Zen sol paneli kirpilmasin.
+    # Iddia "en az 160" degil, "esnek ama kullanilabilir bir taban" olmali.
+    assert 100 <= viewer.list_widget.minimumWidth() <= 160
+    # Asil olcum: butun panelin minimum genisligi. Faz 7 oncesi ~676 px idi,
+    # simdi <= 400 px olmali (olculen: 389).
+    assert viewer.minimumSizeHint().width() <= 400
     
     # Explicit action buttons exist
     assert hasattr(viewer, "btn_read_report")
