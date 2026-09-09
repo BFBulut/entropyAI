@@ -31,6 +31,7 @@ class BootstrapResult:
     """Önyükleme özeti; çağıran (UI/terminal) bunu kullanıcıya basar."""
 
     created: List[str] = field(default_factory=list)
+    offices_created: List[str] = field(default_factory=list)
     compiled: Dict[str, Dict[str, Path]] = field(default_factory=dict)
     roots: List[Path] = field(default_factory=list)
     error: Optional[str] = None
@@ -45,6 +46,8 @@ class BootstrapResult:
         parts = []
         if self.created:
             parts.append(f"varsayılan ajanlar oluşturuldu: {', '.join(self.created)}")
+        if self.offices_created:
+            parts.append(f"varsayılan ofisler oluşturuldu: {', '.join(self.offices_created)}")
         if self.compiled:
             parts.append(
                 f"{len(self.compiled)} ajan derlendi ({', '.join(sorted(self.compiled))}) "
@@ -65,6 +68,7 @@ def bootstrap_agents(
     atlanmaz.
     """
     from entropy.agents.compile import compile_roots
+    from entropy.agents.offices import OfficeRegistry
     from entropy.agents.registry import AgentRegistry
 
     result = BootstrapResult()
@@ -73,6 +77,12 @@ def bootstrap_agents(
         result.created = registry.ensure_defaults()
         if result.created:
             logger.info("Varsayılan ajanlar oluşturuldu: %s", ", ".join(result.created))
+        # Ofisler ajanlardan SONRA tohumlanır: tohum ofis, tohum ajanlara
+        # (orkestrator/degerlendirici) atıfta bulunuyor; ters sırada ofis var
+        # ama orkestratörü olmayan bir kurulum çıkardı.
+        result.offices_created = OfficeRegistry(vault_path=vault_path).ensure_defaults()
+        if result.offices_created:
+            logger.info("Varsayılan ofisler oluşturuldu: %s", ", ".join(result.offices_created))
         result.roots = compile_roots(project_dir)
         result.compiled = registry.compile_all(project_dir)
         logger.info(

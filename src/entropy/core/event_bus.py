@@ -73,6 +73,13 @@ class EntropyEventBus(QObject):
     agents_updated = Signal(str)         # ajan tanımı eklendi/değişti/silindi
     task_cards_updated = Signal(str)     # görev kartı eklendi/değişti/silindi
 
+    # Ofisler (Agent Desk): ofis tanımı değişti ve ofis zincirinin aşaması.
+    # Aşama ayrı bir sinyal çünkü task_cards_updated kart başına yayılıyor ve
+    # sahne "bu ofis şu an planlıyor mu, koşuyor mu" bilgisini kart akışından
+    # güvenilir biçimde çıkaramıyordu.
+    offices_updated = Signal(str)        # ofis adı ("" = birden çok/bilinmiyor)
+    office_progress = Signal(str, str, str)  # ofis, üst kart id, aşama
+
     # İşçi iş parçacıklarından ana iş parçacığına iş taşır. Alıcı bir QObject slotu
     # olduğu için bağlantı kuyruklu olur; lambda alıcı olsaydı doğrudan işçide
     # koşar ve Qt nesnelerine oradan dokunulurdu.

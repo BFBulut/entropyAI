@@ -1,5 +1,7 @@
 """
 Ajan başına kalıcı bellek: `<kasa>/Entropy/Agents/<ajan>/MEMORY.md`.
+Ofis başına kalıcı bellek: `<kasa>/Entropy/Offices/<ofis>/MEMORY.md` (aynı motor,
+`append_office_memory` / `load_office_memory`).
 
 Neyi çözüyor
 ------------
@@ -75,6 +77,39 @@ def memory_path(agent: str, vault_path: Optional[Path] = None) -> Path:
     return agent_dir(agent, vault_path) / "MEMORY.md"
 
 
+# Ofis belleği ajan belleğiyle AYNI deseni kullanır (günlük + öğrenilenler +
+# arşiv, LLM'siz konsolidasyon, 6000 karakter tavanı); yalnızca sahibi bir ajan
+# değil bir ofistir. Ayrı bir modül açmak yerine aynı motoru "sahip türü"
+# (owner kind) ile parametreleştiriyoruz: iki kopya bakım borcu olurdu.
+_OWNER_KINDS = {
+    "agent": {"base": "Agents", "label": "Ajan Belleği", "fm_key": "agent", "fallback": "agent"},
+    "office": {"base": "Offices", "label": "Ofis Belleği", "fm_key": "office", "fallback": "office"},
+}
+
+
+def _owner_dir(name: str, kind: str, vault_path: Optional[Path] = None) -> Path:
+    root = Path(vault_path) if vault_path else Path(config.obsidian_vault_path)
+    spec = _OWNER_KINDS[kind]
+    cleaned = _safe(name)
+    if cleaned == "agent" and spec["fallback"] != "agent":
+        cleaned = spec["fallback"]
+    return root / "Entropy" / spec["base"] / cleaned
+
+
+def office_dir(office: str, vault_path: Optional[Path] = None) -> Path:
+    return _owner_dir(office, "office", vault_path)
+
+
+def office_memory_path(office: str, vault_path: Optional[Path] = None) -> Path:
+    return office_dir(office, vault_path) / "MEMORY.md"
+
+
+def _memory_path(name: str, kind: str, vault_path: Optional[Path] = None) -> Path:
+    if kind == "agent":
+        return memory_path(name, vault_path)
+    return office_memory_path(name, vault_path)
+
+
 # ------------------------------------------------------- ayrıştır / kur
 
 
@@ -103,15 +138,23 @@ def _split_sections(text: str) -> Tuple[str, Dict[str, List[str]], List[str]]:
     return "\n".join(head_lines).rstrip(), sections, order
 
 
-def _render(agent: str, head: str, sections: Dict[str, List[str]], order: List[str], count: int) -> str:
+def _render(
+    agent: str,
+    head: str,
+    sections: Dict[str, List[str]],
+    order: List[str],
+    count: int,
+    kind: str = "agent",
+) -> str:
+    spec = _OWNER_KINDS[kind]
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
     fm = (
         "---\n"
-        f"agent: {agent}\n"
+        f"{spec['fm_key']}: {agent}\n"
         f"entries: {count}\n"
         f"updated: {stamp}\n"
         "---\n\n"
-        f"# {agent} — Ajan Belleği\n"
+        f"# {agent} — {spec['label']}\n"
     )
     body: List[str] = [fm.rstrip("\n"), ""]
     for title in order:
@@ -124,8 +167,10 @@ def _render(agent: str, head: str, sections: Dict[str, List[str]], order: List[s
     return "\n".join(body).rstrip() + "\n"
 
 
-def _read(agent: str, vault_path: Optional[Path] = None) -> Tuple[str, Dict[str, List[str]], List[str], int]:
-    path = memory_path(agent, vault_path)
+def _read(
+    agent: str, vault_path: Optional[Path] = None, kind: str = "agent"
+) -> Tuple[str, Dict[str, List[str]], List[str], int]:
+    path = _memory_path(agent, kind, vault_path)
     if not path.is_file():
         sections = {JOURNAL_TITLE: [], LEARNED_TITLE: []}
         return "", sections, [JOURNAL_TITLE, LEARNED_TITLE], 0
@@ -161,6 +206,20 @@ def _entry_line(entry: Dict[str, Any]) -> str:
     parts = [f"- [{date}] {title}"]
     if result:
         parts.append(f"sonuç: {result}")
+    # Ofis kayıtlarında not ve alt kart sayısı ölçüttür: "iddia etme, ölç"
+    # kuralı gereği özet bunları sayabilsin diye satıra yazılır.
+    grade = entry.get("grade")
+    if grade is not None and str(grade).strip() != "":
+        try:
+            parts.append(f"not: {float(grade):.2f}")
+        except (TypeError, ValueError):
+            parts.append(f"not: {str(grade).strip()[:20]}")
+    children = entry.get("children_count")
+    if children is not None and str(children).strip() != "":
+        try:
+            parts.append(f"{int(children)} alt kart")
+        except (TypeError, ValueError):
+            pass
     link = _wikilink(output)
     if link:
         parts.append(link)
@@ -178,9 +237,24 @@ def append_agent_memory(agent: str, entry: dict) -> Path:
     learning(s) (Öğrenilenler'e eklenecek satır(lar)), vault_path.
     Her CONSOLIDATE_EVERY kayıtta konsolidasyon çalışır.
     """
+    return _append_memory(agent, entry, kind="agent")
+
+
+def append_office_memory(office: str, entry: dict) -> Path:
+    """
+    Ofisin MEMORY.md'sine bir kart kaydı ekler ve dosya yolunu döndürür.
+
+    `entry` anahtarları: title, result, grade (0–1), children_count,
+    output_paths, learnings/learning, date, vault_path. Ajan belleğiyle aynı
+    motor: 10 kayıtta LLM'siz konsolidasyon, ≤ MEMORY_MAX_CHARS.
+    """
+    return _append_memory(office, entry, kind="office")
+
+
+def _append_memory(agent: str, entry: dict, kind: str = "agent") -> Path:
     entry = dict(entry or {})
     vault_path = entry.get("vault_path")
-    head, sections, order, count = _read(agent, vault_path)
+    head, sections, order, count = _read(agent, vault_path, kind)
 
     journal = sections[JOURNAL_TITLE]
     while journal and not journal[-1].strip():
@@ -202,15 +276,15 @@ def append_agent_memory(agent: str, entry: dict) -> Path:
             sections[LEARNED_TITLE].append(line)
 
     count += 1
-    path = memory_path(agent, vault_path)
+    path = _memory_path(agent, kind, vault_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_render(agent, head, sections, order, count), encoding="utf-8")
+    path.write_text(_render(agent, head, sections, order, count, kind), encoding="utf-8")
 
     if count % CONSOLIDATE_EVERY == 0:
         try:
-            consolidate_agent_memory(agent, vault_path=vault_path)
+            _consolidate_memory(agent, vault_path=vault_path, kind=kind)
         except Exception as exc:  # pragma: no cover - konsolidasyon kaydı düşürmemeli
-            logger.warning("Ajan belleği konsolide edilemedi (%s): %s", agent, exc)
+            logger.warning("Bellek konsolide edilemedi (%s/%s): %s", kind, agent, exc)
     return path
 
 
@@ -262,7 +336,16 @@ def consolidate_agent_memory(agent: str, vault_path: Optional[Path] = None) -> P
     Sonuç dosyası MEMORY_MAX_CHARS'ı aşarsa önce arşiv, sonra günlük satırları
     en eskiden başlayarak düşürülür: tavan bir hedef değil, garantidir.
     """
-    head, sections, order, count = _read(agent, vault_path)
+    return _consolidate_memory(agent, vault_path=vault_path, kind="agent")
+
+
+def consolidate_office_memory(office: str, vault_path: Optional[Path] = None) -> Path:
+    """Ofis belleğinin konsolidasyonu (ajan belleğiyle aynı kural, model çağrısı yok)."""
+    return _consolidate_memory(office, vault_path=vault_path, kind="office")
+
+
+def _consolidate_memory(agent: str, vault_path: Optional[Path] = None, kind: str = "agent") -> Path:
+    head, sections, order, count = _read(agent, vault_path, kind)
     journal = [l for l in sections.get(JOURNAL_TITLE, []) if l.strip().startswith("-")]
 
     summary = _auto_summary(journal)
@@ -289,17 +372,17 @@ def consolidate_agent_memory(agent: str, vault_path: Optional[Path] = None) -> P
         sections[ARCHIVE_TITLE] = archive[-ARCHIVE_KEEP:]
     sections[JOURNAL_TITLE] = keep
 
-    path = memory_path(agent, vault_path)
+    path = _memory_path(agent, kind, vault_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = _render(agent, head, sections, order, count)
+    text = _render(agent, head, sections, order, count, kind)
 
     # Tavanı aşarsa: önce arşiv en eskiden kırpılır, yetmezse günlük.
     while len(text) > MEMORY_MAX_CHARS and sections.get(ARCHIVE_TITLE):
         sections[ARCHIVE_TITLE] = sections[ARCHIVE_TITLE][1:]
-        text = _render(agent, head, sections, order, count)
+        text = _render(agent, head, sections, order, count, kind)
     while len(text) > MEMORY_MAX_CHARS and len(sections.get(JOURNAL_TITLE, [])) > 1:
         sections[JOURNAL_TITLE] = sections[JOURNAL_TITLE][1:]
-        text = _render(agent, head, sections, order, count)
+        text = _render(agent, head, sections, order, count, kind)
     if len(text) > MEMORY_MAX_CHARS:
         text = text[: MEMORY_MAX_CHARS - 1].rstrip() + "…\n"
 
@@ -314,9 +397,20 @@ def load_agent_memory(agent: str, budget_tokens: int = 300, vault_path: Optional
     Öncelik: Öğrenilenler (tekrar edilebilir bilgi) > günlüğün en yeni satırları
     (ne yapıldı). Arşiv hiç girmez: en eski ve en az ilgili kısımdır.
     """
+    return _load_memory(agent, budget_tokens=budget_tokens, vault_path=vault_path, kind="agent")
+
+
+def load_office_memory(office: str, budget_tokens: int = 300, vault_path: Optional[Path] = None) -> str:
+    """Bağlam kurucu için ofis belleğinin bütçeye sığan özeti (varsayılan 300 token)."""
+    return _load_memory(office, budget_tokens=budget_tokens, vault_path=vault_path, kind="office")
+
+
+def _load_memory(
+    agent: str, budget_tokens: int = 300, vault_path: Optional[Path] = None, kind: str = "agent"
+) -> str:
     if budget_tokens <= 0:
         return ""
-    _head, sections, _order, _count = _read(agent, vault_path)
+    _head, sections, _order, _count = _read(agent, vault_path, kind)
     learned = [l for l in sections.get(LEARNED_TITLE, []) if l.strip() and not l.strip().startswith("<!--")]
     journal = [l for l in sections.get(JOURNAL_TITLE, []) if l.strip().startswith("-")]
 

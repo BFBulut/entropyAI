@@ -219,6 +219,22 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         color="#FFB300",
         usage="/tasks [backlog|running|review|done|failed]",
     ),
+    SlashCommand(
+        name="/offices",
+        description="Ofisleri listeler (amaç, orkestratör, değerlendirici, üyeler).",
+        category="builtin",
+        badge="🏢 OFİS",
+        color="#00F0FF",
+        usage="/offices",
+    ),
+    SlashCommand(
+        name="/desk",
+        description="Agent Desk: ofisleri ve süren kartları gösterir; işi bir ofise devreder.",
+        category="builtin",
+        badge="🏢 OFİS",
+        color="#00F0FF",
+        usage="/desk  |  /desk task <ofis> <başlık> :: <hedef>  |  /desk stop <kart>",
+    ),
 ]
 
 # Kartın durumu için arayüzde ve komut çıktısında kullanılan simge/renk.
@@ -501,6 +517,148 @@ def _handle_task(args: str) -> str:
     )
 
 
+def _handle_offices(_args: str = "") -> str:
+    """`/offices`: kasadaki ofislerin listesi."""
+    from entropy.agents.offices import OFFICES_SUBDIR, OFFICE_FILENAME, OfficeRegistry
+
+    registry = OfficeRegistry()
+    specs = registry.list()
+    if not specs:
+        return (
+            "<b>🏢 Ofisler</b><br/>Kasada tanımlı ofis yok.<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>Ofis dosyası: "
+            f"<code>{OFFICES_SUBDIR}/&lt;ad&gt;/{OFFICE_FILENAME}</code></span>"
+        )
+    rows = []
+    for spec in specs:
+        members = ", ".join(spec.members) or "-"
+        rows.append(
+            f"🏢 <b>{_html_escape(spec.name)}</b> — {_html_escape(spec.purpose or '-')}<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>orkestratör: "
+            f"{_html_escape(spec.orchestrator or '-')} · değerlendirici: "
+            f"{_html_escape(spec.evaluator or '-')} · üyeler: {_html_escape(members)} · "
+            f"paralel: {spec.max_parallel} · bütçe: {spec.budget_tokens} token</span>"
+        )
+    return (
+        f"<b>🏢 Ofisler ({len(specs)})</b><br/>" + "<br/>".join(rows) +
+        "<br/><span style='color:#8B949E;font-size:11px;'>Devret: "
+        "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code></span>"
+    )
+
+
+def _handle_desk(args: str) -> str:
+    """
+    `/desk` — ofisler + süren ofis kartları.
+    `/desk task <ofis> <başlık> :: <hedef>` — üst kart açar ve harness'ı başlatır.
+    `/desk stop <kart>` — ofis zincirini keser (alt kartlarla birlikte).
+
+    `/task` ile ayrımı bilinçli: `/task` tek ajana tek çağrı, `/desk task` bir
+    ofise planlama-yürütme-değerlendirme zinciri demektir; ikisi aynı komutta
+    toplansaydı kullanıcı hangi maliyeti başlattığını göremezdi.
+    """
+    from entropy.agents.harness import OfficeHarness
+    from entropy.agents.offices import OfficeRegistry
+    from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
+
+    args = (args or "").strip()
+    offices = OfficeRegistry()
+    board = TaskBoard()
+
+    if not args:
+        rows = []
+        for spec in offices.list():
+            active = [
+                c for c in board.list()
+                if c.office == spec.name and not c.parent and c.status in ("running", "review")
+            ]
+            state = ", ".join(
+                f"{_html_escape(c.title)} ({_html_escape(c.status)}"
+                + (f", not {c.grade}" if c.grade is not None else "") + ")"
+                for c in active
+            ) or "boşta"
+            rows.append(
+                f"🏢 <b>{_html_escape(spec.name)}</b> — {_html_escape(spec.purpose or '-')}<br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>{state}</span>"
+            )
+        if not rows:
+            return ("<b>🏢 Agent Desk</b><br/>Tanımlı ofis yok. "
+                    "Ofis dosyası yazıp <code>/offices</code> ile doğrulayabilirsin.")
+        return (
+            "<b>🏢 Agent Desk</b><br/>" + "<br/>".join(rows) +
+            "<br/><span style='color:#8B949E;font-size:11px;'>"
+            "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> · "
+            "<code>/desk stop &lt;kart&gt;</code></span>"
+        )
+
+    verb, _, rest = args.partition(" ")
+    verb = verb.strip().lower()
+    rest = rest.strip()
+
+    if verb == "stop":
+        if not rest:
+            return "<b>🏢 Agent Desk</b><br/>Kullanım: <code>/desk stop &lt;kart&gt;</code>"
+        card = board.get(rest)
+        if card is None:
+            return f"<b>🏢 Agent Desk</b><br/>'{_html_escape(rest)}' kimlikli kart yok."
+        if not card.office:
+            return (f"<b>🏢 Agent Desk</b><br/>'{_html_escape(rest)}' bir ofis kartı değil; "
+                    f"<code>/task stop {_html_escape(rest)}</code> kullan.")
+        harness = OfficeHarness(card.office, board=board, offices=offices)
+        harness.stop(card.id)
+        return (f"<b>🏢 Ofis Durduruldu</b><br/>{_html_escape(card.title)} "
+                f"({_html_escape(card.office)}) zinciri kesildi.")
+
+    if verb != "task":
+        return ("<b>🏢 Agent Desk</b><br/>Kullanım: <code>/desk</code>, "
+                "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> ya da "
+                "<code>/desk stop &lt;kart&gt;</code>")
+
+    head, sep, goal = rest.partition("::")
+    parts = head.split()
+    if len(parts) < 2:
+        return ("<b>🏢 Agent Desk</b><br/>Ofis ve başlık gerekli: "
+                "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code>")
+    office_name = parts[0]
+    title = " ".join(parts[1:]).strip()
+    goal = goal.strip() if sep else ""
+
+    spec = offices.get(office_name)
+    if spec is None:
+        known = ", ".join(s.name for s in offices.list()) or "(yok)"
+        return (f"<b>🏢 Agent Desk</b><br/>'{_html_escape(office_name)}' adında ofis yok.<br/>"
+                f"Mevcut: {_html_escape(known)}")
+
+    card = TaskCard(
+        id=new_task_id(title),
+        title=title,
+        status="backlog",
+        agent=spec.orchestrator,
+        provider=spec.default_provider,
+        model=spec.default_model,
+        goal=goal or title,
+        office=spec.name,
+    )
+    try:
+        card = board.create(card)
+    except Exception as exc:
+        return f"<b>🏢 Agent Desk</b><br/>Kart yazılamadı: {_html_escape(exc)}"
+
+    harness = OfficeHarness(spec.name, board=board, offices=offices)
+    if not harness.start(card.id):
+        return (f"<b>🏢 Agent Desk</b><br/>Kart oluşturuldu ama zincir başlatılamadı: "
+                f"<code>{_html_escape(card.id)}</code>")
+    return (
+        f"<b>🏢 Ofise Devredildi</b><br/>"
+        f"🏢 {_html_escape(spec.name)} → {_html_escape(card.title)}<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Hedef: {_html_escape(card.goal)}<br/>"
+        f"Orkestratör {_html_escape(spec.orchestrator or '-')} planı çıkarıyor; "
+        f"alt kartlar {spec.max_parallel} paralel koşacak, "
+        f"{_html_escape(spec.evaluator or spec.orchestrator or '-')} notlayacak.<br/>"
+        f"Kart: <code>{_html_escape(card.id)}</code> · Durdur: "
+        f"<code>/desk stop {_html_escape(card.id)}</code></span>"
+    )
+
+
 def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[str]:
     """
     AGY'ye gitmeden uygulama içinde yürütülen komutları işler.
@@ -547,6 +705,10 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_tasks(args)
     if head_low == "/task":
         return _handle_task(args)
+    if head_low == "/offices":
+        return _handle_offices(args)
+    if head_low == "/desk":
+        return _handle_desk(args)
 
     if head_low != "/distill":
         return None

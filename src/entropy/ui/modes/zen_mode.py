@@ -76,6 +76,26 @@ class ZenModeWindow(QMainWindow):
         title.setStyleSheet("background: transparent; border: none; padding: 2px 0;")
         h_layout.addWidget(title)
 
+        # Agent Desk düğmesi: başlığın hemen sağında (Chat ile aynı konum).
+        # Pencere bağımsız bir üst penceredir; ikinci kez basınca yenisi
+        # kurulmaz, açık olan öne gelir (bkz. desk.window.open_desk_window).
+        self.desk_btn = QPushButton("🏢 Agent Desk")
+        self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
+        self.desk_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #C084FC;
+                border: 1px solid #3B2A57;
+                border-radius: 5px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { border-color: #C084FC; }
+        """)
+        self.desk_btn.clicked.connect(self.open_agent_desk)
+        h_layout.addWidget(self.desk_btn)
+
         h_layout.addSpacing(8)
 
         # Project Selector Button
@@ -732,6 +752,22 @@ class ZenModeWindow(QMainWindow):
         if hasattr(self, "skills_widget") and self.skills_widget:
             self.skills_widget._on_project_changed(new_dir)
         self._update_telemetry_badges()
+
+    def open_agent_desk(self):
+        """
+        Agent Desk penceresini açar (tek örnek).
+
+        Ağır modüller (sahne, ofis kayıt defteri) yalnızca kullanıcı düğmeye
+        basınca yüklensin diye içe aktarma fonksiyon içinde: Zen açılışı
+        yavaşlamasın.
+        """
+        try:
+            from entropy.desk.window import open_desk_window
+
+            return open_desk_window(parent=None, bridge=self.bridge)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Agent Desk] Pencere açılamadı: {exc}\n")
+            return None
 
     def _select_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Proje Klasörü Seç", str(self.bridge.active_project_dir))

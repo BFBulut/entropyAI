@@ -284,11 +284,17 @@ class TaskBoardWidget(QFrame):
 
     card_selected = Signal(str)
 
-    def __init__(self, parent=None, board: Any = None, compact: bool = False):
+    def __init__(self, parent=None, board: Any = None, compact: bool = False, office: str = ""):
+        """
+        `office` verilirse pano yalnızca o ofise ait kartları gösterir (Agent Desk
+        Kartlar sekmesi) ve kartlar üst/alt (parent/children) ağacı olarak sıralanır.
+        Boşsa eski davranış: tüm kartlar.
+        """
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.board = board if board is not None else load_board()
         self.compact = compact
+        self.office = office or ""
         self.selected_id: str = ""
         self.column_layouts: Dict[str, QVBoxLayout] = {}
         self.column_headers: Dict[str, QLabel] = {}
@@ -300,9 +306,13 @@ class TaskBoardWidget(QFrame):
         root.setSpacing(6)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel(
+        self.title_label = QLabel(
             f"<b style='color:{RT['accent']}; font-size:13px;'>🗂 AJAN GÖREV PANOSU</b>"
-        ))
+            + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
+               if self.office else "")
+        )
+        self.title_label.setStyleSheet("background: transparent; border: none;")
+        header.addWidget(self.title_label)
         header.addStretch()
         self.refresh_btn = QPushButton("Yenile")
         self.refresh_btn.setFixedHeight(22)
@@ -332,8 +342,16 @@ class TaskBoardWidget(QFrame):
 
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
-            scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+            scroll.setStyleSheet(
+                "QScrollArea { border:none; background:transparent; }"
+                " QScrollArea > QWidget > QWidget { background: transparent; }"
+            )
+            # Kartlar sütun genişliğine uyar; yatay çubuk sütunun altında
+            # gereksiz bir şerit bırakıyordu (Faz 2 kozmetik notu).
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.viewport().setAutoFillBackground(False)
             inner = QWidget()
+            inner.setAutoFillBackground(False)
             inner_layout = QVBoxLayout(inner)
             inner_layout.setContentsMargins(0, 0, 0, 0)
             inner_layout.setSpacing(5)
@@ -368,9 +386,69 @@ class TaskBoardWidget(QFrame):
         if self.board is None:
             return []
         try:
-            return list(self.board.list() or [])
+            cards = list(self.board.list() or [])
         except Exception:
             return []
+        if self.office:
+            cards = [c for c in cards if str(spec_field(c, "office", "")) == self.office]
+        return cards
+
+    def set_office(self, office: str) -> None:
+        self.office = office or ""
+        self.selected_id = ""
+        self.title_label.setText(
+            f"<b style='color:{RT['accent']}; font-size:13px;'>🗂 AJAN GÖREV PANOSU</b>"
+            + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
+               if self.office else "")
+        )
+        self.refresh_cards()
+
+    def card_depth(self, card: Any) -> int:
+        """
+        Kartın ağaçtaki derinliği (0 = üst kart).
+
+        Derinlik `parent` zinciri izlenerek bulunur; döngüsel bir zincir
+        (dosyalar elle düzenlenebiliyor) sonsuz döngüye girmesin diye adım
+        sayısı kart sayısıyla sınırlanır.
+        """
+        depth = 0
+        seen = set()
+        current = card
+        for _ in range(len(self._cards) + 1):
+            parent_id = str(spec_field(current, "parent", ""))
+            if not parent_id or parent_id in seen:
+                break
+            seen.add(parent_id)
+            parent = self.get_card(parent_id)
+            if parent is None:
+                break
+            depth += 1
+            current = parent
+        return depth
+
+    def ordered_cards(self, cards: List[Any]) -> List[Any]:
+        """Üst kartları önce, altlarını hemen ardından sıralar (ağaç görünümü)."""
+        by_id = {str(spec_field(c, "id", "")): c for c in cards}
+        roots = [c for c in cards if str(spec_field(c, "parent", "")) not in by_id]
+        ordered: List[Any] = []
+        emitted = set()
+
+        def walk(card: Any) -> None:
+            card_id = str(spec_field(card, "id", ""))
+            if card_id in emitted:
+                return
+            emitted.add(card_id)
+            ordered.append(card)
+            for child in cards:
+                if str(spec_field(child, "parent", "")) == card_id:
+                    walk(child)
+
+        for root in roots:
+            walk(root)
+        for card in cards:  # sarkan (ebeveyni aynı sütunda olmayan) kartlar
+            if str(spec_field(card, "id", "")) not in emitted:
+                ordered.append(card)
+        return ordered
 
     def get_card(self, card_id: str) -> Optional[Any]:
         for card in self._cards:
@@ -398,8 +476,12 @@ class TaskBoardWidget(QFrame):
                 f"letter-spacing:0.4px;'>{label.upper()}</span>"
                 f" <span style='color:{RT['text_dim']}; font-size:10px;'>({len(column_cards)})</span>"
             )
-            for card in column_cards:
+            for card in self.ordered_cards(column_cards):
                 widget = TaskCardWidget(card, self)
+                # Alt kartlar girintili: ağaç ilişkisi kanbanda da görünsün.
+                depth = self.card_depth(card)
+                if depth:
+                    widget.setContentsMargins(min(depth, 3) * 12, 0, 0, 0)
                 self.card_widgets.append(widget)
                 layout.insertWidget(layout.count() - 1, widget)
         current = self.get_card(self.selected_id) if self.selected_id else None

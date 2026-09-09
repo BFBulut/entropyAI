@@ -46,6 +46,12 @@ AGENT_FILENAME = "AGENT.md"
 
 VALID_PROVIDERS = ("agy", "claude")
 
+# Ofis içindeki görev tipi. `role` alanı serbest metin olarak kaldı (mevcut
+# ajanlarda "research", "report writing" gibi açıklayıcı değerler var ve onları
+# tek kelimeye indirmek kullanıcının yazdığı dosyaları bozardı); bu üç değer
+# ayrıca tanınır ve `AgentSpec.office_role` ile normalleştirilir.
+OFFICE_ROLES = ("worker", "orchestrator", "evaluator")
+
 # Manifest bölümü için üst sınır (karakter). ~4 karakter ≈ 1 token olduğundan
 # 600 karakter ≈ 150 token; sözleşmedeki bütçe budur. Bölüm her turda enjekte
 # edildiği için sınır sert: ajan sayısı artarsa liste kesilir, bütçe aşılmaz.
@@ -68,10 +74,27 @@ class AgentSpec:
     prompt: str = ""
     path: Optional[Path] = None
     updated_at: str = ""
+    # Ajanın bağlı olduğu ofis ("" = serbest ajan). Ofis üyeliği ofis dosyasında
+    # da yazılı; buradaki alan ters yönde arama (bu ajan hangi ofiste) içindir.
+    office: str = ""
+    # Sağlayıcı başına model geçersiz kılma: {"agy": ..., "claude": ...}.
+    # Boşsa derleme `model` alanından eşleme yapar (bkz. compile.py). Gerekli
+    # oldu çünkü tek `model` alanı Claude derlemesine Gemini adı taşıyordu.
+    models: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def office_role(self) -> str:
+        """`role` alanının ofis görevine indirgenmiş hâli (bilinmeyen → worker)."""
+        low = (self.role or "").strip().lower()
+        return low if low in OFFICE_ROLES else "worker"
+
+    def model_for(self, provider: str) -> str:
+        """Sağlayıcıya özel model adı; tanımlı değilse genel `model`."""
+        return str((self.models or {}).get((provider or "").strip().lower()) or "")
 
     def to_frontmatter(self) -> Dict[str, object]:
         """Diske yazılacak ön bilgi sözlüğü (gövde hariç)."""
-        return {
+        data: Dict[str, object] = {
             "name": self.name,
             "role": self.role,
             "description": self.description,
@@ -81,7 +104,15 @@ class AgentSpec:
             "skills": list(self.skills or []),
             "tools_policy": self.tools_policy,
             "memory_path": self.memory_path,
+            "office": self.office,
         }
+        # Çift model yalnızca tanımlıysa yazılır: her ajana boş bir eşleme
+        # eklemek kasadaki dosyaları gereksiz yere kalabalıklaştırırdı.
+        for provider in VALID_PROVIDERS:
+            value = (self.models or {}).get(provider)
+            if value:
+                data[f"model_{provider}"] = value
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +225,7 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-only",
         memory_path="Entropy/AgentMemory/arastirmaci.md",
+        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin araştırmacı ajanısın. Görevin bir soruyu kaynaklarıyla "
             "birlikte yanıtlamak.\n\n"
@@ -218,6 +250,7 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-write",
         memory_path="Entropy/AgentMemory/analist.md",
+        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin analist ajanısın. Görevin ham bulguyu karara "
             "dönüştürmek.\n\n"
@@ -240,6 +273,7 @@ DEFAULT_AGENTS: List[AgentSpec] = [
         skills=[],
         tools_policy="read-write",
         memory_path="Entropy/AgentMemory/yazar.md",
+        office="arastirma-ofisi",
         prompt=(
             "Sen Entropy'nin yazar ajanısın. Görevin dağınık bulguyu tek parça, "
             "okunur bir metne çevirmek.\n\n"
@@ -250,6 +284,63 @@ DEFAULT_AGENTS: List[AgentSpec] = [
             "övgü cümlesi yazma.\n"
             "4. Türkçe yaz; teknik terimleri gerektiğinde İngilizce özgün hâliyle ver.\n\n"
             "Çıktın: başlıklı markdown rapor; sonunda kaynaklar ve açık işler."
+        ),
+    ),
+    AgentSpec(
+        name="orkestrator",
+        role="orchestrator",
+        description="Bir ofis kartını en çok beş alt göreve böler ve ajanlara dağıtır.",
+        provider="agy",
+        model="gemini-3.8-flash-high",
+        effort="medium",
+        skills=[],
+        tools_policy="read-only",
+        memory_path="Entropy/AgentMemory/orkestrator.md",
+        office="arastirma-ofisi",
+        prompt=(
+            "Sen Entropy'nin orkestratör ajanısın. Görevin bir işi yapmak değil, "
+            "yapılabilir alt görevlere bölmek.\n\n"
+            "Çalışma biçimin:\n"
+            "1. Kartın hedefini ve ofis tüzüğünü oku; kabul standartlarını alt "
+            "görevlere dağıt.\n"
+            "2. En çok 5 alt görev üret. Her alt görev tek bir soruya yanıt "
+            "versin ve tek bir ajana atansın.\n"
+            "3. Alt görevler birbirinin çıktısını beklemesin; paralel "
+            "koşabilecek biçimde böl.\n"
+            "4. Yalnızca ofis üyesi ajanlara atama yap; olmayan ajan adı uydurma.\n"
+            "5. Açıklama yazma; yanıtın TEK bir ```json kod bloğu olsun.\n\n"
+            "Çıktı şeman:\n"
+            '```json\n'
+            '{"subtasks": [{"title": "...", "goal": "...", '
+            '"criteria": ["..."], "agent": "...", "provider": "agy", "model": ""}]}\n'
+            '```'
+        ),
+    ),
+    AgentSpec(
+        name="degerlendirici",
+        role="evaluator",
+        description="Alt görev çıktılarını kabul ölçütlerine karşı notlar; eksikleri sayar.",
+        provider="agy",
+        model="gemini-3.8-flash-high",
+        effort="medium",
+        skills=[],
+        tools_policy="read-only",
+        memory_path="Entropy/AgentMemory/degerlendirici.md",
+        office="arastirma-ofisi",
+        prompt=(
+            "Sen Entropy'nin değerlendirici ajanısın. Üretmezsin, notlarsın.\n\n"
+            "Çalışma biçimin:\n"
+            "1. Her alt görevi YALNIZCA kendi kabul ölçütlerine göre değerlendir; "
+            "hoşuna gitmesi ölçüt değildir.\n"
+            "2. Notu 0 ile 1 arasında ver: 1.0 tüm ölçütler kanıtıyla karşılandı, "
+            "0.6 kabul edilebilir alt sınır, 0.0 çıktı yok.\n"
+            "3. Karşılanmayan her ölçütü 'missing' listesine tek tek yaz.\n"
+            "4. Açıklama yazma; yanıtın TEK bir ```json kod bloğu olsun.\n\n"
+            "Çıktı şeman:\n"
+            '```json\n'
+            '{"grades": [{"id": "...", "grade": 0.0, "verdict": "...", '
+            '"missing": ["..."]}]}\n'
+            '```'
         ),
     ),
 ]
@@ -322,6 +413,20 @@ class AgentRegistry:
         if isinstance(skills, str):
             skills = [s.strip() for s in skills.split(",") if s.strip()]
         provider = str(front.get("provider") or "agy").strip().lower()
+        # Çift model: nested `models: {agy: ..., claude: ...}` (PyYAML varsa) ya
+        # da düz `model_agy` / `model_claude` anahtarları. İkisi de desteklenir
+        # çünkü yerleşik ayrıştırıcı iç içe eşleme okuyamıyor.
+        models: Dict[str, str] = {}
+        nested = front.get("models")
+        if isinstance(nested, dict):
+            for key, value in nested.items():
+                key = str(key).strip().lower()
+                if key in VALID_PROVIDERS and value:
+                    models[key] = str(value)
+        for provider_name in VALID_PROVIDERS:
+            value = front.get(f"model_{provider_name}")
+            if value:
+                models[provider_name] = str(value)
         try:
             updated = datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
         except OSError:
@@ -339,6 +444,8 @@ class AgentRegistry:
             prompt=body,
             path=path,
             updated_at=updated,
+            office=str(front.get("office") or ""),
+            models=models,
         )
 
     # -- yazma ---------------------------------------------------------

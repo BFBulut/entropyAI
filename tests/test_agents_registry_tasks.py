@@ -208,7 +208,9 @@ def test_registry_emits_agents_updated(registry, qapp):
 
 def test_default_agents_seeded_once_and_not_resurrected(registry):
     created = registry.ensure_defaults()
-    assert set(created) == {"arastirmaci", "analist", "yazar"}
+    # Faz 3'te tohum kadroya ofis rolleri eklendi (orkestratör + değerlendirici).
+    assert set(created) == {"arastirmaci", "analist", "yazar",
+                            "orkestrator", "degerlendirici"}
     assert registry.get("arastirmaci").model == "gemini-3.8-flash-high"
     assert registry.get("yazar").role == "report writing"
 
@@ -287,7 +289,8 @@ def test_compile_all_returns_every_agent(registry, tmp_path, monkeypatch):
     _patch_app_root(monkeypatch, tmp_path / "app")
     registry.ensure_defaults()
     compiled = registry.compile_all(tmp_path / "proj2")
-    assert set(compiled) == {"arastirmaci", "analist", "yazar"}
+    assert set(compiled) == {"arastirmaci", "analist", "yazar",
+                             "orkestrator", "degerlendirici"}
 
 
 # ---------------------------------------------------------------------------

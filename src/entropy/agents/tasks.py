@@ -33,6 +33,7 @@ okumadan "bitti" saymak, panonun tamamını anlamsız kılardı.
 from __future__ import annotations
 
 import datetime
+import logging
 import re
 import threading
 from dataclasses import dataclass, field, replace
@@ -76,6 +77,18 @@ class TaskCard:
     summary: str = ""
     path: Optional[Path] = None
     notes: str = ""
+    # Ofis alanları (Faz 3). Üst kart `children` ile alt kartlarını tutar, alt
+    # kart `parent` ile üstünü; ağaç iki yönlü çünkü pano üstten aşağı, harness
+    # ise bir alt kart bitince yukarı bakıyor ve tek yönlü bağ her iki tarafta
+    # da tüm kartları taramayı gerektirirdi.
+    office: str = ""
+    parent: str = ""
+    children: List[str] = field(default_factory=list)
+    # Değerlendiricinin verdiği not (0–1) ve gerekçesi; `None` = notlanmadı.
+    grade: Optional[float] = None
+    verdict: str = ""
+    # Kaç kez koşuldu: eşiğin altındaki alt kart bir kez yeniden koşar (retry ≤ 1).
+    attempt: int = 0
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -90,6 +103,12 @@ class TaskCard:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "output_paths": list(self.output_paths or []),
+            "office": self.office,
+            "parent": self.parent,
+            "children": list(self.children or []),
+            "grade": "" if self.grade is None else round(float(self.grade), 3),
+            "verdict": self.verdict,
+            "attempt": int(self.attempt or 0),
         }
 
 
@@ -181,6 +200,18 @@ class TaskBoard:
         if isinstance(outputs, str):
             outputs = [o.strip() for o in outputs.split(",") if o.strip()]
         status = str(front.get("status") or "backlog").strip().lower()
+        children = front.get("children") or []
+        if isinstance(children, str):
+            children = [c.strip() for c in children.split(",") if c.strip()]
+        raw_grade = front.get("grade")
+        try:
+            grade = float(raw_grade) if str(raw_grade).strip() not in ("", "None") else None
+        except (TypeError, ValueError):
+            grade = None
+        try:
+            attempt = int(str(front.get("attempt") or 0).strip() or 0)
+        except (TypeError, ValueError):
+            attempt = 0
         return TaskCard(
             id=str(front.get("id") or path.stem),
             title=str(front.get("title") or path.stem),
@@ -198,6 +229,12 @@ class TaskBoard:
             summary=sections.get(SECTION_RESULT, "").strip(),
             notes=sections.get(SECTION_NOTES, "").strip(),
             path=path,
+            office=str(front.get("office") or ""),
+            parent=str(front.get("parent") or ""),
+            children=[str(c) for c in children],
+            grade=grade,
+            verdict=str(front.get("verdict") or ""),
+            attempt=attempt,
         )
 
     # -- yazma ---------------------------------------------------------
@@ -308,13 +345,23 @@ class TaskBoard:
             parts.append(f"[NOTLAR]\n{card.notes}")
         return "\n\n".join(parts)
 
-    def run(self, card_id: str, bridge_factory: Optional[Callable] = None) -> Optional[str]:
+    def run(
+        self,
+        card_id: str,
+        bridge_factory: Optional[Callable] = None,
+        on_done: Optional[Callable[[str, bool], None]] = None,
+    ) -> Optional[str]:
         """
         Kartı arka planda çalıştırır; ledger görev kimliğini döndürür.
 
         Çağrı bloke etmez: köprünün `send_background_task_async`ı iş parçacığı
         açar, sonuç geri çağrıda işlenir. Kart hemen `running` olur ki pano
         (ve ikinci bir /task çağrısı) aynı işi iki kez başlatmasın.
+
+        `on_done(kart_id, başarılı)` kart kapandıktan SONRA çağrılır (köprünün
+        işçi iş parçacığında). Ofis harness'ı sıradaki alt kartı buradan
+        başlatır; Qt sinyaline bağlanmak zorunda kalsaydı harness bir olay
+        döngüsü olmadan (arka plan görevi, test) çalışamazdı.
         """
         card = self.get(card_id)
         if card is None:
@@ -336,6 +383,13 @@ class TaskBoard:
 
         def _on_result(full_text: str, ok: bool, _card_id=card.id):
             self._finish(_card_id, full_text, ok)
+            if on_done is not None:
+                try:
+                    on_done(_card_id, ok)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Kart tamamlama geri çağrısı hata verdi (%s)", _card_id
+                    )
 
         try:
             bridge.send_background_task_async(
@@ -349,6 +403,11 @@ class TaskBoard:
             )
         except Exception as exc:
             self._finish(card.id, f"Görev başlatılamadı: {exc}", False)
+            if on_done is not None:
+                try:
+                    on_done(card.id, False)
+                except Exception:
+                    pass
             return None
         return task_id
 

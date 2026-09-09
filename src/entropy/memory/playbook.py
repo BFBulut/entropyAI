@@ -286,9 +286,13 @@ _NON_REPORT_STEMS = {
 # Tasks/, Agents/ ve wiki/ de aynı gerekçeyle dışarıda: görev kuyruğu, ajan
 # belleği ve sorgu sayfaları olay/durum kaydıdır, tekrar edilebilir yordam değil.
 # Bağlam kurucu ve geri çağırma onları ayrıca görür (wiki.py, agent_memory.py).
+# Offices/ de dışarıda: ofis klasöründeki dosyalar ya ofis belleği ya da wiki
+# sayfasına giden kısa bir işaretçi özettir. Tam metin zaten wiki sorgu
+# sayfasındadır ve o da damıtma kaynağı değildir; özeti kaynak saysaydık aynı
+# turun kırpılmış kopyası yordam gibi damıtılırdı.
 _NON_REPORT_DIRS = {
     "dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian",
-    "sessions", "tasks", "agents", "wiki", "queries",
+    "sessions", "tasks", "agents", "wiki", "queries", "offices",
 }
 _DAILY_NOTE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 

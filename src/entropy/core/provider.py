@@ -428,7 +428,22 @@ class ProviderCommonMixin:
         if agents_section:
             parts.append(agents_section)
 
+        # Ofis kataloğu: ~120 token. Ajan listesinden ayrı çünkü devretme kuralı
+        # farklı: tek adımlık iş ajana, çok adımlı iş ofise gider.
+        offices_section = self.offices_manifest_section()
+        if offices_section:
+            parts.append(offices_section)
+
         return "\n\n".join(parts)
+
+    def offices_manifest_section(self) -> str:
+        """Manifest'in "Ofisler" bölümü: ad, amaç, orkestratör + devretme kuralı."""
+        try:
+            from entropy.agents.offices import offices_manifest
+
+            return offices_manifest()
+        except Exception:
+            return ""
 
     def agents_manifest_section(self) -> str:
         """

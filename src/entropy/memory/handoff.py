@@ -438,6 +438,21 @@ def _store_session_node(
         return False
 
 
+def _is_office_report(path: Path) -> bool:
+    """
+    Dosya bir ofis raporu mu (ön bilgide `type: office_report`)?
+
+    Ofis kartı bitişinde Sessions/ değil ofis raporu yazılır; yine de eski ya da
+    elle taşınmış bir dosya Sessions/ altına düşerse aktarım olarak okunmamalı:
+    ofis raporu bir sonraki oturumun "nerede kalmıştık"ı değildir.
+    """
+    try:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:400]
+    except OSError:
+        return False
+    return bool(re.search(r"(?m)^type:\s*office_report\s*$", head))
+
+
 def load_latest_handoff(vault_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """
     En son aktarım sayfası: {path, title, body, sections}; yoksa None.
@@ -448,7 +463,10 @@ def load_latest_handoff(vault_path: Optional[Path] = None) -> Optional[Dict[str,
     target_dir = sessions_dir(vault_path)
     if not target_dir.is_dir():
         return None
-    candidates = [p for p in target_dir.glob("*.md") if p.name.lower() != "log.md"]
+    candidates = [
+        p for p in target_dir.glob("*.md")
+        if p.name.lower() != "log.md" and not _is_office_report(p)
+    ]
     if not candidates:
         return None
     latest = sorted(candidates, key=lambda p: (p.stem, p.name))[-1]

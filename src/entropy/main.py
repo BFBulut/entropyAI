@@ -96,6 +96,18 @@ def main():
     except Exception as e:
         print(f"[{config.app_name}] Ajan izleyicileri başlatılamadı: {e}")
 
+    # Ofis zincirleri kesintiden sürer: uygulama kapandığında köprü süreçleri
+    # ölüyor ama kart dosyalarında durum `running` kalıyordu. Model çağrısı
+    # ürettiği için ayarla kapatılabilir (config.desk_auto_resume).
+    if getattr(config, "desk_auto_resume", True):
+        try:
+            from entropy.agents.harness import OfficeHarness
+            resumed = OfficeHarness.resume_all()
+            if resumed:
+                print(f"[{config.app_name}] Yarım kalan {len(resumed)} ofis kartı sürdürüldü.")
+        except Exception as e:
+            print(f"[{config.app_name}] Ofis zincirleri sürdürülemedi: {e}")
+
     scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):

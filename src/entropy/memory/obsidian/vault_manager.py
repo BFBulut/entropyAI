@@ -39,6 +39,66 @@ def _query_page_skill(file: Path) -> Optional[str]:
     return ""
 
 
+def _office_page_role(file: Path) -> Optional[Tuple[str, str]]:
+    """
+    Dosya `Entropy/Offices/<ofis>/...` altindaysa (ofis, rol) dondurur.
+
+    Rol: "office" (OFFICE.md kayit defteri), "report" (reports/*.md ofis raporu
+    ozeti), "other" (MEMORY.md, log.md gibi ic dosyalar). Ofis disi dosyalarda
+    None doner.
+    """
+    parts = [p.name for p in file.parents]
+    lower = [p.lower() for p in parts]
+    if "offices" not in lower:
+        return None
+    idx = lower.index("offices")
+    if idx == 0:
+        return None
+    office = parts[idx - 1]
+    if file.name.upper() == "OFFICE.MD" and idx == 1:
+        return office, "office"
+    if idx >= 1 and lower[0] == "reports":
+        return office, "report"
+    return office, "other"
+
+
+def _agent_page_name(file: Path) -> Optional[str]:
+    """`Entropy/Agents/<ajan>/AGENT.md` ise ajan adini dondurur."""
+    if file.name.upper() != "AGENT.MD":
+        return None
+    parents = file.parents
+    if len(parents) < 2 or parents[1].name.lower() != "agents":
+        return None
+    return parents[0].name
+
+
+def _frontmatter_list(text: str, key: str) -> List[str]:
+    """
+    On bilgideki `key`'i tek deger ya da liste olarak okur.
+
+    Satir ici liste (`members: [a, b]`), YAML madde listesi ve tek deger
+    (`orchestrator: a`) desteklenir; OFFICE.md'yi kullanici elle yazabildigi
+    icin tek bir bicime bagli kalinmaz.
+    """
+    m = re.search(rf"(?m)^{re.escape(key)}\s*:\s*(.*)$", text or "")
+    if not m:
+        return []
+    inline = m.group(1).strip()
+    if inline.startswith("[") and inline.endswith("]"):
+        return [v.strip().strip('"').strip("'") for v in inline[1:-1].split(",") if v.strip()]
+    if inline:
+        return [inline.strip('"').strip("'")]
+    out: List[str] = []
+    for line in (text or "")[m.end():].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            out.append(stripped[2:].strip().strip('"').strip("'"))
+            continue
+        if stripped:
+            break
+    return [v for v in out if v]
+
+
 def _graph_disk_cache_enabled() -> bool:
     raw = (os.environ.get("ENTROPY_GRAPH_CACHE") or "").strip().lower()
     return raw not in ("0", "false", "no", "off")
@@ -472,17 +532,56 @@ class ObsidianVaultManager:
         stem_to_id: Dict[str, str] = {}
 
         query_skill_links: List[Tuple[str, str]] = []
+        # Ofis kayit defterlerinden gelen (ofis_id, ajan_adi, rol) uclulari;
+        # ajan dugumleri tarama bittikten sonra baglanir cunku AGENT.md dosyasi
+        # OFFICE.md'den sonra da gorulebilir.
+        office_member_links: List[Tuple[str, str, str]] = []
+        office_report_links: List[Tuple[str, str]] = []
+        agent_ids: Dict[str, str] = {}
+        skipped: Set[Path] = set()
+        file_ids: Dict[Path, str] = {}
 
         for file in files:
             name = file.stem
             category = file.parent.name
             skill_of_query = _query_page_skill(file)
+            office_role = _office_page_role(file)
+            agent_of_page = _agent_page_name(file)
             if skill_of_query is not None:
                 # Wiki sorgu sayfalari kendi grubunda gosterilir; boylece UI
                 # onlari rapor/yetenek dugumlerinden ayirt edebilir.
                 category = "query"
+            elif office_role is not None:
+                office_name, role = office_role
+                if role == "office":
+                    category = "office"
+                    name = office_name
+                elif role == "report":
+                    # Ofis raporu ozeti de bir sorgu sayfasidir: ayni grup,
+                    # ayni renk; farki ofise bagli olmasi.
+                    category = "query"
+                else:
+                    # MEMORY.md / log.md gibi ic dosyalar grafige girmez:
+                    # kullanicinin okudugu bellek dosyasi bir bilgi dugumu
+                    # degil, defterdir. Bunlar wikilink taramasindan da cikar.
+                    skipped.add(file)
+                    continue
+            elif agent_of_page is not None:
+                category = "agent"
+                name = agent_of_page
             node_id = f"{category}/{name}"
-            stem_to_id[name] = node_id
+            if office_role is not None and office_role[1] == "report":
+                # Ofis raporu ozeti wiki sayfasiyla AYNI dosya adini tasir
+                # (tarih-slug); ofis adiyla ayristirilmazsa ikisi tek dugume
+                # duserdi ve ozet grafikte hic gorunmezdi.
+                node_id = f"{category}/office-{office_role[0]}-{name}"
+            elif category not in ("office", "agent") or name not in stem_to_id:
+                # Wikilink hedefi olarak stem daima TAM sayfaya isaret etsin:
+                # ozet zaten `[[tam sayfa]]` diye bagliyor.
+                stem_to_id[name] = node_id
+            file_ids[file] = node_id
+            if category == "agent":
+                agent_ids[agent_of_page.strip().lower()] = node_id
 
             if node_id not in node_ids:
                 node_ids.add(node_id)
@@ -492,6 +591,19 @@ class ObsidianVaultManager:
                     "group": category,
                     "path": str(file)
                 })
+
+            if office_role is not None and office_role[1] == "office":
+                try:
+                    fm_text = file.read_text(encoding="utf-8", errors="ignore")[:2000]
+                except OSError:
+                    fm_text = ""
+                for key, role_label in (("orchestrator", "orkestrator"),
+                                        ("evaluator", "degerlendirici"),
+                                        ("members", "uye")):
+                    for member in _frontmatter_list(fm_text, key):
+                        office_member_links.append((node_id, member, role_label))
+            elif office_role is not None and office_role[1] == "report":
+                office_report_links.append((node_id, f"office/{office_role[0]}"))
 
             if skill_of_query:
                 skill_id = f"skill/{skill_of_query}"
@@ -506,7 +618,9 @@ class ObsidianVaultManager:
                 query_skill_links.append((node_id, skill_id))
 
         for file in files:
-            source_id = stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
+            if file in skipped:
+                continue
+            source_id = file_ids.get(file) or stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
             is_heavy_catalog = (file.stem in ["BELLEK_HARITASI", "MEMORY"])
             try:
                 content = file.read_text(encoding="utf-8", errors="ignore")
@@ -532,6 +646,50 @@ class ObsidianVaultManager:
                 "source": source_id,
                 "target": skill_id,
                 "alias": "skill",
+                "is_catalog_link": False,
+            })
+
+        # Ofis -> ajan baglari. Uye AGENT.md ile kayitliysa MEVCUT dugume
+        # baglanir; degilse sentetik bir `agent` dugumu uretilir: ofis kartinda
+        # adi gecen ama kasada dosyasi olmayan ajan da grafikte gorunmelidir.
+        for office_id, member, role_label in office_member_links:
+            key = member.strip().lower()
+            if not key:
+                continue
+            agent_id = agent_ids.get(key)
+            if agent_id is None:
+                agent_id = f"agent/{member.strip()}"
+                agent_ids[key] = agent_id
+                if agent_id not in node_ids:
+                    node_ids.add(agent_id)
+                    nodes.append({
+                        "id": agent_id,
+                        "name": member.strip(),
+                        "group": "agent",
+                        "path": "",
+                    })
+            links.append({
+                "source": office_id,
+                "target": agent_id,
+                "alias": role_label,
+                "is_catalog_link": False,
+            })
+
+        # Ofis raporu -> ofis baglari (sorgu -> yetenek ile ayni mantik: aidiyet
+        # dosya yolundan gelir, metinden degil).
+        for report_id, office_id in office_report_links:
+            if office_id not in node_ids:
+                node_ids.add(office_id)
+                nodes.append({
+                    "id": office_id,
+                    "name": office_id.split("/", 1)[1],
+                    "group": "office",
+                    "path": "",
+                })
+            links.append({
+                "source": report_id,
+                "target": office_id,
+                "alias": "office",
                 "is_catalog_link": False,
             })
 

@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QVBoxLayout, QWidget
 )
@@ -31,6 +31,19 @@ FALLBACK_MODELS: Dict[str, List[str]] = {
 }
 
 EFFORT_LEVELS = ["low", "medium", "high"]
+
+# Ofis rolleri (Faz 3 sözleşmesi): AgentSpec.role bu üç değerden biri olabilir;
+# eski ajanlarda serbest metin ("Mimari denetçi") duruyor, o zaman rozet çıkmaz.
+ROLE_LABELS = {
+    "orchestrator": "⚙ orkestratör",
+    "evaluator": "⚖ değerlendirici",
+    "worker": "üye",
+}
+ROLE_COLORS = {
+    "orchestrator": "#C084FC",
+    "evaluator": "#3DE8A8",
+    "worker": "#93A3B8",
+}
 TOOLS_POLICIES = ["inherit", "read-only", "full", "none"]
 
 DIALOG_STYLE = f"""
@@ -429,13 +442,39 @@ class AgentCard(QFrame):
         )
         text_col.addWidget(title)
 
-        provider = spec_field(spec, "provider", "agy")
-        model = spec_field(spec, "model", "-")
+        provider = spec_field(spec, "provider", "agy") or "agy"
+        # Model boş dizge olabilir (sağlayıcı varsayılanı kullanılıyor demektir).
+        # spec_field yalnızca None/eksik alanda varsayılana düşer, bu yüzden boş
+        # dizgede "agy / " gibi sarkan bir ayraç kalıyordu; burada kapatılır.
+        model = spec_field(spec, "model", "") or ""
+        effort = spec_field(spec, "effort", "") or ""
+        meta_parts = [f"{provider} / {model}" if model else f"{provider} · varsayılan model"]
+        if effort:
+            meta_parts.append(f"efor {effort}")
         meta = QLabel(
             f"<span style='color:{RT['text_dim']}; font-size:11px;'>"
-            f"{provider} / {model} · efor {spec_field(spec, 'effort', '-')}</span>"
+            f"{' · '.join(meta_parts)}</span>"
         )
         text_col.addWidget(meta)
+
+        # Ofis/rol rozeti (Faz 3): ajan bir ofise bağlıysa ve rolü varsa görünür.
+        office_name = str(spec_field(spec, "office", "") or "")
+        agent_role = str(spec_field(spec, "role", "") or "")
+        badge_parts = []
+        if office_name:
+            badge_parts.append(
+                f"<span style='background:{RT['accent_soft']}; color:{RT['accent']}; "
+                f"font-size:10px; padding:1px 6px; border-radius:4px;'>🏢 {office_name}</span>"
+            )
+        if agent_role in ROLE_LABELS:
+            color = ROLE_COLORS.get(agent_role, RT["text_dim"])
+            badge_parts.append(
+                f"<span style='background:{RT['surface_soft']}; color:{color}; "
+                f"font-size:10px; padding:1px 6px; border-radius:4px;'>{ROLE_LABELS[agent_role]}</span>"
+            )
+        if badge_parts:
+            self.office_badge = QLabel(" ".join(badge_parts))
+            text_col.addWidget(self.office_badge)
 
         skills = list(spec_field(spec, "skills", []) or [])
         if skills:
@@ -452,12 +491,31 @@ class AgentCard(QFrame):
         text_col.addWidget(self.status_label)
         layout.addLayout(text_col, 1)
 
-        for attr, glyph, tip, handler in (
+        buttons = [
             ("assign_btn", "▶", "Görev ver", self._assign),
             ("edit_btn", "✎", "Düzenle", self._edit),
             ("open_btn", "📄", "Tanım dosyasını aç", self._open_file),
             ("delete_btn", "🗑", "Sil", self._delete),
-        ):
+        ]
+        # Ofis kipinde (Agent Desk roster paneli) rol atama düğmeleri eklenir.
+        if getattr(panel, "office", ""):
+            buttons[1:1] = [
+                ("make_orchestrator_btn", "⚙", "Bu ofisin orkestratörü yap", self._make_orchestrator),
+                ("make_evaluator_btn", "⚖", "Bu ofisin değerlendiricisi yap", self._make_evaluator),
+            ]
+        # Dört düğme tek sıraya sığıyor; ofis kipinde altı düğme oluyor ve tek sıra
+        # dar roster sütununda taşıp yatay kaydırma çubuğu çıkarıyordu. Altı
+        # düğme 3x2 ızgaraya konur.
+        if len(buttons) > 4:
+            btn_host = QWidget()
+            btn_grid = QGridLayout(btn_host)
+            btn_grid.setContentsMargins(0, 0, 0, 0)
+            btn_grid.setSpacing(4)
+            layout.addWidget(btn_host)
+        else:
+            btn_grid = None
+
+        for index, (attr, glyph, tip, handler) in enumerate(buttons):
             btn = QPushButton(glyph)
             btn.setFixedSize(28, 26)
             btn.setToolTip(tip)
@@ -478,7 +536,10 @@ class AgentCard(QFrame):
                 """
             )
             btn.clicked.connect(handler)
-            layout.addWidget(btn)
+            if btn_grid is not None:
+                btn_grid.addWidget(btn, index // 3, index % 3)
+            else:
+                layout.addWidget(btn)
             setattr(self, attr, btn)
 
     def _status_html(self) -> str:
@@ -510,6 +571,14 @@ class AgentCard(QFrame):
     def _delete(self):
         self.panel.delete_agent(self.agent_name)
 
+    @Slot()
+    def _make_orchestrator(self):
+        self.panel.assign_office_role(self.agent_name, "orchestrator")
+
+    @Slot()
+    def _make_evaluator(self):
+        self.panel.assign_office_role(self.agent_name, "evaluator")
+
 
 STATUS_LABELS = {
     "backlog": "Bekliyor",
@@ -531,13 +600,29 @@ STATUS_COLORS = {
 class AgentsWidget(QFrame):
     """Ajan kayıt defterinin okunaklı listesi ve yönetim eylemleri."""
 
-    def __init__(self, parent=None, registry: Any = None, board: Any = None, bridge=None, compact: bool = False):
+    def __init__(
+        self,
+        parent=None,
+        registry: Any = None,
+        board: Any = None,
+        bridge=None,
+        compact: bool = False,
+        office: str = "",
+        office_registry: Any = None,
+    ):
+        """
+        `office` verilirse panel yalnızca o ofisin ajanlarını gösterir (Agent Desk
+        roster paneli) ve yeni ajanlar o ofise yazılır. Boşsa eski davranış: tüm
+        kayıt defteri.
+        """
         super().__init__(parent)
         self.setObjectName("cardFrame")
         self.registry = registry if registry is not None else load_registry()
         self.board = board if board is not None else load_board()
         self.bridge = bridge
         self.compact = compact
+        self.office = office or ""
+        self.office_registry = office_registry
         self.cards: List[AgentCard] = []
         self._card_cache: List[Any] = []
 
@@ -546,9 +631,14 @@ class AgentsWidget(QFrame):
         layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel(
+        self.title_label = QLabel(
             f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 AJANLAR</b>"
-        ))
+            if not self.office
+            else f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 KADRO</b>"
+            f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
+        )
+        self.title_label.setStyleSheet("background: transparent; border: none;")
+        header.addWidget(self.title_label)
         header.addStretch()
         self.add_btn = QPushButton("+ Yeni Ajan")
         self.add_btn.setToolTip("Kayıt defterine yeni alt ajan ekle")
@@ -582,8 +672,22 @@ class AgentsWidget(QFrame):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        # Faz 2 kozmetik notu: liste kısa olduğunda altta beyaz bir şerit kalıyordu.
+        # Sebebi QScrollArea'nın görünüm alanı (viewport) ve içerik widget'ının
+        # kendi paletlerini kullanması; yalnızca QScrollArea'ya stil vermek
+        # yetmiyor. Görünüm alanı da saydam yapılır ve otomatik dolgu kapatılır.
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+            " QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Kartlar sütun genişliğine uyar; yatay çubuk yalnızca listenin altında
+        # boşluk yaratıyordu.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_container = QWidget()
+        self.list_container.setAutoFillBackground(False)
+        self.list_container.setStyleSheet("background: transparent;")
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
         self.list_layout.setSpacing(6)
@@ -605,9 +709,145 @@ class AgentsWidget(QFrame):
         if self.registry is None:
             return []
         try:
-            return list(self.registry.list() or [])
+            agents = list(self.registry.list() or [])
         except Exception:
             return []
+        if not self.office:
+            return agents
+        # Ofis süzgeci iki kaynağı birleştirir: ajanın kendi `office` alanı ve
+        # ofisin `members` listesi. Yalnızca birine bakılsaydı, dosyayı elle
+        # düzenleyen kullanıcı (ya da henüz `office` yazmayan bir sürüm) ajanı
+        # roster'da göremezdi.
+        members = set(self.office_members())
+        return [
+            a for a in agents
+            if str(spec_field(a, "office", "")) == self.office
+            or str(spec_field(a, "name", "")) in members
+        ]
+
+    def office_members(self) -> List[str]:
+        """Seçili ofisin üye listesi (ofis kaydı yoksa boş)."""
+        office = self.current_office_spec()
+        if office is None:
+            return []
+        return [str(m) for m in (spec_field(office, "members", []) or [])]
+
+    def current_office_spec(self) -> Optional[Any]:
+        if not self.office:
+            return None
+        registry = self.office_registry
+        if registry is None:
+            try:
+                from entropy.agents.offices import OfficeRegistry  # type: ignore
+
+                registry = OfficeRegistry()
+                self.office_registry = registry
+            except Exception:
+                return None
+        try:
+            return registry.get(self.office)
+        except Exception:
+            return None
+
+    def set_office(self, office: str) -> None:
+        self.office = office or ""
+        title = getattr(self, "title_label", None)
+        if title is not None:
+            title.setText(
+                f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 KADRO</b>"
+                f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
+                if self.office
+                else f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 AJANLAR</b>"
+            )
+        self.refresh_agents()
+
+    @staticmethod
+    def _update_office(registry: Any, office: Any, changes: Dict[str, Any]) -> Any:
+        """
+        Ofis kaydını günceller; veri sınıfı ve sözlük sözleşmelerinin ikisini de
+        karşılar. Gerçek `OfficeRegistry.update(OfficeSpec)` bekler; sahte/esnek
+        uygulamalar sözlük alır.
+        """
+        if hasattr(office, "__dataclass_fields__"):
+            from dataclasses import replace
+
+            return registry.update(replace(office, **changes))
+        payload = dict(office) if isinstance(office, dict) else {}
+        payload.update(changes)
+        office_obj = build_dataclass("entropy.agents.offices", "OfficeSpec", payload)
+        return call_contract(registry.update, payload, office_obj)
+
+    def ensure_office_member(self, agent_name: str) -> bool:
+        """Ajanı seçili ofisin üye listesine ekler (zaten üyeyse dokunmaz)."""
+        if not agent_name or not self.office:
+            return False
+        office = self.current_office_spec()
+        registry = self.office_registry
+        if office is None or registry is None:
+            return False
+        members = [str(m) for m in (spec_field(office, "members", []) or [])]
+        if agent_name in members:
+            return True
+        members.append(agent_name)
+        try:
+            self._update_office(registry, office, {"members": members})
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Roster] Ofis üyesi eklenemedi: {exc}\n")
+            return False
+        signal = getattr(bus, "offices_updated", None)
+        if signal is not None:
+            signal.emit(self.office)
+        self.refresh_agents()
+        return True
+
+    def assign_office_role(self, agent_name: str, role: str) -> bool:
+        """
+        Ajanı bu ofisin orkestratörü/değerlendiricisi yapar.
+
+        İki yer güncellenir: ofis kaydı (orchestrator/evaluator alanı) ve ajanın
+        kendi `role` alanı. Sahne ve harness ofis kaydını, ajan derlemesi ise
+        `role`'ü okuyor; ikisi ayrışırsa sahne ile gerçek koşu birbirini tutmaz.
+        """
+        if role not in ("orchestrator", "evaluator") or not self.office:
+            return False
+        office = self.current_office_spec()
+        registry = self.office_registry
+        if office is None or registry is None:
+            return False
+        members = [str(m) for m in (spec_field(office, "members", []) or [])]
+        if agent_name not in members:
+            members.append(agent_name)
+        try:
+            self._update_office(registry, office, {role: agent_name, "members": members})
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Roster] Rol atanamadı: {exc}\n")
+            return False
+
+        # Ajanın kendi rol alanını da güncelle (sözleşme: AgentSpec.role).
+        try:
+            spec = None
+            for candidate in (self.registry.list() or []):
+                if str(spec_field(candidate, "name", "")) == agent_name:
+                    spec = candidate
+                    break
+            if spec is not None:
+                if hasattr(spec, "__dataclass_fields__"):
+                    from dataclasses import replace
+
+                    self.registry.update(replace(spec, role=role, office=self.office))
+                else:
+                    payload = dict(spec) if isinstance(spec, dict) else {"name": agent_name}
+                    payload.update({"name": agent_name, "role": role, "office": self.office})
+                    call_contract(self.registry.update, payload, None)
+        except Exception:
+            pass
+
+        self.refresh_agents()
+        for signal_name, payload_value in (("offices_updated", self.office), ("agents_updated", agent_name)):
+            signal = getattr(bus, signal_name, None)
+            if signal is not None:
+                signal.emit(payload_value)
+        return True
 
     def _reload_cards(self) -> None:
         if self.board is None:
@@ -642,11 +882,13 @@ class AgentsWidget(QFrame):
 
         agents = self.list_agents()
         if not agents:
-            self.empty_label.setText(
-                "Kayıtlı ajan yok. “+ Yeni Ajan” ile bir alt ajan tanımlayın."
-                if self.registry is not None
-                else "Ajan kayıt defteri modülü henüz yüklenemedi (entropy.agents.registry)."
-            )
+            if self.registry is None:
+                message = "Ajan kayıt defteri modülü henüz yüklenemedi (entropy.agents.registry)."
+            elif self.office:
+                message = f"'{self.office}' ofisinde ajan yok. “+ Yeni Ajan” ile ekleyin."
+            else:
+                message = "Kayıtlı ajan yok. “+ Yeni Ajan” ile bir alt ajan tanımlayın."
+            self.empty_label.setText(message)
             self.empty_label.setVisible(True)
             return
         self.empty_label.setVisible(False)
@@ -662,7 +904,13 @@ class AgentsWidget(QFrame):
         dialog = AgentEditDialog(parent=self, bridge=self.bridge)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self.apply_agent_save(dialog.get_data(), original_name=None)
+        data = dialog.get_data()
+        if self.office:
+            # Roster panelinden eklenen ajan doğrudan bu ofisin üyesi olur.
+            data.setdefault("office", self.office)
+            data["office"] = self.office
+        if self.apply_agent_save(data, original_name=None) and self.office:
+            self.ensure_office_member(str(data.get("name", "")))
 
     def edit_agent(self, spec: Any) -> None:
         dialog = AgentEditDialog(parent=self, spec=spec, bridge=self.bridge)

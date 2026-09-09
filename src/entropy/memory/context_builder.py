@@ -52,6 +52,10 @@ BUDGET_HANDOFF = 300
 # Aktif alt ajanın kalıcı belleği (Agents/<ajan>/MEMORY.md). Küçük tutulur:
 # ajan belleği olay kaydıdır, yordam değil; kararı playbook verir.
 BUDGET_AGENT_MEMORY = 300
+# Aktif ofisin kalıcı belleği (Offices/<ofis>/MEMORY.md). Ajan belleğiyle aynı
+# büyüklük: ofis belleği de olay kaydıdır (hangi kart nasıl notlandı), yordam
+# değil. Yalnızca meta["office"] doluysa ödenir.
+BUDGET_OFFICE_MEMORY = 300
 
 
 @dataclass
@@ -546,6 +550,29 @@ class CognitiveContextBuilder:
             tokens=estimate_tokens(body),
         )
 
+    def _office_memory_section(self, office: Optional[str], budget: int) -> Optional[ContextSection]:
+        """Aktif ofisin öğrendikleri ve son kart notları (meta["office"] varsa)."""
+        if not office or not str(office).strip():
+            return None
+        try:
+            from entropy.memory.agent_memory import load_office_memory
+
+            body = load_office_memory(
+                str(office), budget_tokens=budget, vault_path=self.playbooks.vault_path
+            )
+        except Exception as e:
+            logger.warning("Ofis belleği okunamadı (%s): %s", office, e)
+            return None
+        if not body.strip():
+            return None
+        body = _truncate_to_tokens(body, budget)
+        return ContextSection(
+            title=f"🏢 Ofis Belleği ({office})",
+            body=body,
+            kind="office_memory",
+            tokens=estimate_tokens(body),
+        )
+
     def _project_section(self, project_dir: Optional[Path], budget: int) -> Optional[ContextSection]:
         """Aktif projenin kendi hafıza dosyası ve en güncel proje raporu."""
         if not project_dir:
@@ -718,6 +745,7 @@ class CognitiveContextBuilder:
         ctx = AssembledContext(budget=token_budget)
         remaining = token_budget
         agent = (meta or {}).get("agent")
+        office = (meta or {}).get("office")
 
         # Sıra = öncelik. Yordam ve proje hafızası önce gelir: ikisi de küçük,
         # spesifik ve o işe doğrudan ait. Genel recall daha geniş ve daha gürültülü
@@ -734,6 +762,10 @@ class CognitiveContextBuilder:
             # denedi" bilgisi, proje ve geri çağırmadan daha spesifiktir.
             ("agent_memory", min(BUDGET_AGENT_MEMORY, remaining),
              lambda b: self._agent_memory_section(agent, b)),
+            # Ofis belleği ajan belleğinden hemen sonra: ajanın kendi geçmişi
+            # daha spesifik, ofisin ortak belleği bir adım daha genel.
+            ("office_memory", min(BUDGET_OFFICE_MEMORY, remaining),
+             lambda b: self._office_memory_section(office, b)),
             ("project", min(BUDGET_PROJECT, remaining),
              lambda b: self._project_section(project_dir, b)),
             ("recall", min(BUDGET_RECALL, remaining),

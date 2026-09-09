@@ -42,6 +42,14 @@ MEMORY_NODE_MAX_CHARS = 1500
 GLOBAL_WIKI_DIRNAME = "Wiki"
 DEFAULT_CATEGORY = "Sorgular"
 
+# Ofis kartı bittiğinde yazılan sayfanın kategorisi. Sayfanın kendisi normal bir
+# wiki sorgu sayfasıdır (aynı geri çağırma havuzu, aynı damıtma dışlaması);
+# ofis klasörüne yalnızca wikilink'li KISA bir özet düşer, kopya değil: iki tam
+# kopya olsaydı geri çağırma aynı metni iki kez sayardı.
+OFFICE_REPORT_CATEGORY = "Ofis raporları"
+# Ofis klasöründeki özetin gövde tavanı (karakter). Özet bir işaretçidir.
+OFFICE_SUMMARY_MAX_CHARS = 600
+
 _INDEX_HEADER = "# {title} — Wiki\n\n"
 _LOG_HEADER = "# {title} — Wiki Günlüğü\n\n"
 
@@ -88,6 +96,18 @@ def wiki_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
 
 def queries_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
     return wiki_dir(skill, vault_path) / "queries"
+
+
+def offices_dir(vault_path: Optional[Path] = None) -> Path:
+    return _vault_root(vault_path) / "Entropy" / "Offices"
+
+
+def office_dir(office: str, vault_path: Optional[Path] = None) -> Path:
+    return offices_dir(vault_path) / _safe(office)
+
+
+def office_reports_dir(office: str, vault_path: Optional[Path] = None) -> Path:
+    return office_dir(office, vault_path) / "reports"
 
 
 def _frontmatter_value(text: str, key: str) -> str:
@@ -187,7 +207,103 @@ def write_query_page(skill: str, title: str, body: str, meta: dict) -> Path:
     except Exception as exc:  # pragma: no cover
         logger.warning("Wiki günlüğü yazılamadı (%s): %s", skill, exc)
 
+    office = str(meta.get("office") or "").strip()
+    category = str(meta.get("category") or "").strip()
+    if office and category == OFFICE_REPORT_CATEGORY:
+        try:
+            write_office_report_summary(office, title, path, masked, meta, sources)
+        except Exception as exc:  # pragma: no cover - özet sayfayı düşürmemeli
+            logger.warning("Ofis raporu özeti yazılamadı (%s): %s", office, exc)
+
     _store_query_node(path, skill, title, masked, meta, sources)
+    return path
+
+
+def append_office_log(
+    office: str,
+    title: str,
+    agent: str = "",
+    vault_path: Optional[Path] = None,
+    kind: str = "report",
+) -> Path:
+    """Ofisin `log.md`'sine append-only tek satır ekler."""
+    root = office_dir(office, vault_path)
+    root.mkdir(parents=True, exist_ok=True)
+    log = root / "log.md"
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    line = f"- [{stamp}] {kind}: {title} ({agent or 'bilinmiyor'})" + "\n"
+    header = "" if log.exists() else f"# {office} — Ofis Günlüğü" + "\n\n"
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(header + line)
+    return log
+
+
+def write_office_report_summary(
+    office: str,
+    title: str,
+    page_path: Path,
+    masked_body: str,
+    meta: Dict[str, Any],
+    sources: Optional[List[str]] = None,
+) -> Path:
+    """
+    Ofis klasörüne wikilink'li KISA özet yazar ve ofis günlüğünü günceller.
+
+    Tam metin wiki sorgu sayfasında kalır (`page_path`); burada yalnızca
+    başlık, not, alt kart sayısı ve sayfaya bağ vardır. Kopya değildir:
+    geri çağırma havuzuna wiki sayfası girer, bu dosya bir işaretçidir.
+    """
+    vault_path = meta.get("vault_path")
+    sources = list(sources or [])
+    target = office_reports_dir(office, vault_path)
+    target.mkdir(parents=True, exist_ok=True)
+
+    today = datetime.date.today().isoformat()
+    slug = _slugify(title)
+    path = target / f"{today}-{slug}.md"
+    n = 2
+    while path.exists():
+        path = target / f"{today}-{slug}-{n}.md"
+        n += 1
+
+    summary = (masked_body or "").strip()
+    if len(summary) > OFFICE_SUMMARY_MAX_CHARS:
+        summary = summary[: OFFICE_SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+
+    fm = [
+        "---",
+        "type: office_report",
+        f"office: {office}",
+        f"skill: {meta.get('skill') or ''}",
+        f'title: "{title}"',
+        f"category: {OFFICE_REPORT_CATEGORY}",
+        f"agent: {meta.get('agent') or ''}",
+        f"task_id: {meta.get('task_id') or ''}",
+        f"grade: {meta.get('grade') if meta.get('grade') is not None else ''}",
+        f"children_count: {meta.get('children_count') if meta.get('children_count') is not None else ''}",
+        f"page: {page_path.stem}",
+        f"created: {meta.get('created') or datetime.datetime.now().isoformat(timespec='seconds')}",
+        "---",
+    ]
+    parts = [
+        "\n".join(fm),
+        "",
+        f"# {title}",
+        "",
+        f"Tam sayfa: {_wikilink(page_path)}",
+        "",
+        "## Özet",
+        "",
+        summary,
+    ]
+    if sources:
+        parts += ["", "## Çıktılar", ""] + [f"- {_wikilink(s)}" for s in sources if _wikilink(s)]
+    path.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+
+    try:
+        append_office_log(office, title, str(meta.get("agent") or "bilinmiyor"), vault_path=vault_path)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Ofis günlüğü yazılamadı (%s): %s", office, exc)
     return path
 
 

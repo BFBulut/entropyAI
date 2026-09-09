@@ -229,6 +229,25 @@ class ChatModeWindow(QMainWindow):
         title = QLabel("<b style='color:#00F0FF;'>💬 Entropy AI Chat</b>")
         h_layout.addWidget(title)
 
+        # Agent Desk düğmesi: başlığın hemen sağında (Zen ile parite).
+        self.desk_btn = QPushButton("🏢 Agent Desk")
+        self.desk_btn.setFixedHeight(24)
+        self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
+        self.desk_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #141C2C;
+                color: #C084FC;
+                border: 1px solid #3B2A57;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover { border-color: #C084FC; background-color: #1A2438; }
+        """)
+        self.desk_btn.clicked.connect(self.open_agent_desk)
+        h_layout.addWidget(self.desk_btn)
+
         h_layout.addStretch()
 
         # Project Selector Button
@@ -708,6 +727,51 @@ class ChatModeWindow(QMainWindow):
         else:
             self._open_reports_window()
 
+    def _handle_desk_command(self, prompt: str) -> str:
+        """
+        `/desk` ve `/desk task …` komutunu işler ve çıktıyı okunur kart olarak basar.
+
+        Komutun mantığı (ofise kart açma) agy ajanının `slash_commands`
+        işleyicisinde; burada yalnızca sunum var. İşleyici henüz yoksa panel
+        kullanım özetini gösterir — komut sessizce AGY'ye gitmesin diye.
+        """
+        from entropy.ui.widgets.markdown_renderer import build_command_card_html
+
+        body = None
+        try:
+            from entropy.core.slash_commands import try_handle_local_command
+
+            body = try_handle_local_command(prompt, self.bridge)
+        except Exception as exc:
+            body = f"<b style='color:#FF6B6B;'>/desk hatası:</b> {html.escape(str(exc))}"
+
+        opened = False
+        if prompt.strip() == "/desk":
+            opened = self.open_agent_desk() is not None
+
+        if body is None:
+            body = (
+                "<b style='color:#C084FC;'>🏢 Agent Desk</b><br/>"
+                + ("Ofis penceresi açıldı.<br/>" if opened else "")
+                + "<span style='color:#8B949E;'>Kullanım: "
+                "<code>/desk</code> pencereyi açar · "
+                "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> "
+                "ofise kart verir.</span>"
+            )
+        card = build_command_card_html(body)
+        self.chat_browser.append(card)
+        return card
+
+    def open_agent_desk(self):
+        """Agent Desk penceresini açar (tek örnek; açıksa öne getirir)."""
+        try:
+            from entropy.desk.window import open_desk_window
+
+            return open_desk_window(parent=None, bridge=self.bridge)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Agent Desk] Pencere açılamadı: {exc}\n")
+            return None
+
     def _select_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Proje Klasörü Seç", str(self.bridge.active_project_dir))
         if folder:
@@ -978,6 +1042,13 @@ class ChatModeWindow(QMainWindow):
         # Check slash command handling (supports multiple slash commands in prompt)
         matched_cmds = []
         slash_tokens = re.findall(r'(?:^|\s)/([a-zA-Z0-9_\-:]+)', prompt)
+
+        if slash_tokens and prompt.strip().startswith("/desk"):
+            # /desk yerel bir komut: AGY'ye gitmez. Çıktısı okunur kart olarak
+            # basılır; argümansız "/desk" ayrıca ofis penceresini açar.
+            self._handle_desk_command(prompt.strip())
+            self.input_field.clear()
+            return
 
         if slash_tokens:
             # Uygulama içinde yürütülen komutlar (AGY'ye gitmez); zen_mode ile aynı işleyici.

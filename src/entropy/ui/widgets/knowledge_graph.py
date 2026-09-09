@@ -513,6 +513,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="legend-item" onclick="toggleCategory('mcp', this)"><span class="dot" style="background:#F778BA;"></span> MCP</div>
         <div class="legend-item" onclick="toggleCategory('cognitive', this)"><span class="dot" style="background:#7EE787;"></span> Bilişsel Bellek</div>
         <div class="legend-item" onclick="toggleCategory('Reports', this)"><span class="dot" style="background:#FF0055;"></span> Araştırma Raporları</div>
+        <div class="legend-item" onclick="toggleCategory('office', this)"><span class="dot" style="background:#FFB000;"></span> 🏢 Ofisler</div>
+        <div class="legend-item" onclick="toggleCategory('agent', this)"><span class="dot" style="background:#2DD4BF;"></span> 🤖 Ajanlar</div>
+        <div class="legend-item" onclick="toggleCategory('query', this)"><span class="dot" style="background:#C792EA;"></span> 🔎 Sorgular & Ofis Raporları</div>
     </div>
     <div id="controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
@@ -588,7 +591,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'procedural': true,
             'Reports': true,
             'obsidian': true,
-            'DailyNotes': true
+            'DailyNotes': true,
+            'office': true,
+            'agent': true,
+            'query': true
         };
 
         // Rapor kümesi açma/kapama düğümü YOKTUR. Tüm yapraklar her zaman
@@ -646,6 +652,14 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (currentScope === 'all_mcp') {
                 if (n.id === 'hub-mcp') return true;
                 if (n.cluster_group === 'mcp' || n.group === 'mcp' || n.group === 'mcp-tool' || (n.parent_hub && n.parent_hub.startsWith('subhub-mcp-'))) return true;
+                return false;
+            }
+
+            if (currentScope === 'all_offices') {
+                if (n.id === 'hub-offices') return true;
+                if (n.cluster_group === 'offices' || n.group === 'office' || n.group === 'agent') return true;
+                // Ofise bagli sorgu sayfalari (ofis raporlari) da odakta kalir.
+                if (n.group === 'query' && n.parent_hub && n.parent_hub.startsWith('office/')) return true;
                 return false;
             }
 
@@ -727,8 +741,24 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'procedural': '#58A6FF',
             'Reports': '#FF0055',
             'DailyNotes': '#E3B341',
-            'obsidian': '#BC8CFF'
+            'obsidian': '#BC8CFF',
+            'office': '#FFB000',
+            'agent': '#2DD4BF',
+            'query': '#C792EA'
         };
+
+        // Grup ikonlari: efsanedeki dizgeyle ayni. Ikon yalnizca ofis/ajan/sorgu
+        // gibi yapisal dugumlerde cizilir; yuzlerce rapor yapraginda emoji
+        // cizmek kare suresini gereksiz yere buyutur.
+        const groupIcons = {
+            'office': '🏢',
+            'agent': '🤖',
+            'query': '🔎'
+        };
+
+        function getNodeIcon(group) {
+            return groupIcons[group] || '';
+        }
 
         function getNodeColor(group) {
             return colors[group] || '#79C0FF';
@@ -1337,7 +1367,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const semanticLinks = [];
             const similarityLinks = [];   // Yakınlık (k-NN) kenarları: her zaman soluk çizilir
             // Gövde = çekirdekten çıkan ya da bir dal/küme düğümüne giden kenar.
-            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1 };
+            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1, 'office': 1, 'agent': 1 };
 
             links.forEach(l => {
                 if (l.is_catalog_link) return; // Completely hide catalog index spiderwebs!
@@ -1522,11 +1552,23 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Core White Dot
-                ctx.fillStyle = '#FFFFFF';
-                ctx.beginPath();
-                ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
-                ctx.fill();
+                // Cekirdek: ikonu olan gruplarda (ofis/ajan/sorgu) beyaz nokta
+                // yerine ikon cizilir; boylece dugum turu renkten bagimsiz da
+                // okunur ve efsanedeki ikonla birebir eslesir.
+                const icon = getNodeIcon(n.group);
+                if (icon) {
+                    ctx.save();
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = `${Math.max(r * 1.1, 8)}px "Segoe UI Emoji", "Segoe UI Symbol", sans-serif`;
+                    ctx.fillText(icon, n.x, n.y);
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.beginPath();
+                    ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                }
 
                 // Pill Label: Level of Detail (LOD) - Hubs & Subbranches visible by default, leaves visible when hovered or zoomed
                 const lvl = (n.group === 'ego') ? 0
@@ -1937,6 +1979,8 @@ class KnowledgeGraphWidget(QFrame):
             ("hub-skills", "🎯 Uzmanlık Yetenekleri", "skills", -45.0 * math.pi / 180.0, 400.0),
             ("hub-mcp", "🔌 MCP Sunucuları & Araçları", "mcp", 45.0 * math.pi / 180.0, 400.0),
             ("hub-cognitive", "🧠 Bilişsel Bellek & Episodik Anılar", "cognitive", 135.0 * math.pi / 180.0, 400.0),
+            # Ofisler batıda: dört mevcut hub çeyreklerde duruyor, 180° boştu.
+            ("hub-offices", "🏢 Ofisler & Ajanlar", "offices", 180.0 * math.pi / 180.0, 400.0),
         ]
         for hub_id, hub_name, c_grp, angle, r_cat in cat_hubs:
             node_ids.add(hub_id)
@@ -2291,7 +2335,26 @@ class KnowledgeGraphWidget(QFrame):
         # 5. Obsidian Vault Notes & Research Reports with Deterministic Virtual Taxonomy & Dendritic Sub-Branches
         obsidian_data = self.vault_manager.build_knowledge_graph()
 
-        for o_node in obsidian_data["nodes"]:
+        # Kasa grafiğinden gelen aidiyet bağları (dosya yolundan türetilmiş,
+        # metinden değil): sorgu sayfası -> yetenek/ofis, ofis -> ajan.
+        owner_of: Dict[str, str] = {}
+        office_of_agent: Dict[str, str] = {}
+        for o_link in obsidian_data["links"]:
+            alias = (o_link.get("alias") or "").strip()
+            if alias in ("skill", "office"):
+                owner_of.setdefault(o_link["source"], o_link["target"])
+            elif alias in ("orkestrator", "degerlendirici", "uye"):
+                office_of_agent.setdefault(o_link["target"], o_link["source"])
+
+        # Ofis/ajan/yetenek düğümleri yapraklardan ÖNCE eklenmeli: yaprak
+        # yerleşimi ebeveynin konumundan hesaplanıyor, ebeveyn henüz yoksa
+        # yaprak yanlış dala düşerdi. Sıralama kararlı: geri kalan düzen aynı.
+        _ORDER = {"office": 0, "agent": 0, "skill": 0}
+        obsidian_nodes = sorted(
+            obsidian_data["nodes"], key=lambda n: _ORDER.get(n.get("group", ""), 1)
+        )
+
+        for o_node in obsidian_nodes:
             o_id = o_node["id"]
             if o_id in node_ids:
                 continue
@@ -2304,7 +2367,54 @@ class KnowledgeGraphWidget(QFrame):
             is_daily = (grp == "DailyNotes") or ("DailyNotes" in o_path)
             is_memory = (o_name == "MEMORY")
 
-            if is_report:
+            if grp in ("office", "agent", "query", "skill"):
+                # Faz 3: ofis düğümleri, ofis ajanları ve sorgu/ofis raporu
+                # yaprakları. Renk ve ikon şablondaki `colors`/`groupIcons`
+                # eşlemesinden gelir; burada yalnızca ağaçtaki yerleri kurulur.
+                if grp == "office":
+                    parent_hub = "hub-offices"
+                    cluster_id = f"office:{normalize_slug(o_name)}"
+                    cluster_grp = "offices"
+                    node_val = 15
+                elif grp == "agent":
+                    parent_hub = office_of_agent.get(o_id, "hub-offices")
+                    if not any(n["id"] == parent_hub for n in nodes):
+                        parent_hub = "hub-offices"
+                    cluster_id = "offices:agents"
+                    cluster_grp = "offices"
+                    node_val = 12
+                elif grp == "skill":
+                    slug = normalize_slug(o_name)
+                    subhub = f"subhub-skill-{slug}"
+                    parent_hub = subhub if any(n["id"] == subhub for n in nodes) else "hub-skills"
+                    cluster_id = f"skill:{slug}"
+                    cluster_grp = "skills"
+                    node_val = 13
+                else:  # query (wiki sorgusu ya da ofis raporu özeti)
+                    owner = owner_of.get(o_id, "")
+                    if owner.startswith("office/"):
+                        parent_hub = owner if any(n["id"] == owner for n in nodes) else "hub-offices"
+                        cluster_id = f"office:{normalize_slug(owner.split('/', 1)[1])}"
+                        cluster_grp = "offices"
+                    elif owner.startswith("skill/"):
+                        slug = normalize_slug(owner.split("/", 1)[1])
+                        subhub = f"subhub-skill-{slug}"
+                        if any(n["id"] == subhub for n in nodes):
+                            parent_hub = subhub
+                        elif any(n["id"] == owner for n in nodes):
+                            parent_hub = owner
+                        else:
+                            parent_hub = "hub-skills"
+                        cluster_id = f"skill:{slug}"
+                        cluster_grp = "skills"
+                    else:
+                        parent_hub = "hub-skills"
+                        cluster_id = "skill:genel"
+                        cluster_grp = "skills"
+                    node_val = 12
+                effective_parent = parent_hub
+                node_group = grp
+            elif is_report:
                 parent_hub, cluster_id, cluster_grp = classify_report_to_hub(
                     title=o_name,
                     path_str=o_path,
@@ -2427,7 +2537,7 @@ class KnowledgeGraphWidget(QFrame):
 
         # Post-flight zero-overlap anti-collision relaxation pass
         FIXED_IDS = {
-            "ego-entropy-core", "hub-projects", "hub-skills", "hub-mcp", "hub-cognitive",
+            "ego-entropy-core", "hub-projects", "hub-skills", "hub-mcp", "hub-cognitive", "hub-offices",
             "subhub-skill-autonomous-agent", "subhub-skill-financial-auditor"
         }
         # Kaba kuvvet O(N²) tarama 1000 düğümde tur başına ~500 bin çift ediyor ve
@@ -2528,6 +2638,7 @@ class KnowledgeGraphWidget(QFrame):
             self.scope_combo.addItem(f"🎯 Yetenek: {display_name}", f"skill:{s_slug}")
 
         # All MCP & All Cognitive
+        self.scope_combo.addItem("🏢 Ofisler (Ofisler, Ajanlar, Ofis Raporları)", "all_offices")
         self.scope_combo.addItem("🔌 MCP Sunucuları & Araçları", "all_mcp")
         self.scope_combo.addItem("🧠 Bilişsel Bellek & Anılar", "all_cognitive")
 

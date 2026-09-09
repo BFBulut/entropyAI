@@ -32,6 +32,42 @@ from entropy.agents.registry import AgentSpec, render_frontmatter
 _AGY_MODEL_HINTS = (("flash", "flash"), ("pro", "pro"), ("gpt", "gpt"))
 _CLAUDE_MODEL_HINTS = (("opus", "opus"), ("sonnet", "sonnet"), ("haiku", "haiku"))
 
+# Yabancı model adının işareti: bir sağlayıcının derlemesine diğerinin model adı
+# sızarsa CLI 404 veriyor (Claude Code, `gemini-3.8-flash-high` için). Kaynak
+# tanımında tek bir `model` alanı olduğu için bu sızıntı sessizce oluyordu.
+_GEMINI_MARKERS = ("gemini", "flash", "pro", "gpt")
+_CLAUDE_MARKERS = ("claude", "opus", "sonnet", "haiku")
+
+# Yabancı ad görülünce kullanılacak karşılıklar.
+CLAUDE_FALLBACK_MODEL = "inherit"          # Claude derlemesi: oturumun modelini miras al
+AGY_FALLBACK_MODEL = "gemini-3.8-flash-high"  # agy derlemesi: güvenli varsayılan
+
+
+def resolve_model(spec: AgentSpec, provider: str) -> str:
+    """
+    Bir ajanın verilen sağlayıcıda kullanacağı ham model adı.
+
+    Sıra: (1) `models.<sağlayıcı>` açık geçersiz kılma, (2) `model` alanı o
+    sağlayıcıya aitse doğrudan, (3) yabancı adsa sağlayıcının karşılığı.
+    """
+    provider = (provider or "").strip().lower()
+    explicit = spec.model_for(provider)
+    if explicit:
+        return explicit
+    model = (spec.model or "").strip()
+    low = model.lower()
+    if provider == "claude":
+        if any(m in low for m in _CLAUDE_MARKERS):
+            return model
+        if any(m in low for m in _GEMINI_MARKERS):
+            return CLAUDE_FALLBACK_MODEL
+        return model
+    if provider == "agy":
+        if any(m in low for m in _CLAUDE_MARKERS):
+            return AGY_FALLBACK_MODEL
+        return model
+    return model
+
 # tools_policy -> Claude `tools` listesi. Politika adı sağlayıcıdan bağımsız
 # tutulur ki kasa dosyası tek biçim konuşsun; eşleme burada yapılır.
 _TOOLS_BY_POLICY = {
@@ -71,7 +107,7 @@ def render_agy_agent(spec: AgentSpec) -> str:
         "mainAgent": True,
         "inheritCustomizations": False,
     }
-    model = _short_model(spec.model, _AGY_MODEL_HINTS)
+    model = _short_model(resolve_model(spec, "agy"), _AGY_MODEL_HINTS)
     if model:
         front["model"] = model
     rules = _rules_lines(spec)
@@ -89,7 +125,7 @@ def render_claude_agent(spec: AgentSpec) -> str:
         "name": spec.name,
         "description": " ".join((spec.description or spec.role or spec.name).split()),
     }
-    model = _short_model(spec.model, _CLAUDE_MODEL_HINTS)
+    model = _short_model(resolve_model(spec, "claude"), _CLAUDE_MODEL_HINTS)
     if model:
         front["model"] = model
     if spec.effort:

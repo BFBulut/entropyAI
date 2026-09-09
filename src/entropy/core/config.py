@@ -132,10 +132,20 @@ class EntropyConfig(BaseModel):
     default_project_path: Path = Field(default_factory=lambda: APP_ROOT)
     default_mode: str = "floating"  # "floating", "zen", "chat"
     autostart_enabled: bool = True
+    # Açılışta yarım kalmış ofis zincirlerini kaldığı yerden sürdür. Varsayılan
+    # açık; kapatma imkânı var çünkü sürdürme model çağrısı demektir ve kotasını
+    # kontrol etmek isteyen kullanıcı uygulamayı sessiz açabilmeli.
+    desk_auto_resume: bool = True
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
     last_conversation_id: Optional[str] = None
+    # Agent Desk penceresinin son konumu/boyutu ve bulunduğu ekran.
+    # Anahtarlar: x, y, width, height, screen (ekran adı), maximized (bool).
+    # Bağımsız bir üst pencere olduğu için ana pencereden ayrı hatırlanır;
+    # kullanıcı onu ikinci monitörde bırakmışsa orada açılsın diye ekran adı da
+    # saklanır (ekran bağlı değilse birincil ekrana düşülür, bkz. desk/window.py).
+    desk_geometry: dict = Field(default_factory=dict)
     last_cumulative_usage: dict = Field(
         default_factory=lambda: {
             "input_tokens": 0,
@@ -173,6 +183,8 @@ class EntropyConfig(BaseModel):
                 "provider": self.provider,
                 "provider_models": self.provider_models,
                 "allow_claude_api": self.allow_claude_api,
+                "desk_geometry": self.desk_geometry,
+                "desk_auto_resume": self.desk_auto_resume,
             }
             # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
             # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
@@ -210,6 +222,10 @@ class EntropyConfig(BaseModel):
                     self.provider_models = merged
                 if isinstance(data.get("allow_claude_api"), bool):
                     self.allow_claude_api = data["allow_claude_api"]
+                if isinstance(data.get("desk_geometry"), dict):
+                    self.desk_geometry = data["desk_geometry"]
+                if isinstance(data.get("desk_auto_resume"), bool):
+                    self.desk_auto_resume = data["desk_auto_resume"]
         except Exception as e:
             print(f"[Entropy Config] Ayarlar okunamadı ({SETTINGS_FILE}): {e}", file=sys.stderr)
 
