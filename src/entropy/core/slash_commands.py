@@ -235,6 +235,22 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         color="#00F0FF",
         usage="/desk  |  /desk task <ofis> <başlık> :: <hedef>  |  /desk stop <kart>",
     ),
+    SlashCommand(
+        name="/wiki",
+        description="Playbook'tan kavram ve varlık wiki sayfalarını üretir (model çağırmaz).",
+        category="builtin",
+        badge="📗 WİKİ",
+        color="#00FF9D",
+        usage="/wiki <yetenek>",
+    ),
+    SlashCommand(
+        name="/lint",
+        description="Wiki sağlık denetimi: öksüz/bayat sayfa, kırık bağ, çelişki adayı.",
+        category="builtin",
+        badge="🩺 DENETİM",
+        color="#FFB300",
+        usage="/lint [<yetenek>|all]",
+    ),
 ]
 
 # Kartın durumu için arayüzde ve komut çıktısında kullanılan simge/renk.
@@ -669,6 +685,66 @@ def _handle_desk(args: str) -> str:
     )
 
 
+def _handle_wiki(args: str) -> str:
+    """
+    `/wiki <yetenek>`: playbook'tan kavram/varlık sayfalarını elle üretir.
+
+    Model çağırmaz (bkz. memory/wiki.ingest_playbook_to_wiki), bu yüzden kota
+    harcamaz; damıtma bittiğinde aynı işlev zaten otomatik çalışır.
+    """
+    from entropy.memory.wiki import ingest_playbook_to_wiki
+
+    name = (args or "").split()[0] if (args or "").strip() else ""
+    if not name:
+        return "<b>📗 Wiki</b><br/>Kullanım: <code>/wiki &lt;yetenek&gt;</code>"
+    try:
+        res = ingest_playbook_to_wiki(name)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Wiki üretilemedi: {_html_escape(str(e))}</span>"
+    if not res.get("written"):
+        reason = res.get("reason") or "üretilecek bölüm yok"
+        return (f"<b>📗 Wiki</b><br/>'{_html_escape(name)}' için sayfa üretilmedi: "
+                f"{_html_escape(str(reason))}.")
+    concepts = res.get("concepts") or []
+    entities = res.get("entities") or []
+    return (
+        f"<b>📗 Wiki Güncellendi — {_html_escape(name)}</b><br/>"
+        f"{len(concepts)} kavram, {len(entities)} varlık sayfası "
+        f"(toplam {res['written']}).<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Kavramlar: "
+        f"{_html_escape(', '.join(concepts[:6])) or '-'}<br/>Varlıklar: "
+        f"{_html_escape(', '.join(entities[:6])) or '-'}<br/>"
+        f"İndeks: <code>{_html_escape(str(res.get('index') or '-'))}</code></span>"
+    )
+
+
+def _handle_lint(args: str) -> str:
+    """`/lint [<yetenek>|all]`: wiki sağlık denetimi; sonucu lint.md'ye de yazar."""
+    from entropy.memory.lint import lint_skill, lint_vault, render_lint_html, write_lint_report
+
+    target = (args or "").strip()
+    try:
+        if not target or target.lower() == "all":
+            results = lint_vault()
+        else:
+            results = [lint_skill(target.split()[0])]
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Denetim yapılamadı: {_html_escape(str(e))}</span>"
+    if not results:
+        return "<b>🩺 Wiki Denetimi</b><br/>Kasada denetlenecek yetenek yok."
+    written = 0
+    for res in results:
+        try:
+            write_lint_report(res)
+            written += 1
+        except Exception as e:  # pragma: no cover - rapor yazımı sonucu düşürmemeli
+            logger.warning("lint.md yazılamadı (%s): %s", res.skill, e)
+    return render_lint_html(results) + (
+        f"<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
+        f"{written} yetenek için <code>wiki/lint.md</code> güncellendi.</div>"
+    )
+
+
 def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[str]:
     """
     AGY'ye gitmeden uygulama içinde yürütülen komutları işler.
@@ -685,6 +761,8 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         /distill index           kasadaki raporları yeteneklere yeniden eşler
         /distill stop [<yetenek>|all]  zincirlenen damıtmayı durdurur
         /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
+        /wiki <yetenek>          playbook'tan kavram/varlık sayfaları üretir (model yok)
+        /lint [<yetenek>|all]    wiki sağlık denetimi; wiki/lint.md yazar
 
     `distiller` testler için enjekte edilebilir; verilmezse gerçek depo kullanılır.
     """
@@ -719,6 +797,12 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_offices(args)
     if head_low == "/desk":
         return _handle_desk(args)
+
+    # Wiki katmanı: ikisi de model çağırmaz, bu yüzden yerel komuttur.
+    if head_low == "/wiki":
+        return _handle_wiki(args)
+    if head_low == "/lint":
+        return _handle_lint(args)
 
     if head_low != "/distill":
         return None

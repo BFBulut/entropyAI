@@ -21,6 +21,8 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
+from entropy.ui.widgets.report_inbox import ReportInboxStrip
+from entropy.ui.widgets.ui_polish import apply_list_polish
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -203,6 +205,14 @@ class ReportsViewerWidget(QFrame):
 
         self.layout.addLayout(header)
 
+        # Rapor Merkezi "Gelen" seridi (Faz 4): son 24 saatte uretilen raporlar,
+        # /query sayfalari ve ofis raporlari okunmadi sayaciyla ustte durur.
+        # Tiklaninca okuyucuda acilir ve okundu isaretlenir.
+        self.inbox_strip = ReportInboxStrip(parent=self)
+        self.inbox_strip.report_opened.connect(self.open_report_by_path_or_id)
+        self.inbox_strip.unread_changed.connect(self._on_inbox_unread_changed)
+        self.layout.addWidget(self.inbox_strip)
+
         # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -293,6 +303,9 @@ class ReportsViewerWidget(QFrame):
                 font-weight: bold;
             }}
         """)
+        # Uzun rapor basliklari yatay kaydirma cubugu dogurmasin; sagdan
+        # kirpilir, tam metin girdinin ipucunda kalir (bkz. _rebuild_list).
+        apply_list_polish(self.list_widget)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         left_layout.addWidget(self.list_widget)
 
@@ -583,6 +596,19 @@ class ReportsViewerWidget(QFrame):
         self.refresh_reports()
 
     @Slot(str, str, str)
+    @Slot(int)
+    def _on_inbox_unread_changed(self, count: int):
+        """
+        Gelen seridi sayaci degisti: rozeti gosteren pencerelere duyur.
+
+        Alici QObject slotu (lambda degil); rapor izleyici isci is parcacigindan
+        yenileme tetiklerse bile sinyal ana is parcacigina kuyruklanir.
+        """
+        try:
+            bus.report_inbox_unread.emit(int(count))
+        except (AttributeError, RuntimeError):
+            pass
+
     def _on_task_notification(self, _tid: str, _tname: str, _p: str):
         self.refresh_reports()
 
@@ -1024,6 +1050,11 @@ class ReportsViewerWidget(QFrame):
                     entries.append(entry)
 
         self._entries = entries
+        # Gelen seridi ayni kunye listesinden beslenir: ikinci bir tarama yok.
+        try:
+            self.inbox_strip.set_entries(entries)
+        except (AttributeError, RuntimeError):
+            pass
 
         # Filtre açılır listesini keşfedilen gruplara göre tazele
         prev_filter = self.filter_combo.currentData()

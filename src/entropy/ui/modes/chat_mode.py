@@ -22,7 +22,11 @@ from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.skills.manager import SkillManager
-from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
+from entropy.ui.widgets.report_inbox import (
+    InboxBadge, ReportInboxStrip, collect_recent_entries,
+)
+from entropy.ui.widgets.ui_polish import apply_model_placeholder
 from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html, render_markdown_to_html
 from entropy.core.slash_commands import SlashCommandRegistry, invalidate_command_cache
 from entropy.mcp.manager import default_mcp_manager
@@ -230,7 +234,7 @@ class ChatModeWindow(QMainWindow):
         h_layout.addWidget(title)
 
         # Agent Desk düğmesi: başlığın hemen sağında (Zen ile parite).
-        self.desk_btn = QPushButton("🏢 Agent Desk")
+        self.desk_btn = QPushButton("🏢 Entropy Agent Desk")
         self.desk_btn.setFixedHeight(24)
         self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
         self.desk_btn.setStyleSheet("""
@@ -291,6 +295,9 @@ class ChatModeWindow(QMainWindow):
         for m in models:
             self.model_combo.addItem(m)
         self.model_combo.setCurrentText(self.bridge.selected_model)
+        # Boş model kutusu "Model:" etiketinin yanında kopuk bir ayraç gibi
+        # duruyordu; boşken ne anlama geldiğini yazan yer tutucu konur.
+        apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
 
@@ -375,6 +382,11 @@ class ChatModeWindow(QMainWindow):
         self.panel_btn.clicked.connect(self.toggle_side_panel)
         h_layout.addWidget(self.panel_btn)
 
+        # Rapor Merkezi rozeti — Zen üst çubuğundakiyle aynı bileşen (parite).
+        self.inbox_badge = InboxBadge()
+        h_layout.addWidget(self.inbox_badge)
+        bus.report_inbox_unread.connect(self._on_inbox_unread)
+
         btn_zen = QPushButton("Zen Mode")
         btn_zen.setFixedHeight(24)
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
@@ -456,6 +468,11 @@ class ChatModeWindow(QMainWindow):
                 font-size: {RT['font_size_body']};
             }}
         """)
+        # Faz 4 (2d/2f): sohbet gövdesi rapor okuyucu ve Agent Desk akış
+        # paneliyle aynı tipografiyi kullanır. Belge stil sayfası verilmezse
+        # komut kartı içindeki çıplak <table> (ör. /lint, /wiki çıktıları) Qt
+        # varsayılanıyla, kalın beyaz kenarlıklarla çizilirdi.
+        self.chat_browser.document().setDefaultStyleSheet(reading_css())
         self.layout.addWidget(self.chat_browser)
         self._load_chat_history()
 
@@ -594,8 +611,45 @@ class ChatModeWindow(QMainWindow):
             self.side_panel.addTab(self.skills_widget, "🎯 Yetenekler")
             self.side_panel.addTab(self.agents_widget, "🤖 Ajanlar")
             self.side_panel.addTab(self.agent_tasks_widget, "🗂 Ajan Görevleri")
+
+            # Kompakt "Gelen" listesi: Zen'deki şeridin aynısı, Chat panelinde.
+            # Chat'te rapor okuyucu yok; girdiler kasadan doğrudan toplanır ve
+            # bir rapora tıklanınca ayrı rapor penceresinde açılır.
+            self.inbox_strip = ReportInboxStrip(parent=self)
+            self.inbox_strip.set_entries(collect_recent_entries())
+            self.inbox_strip.report_opened.connect(self._open_inbox_report)
+            self.inbox_strip.unread_changed.connect(self._on_inbox_unread_changed)
+            self.side_panel.addTab(self.inbox_strip, "📥 Gelen")
             self.side_panel_layout.addWidget(self.side_panel)
         return self.side_panel
+
+    @Slot(int)
+    def _on_inbox_unread(self, count: int):
+        """Rapor Merkezi rozetini günceller (QObject slotu, lambda değil)."""
+        if hasattr(self, "inbox_badge"):
+            self.inbox_badge.set_count(count)
+
+    @Slot(int)
+    def _on_inbox_unread_changed(self, count: int):
+        """Kompakt şeritteki değişimi diğer pencerelere duyurur."""
+        try:
+            bus.report_inbox_unread.emit(int(count))
+        except (AttributeError, RuntimeError):
+            pass
+
+    @Slot(str)
+    def _open_inbox_report(self, path: str):
+        """Gelen şeridinden seçilen raporu ayrı rapor penceresinde açar."""
+        if not path:
+            return
+        try:
+            from entropy.ui.widgets.standalone_report_window import (
+                open_standalone_report_window,
+            )
+
+            self._inbox_report_window = open_standalone_report_window(str(path), parent=self)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Rapor Merkezi] Rapor açılamadı: {exc}\n")
 
     def toggle_side_panel(self):
         """Paneli açar/kapatır; ilk açılışta sekmeleri kurar.
@@ -986,6 +1040,7 @@ class ChatModeWindow(QMainWindow):
             for m in self.bridge.fetch_available_models():
                 self.model_combo.addItem(m)
             self.model_combo.setCurrentText(self.bridge.selected_model)
+            apply_model_placeholder(self.model_combo)
         finally:
             self.model_combo.blockSignals(False)
 

@@ -22,6 +22,9 @@ from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import (
     DIALOG_STYLE, build_dataclass, call_contract, spec_field,
 )
+from entropy.ui.widgets.ui_polish import (
+    BODY_PX, apply_list_polish, apply_no_hscroll, icon_button_style, set_item_text,
+)
 
 PROVIDERS = ("agy", "claude")
 
@@ -113,7 +116,8 @@ class OfficeEditDialog(QDialog):
 
         self.members_list = QListWidget()
         self.members_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-        self.members_list.setMaximumHeight(120)
+        self.members_list.setMaximumHeight(140)
+        apply_list_polish(self.members_list)
         for name in every:
             self.members_list.addItem(QListWidgetItem(name))
         form.addRow("Üyeler", self.members_list)
@@ -257,7 +261,8 @@ class OfficesPanel(QFrame):
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
         self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:12px; background:transparent; border:none;"
+            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:6px 2px;"
+            " background:transparent; border:none;"
         )
         layout.addWidget(self.empty_label)
 
@@ -269,27 +274,35 @@ class OfficesPanel(QFrame):
                 border:1px solid {RT['divider_soft']};
                 border-radius:{RT['radius']};
                 color:{RT['text']};
-                font-size:12px;
+                font-size:{BODY_PX}px;
             }}
-            QListWidget::item {{ padding:7px 8px; }}
+            QListWidget::item {{ padding:8px 10px; }}
             QListWidget::item:selected {{
                 background-color:{RT['accent_soft']}; color:{RT['accent']};
             }}
             """
         )
+        # Uzun ofis amacı yatay kaydırma çubuğu doğurmasın; sağdan kırpılır.
+        apply_list_polish(self.list_widget)
         self.list_widget.currentItemChanged.connect(self._on_current_changed)
         layout.addWidget(self.list_widget, 1)
 
+        # İkon + kısa metin düğmeler; her birinin ipucu var (ikon tek başına
+        # ne yaptığını anlatmıyor, metin tek başına dar sütuna sığmıyor).
         actions = QHBoxLayout()
-        self.edit_btn = QPushButton("Düzenle")
-        self.edit_btn.clicked.connect(self.edit_current)
-        actions.addWidget(self.edit_btn)
-        self.delete_btn = QPushButton("Sil")
-        self.delete_btn.clicked.connect(self.delete_current)
-        actions.addWidget(self.delete_btn)
-        self.refresh_btn = QPushButton("Yenile")
-        self.refresh_btn.clicked.connect(self.refresh_offices)
-        actions.addWidget(self.refresh_btn)
+        actions.setSpacing(6)
+        for attr, label, tip, handler in (
+            ("edit_btn", "✏️ Düzenle", "Seçili ofisi düzenle", self.edit_current),
+            ("delete_btn", "🗑 Sil", "Seçili ofisi sil (ajan tanımları silinmez)", self.delete_current),
+            ("refresh_btn", "🔄 Yenile", "Ofis listesini yeniden oku", self.refresh_offices),
+        ):
+            btn = QPushButton(label)
+            btn.setToolTip(tip)
+            btn.setFixedHeight(28)
+            btn.setStyleSheet(icon_button_style())
+            btn.clicked.connect(handler)
+            setattr(self, attr, btn)
+            actions.addWidget(btn)
         layout.addLayout(actions)
 
         signal = getattr(bus, "offices_updated", None)
@@ -331,9 +344,16 @@ class OfficesPanel(QFrame):
         for office in offices:
             name = str(spec_field(office, "name", ""))
             purpose = str(spec_field(office, "purpose", ""))
-            item = QListWidgetItem(f"{name}\n{purpose[:60]}" if purpose else name)
+            # Görünen metin tek satır: kırpmayı Qt'ye (ElideRight) bırakırız,
+            # sabit karakter kesmesi (eski purpose[:60]) hem kelime ortasından
+            # bölüyor hem de ipucu vermeden bilgi gizliyordu.
+            item = QListWidgetItem()
+            set_item_text(
+                item,
+                f"{name} · {purpose}" if purpose else name,
+                tooltip=f"{name}\n{purpose}" if purpose else name,
+            )
             item.setData(Qt.ItemDataRole.UserRole, name)
-            item.setToolTip(purpose or name)
             self.list_widget.addItem(item)
         self.list_widget.blockSignals(False)
 

@@ -22,6 +22,10 @@ from PySide6.QtWidgets import (
 
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
+
+# Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
+COLUMN_MIN_WIDTH = 190
 from entropy.ui.widgets.agents_widget import (
     STATUS_COLORS, STATUS_LABELS, call_flex, load_board, spec_field
 )
@@ -109,9 +113,10 @@ class TaskCardWidget(QFrame):
                 f"padding:1px 5px; border-radius:3px;'>BAŞARISIZ</span> {title_text}"
             )
         self.title_label = QLabel(
-            f"<span style='color:{RT['text']}; font-size:12px; font-weight:600;'>{header}</span>"
+            f"<span style='color:{RT['text']}; font-size:{BODY_PX}px; font-weight:600;'>{header}</span>"
         )
         self.title_label.setWordWrap(True)
+        self.title_label.setToolTip(title_text)
         layout.addWidget(self.title_label)
 
         meta_bits = [str(spec_field(card, "agent", "")) or "—"]
@@ -122,10 +127,11 @@ class TaskCardWidget(QFrame):
         duration = format_duration(card)
         if duration:
             meta_bits.append(duration)
+        meta_text = ' · '.join(b for b in meta_bits if b)
         meta_label = QLabel(
-            f"<span style='color:{RT['text_dim']}; font-size:10px;'>"
-            f"{' · '.join(b for b in meta_bits if b)}</span>"
+            f"<span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>{meta_text}</span>"
         )
+        meta_label.setToolTip(meta_text)
         # Dar sütunda tek satır kırpılıyordu; sağlayıcı/model okunur kalsın.
         meta_label.setWordWrap(True)
         layout.addWidget(meta_label)
@@ -134,9 +140,11 @@ class TaskCardWidget(QFrame):
         if summary:
             short = summary if len(summary) <= 110 else summary[:107] + "…"
             summary_label = QLabel(
-                f"<span style='color:{RT['text_body']}; font-size:11px;'>{short}</span>"
+                f"<span style='color:{RT['text_body']}; font-size:{LABEL_PX}px;'>{short}</span>"
             )
             summary_label.setWordWrap(True)
+            # Kısaltılan özetin tamamı ipucunda kalır (bilgi kaybı olmasın).
+            summary_label.setToolTip(summary)
             layout.addWidget(summary_label)
 
     def mousePressEvent(self, event):
@@ -359,6 +367,11 @@ class TaskBoardWidget(QFrame):
             scroll.setWidget(inner)
             col_layout.addWidget(scroll, 1)
             self.column_layouts[key] = inner_layout
+            # Faz 2-3 notu: sütunlar yalnızca esneme katsayısıyla paylaşılınca
+            # dar pencerede kartlar okunamayacak kadar sıkışıyordu. Her sütuna
+            # alt sınır verilir; dört sütun sığmazsa gövde yatay değil, splitter
+            # üzerinden yeniden boyutlanır.
+            column.setMinimumWidth(COLUMN_MIN_WIDTH)
             columns_layout.addWidget(column, 1)
         splitter.addWidget(columns_host)
 
@@ -607,6 +620,9 @@ class CompactTaskListWidget(QFrame):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        # Kompakt listede satırlar zaten sütun genişliğine sığar; yatay çubuk
+        # yalnızca listenin altında gereksiz bir şerit bırakıyordu.
+        apply_no_hscroll(scroll)
         scroll.setWidget(self.list_container)
         layout.addWidget(scroll, 1)
 
@@ -650,18 +666,24 @@ class CompactTaskListWidget(QFrame):
         )
         for card in cards[:12]:
             status = str(spec_field(card, "status", "backlog"))
+            title_text = str(spec_field(card, 'title', ''))
             row = QLabel(
-                f"<span style='color:{STATUS_COLORS.get(status, RT['text_dim'])}; font-size:11px;'>●</span> "
-                f"<span style='color:{RT['text_body']}; font-size:11px;'>"
-                f"{spec_field(card, 'title', '')}</span> "
-                f"<span style='color:{RT['text_dim']}; font-size:10px;'>"
+                f"<span style='color:{STATUS_COLORS.get(status, RT['text_dim'])}; font-size:{LABEL_PX}px;'>●</span> "
+                f"<span style='color:{RT['text_body']}; font-size:{BODY_PX}px;'>"
+                f"{title_text}</span> "
+                f"<span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
                 f"{spec_field(card, 'agent', '')} · {STATUS_LABELS.get(status, status)}</span>"
             )
             row.setStyleSheet("background:transparent; border:none;")
+            row.setToolTip(
+                f"{title_text}\n"
+                f"{spec_field(card, 'agent', '')} · {STATUS_LABELS.get(status, status)}"
+            )
             self.list_layout.addWidget(row)
         if not cards:
             empty = QLabel(
-                f"<span style='color:{RT['text_dim']}; font-size:11px;'>Ajan görevi yok.</span>"
+                f"<span style='color:{RT['text_dim']}; font-size:{BODY_PX}px;'>"
+                "Ajan görevi yok. Bir ajana görev verdiğinizde kartlar burada listelenir.</span>"
             )
             empty.setStyleSheet("background:transparent; border:none;")
             self.list_layout.addWidget(empty)

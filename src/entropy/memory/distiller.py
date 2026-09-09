@@ -478,7 +478,30 @@ class PlaybookDistiller:
             self.store.save_processed(prepared["skill"], dict(entries))
         if pb is not None:
             self.advance_refresh(prepared)
+            self._ingest_wiki(prepared["skill"])
         return pb
+
+    def _ingest_wiki(self, skill_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Damıtma bitince playbook'tan wiki sayfalarını üretir.
+
+        Model çağırmaz (bkz. memory/wiki.ingest_playbook_to_wiki): kota
+        harcamaz, bu yüzden her turun sonunda çalışabilir. Başarısız olursa
+        damıtma sonucu korunur; wiki türetilmiş bir katmandır ve `/wiki`
+        komutuyla elle yeniden üretilebilir.
+        """
+        try:
+            from entropy.memory.wiki import ingest_playbook_to_wiki
+
+            res = ingest_playbook_to_wiki(skill_name, store=self.store)
+            logger.info(
+                "Wiki güncellendi (%s): %d kavram, %d varlık sayfası.",
+                skill_name, len(res.get("concepts") or []), len(res.get("entities") or []),
+            )
+            return res
+        except Exception as exc:
+            logger.warning("Wiki sayfaları üretilemedi (%s): %s", skill_name, exc)
+            return None
 
     # -- köprü ile uçtan uca --------------------------------------------
 

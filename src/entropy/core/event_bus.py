@@ -65,6 +65,12 @@ class EntropyEventBus(QObject):
     reports_updated = Signal(str)        # skill_name veya ""
     distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor
 
+    # Rapor Merkezi "Gelen" şeridi (Faz 4): son 24 saatteki okunmamış rapor
+    # sayısı. Rozeti Zen üst çubuğu ve Chat başlığı ayrı ayrı gösterdiği için
+    # sayaç şeritten doğrudan değil, bu sinyalle dağıtılır; pencerelerden biri
+    # kapalıyken de açılışta doğru değeri okur.
+    report_inbox_unread = Signal(int)    # okunmamış rapor sayısı
+
     # Ajanlar ve görev kartları: kaynak dosyalar kasada (Entropy/Agents,
     # Entropy/Tasks) ve onları Entropy, kullanıcı (Obsidian) ve harici CLI'lar
     # birlikte yazıyor. Panellerin diski yoklamak yerine haber alması için

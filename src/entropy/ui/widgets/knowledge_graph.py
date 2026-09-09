@@ -516,6 +516,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="legend-item" onclick="toggleCategory('office', this)"><span class="dot" style="background:#FFB000;"></span> 🏢 Ofisler</div>
         <div class="legend-item" onclick="toggleCategory('agent', this)"><span class="dot" style="background:#2DD4BF;"></span> 🤖 Ajanlar</div>
         <div class="legend-item" onclick="toggleCategory('query', this)"><span class="dot" style="background:#C792EA;"></span> 🔎 Sorgular & Ofis Raporları</div>
+        <div class="legend-item" onclick="toggleCategory('hub-offices', this)"><span class="dot" style="background:#FFC94D;"></span> 🏢 Ofis Kümesi</div>
+        <div class="legend-item" onclick="toggleCategory('concept', this)"><span class="dot" style="background:#9BE9A8;"></span> 📗 Kavramlar</div>
+        <div class="legend-item" onclick="toggleCategory('entity', this)"><span class="dot" style="background:#8CC8FF;"></span> 🏷 Varlıklar</div>
     </div>
     <div id="controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
@@ -594,7 +597,13 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'DailyNotes': true,
             'office': true,
             'agent': true,
-            'query': true
+            'query': true,
+            // Faz 4: bellek ajani bu gruplari veri tarafinda uretiyor.
+            // 'hub-offices' ofis kumesinin govde dugumu; 'concept' ve 'entity'
+            // bilissel bellekten cikan kavram/varlik yapraklari.
+            'hub-offices': true,
+            'concept': true,
+            'entity': true
         };
 
         // Rapor kümesi açma/kapama düğümü YOKTUR. Tüm yapraklar her zaman
@@ -744,7 +753,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'obsidian': '#BC8CFF',
             'office': '#FFB000',
             'agent': '#2DD4BF',
-            'query': '#C792EA'
+            'query': '#C792EA',
+            'hub-offices': '#FFC94D',
+            'concept': '#9BE9A8',
+            'entity': '#8CC8FF'
         };
 
         // Grup ikonlari: efsanedeki dizgeyle ayni. Ikon yalnizca ofis/ajan/sorgu
@@ -753,7 +765,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         const groupIcons = {
             'office': '🏢',
             'agent': '🤖',
-            'query': '🔎'
+            'query': '🔎',
+            'hub-offices': '🏢',
+            'concept': '📗',
+            'entity': '🏷'
         };
 
         function getNodeIcon(group) {

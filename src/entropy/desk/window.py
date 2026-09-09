@@ -35,8 +35,12 @@ from entropy.desk.scene import OfficeScene
 from entropy.desk.stream_panel import StreamPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 
-WINDOW_TITLE = "Entropy · Agent Desk"
+WINDOW_TITLE = "Entropy Agent Desk"
 DEFAULT_SIZE = (1400, 880)
+
+# Kadro sütununun en küçük okunur genişliği: ajan kartındaki 3x2 ikon
+# düğme ızgarası artı kimlik metni bu genişlik altında kırpılıyordu.
+ROSTER_MIN_WIDTH = 380
 
 TAB_CARDS = 0
 TAB_STREAM = 1
@@ -168,7 +172,11 @@ class AgentDeskWindow(QMainWindow):
             office="",
         )
         self.splitter.addWidget(self.roster_panel)
-        self.splitter.setSizes([260, 820, 320])
+        # Kadro sütunu 320 px'te ofis kipindeki 3x2 ikon ızgarasını kırpıyordu
+        # (üçüncü düğme yarım kalıyordu). Panelin alt sınırı ızgaraya göre
+        # verilir ve başlangıç payı ona göre dağıtılır.
+        self.roster_panel.setMinimumWidth(ROSTER_MIN_WIDTH)
+        self.splitter.setSizes([250, 770, ROSTER_MIN_WIDTH])
         root.addWidget(self.splitter, 1)
 
         signal = getattr(bus, "offices_updated", None)
@@ -199,7 +207,7 @@ class AgentDeskWindow(QMainWindow):
         self.refresh_memory()
         title = self.current_office or "ofis seçilmedi"
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:15px;'>🏢 AGENT DESK</b>"
+            f"<b style='color:{RT['accent']}; font-size:15px;'>🏢 ENTROPY AGENT DESK</b>"
             f" <span style='color:{RT['text_dim']}; font-size:12px;'>· {title}</span>"
         )
         self.setWindowTitle(f"{WINDOW_TITLE} — {title}")

@@ -53,6 +53,42 @@ OFFICE_SUMMARY_MAX_CHARS = 600
 _INDEX_HEADER = "# {title} — Wiki\n\n"
 _LOG_HEADER = "# {title} — Wiki Günlüğü\n\n"
 
+# Karpathy'nin LLM-wiki deseni: ham (raporlar) → üretilmiş sayfalar (wiki) →
+# şema (GEMINI.md). Burada "üretilmiş sayfa" iki türdür:
+#   concept — playbook'un bir bölümünden ("Çalışma Adımları" gibi) türeyen yordam
+#             parçası; sorguya göre bağlama tek başına girebilecek büyüklükte.
+#   entity  — o yordamda ve raporlarda tekrar eden ad (araç, kurum, dosya).
+# İkisi de damıtmaya KAYNAK değildir (wiki/ zaten _NON_REPORT_DIRS içinde):
+# playbook'tan türedikleri için kaynak sayılsalardı damıtma kendi çıktısını
+# yeniden okurdu.
+CONCEPT_CATEGORY = "Kavramlar"
+ENTITY_CATEGORY = "Varlıklar"
+PROCEDURE_CATEGORY = "Yordam"
+SESSION_CATEGORY = "Oturumlar"
+
+# İndeks başlıklarının sabit sırası. Alfabetik sıralama "Kavramlar"ı
+# "Sorgular"dan önce koyar ama "Yordam"ı en sona atardı; okuma sırası
+# genelden özele olmalı.
+INDEX_CATEGORY_ORDER = [
+    PROCEDURE_CATEGORY,
+    CONCEPT_CATEGORY,
+    ENTITY_CATEGORY,
+    DEFAULT_CATEGORY,
+    OFFICE_REPORT_CATEGORY,
+    SESSION_CATEGORY,
+]
+
+# Tek bir kavram/varlık sayfası gövde tavanı (karakter). Bağlam kurucu wiki
+# sayfalarına 400 token (~1600 karakter) ayırır; sayfanın tek başına o dilimi
+# aşması bir işe yaramaz, yalnızca kırpılır.
+WIKI_PAGE_MAX_CHARS = 2400
+# Bir damıtmadan üretilecek azami varlık sayfası. Sezgisel çıkarım gürültülüdür;
+# üst sınır olmadan tek playbook 60+ öksüz sayfa üretiyor.
+MAX_ENTITY_PAGES = 12
+# Çok kelimeli aday için asgari geçiş sayısı. Tek geçen büyük harfli ikili
+# çoğunlukla cümle başıdır, varlık değil.
+MIN_ENTITY_OCCURRENCES = 2
+
 
 # ---------------------------------------------------------------- yardımcılar
 
@@ -96,6 +132,14 @@ def wiki_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
 
 def queries_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
     return wiki_dir(skill, vault_path) / "queries"
+
+
+def concepts_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
+    return wiki_dir(skill, vault_path) / "concepts"
+
+
+def entities_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Path:
+    return wiki_dir(skill, vault_path) / "entities"
 
 
 def offices_dir(vault_path: Optional[Path] = None) -> Path:
@@ -395,7 +439,13 @@ def rebuild_wiki_index(skill: Optional[str], vault_path: Optional[Path] = None) 
         lines += ["## Yordam", "", f"- [[{playbook.stem}]] — damıtılmış çalışma yordamı", ""]
 
     grouped: Dict[str, List[str]] = {}
-    for page in _query_pages(skill, vault_path):
+    pages = list(_query_pages(skill, vault_path))
+    # Üretilmiş sayfalar da indekse girer; kategori frontmatter'daki `category`
+    # alanından gelir, dizin adından değil (dizin bir uygulama detayıdır).
+    for extra in (concepts_dir(skill, vault_path), entities_dir(skill, vault_path)):
+        if extra.is_dir():
+            pages.extend(sorted(extra.glob("*.md"), key=lambda p: p.name))
+    for page in pages:
         try:
             text = page.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -406,7 +456,9 @@ def rebuild_wiki_index(skill: Optional[str], vault_path: Optional[Path] = None) 
         entry = f"- [[{page.stem}]] — {title}" + (f" ({created})" if created else "")
         grouped.setdefault(category, []).append(entry)
 
-    for category in sorted(grouped):
+    ordered = [c for c in INDEX_CATEGORY_ORDER if c in grouped]
+    ordered += [c for c in sorted(grouped) if c not in INDEX_CATEGORY_ORDER]
+    for category in ordered:
         lines += [f"## {category}", ""] + grouped[category] + [""]
 
     if not grouped and not (skill and playbook.is_file()):
@@ -414,3 +466,288 @@ def rebuild_wiki_index(skill: Optional[str], vault_path: Optional[Path] = None) 
 
     index.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return index
+
+
+# ------------------------------------------------- playbook → wiki sayfaları
+
+# Cümle başı büyük harfli sözcükler varlık değildir; en sık görülenleri eleriz.
+_ENTITY_STOPWORDS = {
+    "bu", "su", "şu", "her", "bir", "ve", "ama", "eger", "eğer", "not", "ayrica",
+    "ayrıca", "once", "önce", "sonra", "adim", "adım", "adimlar", "adımlar",
+    "asla", "daima", "tum", "tüm", "hangi", "neden", "nasil", "nasıl", "ornek",
+    "örnek", "ozet", "özet", "sonuc", "sonuç", "karar", "girdi", "cikti", "çıktı",
+    "kaynak", "kaynaklar", "yordam", "kural", "kurallar", "asama", "aşama",
+    "toplam", "yeni", "eski", "varsa", "yoksa", "icin", "için", "the", "and",
+}
+
+# Çok kelimeli özel ad: art arda en az iki büyük harfle başlayan sözcük.
+_ENTITY_MULTIWORD_RE = re.compile(
+    r"\b([A-ZÇĞİÖŞÜ][\wçğıöşüÇĞİÖŞÜ]{1,}(?:\s+[A-ZÇĞİÖŞÜ][\wçğıöşüÇĞİÖŞÜ]{1,}){1,3})\b"
+)
+# Araç/dosya adı: geri tırnak içi (`agy`, `PLAYBOOK.md`).
+_ENTITY_BACKTICK_RE = re.compile(r"`([A-Za-z][\w\-\./]{1,40})`")
+# İç büyük harfli tek sözcük (PySide6, GitHub, SkillPlaybook) — Türkçede cümle
+# başı bu kalıbı üretmez, dolayısıyla tek geçiş bile yeterlidir.
+_ENTITY_CAMEL_RE = re.compile(r"\b([A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]+)+)\b")
+
+
+def split_playbook_sections(procedure: str) -> List[tuple]:
+    """
+    Playbook gövdesini `(başlık, gövde)` çiftlerine böler (## ve ### seviyeleri).
+
+    Başlıksız bir giriş paragrafı yok sayılır: kavram sayfasının adı başlıktan
+    gelir, adsız bir sayfa indeksi kirletir.
+    """
+    out: List[tuple] = []
+    title: Optional[str] = None
+    buf: List[str] = []
+    for line in (procedure or "").splitlines():
+        m = re.match(r"^#{2,3}\s+(.+?)\s*$", line)
+        if m:
+            if title:
+                out.append((title, "\n".join(buf).strip()))
+            title = m.group(1).strip()
+            buf = []
+        elif title:
+            buf.append(line)
+    if title:
+        out.append((title, "\n".join(buf).strip()))
+    return out
+
+
+def extract_entities(
+    texts: List[str],
+    exclude: Optional[List[str]] = None,
+    must_appear_in: Optional[str] = None,
+) -> List[str]:
+    """
+    Metinlerden varlık adaylarını sezgisel olarak çıkarır (LLM YOK).
+
+    Üç kalıp: çok kelimeli özel ad, geri tırnaklı araç/dosya adı, iç büyük
+    harfli tek sözcük. Çok kelimeli adaylar için asgari geçiş sayısı aranır;
+    tek geçen büyük harfli ikili çoğunlukla cümle başıdır. Sonuç sıklığa göre
+    sıralı ve MAX_ENTITY_PAGES ile sınırlıdır.
+
+    `must_appear_in` verilirse aday o metinde de geçmelidir. Çağıran bunu
+    playbook gövdesiyle doldurur: yalnızca rapor BAŞLIĞINDA geçen bir ad hiçbir
+    kavram sayfasından bağ almaz ve doğduğu anda öksüz bir sayfa olur.
+    """
+    blob = "\n".join(t for t in texts if t)
+    if not blob.strip():
+        return []
+    banned = {(e or "").strip().lower() for e in (exclude or [])}
+    counts: Dict[str, int] = {}
+    strong: Dict[str, bool] = {}
+
+    def _add(name: str, is_strong: bool) -> None:
+        name = re.sub(r"\s+", " ", (name or "").strip(" .,:;()[]"))
+        if len(name) < 3 or len(name) > 60:
+            return
+        if name.lower() in banned:
+            return
+        words = name.split()
+        if words[0].lower() in _ENTITY_STOPWORDS:
+            return
+        if all(len(w) <= 2 for w in words):
+            return
+        counts[name] = counts.get(name, 0) + 1
+        strong[name] = strong.get(name, False) or is_strong
+
+    for m in _ENTITY_MULTIWORD_RE.finditer(blob):
+        _add(m.group(1), False)
+    for m in _ENTITY_BACKTICK_RE.finditer(blob):
+        _add(m.group(1), True)
+    for m in _ENTITY_CAMEL_RE.finditer(blob):
+        _add(m.group(1), True)
+
+    anchor = (must_appear_in or "").lower()
+    picked = [
+        (n, c) for n, c in counts.items()
+        if (strong.get(n) or c >= MIN_ENTITY_OCCURRENCES)
+        and (not anchor or n.lower() in anchor)
+    ]
+    picked.sort(key=lambda x: (-x[1], x[0].lower()))
+    return [n for n, _ in picked[:MAX_ENTITY_PAGES]]
+
+
+def _render_generated_page(
+    page_type: str,
+    skill: str,
+    title: str,
+    category: str,
+    body: str,
+    sources: List[str],
+    links: List[str],
+    created: str,
+    source_version: int = 0,
+) -> str:
+    """Kavram/varlık sayfasının tam metni (ön bilgi + gövde + çapraz bağlar)."""
+    fm = [
+        "---",
+        f"type: {page_type}",
+        f"skill: {skill}",
+        f'title: "{title}"',
+        f"category: {category}",
+        f"source_version: {source_version}",
+        f"created: {created}",
+        f"updated: {datetime.datetime.now().isoformat(timespec='seconds')}",
+    ]
+    if sources:
+        fm.append("sources:")
+        fm.extend(f"  - {_wikilink(s)}" for s in sources if _wikilink(s))
+    else:
+        fm.append("sources: []")
+    fm.append("---")
+
+    parts = ["\n".join(fm), "", f"# {title}", "", (body or "").strip()]
+    if links:
+        seen = []
+        for l in links:
+            w = _wikilink(l)
+            if w and w not in seen:
+                seen.append(w)
+        if seen:
+            parts += ["", "## İlgili", ""] + [f"- {w}" for w in seen]
+    if sources:
+        parts += ["", "## Kaynaklar", ""] + [f"- {_wikilink(s)}" for s in sources if _wikilink(s)]
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def _existing_created(path: Path) -> Optional[str]:
+    """Sayfa varsa `created` alanını korur: yeniden üretim doğum tarihini silmez."""
+    try:
+        return _frontmatter_value(path.read_text(encoding="utf-8", errors="ignore"), "created") or None
+    except OSError:
+        return None
+
+
+def ingest_playbook_to_wiki(
+    skill: str,
+    vault_path: Optional[Path] = None,
+    store: Any = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """
+    PLAYBOOK.md'den kavram ve varlık sayfaları üretir (LLM YOK, kota harcamaz).
+
+    Kaynak yalnızca damıtılmış yordam ve yeteneğin rapor BAŞLIKLARIdır; rapor
+    gövdeleri okunmaz, böylece maliyet arşivin boyutuna bağlanmaz. `dry_run`
+    hiçbir şey yazmadan aynı sayımı döndürür: gerçek kasada güvenle ölçülür.
+
+    Dönen: {"skill", "concepts", "entities", "written", "pages", "index", "log"}
+    """
+    from entropy.memory.playbook import PlaybookStore
+
+    store = store or PlaybookStore(vault_path=vault_path)
+    vault_path = vault_path if vault_path is not None else store.vault_path
+    pb = store.load(skill)
+    result: Dict[str, Any] = {
+        "skill": skill,
+        "concepts": [],
+        "entities": [],
+        "written": 0,
+        "pages": [],
+        "index": None,
+        "log": None,
+        "reason": "",
+    }
+    if pb is None or not (pb.procedure or "").strip():
+        result["reason"] = "playbook yok"
+        return result
+
+    sections = split_playbook_sections(pb.procedure)
+    if not sections:
+        result["reason"] = "playbook'ta başlık yok"
+        return result
+
+    try:
+        reports = list(store.source_reports(skill))
+    except Exception:  # pragma: no cover - rapor listesi sayfa üretimini düşürmemeli
+        reports = []
+    report_titles = [p.stem for p in reports]
+    playbook_link = store.playbook_path(skill).stem
+
+    headings = [t for t, _ in sections]
+    entities = extract_entities(
+        [pb.procedure] + report_titles,
+        exclude=headings + [skill, playbook_link],
+        must_appear_in=pb.procedure,
+    )
+    result["concepts"] = list(headings)
+    result["entities"] = list(entities)
+    if dry_run:
+        result["written"] = len(headings) + len(entities)
+        return result
+
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    c_dir = concepts_dir(skill, vault_path)
+    e_dir = entities_dir(skill, vault_path)
+    c_dir.mkdir(parents=True, exist_ok=True)
+    if entities:
+        e_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sayfa adı yetenekle ön eklenir: iki yeteneğin "Çıktı Biçimi" sayfası aynı
+    # stem'i taşısaydı Obsidian wikilink'leri birbirine karışırdı.
+    prefix = _slugify(skill, 24)
+    concept_paths: Dict[str, Path] = {
+        title: c_dir / f"{prefix}-{_slugify(title)}.md" for title in headings
+    }
+    entity_paths: Dict[str, Path] = {
+        name: e_dir / f"{prefix}-{_slugify(name)}.md" for name in entities
+    }
+
+    written: List[Path] = []
+    for title, body in sections:
+        path = concept_paths[title]
+        # Çapraz bağ: bu bölümde adı geçen varlıklar + diğer kavram sayfaları.
+        mentioned = [n for n in entities if n.lower() in body.lower()]
+        links = [str(entity_paths[n]) for n in mentioned]
+        links += [str(p) for t, p in concept_paths.items() if t != title]
+        links.append(playbook_link)
+        text = _render_generated_page(
+            "concept", skill, title, CONCEPT_CATEGORY,
+            (body or "")[:WIKI_PAGE_MAX_CHARS],
+            sources=[playbook_link], links=links,
+            created=_existing_created(path) or now,
+            source_version=int(getattr(pb, "version", 0) or 0),
+        )
+        path.write_text(text, encoding="utf-8")
+        written.append(path)
+
+    for name in entities:
+        path = entity_paths[name]
+        low = name.lower()
+        in_sections = [t for t, b in sections if low in b.lower()]
+        src_reports = [p for p in report_titles if low in p.lower()]
+        lines = [f"`{name}` — {skill} yordamında ve raporlarında geçen ad."]
+        if in_sections:
+            lines += ["", "Geçtiği bölümler: " + ", ".join(in_sections) + "."]
+        text = _render_generated_page(
+            "entity", skill, name, ENTITY_CATEGORY,
+            "\n".join(lines),
+            sources=[playbook_link] + src_reports[:5],
+            links=[str(concept_paths[t]) for t in in_sections],
+            created=_existing_created(path) or now,
+            source_version=int(getattr(pb, "version", 0) or 0),
+        )
+        path.write_text(text, encoding="utf-8")
+        written.append(path)
+
+    result["written"] = len(written)
+    result["pages"] = [str(p) for p in written]
+    try:
+        result["index"] = str(rebuild_wiki_index(skill, vault_path=vault_path))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Wiki indeksi güncellenemedi (%s): %s", skill, exc)
+    try:
+        result["log"] = str(append_wiki_log(
+            skill,
+            f"{len(headings)} kavram, {len(entities)} varlık sayfası üretildi "
+            f"(playbook v{getattr(pb, 'version', 0)})",
+            agent="wiki",
+            vault_path=vault_path,
+            kind="ingest",
+        ))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Wiki günlüğü yazılamadı (%s): %s", skill, exc)
+    return result

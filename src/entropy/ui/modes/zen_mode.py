@@ -25,7 +25,9 @@ from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.core.slash_commands import SlashCommandRegistry
 from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.modes.chat_mode import ChatInputField
-from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
+from entropy.ui.widgets.report_inbox import InboxBadge
+from entropy.ui.widgets.ui_polish import apply_model_placeholder
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
 from entropy.ui.widgets.mcp_drawer import MCPDrawerWidget
@@ -49,6 +51,9 @@ class ZenModeWindow(QMainWindow):
         self.staged_pdfs: List[str] = []
         self._streaming_active: bool = False
         self.setStyleSheet(STYLESHEET)
+        # Çerçevesiz pencerede başlık görünmez ama görev çubuğu/pencere listesi
+        # ve ekran okuyucular bunu kullanır: ürün adı tek biçimde "Entropy AI".
+        self.setWindowTitle("Entropy AI")
         self.setAcceptDrops(True)
 
         # Borderless window configuration
@@ -79,7 +84,7 @@ class ZenModeWindow(QMainWindow):
         # Agent Desk düğmesi: başlığın hemen sağında (Chat ile aynı konum).
         # Pencere bağımsız bir üst penceredir; ikinci kez basınca yenisi
         # kurulmaz, açık olan öne gelir (bkz. desk.window.open_desk_window).
-        self.desk_btn = QPushButton("🏢 Agent Desk")
+        self.desk_btn = QPushButton("🏢 Entropy Agent Desk")
         self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
         self.desk_btn.setStyleSheet("""
             QPushButton {
@@ -148,6 +153,10 @@ class ZenModeWindow(QMainWindow):
         for m in models:
             self.model_combo.addItem(m)
         self.model_combo.setCurrentText(self.bridge.selected_model)
+        # Model alanı boşken üst çubukta "Model:" etiketi ile boş bir kutu
+        # yan yana kalıyor, araya sanki bir ayraç düşmüş gibi görünüyordu.
+        # Boşken ne olduğunu yazan bir yer tutucu koyarız (işlev değişmez).
+        apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
 
@@ -173,6 +182,12 @@ class ZenModeWindow(QMainWindow):
         self.context_badge = QLabel("Bağlam: %0")
         h_layout.addWidget(self.context_badge)
         self._apply_context_badge()
+
+        # Rapor Merkezi rozeti (Faz 4): son 24 saatte okunmamış rapor sayısı.
+        # Sıfırken kendini gizler, üst çubukta yer kaplamaz.
+        self.inbox_badge = InboxBadge()
+        h_layout.addWidget(self.inbox_badge)
+        bus.report_inbox_unread.connect(self._on_inbox_unread)
 
         h_layout.addSpacing(8)
 
@@ -388,6 +403,11 @@ class ZenModeWindow(QMainWindow):
                 font-size: {RT['font_size_body']};
             }}
         """)
+        # Faz 4 (2d/2f): sohbet gövdesi rapor okuyucu ve Agent Desk akış
+        # paneliyle aynı tipografiyi kullanır. Belge stil sayfası verilmezse
+        # komut kartı içindeki çıplak <table> (ör. /lint, /wiki çıktıları) Qt
+        # varsayılanıyla, kalın beyaz kenarlıklarla çizilirdi.
+        self.chat_browser.document().setDefaultStyleSheet(reading_css())
         chat_layout.addWidget(self.chat_browser)
 
         # Staged image preview bar
@@ -704,6 +724,12 @@ class ZenModeWindow(QMainWindow):
         """Baskı sinyali: rozeti son bilinen oranla tazeler."""
         self._last_context_pressure = float(ratio or 0.0)
         self._apply_context_badge()
+
+    @Slot(int)
+    def _on_inbox_unread(self, count: int):
+        """Rapor Merkezi rozetini günceller (sinyal alıcısı QObject slotu)."""
+        if hasattr(self, "inbox_badge"):
+            self.inbox_badge.set_count(count)
 
     def _apply_context_badge(self):
         """Bağlam doluluk rozetinin metni, ipucu ve rengi (tek yerden)."""

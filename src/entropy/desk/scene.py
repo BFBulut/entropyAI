@@ -1,10 +1,9 @@
 """
 Ofis sahnesi: bir ofisin ajanlarını piksel masalar olarak çizer.
 
-Kaynak: `desk/legacy/pixel_canvas.py` (Faz 1 `PixelCanvas`). O dosya
-`src.entropy.agent_desk.core.models` altındaki artık var olmayan veri
-sınıflarına bağlıydı; buraya kopyalanıp uyarlandı ve ölü importlar atıldı.
-Legacy dosyaya dokunulmadı (salt okunur kaynak).
+Kaynak: Faz 1 `PixelCanvas`. O dosya artık var olmayan veri sınıflarına
+bağlıydı; gereken çizim yardımcıları buraya taşınıp uyarlandı, ölü importlar
+atıldı ve eski `desk/legacy/` paketi Faz 4'te tamamen kaldırıldı.
 
 Uyarlamada değişenler:
 - Veri kaynağı `AgentPersona` değil, ofis sözleşmesi: ajan adı + rol
@@ -440,6 +439,35 @@ class OfficeScene(QWidget):
                 break
         super().mousePressEvent(event)
 
+    def slot_at(self, raw_pos) -> Optional[DeskSlot]:
+        """Pencere koordinatındaki noktanın altındaki masa (yoksa None)."""
+        pos = self._to_logical(raw_pos).toPoint()
+        for slot in self.slots:
+            if slot.rect.contains(pos):
+                return slot
+        return None
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        """
+        Masa üzerinde ipucu: etiket kırpıldıysa tam ad/rol/durum burada okunur.
+
+        Kırpma bilgi gizlemesin diye ipucu ham metni taşır.
+        """
+        raw = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        slot = self.slot_at(raw)
+        if slot is None:
+            self.setToolTip("")
+        else:
+            role_label = {
+                ROLE_ORCHESTRATOR: "orkestratör",
+                ROLE_EVALUATOR: "değerlendirici",
+            }.get(slot.role, "üye")
+            note = f"\n{slot.note}" if slot.note else ""
+            self.setToolTip(
+                f"{slot.agent}\n{role_label} · {STATE_LABELS.get(slot.state, slot.state)}{note}"
+            )
+        super().mouseMoveEvent(event)
+
     def select_agent(self, agent: str) -> None:
         self.selected_agent = agent
         self.update()
@@ -453,7 +481,7 @@ class OfficeScene(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         w, h = self.width(), self.height()
 
-        # 1. Zemin ve ızgara (legacy kanvastan)
+        # 1. Zemin ve ızgara (Faz 1 piksel kanvasından uyarlandı)
         painter.fillRect(0, 0, w, h, QColor(15, 18, 26))
         painter.setPen(QPen(QColor(26, 32, 44, 80), 1))
         for x in range(0, w, 24):
@@ -602,24 +630,31 @@ class OfficeScene(QWidget):
         w = int(slot.width * scale)
         label_y = int((slot.y + 112) * scale + dy)
         meta_y = int((slot.y + 128) * scale + dy)
+        # Etiket kutusu masa genişliğiyle sınırlı: yazı tipi piksel sabit olduğu
+        # için sahne küçüldükçe metin kutudan taşıp komşu masanın üstüne
+        # biniyordu (Faz 2-3 notu: "sahnede etiket taşması"). Hem ad hem de
+        # rol/durum satırı bu genişliğe göre kırpılır.
+        box = max(24, w - 6)
         name_font = QFont("Segoe UI")
-        name_font.setPixelSize(12)
+        name_font.setPixelSize(13)
         name_font.setBold(True)
         painter.setFont(name_font)
-        metrics = QFontMetrics(name_font)
-        name = metrics.elidedText(slot.agent, Qt.TextElideMode.ElideRight, w - 6)
+        name = QFontMetrics(name_font).elidedText(
+            slot.agent, Qt.TextElideMode.ElideRight, box
+        )
         painter.setPen(QColor(232, 239, 247))
         painter.drawText(x, label_y, w, 16, Qt.AlignmentFlag.AlignCenter, name)
 
         meta_font = QFont("Segoe UI")
-        meta_font.setPixelSize(10)
+        meta_font.setPixelSize(11)
         painter.setFont(meta_font)
         role_label = {
             ROLE_ORCHESTRATOR: "orkestratör",
             ROLE_EVALUATOR: "değerlendirici",
         }.get(slot.role, "üye")
-        painter.setPen(STATE_COLORS.get(slot.state, STATE_COLORS[STATE_IDLE]))
-        painter.drawText(
-            x, meta_y, w, 14, Qt.AlignmentFlag.AlignCenter,
-            f"{role_label} · {STATE_LABELS.get(slot.state, slot.state)}",
+        meta_text = f"{role_label} · {STATE_LABELS.get(slot.state, slot.state)}"
+        meta_text = QFontMetrics(meta_font).elidedText(
+            meta_text, Qt.TextElideMode.ElideRight, box
         )
+        painter.setPen(STATE_COLORS.get(slot.state, STATE_COLORS[STATE_IDLE]))
+        painter.drawText(x, meta_y, w, 14, Qt.AlignmentFlag.AlignCenter, meta_text)

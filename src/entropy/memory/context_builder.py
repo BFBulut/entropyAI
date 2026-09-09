@@ -45,6 +45,12 @@ BUDGET_REPORTS = 900
 BUDGET_PROJECT = 400
 BUDGET_CODE = 400
 BUDGET_GLOBAL_MEMORY = 300
+# Wiki kavram/varlık sayfaları (bkz. memory/wiki.py). Playbook'tan hemen sonra,
+# rapor alıntılarından önce gelir: sayfa playbook'un o sorguya ait bölümünün
+# genişletilmiş hâlidir, ham rapordan daha yoğundur. En iyi 2 sayfa alınır;
+# 400 token iki kısa sayfayı taşır, üçüncüsü bütçeyi rapor alıntılarından çalar.
+BUDGET_WIKI_PAGES = 400
+MAX_WIKI_PAGES = 2
 # Önceki oturumun aktarım sayfası. Yalnızca yeni oturumun ilk turunda ödenir
 # (sayfa "tüketildi" diye işaretlenir), her turda değil: 300 token her turda
 # yeniden ödenirse aktarımın kazandırdığı bağlam maliyetiyle eşitlenir.
@@ -514,6 +520,118 @@ class CognitiveContextBuilder:
             tokens=used,
         )
 
+    def _wiki_page_files(self, skill_name: Optional[str]) -> List[Path]:
+        """Yeteneğin wiki kavram/varlık sayfaları."""
+        if not skill_name:
+            return []
+        try:
+            from entropy.memory.wiki import concepts_dir, entities_dir
+        except Exception:
+            return []
+        out: List[Path] = []
+        for d in (concepts_dir(skill_name, self.playbooks.vault_path),
+                  entities_dir(skill_name, self.playbooks.vault_path)):
+            if d.is_dir():
+                out.extend(sorted(d.glob("*.md")))
+        return out
+
+    # Kırpılmış bir kavram sayfasının anlamlı kalabileceği asgari pay (token).
+    # Bunun altında sayfa hiç alınmaz: iki satırlık bir kalıntı bağlamda yer
+    # kaplar ama karar değiştirmez.
+    MIN_WIKI_PAGE_TOKENS = 120
+
+    def _wiki_pages_section(
+        self, query: str, skill_name: Optional[str], budget: int,
+        exclude_text: str = "",
+    ) -> Optional[ContextSection]:
+        """
+        Sorguya en yakın en fazla MAX_WIKI_PAGES wiki sayfasını bağlama koyar.
+
+        Sıralama rapor alıntılarıyla aynı iki aşamalı yolu izler: önce sözcüksel
+        isabet, hiç isabet yoksa gömme benzerliği (`_semantic_rank`).
+
+        `exclude_text` o ana kadar kurulmuş bağlamdır: playbook bölümü zaten
+        aynı metni taşıyorsa sayfa alınmaz. Kavram sayfası playbook'un bir
+        bölümünden türer; ikisini birden koymak bütçenin bir dilimini aynı
+        cümleler için iki kez ödemek olur.
+        """
+        pages = self._wiki_page_files(skill_name)
+        if not pages:
+            return None
+        terms = {t for t in re.findall(r"\w+", (query or "").lower()) if len(t) >= 3}
+        scored: List[tuple] = []
+        for p in pages:
+            try:
+                raw = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            low = raw.lower()
+            hits = sum(low.count(t) for t in terms) if terms else 0
+            scored.append((hits, p, raw))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        if not scored or scored[0][0] == 0:
+            scored = self._semantic_rank(query, scored)
+            if not scored:
+                return None
+
+        blocks: List[str] = []
+        picked: List[str] = []
+        used = 0
+        # Eleme sıralamadan SONRA yapılır ama tavan elemeden sonra uygulanır:
+        # ilk iki aday playbook'ta zaten varsa sıradaki sayfalara bakılmalı,
+        # yoksa bölüm boş döner (ölçüldü: 3 sorguda da 0 sayfa geliyordu).
+        for score, path, raw in scored:
+            if score <= 0 or len(blocks) >= MAX_WIKI_PAGES:
+                break
+            body = _strip_frontmatter(raw)
+            # Başlık satırı ve "## İlgili"/"## Kaynaklar" bölümleri bağ
+            # listesidir: bağlamda bilgi taşımaz, yalnızca token yer.
+            body = re.split(r"(?m)^##\s+(?:İlgili|Kaynaklar)\s*$", body)[0].strip()
+            if not body:
+                continue
+            if exclude_text and self._already_covered(body, exclude_text):
+                continue
+            block = f"— [{path.stem}]\n{body}"
+            cost = estimate_tokens(block)
+            if used + cost > budget:
+                # Bütçeye sığmayan sayfa kırpılır; kalan pay bir sayfanın
+                # anlamlı kalması için gereken tabanın altındaysa hiç alınmaz.
+                room = budget - used
+                if room < self.MIN_WIKI_PAGE_TOKENS:
+                    continue
+                block = _truncate_to_tokens(block, room)
+                cost = estimate_tokens(block)
+            blocks.append(block)
+            picked.append(path.stem)
+            used += cost
+        if not blocks:
+            return None
+        return ContextSection(
+            title=f"📗 {skill_name} — Wiki Sayfaları",
+            body="\n\n".join(blocks),
+            kind="wiki_pages",
+            tokens=used,
+        )
+
+    @staticmethod
+    def _already_covered(body: str, context_text: str) -> bool:
+        """
+        Sayfa gövdesi mevcut bağlamda zaten var mı (kaba ama ucuz ölçü).
+
+        İlk anlamlı satırın normalize edilmiş hâli bağlamda geçiyorsa sayfa
+        kopya sayılır; playbook bölümüyle kavram sayfası birebir aynı metni
+        taşıdığı için bu tek satır ayrımı yapmaya yeter.
+        """
+        probe = ""
+        for line in (body or "").splitlines():
+            s = re.sub(r"\s+", " ", line.strip())
+            if len(s) >= 25:
+                probe = s[:80]
+                break
+        if not probe:
+            return False
+        return probe in re.sub(r"\s+", " ", context_text)
+
     def _query_pages(self, skill_name: Optional[str]) -> List[Path]:
         """Yeteneğin ve kasa genelinin wiki sorgu sayfaları (en yeniler önce)."""
         try:
@@ -758,6 +876,11 @@ class CognitiveContextBuilder:
              lambda b: self._handoff_section(b) if include_handoff else None),
             ("playbook", min(BUDGET_PLAYBOOK, remaining),
              lambda b: self._playbook_section(skill_name, b, query) if skill_name else None),
+            # Wiki sayfaları playbook'un hemen ardından: aynı yordamın sorguya
+            # ait bölümünün genişletilmiş hâli, ham rapordan daha yoğun.
+            ("wiki_pages", min(BUDGET_WIKI_PAGES, remaining),
+             lambda b: self._wiki_pages_section(
+                 query, skill_name, b, exclude_text=ctx.render()) if skill_name else None),
             # Ajan belleği playbook'tan hemen sonra: "bu ajan bunu daha önce
             # denedi" bilgisi, proje ve geri çağırmadan daha spesifiktir.
             ("agent_memory", min(BUDGET_AGENT_MEMORY, remaining),

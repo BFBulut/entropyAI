@@ -39,6 +39,28 @@ def _query_page_skill(file: Path) -> Optional[str]:
     return ""
 
 
+def _wiki_generated_role(file: Path) -> Optional[Tuple[str, str]]:
+    """
+    Dosya uretilmis bir wiki sayfasiysa (grup, yetenek) dondurur.
+
+    Grup "concept" ya da "entity"; yetenek disi (kasa geneli) sayfalarda yetenek
+    bos dizedir. Yol kurali: Skills/<yetenek>/wiki/concepts|entities/*.md ya da
+    Wiki/concepts|entities/*.md (bkz. entropy.memory.wiki).
+    """
+    parents = file.parents
+    if len(parents) < 2:
+        return None
+    kind = parents[0].name.lower()
+    if kind not in ("concepts", "entities"):
+        return None
+    if parents[1].name.lower() != "wiki":
+        return None
+    group = "concept" if kind == "concepts" else "entity"
+    if len(parents) >= 3 and parents[2].name.lower() not in ("entropy", "skills"):
+        return group, parents[2].name
+    return group, ""
+
+
 def _office_page_role(file: Path) -> Optional[Tuple[str, str]]:
     """
     Dosya `Entropy/Offices/<ofis>/...` altindaysa (ofis, rol) dondurur.
@@ -547,7 +569,20 @@ class ObsidianVaultManager:
             skill_of_query = _query_page_skill(file)
             office_role = _office_page_role(file)
             agent_of_page = _agent_page_name(file)
-            if skill_of_query is not None:
+            wiki_role = _wiki_generated_role(file)
+            if wiki_role is not None:
+                # Uretilmis wiki sayfalari kendi gruplarinda: kavram acik yesil,
+                # varlik acik mavi. Yetenege baglanmalari sorgu sayfalariyla
+                # ayni mekanizmadan gecer (aidiyet dosya yolundan gelir).
+                category = wiki_role[0]
+                skill_of_query = wiki_role[1]
+            elif file.parent.name.lower() == "wiki" and file.stem.lower() in ("index", "log", "lint"):
+                # Wiki'nin defter dosyalari (indeks, gunluk, denetim) bilgi
+                # dugumu degildir; indeks her sayfaya baglandigi icin grafige
+                # girseydi tum wiki'yi tek bir yildiza cokertirdi.
+                skipped.add(file)
+                continue
+            elif skill_of_query is not None:
                 # Wiki sorgu sayfalari kendi grubunda gosterilir; boylece UI
                 # onlari rapor/yetenek dugumlerinden ayirt edebilir.
                 category = "query"

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.event_bus import bus
-from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.themes.cyber_theme import READING_TOKENS as RT, reading_css
 from entropy.ui.widgets.agents_widget import spec_field
 
 # Akışta tutulan en fazla karakter: uzun koşularda panel sınırsız büyümesin.
@@ -64,11 +64,15 @@ class StreamPanel(QFrame):
                 border-radius:{RT['radius']};
                 color:{RT['text_body']};
                 font-family:{RT['font_mono']};
-                font-size:{RT['font_size_small']};
-                padding:8px;
+                font-size:{RT['font_size_mono']};
+                padding:10px;
             }}
             """
         )
+        # Faz 4 (2d): akış paneli, rapor okuyucu ve sohbet balonu tek tipografi
+        # kaynağını paylaşır. `reading_css()` belge stil sayfası olarak
+        # verilince başlık/tablo/liste ölçüleri üç yüzeyde de aynı olur.
+        self.view.document().setDefaultStyleSheet(reading_css())
         layout.addWidget(self.view, 1)
 
         signal = getattr(bus, "token_chunk_received", None)

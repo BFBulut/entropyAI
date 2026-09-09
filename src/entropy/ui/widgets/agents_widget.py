@@ -20,8 +20,29 @@ from PySide6.QtWidgets import (
     QScrollArea, QVBoxLayout, QWidget
 )
 
+from PySide6.QtGui import QColor, QPalette
+
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.widgets.ui_polish import BODY_PX, BODY_STRONG_PX, LABEL_PX
+
+
+def _paint_dark(widget) -> None:
+    """
+    Widget paletini koyu yüzeye sabitler.
+
+    Stil sayfası (`setStyleSheet`) bazı Qt sınıflarında görünüm alanına
+    (viewport) uygulanmaz; o durumda sistem paleti devreye girip beyaz bir
+    şerit bırakır. Palet doğrudan yazılınca sonuç stil sayfasından bağımsızdır.
+    """
+    try:
+        palette = widget.palette()
+        color = QColor(RT["surface_base"])
+        for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base):
+            palette.setColor(role, color)
+        widget.setPalette(palette)
+    except (AttributeError, RuntimeError):
+        pass
 
 # Sağlayıcı başına önerilen model listesi. AGY tarafı köprüden dinamik
 # okunur; okunamazsa bu sabit liste devreye girer.
@@ -48,14 +69,14 @@ TOOLS_POLICIES = ["inherit", "read-only", "full", "none"]
 
 DIALOG_STYLE = f"""
     QDialog {{ background-color: {RT['surface_base']}; color: {RT['text']}; }}
-    QLabel {{ color: {RT['text_body']}; font-size: {RT['font_size_small']}; }}
+    QLabel {{ color: {RT['text_body']}; font-size: {RT['font_size_body']}; }}
     QLineEdit, QPlainTextEdit, QComboBox, QListWidget {{
         background-color: {RT['surface_raised']};
         border: 1px solid {RT['divider']};
         border-radius: {RT['radius_small']};
-        padding: 6px;
+        padding: 7px 8px;
         color: {RT['text']};
-        font-size: {RT['font_size_small']};
+        font-size: {RT['font_size_body']};
     }}
     QPlainTextEdit {{ font-family: {RT['font_mono']}; }}
     QPushButton {{
@@ -63,7 +84,8 @@ DIALOG_STYLE = f"""
         color: {RT['accent']};
         border: 1px solid {RT['divider']};
         border-radius: {RT['radius_small']};
-        padding: 6px 14px;
+        padding: 7px 16px;
+        font-size: {RT['font_size_body']};
     }}
     QPushButton:hover {{ border-color: {RT['accent']}; }}
     QListWidget::item {{ padding: 2px 4px; }}
@@ -434,12 +456,14 @@ class AgentCard(QFrame):
 
         text_col = QVBoxLayout()
         text_col.setSpacing(3)
+        # Okunakli tasarim sistemi: kart basligi 15 px, yardimci metin 12 px.
         title = QLabel(
-            f"<span style='color:{RT['text']}; font-size:13px; font-weight:600;'>"
+            f"<span style='color:{RT['text']}; font-size:{BODY_STRONG_PX}px; font-weight:600;'>"
             f"{self.agent_name}</span>"
-            f"<span style='color:{RT['text_dim']}; font-size:11px;'>  ·  "
+            f"<span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>  ·  "
             f"{spec_field(spec, 'role')}</span>"
         )
+        title.setToolTip(f"{self.agent_name} ({spec_field(spec, 'role')})")
         text_col.addWidget(title)
 
         provider = spec_field(spec, "provider", "agy") or "agy"
@@ -452,9 +476,10 @@ class AgentCard(QFrame):
         if effort:
             meta_parts.append(f"efor {effort}")
         meta = QLabel(
-            f"<span style='color:{RT['text_dim']}; font-size:11px;'>"
+            f"<span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"{' · '.join(meta_parts)}</span>"
         )
+        meta.setToolTip(' · '.join(meta_parts))
         text_col.addWidget(meta)
 
         # Ofis/rol rozeti (Faz 3): ajan bir ofise bağlıysa ve rolü varsa görünür.
@@ -666,7 +691,8 @@ class AgentsWidget(QFrame):
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
         self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:12px; background:transparent; border:none;"
+            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:14px 4px;"
+            " background:transparent; border:none;"
         )
         layout.addWidget(self.empty_label)
 
@@ -682,6 +708,11 @@ class AgentsWidget(QFrame):
         )
         scroll.viewport().setAutoFillBackground(False)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Faz 4: saydamlık tek başına yetmiyordu — kapsayıcı stil sayfası
+        # değişince görünüm alanı yeniden sistem paletine (beyaz) düşüyordu.
+        # Palet doğrudan koyu yüzeye sabitlenir; stil sayfasından bağımsız.
+        _paint_dark(scroll.viewport())
+        _paint_dark(scroll)
         # Kartlar sütun genişliğine uyar; yatay çubuk yalnızca listenin altında
         # boşluk yaratıyordu.
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
