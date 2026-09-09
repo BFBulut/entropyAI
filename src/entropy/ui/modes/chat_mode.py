@@ -26,6 +26,7 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STY
 from entropy.ui.widgets.command_palette import install_command_palette
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
 from entropy.ui.widgets.report_center import ReportCenterWidget
 from entropy.ui.widgets.timeline_panel import TimelinePanel
@@ -199,11 +200,14 @@ class ChatInputField(QLineEdit):
     def closeEvent(self, event):
         if hasattr(self, "popup"):
             self.popup.close()
-        for sig in (bus.skills_updated, bus.mcp_servers_updated):
-            try:
-                sig.disconnect(self._on_command_catalog_changed)
-            except Exception:
-                pass
+        # Faz 8: tekrar kapanislarda "Failed to disconnect" uyarisi uretmesin.
+        if getattr(self, "_catalog_connected", True):
+            self._catalog_connected = False
+            for sig in (bus.skills_updated, bus.mcp_servers_updated):
+                try:
+                    sig.disconnect(self._on_command_catalog_changed)
+                except Exception:
+                    pass
         super().closeEvent(event)
 
 
@@ -244,16 +248,20 @@ class ChatModeWindow(QMainWindow):
         self.layout.setSpacing(6)
 
         # 1. Header
-        header = QFrame()
-        header.setObjectName("cardFrame")
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(10, 6, 10, 6)
+        # Faz 8: tek satirlik QHBoxLayout + yatay QScrollArea yerine akan
+        # (wrap eden) yerlesim. Eskiden cubugun ortuk genisligi ~2450 px'ti ve
+        # kaydirma alani sagdaki dugmeleri (Zen, rozetler) gorunmez kiliyordu.
+        header = FlowHeaderFrame(margins=(10, 6, 10, 6))
+        h_layout = header.flow()
 
-        title = QLabel("<b style='color:#00F0FF;'>💬 Entropy AI Chat</b>")
+        # Faz 8: baslik kisaltildi (221 -> ~110 px); tam ad ipucunda.
+        title = QLabel("<b style='color:#00F0FF;'>💬 Entropy</b>")
+        title.setToolTip("Entropy AI Chat")
         h_layout.addWidget(title)
 
         # Agent Desk düğmesi: başlığın hemen sağında (Zen ile parite).
-        self.desk_btn = QPushButton("🏢 Entropy Agent Desk")
+        # Faz 8: 238 -> ~90 px. Tam ad ipucunda kalir.
+        self.desk_btn = QPushButton("🏢 Desk")
         self.desk_btn.setFixedHeight(24)
         self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
         self.desk_btn.setStyleSheet("""
@@ -318,6 +326,11 @@ class ChatModeWindow(QMainWindow):
         # duruyordu; boşken ne anlama geldiğini yazan yer tutucu konur.
         apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
+        # Faz 8: en uzun model adi combo'yu 300 px'e sisiriyordu; acilir liste
+        # tam adi gosterir, kapali kutu 170 px'e sinirlanir.
+        self.model_combo.setMaximumWidth(170)
+        self.model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.model_combo.setMinimumContentsLength(10)
         h_layout.addWidget(self.model_combo)
 
         # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
@@ -337,6 +350,10 @@ class ChatModeWindow(QMainWindow):
             }
         """)
         self._populate_skills_combo()
+        # Faz 8: 274 -> 150 px (bkz. model combo gerekcesi).
+        self.skill_combo.setMaximumWidth(150)
+        self.skill_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.skill_combo.setMinimumContentsLength(8)
         h_layout.addWidget(self.skill_combo)
 
         self.tokens_badge = QLabel("0 tokens")
@@ -414,25 +431,16 @@ class ChatModeWindow(QMainWindow):
         self.provider_badge.login_requested.connect(self._on_provider_login_requested)
         h_layout.addWidget(self.provider_badge)
 
-        btn_zen = QPushButton("Zen Mode")
+        btn_zen = QPushButton("🧘 Zen")
         btn_zen.setFixedHeight(24)
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
         h_layout.addWidget(btn_zen)
 
-        # Faz 6: ust cubugun ortuk asgari genisligi ~2470 px'ti; dar sohbet
-        # penceresinde sagdaki dugmeler kirpiliyordu. Cubuk yatay kaydirilabilir
-        # bir alana konur (icerik daralmaz, gerekince kayar).
-        self.header_scroll = QScrollArea()
-        self.header_scroll.setObjectName("headerScroll")
-        self.header_scroll.setWidget(header)
-        self.header_scroll.setWidgetResizable(True)
-        self.header_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.header_scroll.setMinimumWidth(160)
-        self.header_scroll.setStyleSheet("QScrollArea#headerScroll { background: transparent; border: none; }")
-        self.header_scroll.setFixedHeight(max(header.sizeHint().height(), 40) + 14)
-        self.layout.addWidget(self.header_scroll)
+        # Faz 8: cubuk artik dogrudan duzene girer; dar pencerede satir atlar.
+        # `header_frame` testler ve olcumler icin acikta tutulur.
+        self.header_frame = header
+        header.setMinimumWidth(180)
+        self.layout.addWidget(header)
 
         # Report quick notification bar (shown when a report is created)
         self.report_bar = QFrame()
@@ -588,6 +596,12 @@ class ChatModeWindow(QMainWindow):
         install_command_palette(self, on_activated=self._on_palette_activated)
 
     def _connect_signals(self):
+        # Faz 8: closeEvent her cagrildiginda 15 sinyali kosulsuz cozuyordu.
+        # Pencere birden cok kez kapatilinca (testlerde ve tepsiye alma /
+        # geri getirme dongusunde) PySide her cozulmus baglanti icin
+        # "Failed to disconnect ..." RuntimeWarning'i basiyordu (olculen:
+        # 526 uyari). Bayrak, cozmeyi yalnizca gercekten bagliyken yapar.
+        self._bus_connected = True
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)
         bus.agent_turn_started.connect(self._on_turn_started)
@@ -1351,6 +1365,11 @@ class ChatModeWindow(QMainWindow):
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def closeEvent(self, event):
+        if not getattr(self, "_bus_connected", False):
+            # Zaten cozulmus; ikinci kez denemek RuntimeWarning uretirdi.
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         signals = [
             (bus.model_detected, self._update_model_badge),
             (bus.token_usage_updated, self._update_tokens),
@@ -1367,6 +1386,8 @@ class ChatModeWindow(QMainWindow):
             (bus.distill_progress, self._on_distill_progress),
             (bus.chat_history_updated, self._on_chat_history_updated),
             (bus.chat_history_cleared, self._on_chat_history_cleared),
+            # Faz 8: bagliydi ama cozulmuyordu (sizinti).
+            (bus.context_pressure, self._on_context_pressure),
         ]
         for sig, slot in signals:
             try:

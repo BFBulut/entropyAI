@@ -74,6 +74,48 @@ def cleanup_task_scheduler():
     except Exception:
         pass
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_obsidian_vault_session(tmp_path_factory):
+    """Oturum boyu kalici kasa yonlendirmesi.
+
+    Test bazli monkeypatch yeterli degil: arka plan is parcaciklari (koprunun
+    `_execute_background_task_worker` gibi) raporu fixture teardown'undan SONRA
+    yaziyordu ve gercek kasaya dusuyordu. Oturum kapsaminda bir kez
+    yonlendirilince yaris penceresi kapanir.
+    """
+    # DIKKAT: `entropy/core/__init__.py` `from entropy.core.config import config`
+    # yaptigi icin `import entropy.core.config as m` MODULU DEGIL, EntropyConfig
+    # ORNEGINI dondurur (paket ozniteligi alt modulu golgeler). Gercek modul
+    # yalnizca sys.modules uzerinden guvenle alinir.
+    import entropy.core.config  # noqa: F401  (sys.modules'e yuklenmesi icin)
+
+    cfg_mod = sys.modules["entropy.core.config"]
+    session_vault = tmp_path_factory.mktemp("session_vault")
+    (session_vault / "Entropy").mkdir(parents=True, exist_ok=True)
+    os.environ["ENTROPY_VAULT_PATH"] = str(session_vault)
+    object.__setattr__(cfg_mod.config, "obsidian_vault_path", session_vault)
+    yield session_vault
+
+
+@pytest.fixture(autouse=True)
+def isolate_obsidian_vault(tmp_path, monkeypatch):
+    """Faz 8: hicbir test kullanicinin gercek Obsidian kasasina yazmasin.
+
+    Kanit: `Entropy/Projects/test_bridge_background_task_*` altinda 195 rapor,
+    `ObsidianVaultManager()` varsayilan yolu (config.obsidian_vault_path)
+    uzerinden test kosumlarindan yazilmisti. Testler `vault_path` gecmedigi her
+    yerde artik tmp'ye duser.
+    """
+    import entropy.core.config  # noqa: F401
+
+    cfg_mod = sys.modules["entropy.core.config"]  # bkz. oturum fixture'i: golgeleme
+    fake_vault = tmp_path / "obsidian_vault"
+    (fake_vault / "Entropy").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ENTROPY_VAULT_PATH", str(fake_vault))
+    monkeypatch.setattr(cfg_mod.config, "obsidian_vault_path", fake_vault)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def isolate_chat_history(tmp_path, monkeypatch):
     """Ensure tests never write dummy conversations into user's live chat history."""

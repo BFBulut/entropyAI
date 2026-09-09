@@ -128,6 +128,8 @@ class DeskOffice:
     default_provider: str = "agy"
     default_model: str = ""
     max_parallel: int = DEFAULT_MAX_PARALLEL
+    # Ofis düzeyi token tavanı. 0 = SINIRSIZ (harness `_budget`/`_can_afford`
+    # sıfırı zaten "tavan yok" olarak okuyor).
     budget_tokens: int = DEFAULT_BUDGET_TOKENS
     # Ofisin çalışma dizini: kullanıcının proje klasörü. Boşsa ofis klasörü.
     workdir: str = ""
@@ -381,11 +383,21 @@ class DeskRegistry:
         return self._read(self.office_file(name)) if name else None
 
     @staticmethod
-    def _int(value, fallback: int) -> int:
+    def _int(value, fallback: int, allow_zero: bool = False) -> int:
+        """
+        Ön bilgideki tamsayı; geçersizse varsayılan.
+
+        `allow_zero=True` yalnızca `budget_tokens` için: 0 SINIRSIZ demektir ve
+        varsayılana düşürülmemelidir. Eskiden `budget_tokens: 0` yazan ofis
+        sessizce 120k tavana geri dönüyordu ve kullanıcı sınırsız istediğini
+        sanıyordu. Negatif değer yine varsayılana düşer (anlamı yok).
+        """
         try:
             out = int(str(value).strip())
         except (TypeError, ValueError):
             return fallback
+        if out == 0:
+            return 0 if allow_zero else fallback
         return out if out > 0 else fallback
 
     def _read(self, path: Path) -> Optional[DeskOffice]:
@@ -412,7 +424,8 @@ class DeskRegistry:
             default_provider=provider if provider in VALID_PROVIDERS else "agy",
             default_model=str(front.get("default_model") or ""),
             max_parallel=self._int(front.get("max_parallel"), DEFAULT_MAX_PARALLEL),
-            budget_tokens=self._int(front.get("budget_tokens"), DEFAULT_BUDGET_TOKENS),
+            budget_tokens=self._int(front.get("budget_tokens"), DEFAULT_BUDGET_TOKENS,
+                                    allow_zero=True),
             workdir=str(front.get("workdir") or ""),
             charter=body,
             path=path,
@@ -537,6 +550,14 @@ class DeskRegistry:
         if not target.is_dir():
             return False
         shutil.rmtree(target, ignore_errors=True)
+        # Ofis gidince süren sağlayıcı konuşması da düşer: eşlemede kalan kimlik
+        # aynı adla açılan YENİ bir ofisi eski ofisin bağlamına bağlardı.
+        try:
+            from entropy.core.identity import conversation_map
+
+            conversation_map.forget(f"office:{name}")
+        except Exception:
+            pass
         self._notify(name)
         return not target.exists()
 

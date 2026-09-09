@@ -170,7 +170,10 @@ def test_force_layout_engine_present_and_clusters_removed():
     assert "report-cluster" not in GRAPH_HTML_TEMPLATE
     # Topluluk tonu ve yakınlık kenarları çiziliyor
     assert "communityTint" in GRAPH_HTML_TEMPLATE
-    assert "similarityLinks" in GRAPH_HTML_TEMPLATE
+    # Faz 8: yakinlik kenarlari ayri bir dizi degil, LINK_KINDS uzerinden
+    # siniflandirilip cizim dalinda ele aliniyor.
+    assert "if (l.is_similarity_link) return 'similarity';" in GRAPH_HTML_TEMPLATE
+    assert "else if (kind === 'similarity')" in GRAPH_HTML_TEMPLATE
 
 
 def test_graph_has_no_cluster_toggle_nodes(qapp, tmp_path):

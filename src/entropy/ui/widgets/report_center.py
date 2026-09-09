@@ -842,6 +842,8 @@ class ReportCenterWidget(QFrame):
 
     report_opened = Signal(str)   # açılacak rapor yolu
     unread_changed = Signal(int)  # okunmadı sayısı
+    #: Faz 8: "Tümü" düğmesi — tam rapor listesine geçiş isteği.
+    show_all_requested = Signal()
     orchestrator_answer = Signal(str, str)  # ofis, yanıt gövdesi
 
     def __init__(
@@ -950,6 +952,20 @@ class ReportCenterWidget(QFrame):
         )
         root.addWidget(self.quiet_btn)
 
+        # Faz 8: kart listesi ozetlidir (895 rapordan 9 kart + 135 sessiz kume);
+        # kullanici "toplam raporlar gorunmuyor" dedi. Bu dugme sessiz bolumu
+        # acar ve tam rapor listesini gosteren yuzeyi (Raporlar sekmesi ya da
+        # bagimsiz pencere) ister.
+        self.show_all_btn = DigestCardWidget._action_btn(
+            "🗂 Tümü", "Sessiz bölümü aç ve tam rapor listesine geç"
+        )
+        self.show_all_btn.clicked.connect(self._on_show_all_clicked)
+        self.show_all_btn.setMinimumWidth(80)
+        self.show_all_btn.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        root.addWidget(self.show_all_btn)
+
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
         self.empty_label.setStyleSheet(
@@ -1025,6 +1041,13 @@ class ReportCenterWidget(QFrame):
     def quiet_cards(self) -> List[Dict[str, Any]]:
         return list(self._result.get("quiet", []))
 
+    @Slot()
+    def _on_show_all_clicked(self) -> None:
+        """Sessiz bolumu acar ve tam listeyi isteyen sinyali yayar (Faz 8)."""
+        if not self._quiet_expanded:
+            self.toggle_quiet()
+        self.show_all_requested.emit()
+
     @Slot(int)
     def _on_threshold_changed(self, _index: int) -> None:
         """Esik combosu (QObject slotu, lambda degil)."""
@@ -1066,8 +1089,9 @@ class ReportCenterWidget(QFrame):
         self.header_label.setText(
             f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>📥 RAPOR MERKEZİ</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
-            f"{self._result['total']} rapor · {len(self._result['cards'])} öne çıkan"
-            f" · {len(self._result['quiet'])} sessiz küme"
+            f"Toplam {self._result['total']} rapor ·"
+            f" {len(self._result['cards'])} öne çıkan"
+            f" · {len(self._result['quiet'])} sessiz"
             + (f" · {unread} okunmadı" if unread else "") + "</span>"
         )
         quiet_count = len(self._result["quiet"])
@@ -1080,6 +1104,8 @@ class ReportCenterWidget(QFrame):
             f" Eşik (report_center_quiet_threshold): {self.quiet_threshold:.2f}"
         )
         self.quiet_btn.setVisible(quiet_count > 0)
+        self.show_all_btn.setText(f"🗂 Tümü ({self._result['total']} rapor)")
+        self.show_all_btn.setVisible(self._result["total"] > 0)
         if not visible and not quiet_count:
             self.empty_label.setText(
                 "Rapor Merkezi boş. Bir araştırma, ofis kartı ya da /query"
@@ -1168,12 +1194,24 @@ class ReportCenterWidget(QFrame):
         self._mailbox_cache = None
         self.refresh()
 
+    #: Kasadan tazelemede taranacak azami kunye sayisi (Faz 8).
+    #: `collect_recent_entries` varsayilani 60'ti; `bus.reports_updated` her
+    #: tetiklendiginde Rapor Merkezi 895 raporluk listeyi 61'e dusuruyordu —
+    #: kullanicinin "toplam raporlar gorunmuyor" dedigi durumun kok nedeni.
+    VAULT_RELOAD_LIMIT = 5000
+
     def reload_from_vault(self) -> None:
         from entropy.ui.widgets.report_inbox import collect_recent_entries
 
-        self.set_entries(collect_recent_entries())
+        self.set_entries(collect_recent_entries(limit=self.VAULT_RELOAD_LIMIT))
 
     def closeEvent(self, event):  # noqa: N802
+        # Faz 8: tekrarli kapanislarda ayni sinyali yeniden cozmek
+        # libpyside'in "Failed to disconnect" uyarisini basiyordu.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         try:
             bus.reports_updated.disconnect(self._on_reports_updated)
         except (TypeError, RuntimeError):

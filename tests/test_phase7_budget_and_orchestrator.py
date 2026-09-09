@@ -14,6 +14,7 @@ import pytest
 from entropy.agents.desk_registry import DeskOffice as OfficeSpec, DeskRegistry
 from entropy.agents.harness import (
     ORCHESTRATOR_NO_CODE_RETRY,
+    SUBCARD_ESTIMATE_FLOOR,
     SUBCARD_TOKEN_ESTIMATE,
     OfficeHarness,
     orchestrator_produced_code,
@@ -410,8 +411,9 @@ def test_subcard_not_started_when_remaining_budget_below_estimate(board, offices
     bridge = _RecordingBridge([(_plan_json("Kaynak tara"), True)])
     harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices,
                             bridge_factory=lambda p: bridge)
-    # Tavan alt kart tahmininin altında: plan yazılır ama alt kart başlamaz.
-    card = _office_card(board, budget=SUBCARD_TOKEN_ESTIMATE // 2)
+    # Tavan alt kart tahmininin (Faz 8'den beri uyarlanabilir; bu kart için
+    # taban 8k) altında: plan yazılır ama alt kart başlamaz.
+    card = _office_card(board, budget=SUBCARD_ESTIMATE_FLOOR // 2)
     assert harness.start(card.id)
 
     done = board.get(card.id)

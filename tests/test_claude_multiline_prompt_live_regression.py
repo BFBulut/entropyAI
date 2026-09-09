@@ -148,17 +148,19 @@ def test_failed_task_records_usage_in_ledger(tmp_path, monkeypatch):
     assert rec.get("total_tokens"), f"başarısız görevin usage'ı yazılmadı: {rec}"
 
 
-def test_claude_background_task_accepts_no_max_steps(tmp_path, monkeypatch):
+def test_both_bridges_accept_max_steps(tmp_path, monkeypatch):
     """
-    BELGELEME testi: Claude köprüsü `max_steps` almıyor (adım tavanı yok).
+    PARİTE testi (Faz 8): iki köprü de `max_steps` ve `conversation_id` alır.
 
-    `TaskBoard.run` tavanı `_accepts_kwarg` ile eleyip düşürüyor; yani
-    `MAX_STEPS_PER_CARD` yalnızca AGY alt kartlarında yaptırımlı. Bu test
-    kusuru kilitler: parite sağlandığında ters çevrilmeli.
+    Eskiden Claude köprüsü `max_steps` almıyordu ve `TaskBoard.run` tavanı
+    `_accepts_kwarg` ile eleyip düşürüyordu: `MAX_STEPS_PER_CARD` yalnızca AGY
+    alt kartlarında yaptırımlıydı. Artık Claude tarafında yaptırım akış
+    sayacındadır (CLI'da `--max-turns` bayrağı yok).
     """
     from entropy.agents.tasks import _accepts_kwarg
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.claude_bridge import ClaudeCodeBridge
 
-    assert _accepts_kwarg(AgyProcessBridge.send_background_task_async, "max_steps") is True
-    assert _accepts_kwarg(ClaudeCodeBridge.send_background_task_async, "max_steps") is False
+    for bridge_cls in (AgyProcessBridge, ClaudeCodeBridge):
+        for kwarg in ("max_steps", "conversation_id"):
+            assert _accepts_kwarg(bridge_cls.send_background_task_async, kwarg) is True

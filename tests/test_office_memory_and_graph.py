@@ -381,8 +381,8 @@ def test_graph_template_has_office_colors_icons_legend_and_scope():
     assert "'agent': '#2DD4BF'" in T
     assert "'query': '#C792EA'" in T
     assert "🏢" in T and "🤖" in T and "🔎" in T
-    assert "toggleCategory('office'" in T
-    assert "toggleCategory('agent'" in T
-    assert "toggleCategory('query'" in T
+    assert "['office', " in T  # Faz 8: efsane LEGEND_DEFS + buildLegend ile kuruluyor
+    assert "['agent', " in T  # Faz 8: efsane LEGEND_DEFS + buildLegend ile kuruluyor
+    assert "['query', " in T  # Faz 8: efsane LEGEND_DEFS + buildLegend ile kuruluyor
     assert "currentScope === 'all_offices'" in T
     assert "function getNodeIcon(group)" in T

@@ -154,6 +154,12 @@ class ProviderStatusBadge(QFrame):
         super().mousePressEvent(event)
 
     def closeEvent(self, event):  # noqa: N802
+        # Faz 8: tekrarli kapanislarda ayni sinyali yeniden cozmek
+        # libpyside'in "Failed to disconnect" uyarisini basiyordu.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         if self._signal is not None:
             try:
                 self._signal.disconnect(self._on_status)

@@ -74,8 +74,11 @@ def test_desk_window_title_and_button_text(qapp):
 
     chat_src = Path(chat_mod.__file__).read_text(encoding="utf-8")
     zen_src = Path(zen_mod.__file__).read_text(encoding="utf-8")
-    assert 'QPushButton("🏢 Entropy Agent Desk")' in chat_src
-    assert 'QPushButton("🏢 Entropy Agent Desk")' in zen_src
+    # Faz 8: etiket "🏢 Desk"e kisaltildi, tam metin setToolTip'te.
+    assert 'QPushButton("🏢 Desk")' in chat_src
+    assert 'QPushButton("🏢 Desk")' in zen_src
+    assert 'setToolTip("Ofis masasını aç' in chat_src
+    assert 'setToolTip("Ofis masasını aç' in zen_src
 
 
 def test_desk_window_sets_titles(qapp, monkeypatch):
@@ -253,7 +256,10 @@ def test_graph_legend_has_new_groups():
         encoding="utf-8"
     )
     for group in ("hub-offices", "concept", "entity"):
-        assert f"toggleCategory('{group}'" in src, f"{group} efsanede yok"
+        # Faz 8: efsane artık statik HTML degil, LEGEND_DEFS'ten JS ile kurulur
+        # (buildLegend -> el.onclick = toggleCategory(cat, el)). Kategori
+        # girdisinin varligi LEGEND_DEFS satirindan dogrulanir.
+        assert f"['{group}', " in src, f"{group} LEGEND_DEFS'te yok"
         assert f"'{group}': true" in src, f"{group} kategori varsayılanı yok"
     # Renkler: kavram açık yeşil, varlık açık mavi.
     assert "'concept': '#9BE9A8'" in src

@@ -510,7 +510,10 @@ def test_zen_and_chat_have_agent_desk_button(qapp):
     try:
         for window in (zen, chat):
             assert hasattr(window, "desk_btn")
-            assert "Agent Desk" in window.desk_btn.text()
+            # Faz 8: dar ust cubuk icin etiket kisaltildi (246 -> ~90 px);
+            # tam anlam ipucunda tasiniyor.
+            assert "Desk" in window.desk_btn.text()
+            assert "Ofis masası" in window.desk_btn.toolTip()
             assert hasattr(window, "open_agent_desk")
         # Düğme başlığın hemen sağında: üst çubuk düzeninde 2. sırada.
         for window in (zen, chat):

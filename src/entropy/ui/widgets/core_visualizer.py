@@ -368,6 +368,11 @@ class CoreVisualizerWidget(QWidget):
     def closeEvent(self, event):
         if hasattr(self, "timer") and self.timer.isActive():
             self.timer.stop()
+        # Faz 8: ikinci kapanista uyari basmasin.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         try:
             bus.core_pulse_triggered.disconnect(self.trigger_pulse)
             bus.core_state_changed.disconnect(self.set_state)

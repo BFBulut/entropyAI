@@ -13,7 +13,8 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 
 from entropy.core.event_bus import bus
 from entropy.core.config import config
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.memory.obsidian.vault_manager import ObsidianVaultManager, is_test_artifact_name
+from entropy.memory.graph_enrich import enrich_graph
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.skills.manager import SkillManager
 from entropy.mcp.manager import MCPManager
@@ -26,7 +27,7 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME
 
 # Yaprak düğümler arasında kurulan k-NN benzerlik kenarları. Kosinüs eşiği
 # altındaki çiftler bağlanmaz; k komşu, düğüm başına üst sınırdır.
-SIMILARITY_K = 4
+SIMILARITY_K = 3  # Faz 8: k=4 iken 716 benzerlik kenari (JSON %13); k=3 kumelemeyi bozmuyor
 SIMILARITY_MIN = 0.34
 # Benzerlik hesabına giren yaprak grupları (dal/hub düğümleri hariç).
 SIMILARITY_GROUPS = {"Reports", "obsidian", "semantic", "episodic", "procedural", "DailyNotes"}
@@ -214,6 +215,39 @@ def normalize_slug(text: str) -> str:
     slug = re.sub(r'[^a-zA-Z0-9\-]', '-', normalized).strip('-')
     slug = re.sub(r'-+', '-', slug)
     return slug if slug else "item"
+
+
+COGNITIVE_NAME_MAX = 40
+
+
+def _cognitive_node_name(content: str, counts: Optional[Dict[str, int]] = None) -> str:
+    """
+    Bilişsel bellek düğümünün adı: içeriğin İLK ANLAMLI SATIRI.
+
+    Satır sonu taşımaz (kanvasta ad tek satır çizilir), ≤ 40 karakterdir ve aynı
+    ad 5'ten çok kez tekrar ederse sayaç eki alır (`counts` verilirse). Ölçüm
+    2026-09-09: eski "ilk 26 karakter" kuralı 80 düğüm adına satır sonu, 5 gruba
+    da çakışan ad koyuyordu.
+    """
+    first = ""
+    for line in (content or "").splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            first = stripped
+            break
+    if not first:
+        first = (content or "").strip().replace("\n", " ")[:COGNITIVE_NAME_MAX]
+    first = re.sub(r"\s+", " ", first).strip()
+    if len(first) > COGNITIVE_NAME_MAX:
+        first = first[:COGNITIVE_NAME_MAX - 1].rstrip() + "…"
+    if counts is None:
+        return first
+    seen = counts.get(first, 0)
+    counts[first] = seen + 1
+    if seen == 0:
+        return first
+    suffix = f" ({seen + 1})"
+    return (first[: COGNITIVE_NAME_MAX - len(suffix)]).rstrip() + suffix
 
 
 def classify_report_to_hub(
@@ -424,64 +458,76 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             width: 100%;
             height: 100%;
         }
+        /* Faz 8 / U3: efsane tek satır, yalnızca bu veride düğümü olan
+           kategoriler + sayılar. Kapalıyken yüksekliği 26 px'i geçmez; tam
+           liste, topluluk paleti ve kontroller katlanan panelin içindedir. */
         #legend {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            top: 8px;
+            left: 8px;
             font-size: 11px;
             background: rgba(14, 20, 32, 0.92);
             border: 1px solid #1F2B42;
             border-radius: 6px;
-            padding: 5px 10px;
+            padding: 3px 8px;
             display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
+            align-items: center;
+            gap: 8px;
             backdrop-filter: blur(6px);
             z-index: 10;
-            max-width: calc(100vw - 20px);
+            max-width: 460px;
+            height: 26px;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        #legendToggle {
+            cursor: pointer;
+            color: #00F0FF;
+            font-weight: 700;
+            padding: 0 3px;
         }
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
             cursor: pointer;
-            padding: 2px 5px;
+            padding: 1px 4px;
             border-radius: 4px;
             transition: all 0.15s ease;
         }
-        .legend-item:hover {
-            background: rgba(0, 240, 255, 0.12);
-        }
-        .legend-item.dimmed {
-            opacity: 0.30;
-            text-decoration: line-through;
-        }
+        .legend-item:hover { background: rgba(0, 240, 255, 0.12); }
+        .legend-item.dimmed { opacity: 0.30; text-decoration: line-through; }
+        .legend-count { color: #8B949E; font-size: 10px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        /* Faz 5.6 kontrol şeridi: efsanenin hemen altında, zaman kaydırıcısı +
-           tür/önem filtreleri + "yalnızca geçerli". Efsanenin içine konsaydı
-           kategori düğmeleriyle karışırdı. */
-        #graphControls {
+        /* Katlanan panel: tam kategori listesi + topluluk paleti + kontroller. */
+        #legendPanel {
             position: absolute;
-            left: 10px;
-            /* Efsanenin altına yerleşir; kesin değer yüklemede JS ile efsanenin
-               gerçek yüksekliğine göre düzeltilir (efsane sarınca büyüyor). */
-            top: 56px;
+            top: 40px;
+            left: 8px;
+            display: none;
             font-size: 11px;
-            background: rgba(14, 20, 32, 0.92);
+            background: rgba(14, 20, 32, 0.96);
             border: 1px solid #1F2B42;
             border-radius: 6px;
-            padding: 5px 10px;
+            padding: 8px 10px;
+            z-index: 11;
+            max-width: 460px;
+            color: #C9D1D9;
+            backdrop-filter: blur(6px);
+        }
+        #legendPanel.open { display: block; }
+        #legendPanelItems { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+        #graphControls {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
-            backdrop-filter: blur(6px);
-            z-index: 10;
-            max-width: calc(100vw - 20px);
-            color: #C9D1D9;
+            border-top: 1px solid #1F2B42;
+            padding-top: 6px;
         }
+        #graphControls.empty { display: none; }
         .ctrl-group { display: flex; align-items: center; gap: 5px; }
-        .ctrl-group.disabled { opacity: 0.35; }
+        .ctrl-group.disabled { display: none; }
         #graphControls select, #graphControls input[type=range] {
             background: #0E1420;
             color: #00F0FF;
@@ -490,7 +536,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 11px;
             padding: 1px 4px;
         }
-        #graphControls input[type=range] { width: 120px; padding: 0; }
+        #graphControls input[type=range] { width: 110px; padding: 0; }
         #controls {
             position: absolute;
             bottom: 12px;
@@ -520,11 +566,68 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             color: #080B10;
             border-color: #00F0FF;
         }
+        /* U7: arama kutusu (Ctrl+F) */
+        #searchBox {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 12;
+            display: none;
+            background: rgba(14, 20, 32, 0.96);
+            border: 1px solid #00F0FF;
+            border-radius: 6px;
+            padding: 4px 6px;
+            width: 260px;
+        }
+        #searchBox.open { display: block; }
+        #searchInput {
+            width: 100%;
+            background: #0E1420;
+            color: #F0F6FC;
+            border: 1px solid #1F2B42;
+            border-radius: 4px;
+            font-size: 11px;
+            padding: 3px 6px;
+            outline: none;
+        }
+        #searchResults { margin-top: 4px; max-height: 168px; overflow: hidden; }
+        .search-hit {
+            padding: 3px 6px;
+            font-size: 11px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #C9D1D9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .search-hit:hover { background: rgba(0, 240, 255, 0.14); color: #00F0FF; }
+        /* U5: breadcrumb — hiyerarşideki konum, gezinti geçmişi değil. */
+        #breadcrumb {
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9;
+            font-size: 11px;
+            color: #8B949E;
+            background: rgba(14, 20, 32, 0.82);
+            border: 1px solid #1F2B42;
+            border-radius: 6px;
+            padding: 3px 10px;
+            display: none;
+            max-width: 46vw;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+        #breadcrumb .crumb { cursor: pointer; color: #79C0FF; }
+        #breadcrumb .crumb:hover { color: #00F0FF; text-decoration: underline; }
         #infoBox {
             position: absolute;
             bottom: 12px;
             left: 12px;
-            right: 120px;
+            right: 300px;
             background: rgba(14, 20, 32, 0.95);
             border: 1px solid #00F0FF;
             border-radius: 6px;
@@ -539,53 +642,48 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div id="legend">
-        <div class="legend-item" onclick="toggleCategory('ego', this)"><span class="dot" style="background:#00F0FF;"></span> Çekirdek</div>
-        <div class="legend-item" onclick="toggleCategory('hub', this)"><span class="dot" style="background:#79C0FF;"></span> Ana Hublar</div>
-        <div class="legend-item" onclick="toggleCategory('project', this)"><span class="dot" style="background:#388BFD;"></span> Projeler</div>
-        <div class="legend-item" onclick="toggleCategory('skill', this)"><span class="dot" style="background:#00FF9D;"></span> Yetenekler</div>
-        <div class="legend-item" onclick="toggleCategory('subbranch', this)"><span class="dot" style="background:#FF79C6;"></span> Alt Dallar</div>
-        <div class="legend-item" onclick="toggleCategory('mcp', this)"><span class="dot" style="background:#F778BA;"></span> MCP</div>
-        <div class="legend-item" onclick="toggleCategory('cognitive', this)"><span class="dot" style="background:#7EE787;"></span> Bilişsel Bellek</div>
-        <div class="legend-item" onclick="toggleCategory('Reports', this)"><span class="dot" style="background:#FF0055;"></span> Araştırma Raporları</div>
-        <div class="legend-item" onclick="toggleCategory('office', this)"><span class="dot" style="background:#FFB000;"></span> 🏢 Ofisler</div>
-        <div class="legend-item" onclick="toggleCategory('agent', this)"><span class="dot" style="background:#2DD4BF;"></span> 🤖 Ajanlar</div>
-        <div class="legend-item" onclick="toggleCategory('query', this)"><span class="dot" style="background:#C792EA;"></span> 🔎 Sorgular & Ofis Raporları</div>
-        <div class="legend-item" onclick="toggleCategory('hub-offices', this)"><span class="dot" style="background:#FFC94D;"></span> 🏢 Ofis Kümesi</div>
-        <div class="legend-item" onclick="toggleCategory('concept', this)"><span class="dot" style="background:#9BE9A8;"></span> 📗 Kavramlar</div>
-        <div class="legend-item" onclick="toggleCategory('entity', this)"><span class="dot" style="background:#8CC8FF;"></span> 🏷 Varlıklar</div>
-        <div class="legend-item" onclick="toggleCategory('community', this)"><span class="dot" style="background:#FFD166;"></span> 🔮 Topluluklar</div>
+        <span id="legendToggle" onclick="toggleLegendPanel()" title="Tüm kategoriler, topluluk paleti ve filtreler">☰</span>
     </div>
-    <div id="graphControls">
-        <div class="ctrl-group" id="grpTime">
-            <span title="Kaydırıcıyı geçmişe çekince o tarihte henüz oluşmamış düğümler solar.">🕓 Zaman</span>
-            <input type="range" id="timeSlider" min="0" max="100" value="100"
-                   oninput="onTimeSlider(this.value)" title="Bellek zaman penceresi">
-            <span id="timeLabel">şimdi</span>
+    <div id="legendPanel">
+        <div id="legendPanelItems"></div>
+        <div id="graphControls">
+            <div class="ctrl-group" id="grpTime">
+                <span title="Kaydırıcıyı geçmişe çekince o tarihte henüz oluşmamış düğümler solar.">🕓 Zaman</span>
+                <input type="range" id="timeSlider" min="0" max="100" value="100"
+                       oninput="onTimeSlider(this.value)" title="Bellek zaman penceresi">
+                <span id="timeLabel">şimdi</span>
+            </div>
+            <div class="ctrl-group" id="grpType">
+                <span title="Yalnızca seçili düğüm türünü göster">🏷 Tür</span>
+                <select id="typeFilter" onchange="onTypeFilter(this.value)">
+                    <option value="">tümü</option>
+                </select>
+            </div>
+            <div class="ctrl-group" id="grpImportance">
+                <span title="Önem puanı bu eşiğin altındaki düğümler gizlenir">⭐ Önem</span>
+                <input type="range" id="importanceSlider" min="0" max="100" value="0"
+                       oninput="onImportanceSlider(this.value)" title="En düşük önem">
+                <span id="importanceLabel">0.00</span>
+            </div>
+            <div class="ctrl-group" id="grpValid">
+                <label title="Geçersizleştirilmiş (t_valid_to dolu) düğümleri gizler.">
+                    <input type="checkbox" id="onlyValid" checked onchange="onOnlyValid(this.checked)">
+                    yalnızca geçerli
+                </label>
+            </div>
+            <div class="ctrl-group" id="grpCommunity">
+                <button class="ctrl-btn" style="width:auto; padding:0 8px;" onclick="collapseAllCommunities()"
+                        title="Bütün toplulukları kapat (açılış görünümü)">⊟ toplulukları kapat</button>
+            </div>
         </div>
-        <div class="ctrl-group" id="grpType">
-            <span title="Yalnızca seçili düğüm türünü göster">🏷 Tür</span>
-            <select id="typeFilter" onchange="onTypeFilter(this.value)">
-                <option value="">tümü</option>
-            </select>
-        </div>
-        <div class="ctrl-group" id="grpImportance">
-            <span title="Önem puanı bu eşiğin altındaki düğümler gizlenir">⭐ Önem</span>
-            <input type="range" id="importanceSlider" min="0" max="100" value="0"
-                   oninput="onImportanceSlider(this.value)" title="En düşük önem">
-            <span id="importanceLabel">0.00</span>
-        </div>
-        <div class="ctrl-group" id="grpValid">
-            <label title="Geçersizleştirilmiş (t_valid_to dolu) düğümleri gizler; çift zamanlı bellekte varsayılan görünüm budur.">
-                <input type="checkbox" id="onlyValid" checked onchange="onOnlyValid(this.checked)">
-                yalnızca geçerli
-            </label>
-        </div>
-        <div class="ctrl-group" id="grpCommunity">
-            <button class="ctrl-btn" style="width:auto; padding:0 8px;" onclick="collapseAllCommunities()"
-                    title="Bütün toplulukları kapat (açılış görünümü)">⊟ toplulukları kapat</button>
-        </div>
+    </div>
+    <div id="breadcrumb"></div>
+    <div id="searchBox">
+        <input id="searchInput" type="text" placeholder="Ara (Ctrl+F) — Esc kapatır" oninput="onSearchInput(this.value)">
+        <div id="searchResults"></div>
     </div>
     <div id="controls">
+        <button class="ctrl-btn" onclick="toggleSearch()" title="Ara (Ctrl+F)">🔍</button>
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
         <button class="ctrl-btn" onclick="zoomOut()" title="Uzaklaştır">-</button>
         <button class="ctrl-btn" onclick="resetView()" title="Görünümü Sığdır / Sıfırla">⟲</button>
@@ -616,6 +714,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let width = 600;
         let height = 400;
 
+        // Faz 8 / U9: ölçüm kancası. QWebEngine içinden
+        // page.runJavaScript("window.__graphStats") ile okunur; kare süresi,
+        // görünür düğüm/etiket sayısı ve yerleşim yayılımı buradan raporlanır.
+        window.__graphStats = {
+            nodes: nodes.length, links: links.length,
+            simNodes: 0, simLinks: 0, drawnNodes: 0, drawnLinks: 0,
+            labels: 0, labelMs: 0, physMs: 0, drawMs: 0, frameMs: 0,
+            zoom: 1, band: 0, worldW: 0, worldH: 0, frames: []
+        };
+
         const nodeMap = new Map();
         nodes.forEach(n => {
             nodeMap.set(n.id, n);
@@ -636,9 +744,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let zoom = 1.0;
         let panX = 0;
         let panY = 0;
-        // Yükleme sırasındaki sığdırma fizik açılmadan çalışır; ağaç sonradan
-        // genişleyince görünüm bir köşede kalıyordu. Benzetim durulunca bir kez
-        // daha sığdırılır — kullanıcı o arada yakınlaştırdı/kaydırdıysa dokunulmaz.
         let userAdjustedView = false;
         let settledFitDone = false;
         let isPanning = false;
@@ -646,63 +751,28 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let panStartY = 0;
 
         const activeCategories = {
-            'ego': true,
-            'hub': true,
-            'project': true,
-            'skill': true,
-            'subbranch': true,
-            'mcp': true,
-            'mcp-tool': true,
-            'cognitive': true,
-            'semantic': true,
-            'episodic': true,
-            'procedural': true,
-            'Reports': true,
-            'obsidian': true,
-            'DailyNotes': true,
-            'office': true,
-            'agent': true,
-            'query': true,
-            // Faz 4: bellek ajani bu gruplari veri tarafinda uretiyor.
-            // 'hub-offices' ofis kumesinin govde dugumu; 'concept' ve 'entity'
-            // bilissel bellekten cikan kavram/varlik yapraklari.
-            'hub-offices': true,
-            'concept': true,
-            // Faz 5.6: topluluk (özet) düğümleri. Açılışta görünür, üyeleri kapalı.
-            'community': true,
-            'entity': true
+            'ego': true, 'hub': true, 'project': true, 'skill': true,
+            'subbranch': true, 'mcp': true, 'mcp-tool': true, 'cognitive': true,
+            'semantic': true, 'episodic': true, 'procedural': true,
+            'Reports': true, 'obsidian': true, 'DailyNotes': true,
+            'office': true, 'agent': true, 'query': true,
+            'hub-offices': true, 'concept': true, 'community': true, 'entity': true
         };
 
         // ---- Faz 5.6: çift zamanlı bellek kontrolleri ----
-        //
-        // Alanlar bellek ajanının (Faz 5.1/5.2) ürettiği düğümlerden gelir:
-        //   type           — CoALA düğüm etiketi (episode/fact/entity/...)
-        //   importance     — 0..1 önem puanı
-        //   t_valid_from   — olgunun geçerli olmaya başladığı an
-        //   t_valid_to     — geçersizleştirildiği an (boşsa hâlâ geçerli)
-        //   group=community + member_count — topluluk (özet) düğümü
-        //
-        // HİÇBİRİ ZORUNLU DEĞİL. Alan yoksa ilgili kontrol pasifleşir ve grafik
-        // Faz 4'teki gibi davranır; eski kasalarda hiçbir şey bozulmaz.
-
         function parseGraphTime(v) {
             if (v === null || v === undefined || v === '') return null;
-            if (typeof v === 'number') {
-                // Saniye cinsinden unix damgası da olabilir; ms'ye normalize et.
-                return v < 1e11 ? v * 1000 : v;
-            }
+            if (typeof v === 'number') return v < 1e11 ? v * 1000 : v;
             const parsed = Date.parse(String(v));
             return isNaN(parsed) ? null : parsed;
         }
 
-        // Alanları bir kez çözüp düğüme yaz: 1000+ düğümde her karede yeniden
-        // ayrıştırmak kare süresini kabul edilemez biçimde büyütürdü.
         let hasTimeData = false;
         let hasImportanceData = false;
         let hasValidityData = false;
         let hasCommunityData = false;
         const nodeTypes = [];
-        const communityMembers = new Map();  // topluluk id -> üye sayısı
+        const communityMembers = new Map();
 
         nodes.forEach(n => {
             n._tFrom = parseGraphTime(n.t_valid_from);
@@ -716,14 +786,14 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (n.group === 'community') {
                 hasCommunityData = true;
                 if (typeof n.member_count === 'number' && n.member_count > 0) {
-                    // Topluluk düğümünün yarıçapı üye sayısıyla büyür (log:
-                    // 5 üyeli ile 500 üyeli topluluk arasında 10x fark olmasın).
                     n.val = Math.max(n.val || 12, 12 + Math.log(1 + n.member_count) * 6);
                 }
             }
         });
 
-        // Üyelik: düğümde community_id / parent_hub, ya da member_of kenarı.
+        const communityIds = new Set();
+        nodes.forEach(n => { if (n.group === 'community') communityIds.add(String(n.id)); });
+
         function memberCommunityOf(n) {
             if (!n || n.group === 'community') return null;
             if (n.community_id) return String(n.community_id);
@@ -731,8 +801,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             return n._memberOf || null;
         }
 
-        const communityIds = new Set();
-        nodes.forEach(n => { if (n.group === 'community') communityIds.add(String(n.id)); });
         links.forEach(l => {
             if (!l || l.type !== 'member_of') return;
             const src = String(l.source && l.source.id ? l.source.id : l.source);
@@ -754,41 +822,30 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n._tFrom > timeMax) timeMax = n._tFrom;
             }
         });
-        if (!isFinite(timeMin) || !isFinite(timeMax) || timeMax <= timeMin) {
-            hasTimeData = false;
-        }
+        if (!isFinite(timeMin) || !isFinite(timeMax) || timeMax <= timeMin) hasTimeData = false;
 
-        // Açılışta topluluklar KAPALI: tasarım "açılışta topluluk düğümleri,
-        // tıklayınca kademeli açılma" diyor.
         const expandedCommunities = new Set();
-        let timeCursor = 1.0;        // 0..1, 1 = şimdi
-        let minImportance = 0.0;     // 0..1
-        let typeFilter = '';         // '' = tümü
-        let onlyValid = true;        // t_valid_to dolu olanları gizle
+        let timeCursor = 1.0;
+        let minImportance = 0.0;
+        let typeFilter = '';
+        let onlyValid = true;
 
         function timeCursorMs() {
             if (!hasTimeData) return Infinity;
             return timeMin + (timeMax - timeMin) * timeCursor;
         }
-
-        // Zaman penceresi dışında mı? (soluk çizilir, gizlenmez: kullanıcı
-        // "burada bir şey vardı" bilgisini kaybetmesin)
         function isOutsideTimeWindow(n) {
             if (!hasTimeData || n._tFrom === null) return false;
             return n._tFrom > timeCursorMs();
         }
-
         function isInvalidated(n) {
             return hasValidityData && n._tTo !== null && n._tTo <= timeCursorMs();
         }
-
-        // Topluluk kapalıyken üyeleri gizlenir (kademeli açılma).
         function isCollapsedMember(n) {
             if (!hasCommunityData) return false;
             const cid = memberCommunityOf(n);
             return !!cid && !expandedCommunities.has(cid);
         }
-
         function toggleCommunity(id) {
             const key = String(id);
             if (expandedCommunities.has(key)) expandedCommunities.delete(key);
@@ -796,12 +853,10 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             relayoutAndFit(0.6, false);
             return expandedCommunities.has(key);
         }
-
         function collapseAllCommunities() {
             expandedCommunities.clear();
             relayoutAndFit(0.6, false);
         }
-
         function onTimeSlider(value) {
             timeCursor = Math.max(0, Math.min(1, Number(value) / 100));
             const label = document.getElementById('timeLabel');
@@ -812,69 +867,25 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
             requestRender();
         }
-
         function onImportanceSlider(value) {
             minImportance = Math.max(0, Math.min(1, Number(value) / 100));
             const label = document.getElementById('importanceLabel');
             if (label) label.textContent = minImportance.toFixed(2);
             relayoutAndFit(0.4, false);
         }
-
         function onTypeFilter(value) {
             typeFilter = String(value || '');
             relayoutAndFit(0.4, false);
         }
-
         function onOnlyValid(checked) {
             onlyValid = !!checked;
             requestRender();
         }
 
-        // Kontrol şeridini veriye göre kur: alan yoksa grup pasifleşir.
-        function initGraphControls() {
-            const setDisabled = (groupId, inputId, disabled) => {
-                const group = document.getElementById(groupId);
-                if (group && group.classList) group.classList.toggle('disabled', disabled);
-                const input = document.getElementById(inputId);
-                if (input) input.disabled = disabled;
-            };
-            setDisabled('grpTime', 'timeSlider', !hasTimeData);
-            setDisabled('grpImportance', 'importanceSlider', !hasImportanceData);
-            setDisabled('grpValid', 'onlyValid', !hasValidityData);
-            setDisabled('grpType', 'typeFilter', nodeTypes.length === 0);
-            const community = document.getElementById('grpCommunity');
-            if (community && community.classList) {
-                community.classList.toggle('disabled', !hasCommunityData);
-            }
-            const select = document.getElementById('typeFilter');
-            if (select && select.appendChild && typeof document.createElement === 'function') {
-                nodeTypes.slice().sort().forEach(t => {
-                    const option = document.createElement('option');
-                    option.value = t;
-                    option.textContent = t;
-                    select.appendChild(option);
-                });
-            }
-            const label = document.getElementById('timeLabel');
-            if (label) label.textContent = hasTimeData ? 'şimdi' : 'veri yok';
-            // Şerit efsanenin altına: efsane sarınca sabit 56 px yetmiyor.
-            const legend = document.getElementById('legend');
-            const strip = document.getElementById('graphControls');
-            if (legend && strip && strip.style && legend.offsetHeight) {
-                strip.style.top = (legend.offsetHeight + 16) + 'px';
-            }
-        }
-        initGraphControls();
-
-        // ---- Faz 6: seçim ve dal izolasyonu ----
-        //
-        // 👁️ düğmesi eskiden yalnızca "Odak" kapsamıyla çalışıyordu; kapsam
-        // "Tüm Hafıza" iken hiçbir şey yapmıyordu (kullanıcının gördüğü hata).
-        // Artık izolasyon SEÇİLİ DÜĞÜMÜN DALINA uygulanır: atalar + alt ağaç +
-        // doğrudan komşular. Seçim yoksa eski kapsam davranışına düşülür.
-        const treeChildren = new Map();   // ebeveyn id -> [çocuk id]
-        const treeParent = new Map();     // çocuk id -> ebeveyn id
-        const neighborIds = new Map();    // id -> Set(komşu id)
+        // ---- Faz 6: ağaç yapısı, seçim ve dal izolasyonu ----
+        const treeChildren = new Map();
+        const treeParent = new Map();
+        const neighborIds = new Map();
 
         function addNeighbor(a, b) {
             let s = neighborIds.get(a);
@@ -896,20 +907,211 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
         });
 
-        // parent_hub alanı ağaç kenarı üretilmemiş düğümlerde de ebeveyni verir.
+        // Kenar çifti indeksi: parent_hub ile türetilen ebeveynlikler için
+        // sentetik ağaç kenarı üretilir. Aksi hâlde (bu kasada alt dalların bir
+        // kısmı) düğüm ekranda ebeveynine bağlanmadan yalnız duruyordu.
+        const linkPairs = new Set();
+        links.forEach(l => {
+            if (!l.sourceNode || !l.targetNode) return;
+            linkPairs.add(l.sourceNode.id + '>' + l.targetNode.id);
+            linkPairs.add(l.targetNode.id + '>' + l.sourceNode.id);
+        });
         nodes.forEach(n => {
             if (!treeParent.has(n.id) && n.parent_hub && nodeMap.has(String(n.parent_hub))) {
-                treeParent.set(n.id, String(n.parent_hub));
-                let kids = treeChildren.get(String(n.parent_hub));
-                if (!kids) { kids = []; treeChildren.set(String(n.parent_hub), kids); }
+                const pid = String(n.parent_hub);
+                treeParent.set(n.id, pid);
+                let kids = treeChildren.get(pid);
+                if (!kids) { kids = []; treeChildren.set(pid, kids); }
                 if (kids.indexOf(n.id) === -1) kids.push(n.id);
+                if (!linkPairs.has(pid + '>' + n.id)) {
+                    const parent = nodeMap.get(pid);
+                    const syn = {
+                        source: pid, target: n.id, is_tree_link: true, is_synthetic: true,
+                        sourceNode: parent, targetNode: n
+                    };
+                    links.push(syn);
+                    linkPairs.add(pid + '>' + n.id);
+                    linkPairs.add(n.id + '>' + pid);
+                    addNeighbor(pid, n.id);
+                    addNeighbor(n.id, pid);
+                }
             }
         });
+
+        // ---- Faz 8: türetilmiş alanlar ----
+        //
+        // memory-rag-engineer `level, importance, degree, child_count,
+        // short_label, community_id` alanlarını `build_unified_graph` çıktısına
+        // ekliyor. Alanlar HENÜZ GELMEMİŞ OLABİLİR: geldiyse tercih edilir,
+        // gelmediyse burada türetilir (level ağaç derinliğinden, degree kenar
+        // sayımından, short_label ad kırpmasından). İki durumda da aşağıdaki
+        // kod tek bir alan adına (`_level`, `_deg`, `_imp`, `_short`) bakar.
+        const STRUCTURAL_GROUPS = {
+            'ego': 1, 'hub': 1, 'hub-offices': 1, 'project': 1, 'skill': 1,
+            'subbranch': 1, 'mcp': 1, 'office': 1, 'agent': 1, 'community': 1,
+            'cognitive': 1
+        };
+
+        const GROUP_LEVEL = {
+            'ego': 0, 'hub': 1, 'hub-offices': 1,
+            'project': 2, 'skill': 2, 'mcp': 2, 'office': 2, 'community': 2, 'cognitive': 2,
+            'subbranch': 3, 'agent': 3
+        };
+
+        const degreeCount = new Map();
+        links.forEach(l => {
+            if (l.is_catalog_link) return;
+            const s = l.sourceNode, t = l.targetNode;
+            if (!s || !t || s === t) return;
+            degreeCount.set(s.id, (degreeCount.get(s.id) || 0) + 1);
+            degreeCount.set(t.id, (degreeCount.get(t.id) || 0) + 1);
+        });
+
+        function treeDepth(id) {
+            let d = 0, cur = id, guard = 0;
+            while (guard++ < 64) {
+                const p = treeParent.get(cur);
+                if (!p || p === cur) break;
+                d++; cur = p;
+            }
+            return d;
+        }
+
+        // `Gorev_<yetenek>_<tarih>_<konu>` kalıbından konuya odaklı kısa etiket.
+        const NEWLINE_RE = new RegExp('[' + String.fromCharCode(13) + String.fromCharCode(10) + ']+', 'g');
+        function flattenName(name) {
+            return String(name || '').replace(NEWLINE_RE, ' ').replace(/[ ]{2,}/g, ' ').trim();
+        }
+        function shortenLabel(name) {
+            let s = flattenName(name);
+            if (s.indexOf('Gorev_') === 0 || s.indexOf('Görev_') === 0) {
+                const parts = s.split('_');
+                if (parts.length >= 3) s = parts.slice(2).join(' ').trim() || s;
+            }
+            s = s.replace(/^[0-9]{4}-[0-9]{2}-[0-9]{2}[ _-]*/, '');
+            if (s.length > 28) s = s.substring(0, 27).trim() + '…';
+            return s || String(name || '');
+        }
+
+        const shortLabelSeen = new Map();
+        let maxDegree = 1, maxChildren = 1;
+        nodes.forEach(n => {
+            const deg = (typeof n.degree === 'number') ? n.degree : (degreeCount.get(n.id) || 0);
+            n._deg = deg;
+            if (deg > maxDegree) maxDegree = deg;
+            const kids = treeChildren.get(n.id);
+            n._childCount = (typeof n.child_count === 'number') ? n.child_count : (kids ? kids.length : 0);
+            if (n._childCount > maxChildren) maxChildren = n._childCount;
+        });
+        nodes.forEach(n => {
+            if (typeof n.level === 'number') n._level = n.level;
+            else if (!STRUCTURAL_GROUPS[n.group]) {
+                // Yaprak (rapor/anı/araç): kasadaki ağaç derinliği 3'te düz
+                // olduğu için derinlik yaprak ayrımı yapmaz; grup yapar.
+                n._level = 4;
+            } else {
+                const d = treeDepth(n.id);
+                const g = GROUP_LEVEL[n.group];
+                n._level = Math.min(3, (d > 0) ? d : (g === undefined ? 3 : g));
+            }
+            if (n._imp === null) {
+                // Türetilmiş önem: seviye (küçük = önemli) + normalize derece.
+                const lvlPart = 1 - Math.min(4, n._level) / 4;
+                const degPart = Math.log(1 + n._deg) / Math.log(1 + maxDegree);
+                n._imp = Math.max(0, Math.min(1, 0.6 * lvlPart + 0.4 * degPart));
+                n._impDerived = true;
+            }
+            let sl = (typeof n.short_label === 'string' && n.short_label) ? n.short_label : shortenLabel(n.name);
+            const seen = shortLabelSeen.get(sl);
+            if (seen) {
+                shortLabelSeen.set(sl, seen + 1);
+                sl = sl + ' (' + (seen + 1) + ')';
+            } else {
+                shortLabelSeen.set(sl, 1);
+            }
+            n._short = sl;
+            n._full = flattenName(n.name);
+            n._cid = (n.community_id !== undefined && n.community_id !== null)
+                ? String(n.community_id)
+                : (memberCommunityOf(n) || (typeof n.community === 'number' ? 'c' + n.community : null));
+        });
+
+        // Kök hub (level 1 atası): sektör çekiminde ve breadcrumb'da kullanılır.
+        function rootHubOf(id) {
+            let cur = id, guard = 0, last = id;
+            while (guard++ < 64) {
+                const n = nodeMap.get(cur);
+                if (n && n._level === 1) return cur;
+                const p = treeParent.get(cur);
+                if (!p || p === cur) break;
+                last = cur; cur = p;
+            }
+            return (nodeMap.get(cur) && nodeMap.get(cur)._level === 1) ? cur : last;
+        }
+        const hubIds = nodes.filter(n => n._level === 1).map(n => n.id).sort();
+        nodes.forEach(n => { n._rootHub = rootHubOf(n.id); n._sector = null; });
+
+        // U1 sektör çekimi: her düğüm ebeveyninin açı diliminden alt ağaç
+        // büyüklüğü oranında pay alır (klasik ağırlıklı radyal ağaç). Kardeş
+        // dallar açısal olarak ayrıldığı için bir dalın yaprakları komşu dalın
+        // alanına akmaz ve ağaç kenarları birbirini kesmez.
+        const subtreeSize = new Map();
+        const treeRoots = [];
+        (function computeSubtreeSizes() {
+            const order = [];
+            const seen = new Set();
+            nodes.forEach(n => { if (!treeParent.has(n.id)) treeRoots.push(n.id); });
+            const stack = treeRoots.slice();
+            while (stack.length) {
+                const cur = stack.pop();
+                if (seen.has(cur)) continue;
+                seen.add(cur);
+                order.push(cur);
+                const kids = treeChildren.get(cur);
+                if (kids) for (let i = 0; i < kids.length; i++) if (!seen.has(kids[i])) stack.push(kids[i]);
+            }
+            for (let i = order.length - 1; i >= 0; i--) {
+                const kids = treeChildren.get(order[i]);
+                let s = 1;
+                if (kids) for (let j = 0; j < kids.length; j++) s += (subtreeSize.get(kids[j]) || 1);
+                subtreeSize.set(order[i], s);
+            }
+        })();
+
+        (function assignSectors() {
+            let total = 0;
+            treeRoots.forEach(id => { total += (subtreeSize.get(id) || 1); });
+            if (total <= 0) total = 1;
+            const queue = [];
+            let a0 = 0;
+            treeRoots.forEach(id => {
+                const span = (subtreeSize.get(id) || 1) / total * Math.PI * 2;
+                queue.push([id, a0, a0 + span]);
+                a0 += span;
+            });
+            let guard = 0;
+            while (queue.length && guard++ < 500000) {
+                const item = queue.shift();
+                const id = item[0], s = item[1], e = item[2];
+                const n = nodeMap.get(id);
+                if (n) { n._a0 = s; n._a1 = e; n._sector = (s + e) / 2; }
+                const kids = treeChildren.get(id);
+                if (!kids || !kids.length) continue;
+                let tot = 0;
+                for (let i = 0; i < kids.length; i++) tot += (subtreeSize.get(kids[i]) || 1);
+                let cur = s;
+                const sorted = kids.slice().sort();
+                for (let i = 0; i < sorted.length; i++) {
+                    const span = (subtreeSize.get(sorted[i]) || 1) / Math.max(1, tot) * (e - s);
+                    queue.push([sorted[i], cur, cur + span]);
+                    cur += span;
+                }
+            }
+        })();
 
         function computeBranchSet(rootId) {
             const out = new Set();
             if (!rootId || !nodeMap.has(rootId)) return out;
-            // 1. Alt ağaç (genişlik öncelikli; döngüye karşı ziyaret kümesi).
             const queue = [rootId];
             while (queue.length) {
                 const cur = queue.shift();
@@ -918,14 +1120,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const kids = treeChildren.get(cur);
                 if (kids) for (let i = 0; i < kids.length; i++) queue.push(kids[i]);
             }
-            // 2. Atalar (kökten seçili düğüme giden yol görünür kalsın).
             let p = treeParent.get(rootId);
             let guard = 0;
-            while (p && guard++ < 64) {
-                out.add(p);
-                p = treeParent.get(p);
-            }
-            // 3. Seçili düğümün doğrudan komşuları (benzerlik/wikilink bağları).
+            while (p && guard++ < 64) { out.add(p); p = treeParent.get(p); }
             const nb = neighborIds.get(rootId);
             if (nb) nb.forEach(id => out.add(id));
             return out;
@@ -938,52 +1135,76 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             isolatedIds = (isIsolated && selectedNodeId) ? computeBranchSet(selectedNodeId) : null;
         }
 
-        // ---- Faz 6: kademeli detay (yaprak raporlar açılışta gizli) ----
+        // ---- Faz 8 / U2: dört bantlı LOD ----
         //
-        // 1100 düğümlük bir arşivde her yaprağı birden çizmek grafiği kırmızı
-        // yıldız bulutuna çeviriyordu: sığdırma zoom'u 0,06'ya düşüyor, hiçbir
-        // etiket okunmuyordu. Artık açılışta yalnızca YAPISAL iskelet (çekirdek,
-        // ana hub'lar, projeler, yetenekler, alt dallar, ofis/ajan, topluluk
-        // özetleri) çizilir. Yapraklar iki doğal yolla açılır:
-        //   * yakınlaştırma DETAIL_ZOOM eşiğini geçince (tekerlek / + düğmesi)
-        //   * bir dala tıklayınca (yalnızca o dalın yaprakları)
-        // Ayrı bir "raporları göster" düğmesi bilerek eklenmemiştir.
-        const STRUCTURAL_GROUPS = {
-            'ego': 1, 'hub': 1, 'hub-offices': 1, 'project': 1, 'skill': 1,
-            'subbranch': 1, 'mcp': 1, 'office': 1, 'agent': 1, 'community': 1,
-            'cognitive': 1
-        };
-        const DETAIL_ZOOM = 0.9;
+        // Tek eşik (58 -> 1145 düğüm) yerine dört bant: uzak / harita / dal /
+        // yakın. ZMLT tutarlılığı: bir bantta görünen düğüm daha yakın bantlarda
+        // KAYBOLMAZ (maxLevel monoton artar). Geçişler sert değil: 0,1'lik ara
+        // bantta α-karışımıyla belirir, benzetim yeniden ısıtılmaz.
+        const LOD_FAR = 0.25;
+        const LOD_MAP = 0.75;
+        const LOD_BRANCH = 1.2;
+        const LOD_FADE = 0.10;
+        // Geriye uyum: eski tek eşik adı korunur (yaprakların açıldığı bant).
+        const DETAIL_ZOOM = LOD_MAP;
+
+        function lodBand(z) {
+            if (z < LOD_FAR) return 0;
+            if (z < LOD_MAP) return 1;
+            if (z < LOD_BRANCH) return 2;
+            return 3;
+        }
+        const BAND_MAX_LEVEL = [2, 3, 4, 4];
+        function bandMaxLevel() { return BAND_MAX_LEVEL[lodBand(zoom)]; }
+
+        // Düğümün belirdiği zoom eşiği: α-karışımı bunun etrafında yapılır.
+        function appearZoom(n) {
+            if (n._level <= 2) return 0;
+            if (n._level === 3) return LOD_FAR;
+            return LOD_MAP;
+        }
+        function lodFade(n) {
+            // Kullanıcının açtığı dal / izolasyon kümesi LOD solmasına tabi
+            // değildir: dala sığdırma zoom'u eşiğin altında kalsa bile yapraklar
+            // görünür kalır.
+            if (isExplicitlyShown(n)) return 1;
+            const az = appearZoom(n);
+            if (az <= 0) return 1;
+            if (zoom >= az + LOD_FADE) return 1;
+            if (zoom <= az) return 0;
+            return (zoom - az) / LOD_FADE;
+        }
+
         const structuralCount = nodes.filter(n => STRUCTURAL_GROUPS[n.group]).length;
-        // İskeleti olmayan (küçük ya da düz) kasalarda kademelendirme grafiği
-        // boşaltırdı; böyle durumda her şey açılıştan görünür kalır.
         const detailsAlwaysOn = structuralCount < 8;
         const expandedBranches = new Set();
 
         function isDetailNode(n) {
-            return !STRUCTURAL_GROUPS[n.group];
+            return !STRUCTURAL_GROUPS[n.group] || n._level >= 4;
         }
-
         function detailsGloballyVisible() {
             return detailsAlwaysOn || zoom >= DETAIL_ZOOM;
         }
-
-        function isDetailShown(n) {
-            if (detailsGloballyVisible()) return true;
+        // Kullanıcı bu düğümü açıkça açtı mı? (dal açma, izolasyon, seçim)
+        function isExplicitlyShown(n) {
             if (isolatedIds && isolatedIds.has(n.id)) return true;
             if (expandedBranches.size === 0) return false;
             if (expandedBranches.has(n.id)) return true;
             if (n.parent_hub && expandedBranches.has(String(n.parent_hub))) return true;
             if (n.skill_hub && expandedBranches.has(String(n.skill_hub))) return true;
-            return false;
+            const p = treeParent.get(n.id);
+            return !!(p && expandedBranches.has(p));
         }
 
-        // Yakınlık eşiği aşıldığında görünür küme değişir; benzetim buna göre
-        // yeniden kurulmalıdır. Eşik geçişi tekerlek/düğme dışında (örneğin
-        // sığdırma zoom'u düşürdüğünde) de olabildiği için tek yerden izlenir.
+        function isDetailShown(n) {
+            if (detailsAlwaysOn) return true;
+            if (isExplicitlyShown(n)) return true;
+            return n._level <= bandMaxLevel();
+        }
+
         let lastDetailState = null;
         function syncDetailState() {
-            const cur = detailsGloballyVisible();
+            const cur = lodBand(zoom);
             if (lastDetailState === null) { lastDetailState = cur; return false; }
             if (cur !== lastDetailState) {
                 lastDetailState = cur;
@@ -1004,14 +1225,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (isolatedIds && !isolatedIds.has(n.id)) return false;
             if (!isCategoryActive(n.group)) return false;
             if (typeFilter && n._type && n._type !== typeFilter) return false;
-            if (minImportance > 0 && n._imp !== null && n._imp < minImportance) return false;
+            if (minImportance > 0 && n._imp !== null && !n._impDerived && n._imp < minImportance) return false;
             if (isCollapsedMember(n)) return false;
             if (isDetailNode(n) && !isDetailShown(n)) return false;
             return true;
         }
 
-        // Çizim solukluğu: pencere dışı / geçersizleştirilmiş düğümler görünür
-        // ama silik kalır. 1.0 = tam, 0 = çizme.
         function nodeAlphaFactor(n) {
             if (isInvalidated(n)) return onlyValid ? 0.10 : 0.45;
             if (isOutsideTimeWindow(n)) return 0.12;
@@ -1020,18 +1239,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         function isCategoryActive(group) {
             if (!group) return true;
-            if (group === 'subbranch') {
-                if (activeCategories['skill'] === false) return false;
-            }
-            if (group === 'semantic' || group === 'episodic' || group === 'procedural') {
-                if (activeCategories['cognitive'] === false) return false;
-            }
-            if (group === 'mcp-tool') {
-                if (activeCategories['mcp'] === false) return false;
-            }
-            if (group === 'DailyNotes' || group === 'obsidian') {
-                if (activeCategories['cognitive'] === false) return false;
-            }
+            if (group === 'subbranch' && activeCategories['skill'] === false) return false;
+            if ((group === 'semantic' || group === 'episodic' || group === 'procedural')
+                && activeCategories['cognitive'] === false) return false;
+            if (group === 'mcp-tool' && activeCategories['mcp'] === false) return false;
+            if ((group === 'DailyNotes' || group === 'obsidian')
+                && activeCategories['cognitive'] === false) return false;
             return activeCategories[group] !== false;
         }
 
@@ -1047,13 +1260,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n.parent_hub === 'subhub-project-' + targetSlug) return true;
                 return false;
             }
-
             if (currentScope === 'all_skills') {
                 if (n.id === 'hub-skills') return true;
                 if (n.cluster_group === 'skills' || n.group === 'skill' || n.group === 'subbranch' || (n.parent_hub && (n.parent_hub.startsWith('subhub-skill-') || n.parent_hub.startsWith('subbranch-')))) return true;
                 return false;
             }
-
             if (currentScope.startsWith('skill:')) {
                 const targetSkill = currentScope.replace('skill:', '');
                 const targetSubhub = 'subhub-skill-' + targetSkill;
@@ -1062,27 +1273,22 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n.parent_hub === targetSubhub || (n.cluster && n.cluster === 'skill:' + targetSkill)) return true;
                 return false;
             }
-
             if (currentScope === 'all_mcp') {
                 if (n.id === 'hub-mcp') return true;
                 if (n.cluster_group === 'mcp' || n.group === 'mcp' || n.group === 'mcp-tool' || (n.parent_hub && n.parent_hub.startsWith('subhub-mcp-'))) return true;
                 return false;
             }
-
             if (currentScope === 'all_offices') {
                 if (n.id === 'hub-offices') return true;
                 if (n.cluster_group === 'offices' || n.group === 'office' || n.group === 'agent') return true;
-                // Ofise bagli sorgu sayfalari (ofis raporlari) da odakta kalir.
                 if (n.group === 'query' && n.parent_hub && n.parent_hub.startsWith('office/')) return true;
                 return false;
             }
-
             if (currentScope === 'all_cognitive') {
                 if (n.id === 'hub-cognitive') return true;
                 if (n.cluster_group === 'cognitive' || ['semantic', 'episodic', 'procedural', 'DailyNotes'].includes(n.group) || (n.parent_hub && (n.parent_hub.startsWith('subhub-cog-') || n.parent_hub.startsWith('subbranch-cog-')))) return true;
                 return false;
             }
-
             return true;
         }
 
@@ -1095,23 +1301,19 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             fitToView();
         }
 
-        // Python tarafı (Odak listesi / rapor seçimi) ya da kanvas tıklaması
-        // seçili düğümü buradan bildirir. Seçim aynı zamanda o dalın
-        // yapraklarını açar; izolasyon açıksa küme yeniden hesaplanır.
         function setSelectedNode(id) {
             selectedNodeId = id ? String(id) : null;
             if (selectedNodeId && !expandedBranches.has(selectedNodeId)) {
                 expandedBranches.add(selectedNodeId);
             }
             recomputeIsolation();
+            updateBreadcrumb();
             userAdjustedView = false;
             relayoutAndFit(0.7, true);
             fitToView();
         }
 
         function setScope(newScope) {
-            // Odak değişince aynı radyal kural seçili dal için uygulanır:
-            // kapsam dışı düğümler düzenden çıkar, seçili dal tüm çemberi kaplar.
             currentScope = newScope;
             userAdjustedView = false;
             relayoutAndFit(1.0, true);
@@ -1128,23 +1330,18 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         function toggleCategory(cat, el) {
             const newState = !activeCategories[cat];
             activeCategories[cat] = newState;
-            el.classList.toggle('dimmed', !newState);
-            // Kategori kapanınca kalan düğümler boşluğu organik olarak doldurur;
-            // görünüm sıçramasın diye yeniden sığdırma yapılmaz.
+            if (el && el.classList) el.classList.toggle('dimmed', !newState);
+            document.querySelectorAll('[data-cat="' + cat + '"]').forEach(e => {
+                e.classList.toggle('dimmed', !newState);
+            });
             relayoutAndFit(0.5, false);
         }
 
         function updateDimensions() {
-            // Kanvasın kendi ölçüsü hesaba katılmaz: bir kez büyüyünce clientWidth
-            // o değerde kalıyor ve panel küçülünce sığdırma eski büyük kanvasa göre
-            // yapılıp grafik sağ altta minik kalıyordu.
             width = canvas.width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 300);
             height = canvas.height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 250);
             requestRender();
         }
-        // Panel yeniden boyutlanınca (Zen penceresi açılışta büyükten küçülür) yalnızca
-        // kanvas ölçüsü değil, sığdırma da yenilenir; kullanıcı görünümü elle
-        // ayarladıysa dokunulmaz.
         let resizeTimer = null;
         window.addEventListener('resize', () => {
             updateDimensions();
@@ -1158,74 +1355,165 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         updateDimensions();
 
         const colors = {
-            'ego': '#00F0FF',
-            'hub': '#79C0FF',
-            'project': '#388BFD',
-            'skill': '#00FF9D',
-            'subbranch': '#FF79C6',
-            'mcp': '#F778BA',
-            'mcp-tool': '#D2A8FF',
-            'cognitive': '#7EE787',
-            'semantic': '#7EE787',
-            'episodic': '#FFB300',
-            'procedural': '#58A6FF',
-            'Reports': '#FF0055',
-            'DailyNotes': '#E3B341',
-            'obsidian': '#BC8CFF',
-            'office': '#FFB000',
-            'agent': '#2DD4BF',
-            'query': '#C792EA',
-            'hub-offices': '#FFC94D',
-            'concept': '#9BE9A8',
-            'entity': '#8CC8FF',
-            'community': '#FFD166'
+            'ego': '#00F0FF', 'hub': '#79C0FF', 'project': '#388BFD', 'skill': '#00FF9D',
+            'subbranch': '#FF79C6', 'mcp': '#F778BA', 'mcp-tool': '#D2A8FF',
+            'cognitive': '#7EE787', 'semantic': '#7EE787', 'episodic': '#FFB300',
+            'procedural': '#58A6FF', 'Reports': '#FF0055', 'DailyNotes': '#E3B341',
+            'obsidian': '#BC8CFF', 'office': '#FFB000', 'agent': '#2DD4BF',
+            'query': '#C792EA', 'hub-offices': '#FFC94D', 'concept': '#9BE9A8',
+            'entity': '#8CC8FF', 'community': '#FFD166'
         };
 
-        // Grup ikonlari: efsanedeki dizgeyle ayni. Ikon yalnizca ofis/ajan/sorgu
-        // gibi yapisal dugumlerde cizilir; yuzlerce rapor yapraginda emoji
-        // cizmek kare suresini gereksiz yere buyutur.
+        // U6: renk körlüğüne güvenli paletler. OKABE_ITO kategori yedeği
+        // (tabloda olmayan grup), TOL_12 ise topluluk tonlarıdır: 88 topluluğu
+        // altın açıyla 88 tona dağıtmak yerine 12 ayrık ton döngüsü kullanılır.
+        const OKABE_ITO = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
+                           '#0072B2', '#D55E00', '#CC79A7', '#999999'];
+        const TOL_12 = ['#332288', '#88CCEE', '#44AA99', '#117733', '#999933', '#DDCC77',
+                        '#CC6677', '#882255', '#AA4499', '#6699CC', '#DDAA33', '#BB5566'];
+
         const groupIcons = {
-            'office': '🏢',
-            'agent': '🤖',
-            'query': '🔎',
-            'hub-offices': '🏢',
-            'concept': '📗',
-            'entity': '🏷',
-            'community': '🔮'
+            'office': '🏢', 'agent': '🤖', 'query': '🔎', 'hub-offices': '🏢',
+            'concept': '📗', 'entity': '🏷', 'community': '🔮'
         };
-
-        function getNodeIcon(group) {
-            return groupIcons[group] || '';
-        }
-
+        function getNodeIcon(group) { return groupIcons[group] || ''; }
         function getNodeColor(group) {
-            return colors[group] || '#79C0FF';
+            if (colors[group]) return colors[group];
+            return OKABE_ITO[Math.abs(hashSeed(String(group || ''))) % OKABE_ITO.length];
         }
 
-        // Topluluk tonu: etiket yayılımıyla bulunan topluluklar altın açı ile
-        // ayrık renk tonlarına eşlenir. Yalnızca hale/benzerlik kenarı boyanır;
-        // düğümün çekirdek rengi grup rengidir (efsane geçerli kalsın).
+        function communityIndex(n) {
+            if (typeof n.community === 'number') return n.community;
+            if (n._cid) return Math.abs(hashSeed(String(n._cid))) % TOL_12.length;
+            return 0;
+        }
+        function communityColor(n) { return TOL_12[communityIndex(n) % TOL_12.length]; }
         function communityTint(n, a) {
-            const c = (typeof n.community === 'number') ? n.community : 0;
-            const hue = (c * 137.508) % 360;
-            return 'hsla(' + hue.toFixed(1) + ', 72%, 62%, ' + a + ')';
+            const hex = communityColor(n);
+            const r = parseInt(hex.substring(1, 3), 16);
+            const g = parseInt(hex.substring(3, 5), 16);
+            const b = parseInt(hex.substring(5, 7), 16);
+            return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
         }
 
-        // ⟲ düğmesi: kullanıcı görünümü elle değiştirmiş olsa da sıfırlar ve
-        // O AN GÖRÜNÜR olan bütün düğümleri kanvasa sığdırır.
+        // ---- U3: efsane (tek satır, yalnız dolu kategoriler + sayılar) ----
+        const LEGEND_DEFS = [
+            ['ego', 'Çekirdek', ['ego']],
+            ['hub', 'Ana Hublar', ['hub']],
+            ['project', 'Projeler', ['project']],
+            ['skill', 'Yetenekler', ['skill']],
+            ['subbranch', 'Alt Dallar', ['subbranch']],
+            ['mcp', 'MCP', ['mcp', 'mcp-tool']],
+            ['cognitive', 'Bilişsel Bellek', ['cognitive', 'semantic', 'episodic', 'procedural', 'obsidian', 'DailyNotes']],
+            ['Reports', 'Raporlar', ['Reports']],
+            ['office', '🏢 Ofisler', ['office']],
+            ['agent', '🤖 Ajanlar', ['agent']],
+            ['query', '🔎 Sorgular', ['query']],
+            ['hub-offices', '🏢 Ofis Kümesi', ['hub-offices']],
+            ['concept', '📗 Kavramlar', ['concept']],
+            ['entity', '🏷 Varlıklar', ['entity']],
+            ['community', '🔮 Topluluklar', ['community']]
+        ];
+
+        function legendCounts() {
+            const counts = new Map();
+            nodes.forEach(n => counts.set(n.group, (counts.get(n.group) || 0) + 1));
+            return counts;
+        }
+
+        function buildLegend() {
+            const counts = legendCounts();
+            const bar = document.getElementById('legend');
+            const panel = document.getElementById('legendPanelItems');
+            if (!bar || !panel || typeof document.createElement !== 'function') return;
+            const filled = [];
+            LEGEND_DEFS.forEach(def => {
+                let total = 0;
+                def[2].forEach(g => { total += (counts.get(g) || 0); });
+                // Boş kategori hiç çizilmez: bu kasada 0 düğümlü 4 kategori
+                // efsanenin yarısını kaplıyordu.
+                if (total > 0) filled.push([def[0], def[1], total]);
+            });
+            filled.sort((a, b) => b[2] - a[2]);
+            const mk = (cat, label, total) => {
+                const el = document.createElement('div');
+                el.className = 'legend-item';
+                el.setAttribute('data-cat', cat);
+                el.onclick = function () { toggleCategory(cat, el); };
+                const dot = document.createElement('span');
+                dot.className = 'dot';
+                dot.style.background = getNodeColor(cat);
+                el.appendChild(dot);
+                const txt = document.createElement('span');
+                txt.textContent = label;
+                el.appendChild(txt);
+                const cnt = document.createElement('span');
+                cnt.className = 'legend-count';
+                cnt.textContent = String(total);
+                el.appendChild(cnt);
+                return el;
+            };
+            // Şerit yalnız en kalabalık 5 kategoriyi gösterir; gerisi panelde.
+            filled.slice(0, 5).forEach(f => bar.appendChild(mk(f[0], f[1], f[2])));
+            if (filled.length > 5) {
+                const more = document.createElement('span');
+                more.className = 'legend-count';
+                more.textContent = '+' + (filled.length - 5);
+                bar.appendChild(more);
+            }
+            filled.forEach(f => panel.appendChild(mk(f[0], f[1], f[2])));
+            window.__graphStats.legendCategories = filled.length;
+        }
+
+        function toggleLegendPanel() {
+            const panel = document.getElementById('legendPanel');
+            if (panel && panel.classList) panel.classList.toggle('open');
+        }
+
+        function initGraphControls() {
+            const setDisabled = (groupId, inputId, disabled) => {
+                const group = document.getElementById(groupId);
+                if (group && group.classList) group.classList.toggle('disabled', disabled);
+                const input = document.getElementById(inputId);
+                if (input) input.disabled = disabled;
+            };
+            setDisabled('grpTime', 'timeSlider', !hasTimeData);
+            setDisabled('grpImportance', 'importanceSlider', !hasImportanceData);
+            setDisabled('grpValid', 'onlyValid', !hasValidityData);
+            setDisabled('grpType', 'typeFilter', nodeTypes.length === 0);
+            const community = document.getElementById('grpCommunity');
+            if (community && community.classList) community.classList.toggle('disabled', !hasCommunityData);
+            // Hiçbir kontrol etkin değilse şerit tamamen gizlenir: kullanıcı
+            // çalışmayan 5 kontrol görmesin.
+            const strip = document.getElementById('graphControls');
+            const anyLive = hasTimeData || hasImportanceData || hasValidityData || hasCommunityData || nodeTypes.length > 0;
+            if (strip && strip.classList) strip.classList.toggle('empty', !anyLive);
+            const select = document.getElementById('typeFilter');
+            if (select && select.appendChild && typeof document.createElement === 'function') {
+                nodeTypes.slice().sort().forEach(t => {
+                    const option = document.createElement('option');
+                    option.value = t;
+                    option.textContent = t;
+                    select.appendChild(option);
+                });
+            }
+            const label = document.getElementById('timeLabel');
+            if (label) label.textContent = hasTimeData ? 'şimdi' : 'veri yok';
+        }
+        buildLegend();
+        initGraphControls();
+
+        // ⟲ düğmesi
         function resetView() {
             userAdjustedView = false;
             updateDimensions();
             fitToView();
         }
 
-        // Yakınlaştırma tek kapıdan geçer: DETAIL_ZOOM eşiği aşıldığında yaprak
-        // düğümler görünürlüğe girip çıktığı için benzetim yeniden ısıtılmalıdır,
-        // yoksa yeni düğümler eski tohum konumlarında donuk kalır.
         function applyZoom(newZoom, ax, ay) {
             newZoom = Math.max(0.05, Math.min(4.5, newZoom));
             if (newZoom === zoom) return;
-            const wasDetail = detailsGloballyVisible();
+            const wasBand = lodBand(zoom);
             panX = ax - (ax - panX) * (newZoom / zoom);
             panY = ay - (ay - panY) * (newZoom / zoom);
             zoom = newZoom;
@@ -1234,29 +1522,17 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 panStartX = ax - panX;
                 panStartY = ay - panY;
             }
-            if (detailsGloballyVisible() !== wasDetail) {
-                // Görünür küme değişti: yerleşim yeniden kurulur ama görünüm
-                // (zoom/pan) kullanıcının bıraktığı yerde kalır.
-                relayoutAndFit(0.5, false);
+            if (lodBand(zoom) !== wasBand) {
+                // U2: bant değişince yalnızca görünür küme tazelenir. Benzetim
+                // YENİDEN ISITILMAZ (eski davranış alpha'yı 0,5'e çekip yerleşimi
+                // sıfırlıyordu); yeni yapraklar ebeveynlerinin yanında belirir.
+                lastDetailState = lodBand(zoom);
+                relayoutGraph();
             }
             requestRender();
         }
 
-        // ---- Organik kuvvet yerleşimi (çevrimdışı d3-force eşleniği) ----
-        //
-        // Eski radyal sektör motoru kaldırıldı: her düğümü önceden hesaplanmış bir
-        // açı/halka noktasına yapıştırdığı için grafik "yapay" görünüyordu. Yerine
-        // Obsidian graph view'ün de kullandığı kuvvet yönelimli yaklaşım geldi:
-        //
-        //   * yay (link):     bağ türüne göre farklı hedef uzunluk ve sertlik
-        //   * itme (charge):  Barnes-Hut dörtlü ağacı ile O(n log n)
-        //   * çakışma:        tek tip ızgara üzerinden O(n)
-        //   * merkeze çekim:  kopuk bileşenler uzaya savrulmasın diye çok zayıf
-        //
-        // Konumlar tohumlu bir sözde-rastgele dizinden üretilir; gerçek rastgelelik
-        // hiçbir yerde kullanılmaz, yani her açılışta aynı yerleşim çıkar. Benzetim
-        // durulunca (alpha < alphaMin) tamamen durur ve kare çizilmez.
-
+        // ---- Kuvvet yerleşimi (U1) ----
         function hashSeed(str) {
             let h = 2166136261 >>> 0;
             for (let i = 0; i < str.length; i++) {
@@ -1265,7 +1541,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
             return h >>> 0;
         }
-
         function mulberry32(a) {
             return function () {
                 a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -1275,28 +1550,41 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             };
         }
 
-        // Bağ türüne göre yay parametreleri. Ağaç bağı zayıftır (hiyerarşi
-        // görünsün ama yerleşimi dikte etmesin), wikilink orta, gömme/başlık
-        // benzerliği en güçlüsüdür: benzer raporlar birbirine yapışır.
+        // U1: yay hedefleri kısaldı (gövde 140, yaprak 60) ve sertlik d3
+        // kuralıyla (1/min(derece)) normalize ediliyor.
         const LINK_KINDS = {
-            tree: { distance: 120, strength: 0.10 },
+            trunk: { distance: 140, strength: 0.50 },
+            tree: { distance: 60, strength: 0.50 },
             wikilink: { distance: 95, strength: 0.22 },
-            similarity: { distance: 46, strength: 0.55 }
+            similarity: { distance: 46, strength: 0.35 }
         };
+        const TRUNK_LEVELS = 2;
 
         function linkKind(l) {
             if (l.is_similarity_link) return 'similarity';
-            if (l.is_tree_link) return 'tree';
+            if (l.is_tree_link) {
+                const t = l.targetNode;
+                return (t && t._level <= TRUNK_LEVELS) ? 'trunk' : 'tree';
+            }
             return 'wikilink';
         }
 
-        const CHARGE = -230;         // Düğüm başına itme katsayısı
-        const THETA2 = 0.81;         // Barnes-Hut (0.9^2)
-        const CENTER_PULL = 0.010;   // Merkeze çok zayıf çekim
-        const VELOCITY_DECAY = 0.42;
+        // ForceAtlas2 tarzı derece ağırlıklı itme: sabit -230 yerine
+        // -30 * (1 + ln(1 + derece)). distanceMax 400: uzak düğümler birbirini
+        // itmez, dünya şişmez.
+        const CHARGE_BASE = -30;
+        const DISTANCE_MAX = 400;
+        const DISTANCE_MAX_2 = DISTANCE_MAX * DISTANCE_MAX;
+        const THETA2 = 0.81;
+        const CENTER_PULL = 0.010;
+        const VELOCITY_DECAY = 0.40;
+        // forceRadial halkaları (level 1/2/3) ve sektör çekimi.
+        const RING_R = [0, 260, 520, 780, 0];
+        const RADIAL_STRENGTH = 0.10;
+        const SECTOR_STRENGTH = 0.09;
 
-        let simLinks = [];           // Fizikte kullanılan (görünür) kenarlar
-        let simNodes = [];           // Fizikte kullanılan (görünür) düğümler
+        let simLinks = [];
+        let simNodes = [];
         let simDirty = true;
 
         let positionsInitialized = false;
@@ -1304,45 +1592,43 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             if (positionsInitialized) return;
             const cx = width / 2;
             const cy = height / 2;
-
             nodes.forEach(n => {
                 n.vx = 0;
                 n.vy = 0;
-                if (n.group === 'ego') {
-                    n.x = cx; n.y = cy;
-                    return;
-                }
-                if (typeof n.x === 'number' && typeof n.y === 'number' && (n.x !== 0 || n.y !== 0)) {
-                    // Python tarafı deterministik bir tohum konumu üretir; kuvvet
-                    // benzetimi bunu organik yerleşime dönüştürür.
-                    n.x = cx + n.x;
-                    n.y = cy + n.y;
+                if (n.group === 'ego') { n.x = cx; n.y = cy; return; }
+                // U1: tohum konumu halka + sektör kuralına göre deterministik
+                // üretilir; kuvvet benzetimi bunu organik hâle getirir.
+                const ring = RING_R[Math.min(4, n._level)] || 0;
+                const j = mulberry32(hashSeed(n.id + '|seed'));
+                if (n._sector !== null) {
+                    // Tohum: kendi açı dilimi içinde, seviyesinin halkasında.
+                    const wedge = Math.max(0.002, (n._a1 - n._a0));
+                    const ang = n._a0 + wedge * (0.15 + 0.7 * j());
+                    let r = ring;
+                    if (r <= 0) {
+                        const parent = nodeMap.get(treeParent.get(n.id));
+                        const base = parent ? (RING_R[Math.min(4, parent._level)] || 780) : 780;
+                        r = base + 90 + j() * 90;
+                    }
+                    n.x = cx + Math.cos(ang) * r;
+                    n.y = cy + Math.sin(ang) * r;
                 } else {
-                    const h = hashSeed(n.id);
-                    const rnd = mulberry32(h);
-                    const ang = rnd() * Math.PI * 2;
-                    const r = 140 + rnd() * 420;
+                    const ang = j() * Math.PI * 2;
+                    const r = 140 + j() * 420;
                     n.x = cx + Math.cos(ang) * r;
                     n.y = cy + Math.sin(ang) * r;
                 }
-                // Tohumlu, deterministik mikro sarsıntı: tam üst üste binen
-                // düğümler itme kuvvetinde sıfıra bölünmesin.
-                const j = mulberry32(hashSeed(n.id + '|j'));
-                n.x += (j() - 0.5) * 1.5;
-                n.y += (j() - 0.5) * 1.5;
+                const jj = mulberry32(hashSeed(n.id + '|j'));
+                n.x += (jj() - 0.5) * 1.5;
+                n.y += (jj() - 0.5) * 1.5;
             });
-
             links.forEach(l => {
                 l.sourceNode = nodeMap.get(l.source);
                 l.targetNode = nodeMap.get(l.target);
             });
-
             positionsInitialized = true;
         }
 
-        // Görünür düğüm/kenar kümesini ve yay katsayılarını tazeler.
-        // d3-force'taki gibi yay sertliği düğüm derecesine göre normalize edilir:
-        // 300 çocuklu bir hub, tek bir yaprak tarafından savrulmaz.
         function rebuildSimulation() {
             simNodes = [];
             const inSet = new Set();
@@ -1352,9 +1638,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (!isNodeInScope(n) && (isIsolated || currentScope !== 'all')) continue;
                 simNodes.push(n);
                 inSet.add(n.id);
-                n._charge = CHARGE * ((n.val || 12) / 12);
+                n._charge = CHARGE_BASE * (1 + Math.log(1 + n._deg)) * (1 + (n.val || 12) / 48);
             }
-
             const degree = new Map();
             const cand = [];
             for (let i = 0; i < links.length; i++) {
@@ -1371,17 +1656,23 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             for (let i = 0; i < simLinks.length; i++) {
                 const l = simLinks[i];
                 const kind = LINK_KINDS[linkKind(l)];
-                const w = (l.is_similarity_link && typeof l.weight === 'number') ? Math.max(0.3, l.weight) : 1;
+                const w = (typeof l.weight === 'number') ? Math.max(0.3, Math.min(1.5, l.weight)) : 1;
                 const ds = degree.get(l.sourceNode.id) || 1;
                 const dt = degree.get(l.targetNode.id) || 1;
                 l._k = (kind.strength * w) / Math.min(ds, dt);
                 l._len = kind.distance + (l.sourceNode.val || 12) + (l.targetNode.val || 12);
+                // Dissuade Hubs (ForceAtlas2): yüksek dereceli uç çevreye
+                // itilmesin diye çekim o ucun derecesine bölünür; hafif uç
+                // (yaprak) daha çok hareket eder.
                 l._bias = ds / (ds + dt);
             }
             simDirty = false;
+            window.__graphStats.simNodes = simNodes.length;
+            window.__graphStats.simLinks = simLinks.length;
         }
 
         // ---- Barnes-Hut dörtlü ağacı ----
+        let lastTree = null;
         function buildQuadtree(list) {
             if (list.length === 0) return null;
             let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -1393,7 +1684,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (p.y > y1) y1 = p.y;
             }
             const w = Math.max(x1 - x0, y1 - y0, 1);
-            return subdivide(list, x0, y0, x0 + w, y0 + w, 0);
+            lastTree = subdivide(list, x0, y0, x0 + w, y0 + w, 0);
+            return lastTree;
         }
 
         function subdivide(pts, x0, y0, x1, y1, depth) {
@@ -1405,8 +1697,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 sx += p.x * c; sy += p.y * c; wsum += c;
             }
             const node = {
-                x0: x0, y0: y0, x1: x1, y1: y1,
-                q: q,
+                x0: x0, y0: y0, x1: x1, y1: y1, q: q,
                 cx: wsum > 0 ? sx / wsum : (x0 + x1) / 2,
                 cy: wsum > 0 ? sy / wsum : (y0 + y1) / 2,
                 kids: null, pts: null
@@ -1436,6 +1727,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const dy = node.cy - p.y;
             let d2 = dx * dx + dy * dy;
             const w = node.x1 - node.x0;
+            // distanceMax: hücre tamamen 400 biriminden uzaktaysa hiç itmez.
+            const half = w * 0.71;
+            if (d2 > (DISTANCE_MAX + half) * (DISTANCE_MAX + half)) return;
             if (node.kids && (w * w) < THETA2 * d2) {
                 if (d2 < 25) d2 = 25;
                 const f = node.q * k / d2;
@@ -1456,6 +1750,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (o === p) continue;
                 const ddx = o.x - p.x, ddy = o.y - p.y;
                 let dd = ddx * ddx + ddy * ddy;
+                if (dd > DISTANCE_MAX_2) continue;
                 if (dd < 25) dd = 25;
                 const f = (o._charge || 0) * k / dd;
                 p.vx += ddx * f;
@@ -1463,7 +1758,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        // ---- Izgara tabanlı çakışma çözümü (O(n)) ----
+        // ---- Izgara tabanlı çakışma çözümü (tamsayı anahtar, dize üretmez) ----
         function resolveCollisions(list) {
             let maxR = 12;
             for (let i = 0; i < list.length; i++) {
@@ -1472,20 +1767,22 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             }
             const cell = maxR * 2;
             const grid = new Map();
+            const cells = [];
             for (let i = 0; i < list.length; i++) {
                 const p = list[i];
-                const gx = Math.floor(p.x / cell), gy = Math.floor(p.y / cell);
-                const key = gx + ',' + gy;
+                const gx = Math.floor(p.x / cell) + 32768;
+                const gy = Math.floor(p.y / cell) + 32768;
+                const key = gx * 65536 + gy;
                 let b = grid.get(key);
-                if (!b) { b = []; grid.set(key, b); }
+                if (!b) { b = []; grid.set(key, b); cells.push(key); }
                 b.push(p);
             }
-            grid.forEach((bucket, key) => {
-                const parts = key.split(',');
-                const gx = parseInt(parts[0], 10), gy = parseInt(parts[1], 10);
+            for (let c = 0; c < cells.length; c++) {
+                const key = cells[c];
+                const bucket = grid.get(key);
                 for (let ox = 0; ox <= 1; ox++) {
                     for (let oy = (ox === 0 ? 0 : -1); oy <= 1; oy++) {
-                        const other = (ox === 0 && oy === 0) ? bucket : grid.get((gx + ox) + ',' + (gy + oy));
+                        const other = (ox === 0 && oy === 0) ? bucket : grid.get(key + ox * 65536 + oy);
                         if (!other) continue;
                         for (let i = 0; i < bucket.length; i++) {
                             const a = bucket[i];
@@ -1506,19 +1803,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                         }
                     }
                 }
-            });
+            }
         }
 
-        // Görünürlük/kapsam değişimlerinde benzetim yeniden ısıtılır. Yerleşim
-        // sıfırdan kurulmaz: düğümler bulundukları yerden organik olarak akar.
         function relayoutGraph() {
             simDirty = true;
             rebuildSimulation();
+            hitGridDirty = true;
+            hullCacheDirty = true;
         }
 
-        // refit=false ise görünüm kullanıcının bıraktığı yerde kalır: sığdırma
-        // yalnızca yüklemede, Odak değişiminde ve kullanıcı ⟲ düğmesine bastığında
-        // yapılır (kategori açıp kapatmak ekranı zıplatmasın).
         function relayoutAndFit(alphaKick, refit) {
             relayoutGraph();
             alpha = Math.max(alpha, alphaKick || 0.6);
@@ -1528,28 +1822,26 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         let alpha = 1.0;
         const alphaMin = 0.008;
-        const alphaDecay = 0.020;
+        const alphaDecay = 0.0228;   // d3 varsayılanı: ~300 iterasyon
 
         function tickPhysics() {
             if (isPanning) return;
             if (alpha < alphaMin && !draggedNode) return;
             if (simDirty) rebuildSimulation();
 
+            const t0 = performance.now();
             const cx = width / 2;
             const cy = height / 2;
 
             const egoNode = nodeMap.get('ego-entropy-core');
             if (egoNode && egoNode !== draggedNode) {
-                egoNode.x = cx;
-                egoNode.y = cy;
-                egoNode.vx = 0;
-                egoNode.vy = 0;
+                egoNode.x = cx; egoNode.y = cy; egoNode.vx = 0; egoNode.vy = 0;
             }
 
             const list = simNodes;
             if (list.length === 0) { alpha *= (1 - alphaDecay); return; }
 
-            // 1. Yaylar (link force) — d3'teki gibi konum üzerinden, iki uca bias'lı.
+            // 1. Yaylar
             for (let i = 0; i < simLinks.length; i++) {
                 const l = simLinks[i];
                 const s = l.sourceNode, t = l.targetNode;
@@ -1563,7 +1855,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (s.group !== 'ego' && s !== draggedNode) { s.vx += fx * (1 - l._bias); s.vy += fy * (1 - l._bias); }
             }
 
-            // 2. Karşılıklı itme (Barnes-Hut): 1000 düğümde ~10 bin işlem/kare.
+            // 2. Karşılıklı itme (Barnes-Hut, distanceMax 400)
             const tree = buildQuadtree(list);
             for (let i = 0; i < list.length; i++) {
                 const p = list[i];
@@ -1571,15 +1863,31 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 applyCharge(tree, p, alpha);
             }
 
-            // 3. Merkeze zayıf çekim: benzerlik kenarı olmayan yapraklar sonsuza gitmesin.
+            // 3. forceRadial halkaları + sektör çekimi + merkez
             for (let i = 0; i < list.length; i++) {
                 const p = list[i];
                 if (p.group === 'ego' || p === draggedNode) continue;
+                const dx0 = p.x - cx, dy0 = p.y - cy;
+                const ring = RING_R[Math.min(4, p._level)] || 0;
+                if (ring > 0) {
+                    const d = Math.sqrt(dx0 * dx0 + dy0 * dy0) || 1;
+                    const k = (ring - d) / d * RADIAL_STRENGTH * alpha;
+                    p.vx += dx0 * k;
+                    p.vy += dy0 * k;
+                }
+                if (p._sector !== null) {
+                    // Sektör: dalın yaprakları başka dalın alanına akmasın.
+                    const r = Math.sqrt(dx0 * dx0 + dy0 * dy0) || 1;
+                    const tx = cx + Math.cos(p._sector) * r;
+                    const ty = cy + Math.sin(p._sector) * r;
+                    p.vx += (tx - p.x) * SECTOR_STRENGTH * alpha;
+                    p.vy += (ty - p.y) * SECTOR_STRENGTH * alpha;
+                }
                 p.vx += (cx - p.x) * CENTER_PULL * alpha;
                 p.vy += (cy - p.y) * CENTER_PULL * alpha;
             }
 
-            // 4. Konum güncellemesi (Verlet, hız sönümlü).
+            // 4. Konum güncellemesi
             for (let i = 0; i < list.length; i++) {
                 const p = list[i];
                 if (p.group === 'ego' || p === draggedNode) { p.vx = 0; p.vy = 0; continue; }
@@ -1591,37 +1899,651 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 p.y += p.vy;
             }
 
-            // 5. Çakışma: düğümler üst üste binmesin (etiket okunurluğu için şart).
+            // 5. Çakışma
+            resolveCollisions(list);
             resolveCollisions(list);
 
             alpha *= (1 - alphaDecay);
+            hitGridDirty = true;
+            hullCacheDirty = true;
+            minimapDirty = true;
+            window.__graphStats.physMs = performance.now() - t0;
         }
 
+        // ---- U5: dörtlü ağaç / uzamsal ızgara ile hit-test ----
+        //
+        // Eski kod her mousemove'da 1145 düğümü doğrusal tarıyordu. Konumlar
+        // yalnızca fizik tıkında değiştiği için ızgara "kirli" işaretlenir ve
+        // en fazla kare başına bir kez yeniden kurulur.
+        const HIT_CELL = 64;
+        let hitGrid = new Map();
+        let hitGridDirty = true;
+
+        function rebuildHitGrid() {
+            hitGrid = new Map();
+            for (let i = 0; i < simNodes.length; i++) {
+                const n = simNodes[i];
+                const gx = Math.floor(n.x / HIT_CELL) + 32768;
+                const gy = Math.floor(n.y / HIT_CELL) + 32768;
+                const key = gx * 65536 + gy;
+                let b = hitGrid.get(key);
+                if (!b) { b = []; hitGrid.set(key, b); }
+                b.push(n);
+            }
+            hitGridDirty = false;
+        }
+
+        function nodeAt(wx, wy) {
+            if (hitGridDirty) rebuildHitGrid();
+            const gx = Math.floor(wx / HIT_CELL) + 32768;
+            const gy = Math.floor(wy / HIT_CELL) + 32768;
+            let best = null, bestD = Infinity;
+            for (let ox = -1; ox <= 1; ox++) {
+                for (let oy = -1; oy <= 1; oy++) {
+                    const b = hitGrid.get((gx + ox) * 65536 + (gy + oy));
+                    if (!b) continue;
+                    for (let i = 0; i < b.length; i++) {
+                        const n = b[i];
+                        const r = Math.max(n.val || 12, 4 / Math.max(zoom, 0.05)) + 3;
+                        const dx = n.x - wx, dy = n.y - wy;
+                        const d2 = dx * dx + dy * dy;
+                        if (d2 < r * r && d2 < bestD) { bestD = d2; best = n; }
+                    }
+                }
+            }
+            return best;
+        }
+
+        // ---- U5: hover "dim" deseni (Sigma.js) ----
+        let focusNode = null;
+        let hop1 = null, hop2 = null;
+        function computeFocusSets(n) {
+            hop1 = new Set(); hop2 = new Set();
+            if (!n) return;
+            hop1.add(n.id);
+            const nb = neighborIds.get(n.id);
+            if (nb) nb.forEach(id => hop1.add(id));
+            hop1.forEach(id => {
+                const s = neighborIds.get(id);
+                if (s) s.forEach(x => { if (!hop1.has(x)) hop2.add(x); });
+            });
+        }
+        function dimFactor(n) {
+            if (!focusNode) return 1;
+            if (hop1 && hop1.has(n.id)) return 1;
+            if (hop2 && hop2.has(n.id)) return 0.6;
+            return 0.12;
+        }
+
+        // ---- U4: etiket motoru (öncelik + doluluk bit haritası + sprite) ----
+        const LABEL_CELL = 8;          // doluluk bit haritası hücresi (px)
+        const LABEL_GRID = 90;         // seyreltme ızgarası (px) — Sigma.js deseni
+        const LABEL_GRID_SPARSE = 60;  // yalnız iskelet görünürken daha sık etiket
+        const LABEL_BUDGET = 220;      // kare başına en çok etiket
+        let labelBits = null;
+        let labelBitsW = 0, labelBitsH = 0;
+        let labelOrder = null;
+        let placedLabels = [];
+
+        function ensureLabelBits() {
+            const w = Math.ceil(width / LABEL_CELL), h = Math.ceil(height / LABEL_CELL);
+            if (!labelBits || w !== labelBitsW || h !== labelBitsH) {
+                labelBitsW = w; labelBitsH = h;
+                labelBits = new Uint8Array(w * h);
+            } else {
+                labelBits.fill(0);
+            }
+        }
+        function bitsFree(x, y, w, h) {
+            if (x < 0 || y < 0 || x + w > width || y + h > height) return false;
+            const c0 = Math.floor(x / LABEL_CELL), c1 = Math.ceil((x + w) / LABEL_CELL);
+            const r0 = Math.floor(y / LABEL_CELL), r1 = Math.ceil((y + h) / LABEL_CELL);
+            for (let r = r0; r < r1; r++) {
+                const base = r * labelBitsW;
+                for (let c = c0; c < c1; c++) if (labelBits[base + c]) return false;
+            }
+            return true;
+        }
+        function bitsMark(x, y, w, h) {
+            const c0 = Math.max(0, Math.floor(x / LABEL_CELL)), c1 = Math.min(labelBitsW, Math.ceil((x + w) / LABEL_CELL));
+            const r0 = Math.max(0, Math.floor(y / LABEL_CELL)), r1 = Math.min(labelBitsH, Math.ceil((y + h) / LABEL_CELL));
+            for (let r = r0; r < r1; r++) {
+                const base = r * labelBitsW;
+                for (let c = c0; c < c1; c++) labelBits[base + c] = 1;
+            }
+        }
+
+        // Öncelik: level (küçük önce) -> importance -> degree. Bir kez hesaplanır.
+        function ensureLabelOrder() {
+            if (labelOrder) return;
+            labelOrder = nodes.slice().sort((a, b) => {
+                if (a._level !== b._level) return a._level - b._level;
+                if (b._imp !== a._imp) return b._imp - a._imp;
+                if (b._deg !== a._deg) return b._deg - a._deg;
+                return a.id < b.id ? -1 : 1;
+            });
+        }
+
+        // Metin bitmap önbelleği: fillText yerine drawImage.
+        const spriteCache = new Map();
+        function labelSprite(text, fontSize, weight, color) {
+            const key = text + '|' + fontSize + '|' + weight + '|' + color;
+            let sp = spriteCache.get(key);
+            if (sp) return sp;
+            const font = weight + ' ' + fontSize + 'px "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif';
+            let w = 0;
+            try {
+                ctx.save(); ctx.font = font; w = ctx.measureText(text).width; ctx.restore();
+            } catch (e) { w = text.length * fontSize * 0.55; }
+            const pad = 3;
+            const cw = Math.ceil(w + pad * 2), ch = Math.ceil(fontSize + pad * 2 + 3);
+            let cv = null;
+            try {
+                cv = document.createElement('canvas');
+                cv.width = Math.max(1, cw); cv.height = Math.max(1, ch);
+                const c2 = cv.getContext('2d');
+                c2.font = font;
+                c2.textBaseline = 'middle';
+                // Pil dolgusu yerine koyu kontur "halo": uzak bakışta kutu
+                // kalabalığı yapmaz, koyu zeminde okunur kalır.
+                c2.lineWidth = 3;
+                c2.strokeStyle = 'rgba(8, 11, 16, 0.92)';
+                c2.strokeText(text, pad, ch / 2);
+                c2.fillStyle = color;
+                c2.fillText(text, pad, ch / 2);
+            } catch (e) { cv = null; }
+            sp = { canvas: cv, w: cw, h: ch, text: text, color: color, font: font };
+            if (spriteCache.size > 900) spriteCache.clear();
+            spriteCache.set(key, sp);
+            return sp;
+        }
+
+        function labelStyleFor(n) {
+            const lvl = Math.min(4, n._level);
+            const size = [13, 12, 11.5, 11, 10][lvl];
+            const weight = lvl === 0 ? '700' : (lvl <= 2 ? '600' : '400');
+            return { size: size, weight: weight };
+        }
+
+        // Etiketleri yerleştirir ve çizer. Ekran koordinatlarında çalışır:
+        // yazı boyutu zoom'dan bağımsız piksel sabittir.
+        function drawLabels(viewNodes) {
+            const t0 = performance.now();
+            ensureLabelBits();
+            ensureLabelOrder();
+            placedLabels = [];
+            const cellTaken = new Set();
+            const band = lodBand(zoom);
+            const cellSize = (band <= 1) ? LABEL_GRID_SPARSE : LABEL_GRID;
+            const gridW = Math.ceil(width / cellSize) + 2;
+            const minScreenR = [3, 3, 4, 5][band];
+            const visSet = viewNodes;
+            let placed = 0;
+            for (let i = 0; i < labelOrder.length && placed < LABEL_BUDGET; i++) {
+                const n = labelOrder[i];
+                if (!visSet.has(n)) continue;
+                const sx = n.x * zoom + panX;
+                const sy = n.y * zoom + panY;
+                if (sx < -40 || sy < -20 || sx > width + 40 || sy > height + 20) continue;
+                const r = Math.max((n.val || 12) * zoom, 3);
+                const isHovered = (n === hoveredNode);
+                if (!isHovered) {
+                    // Ekranda çok küçük kalan düğüme etiket yok (Sigma.js
+                    // labelRenderedSizeThreshold) ve 90 px ızgarada bir etiket.
+                    if (r < minScreenR) continue;
+                    const cell = (Math.floor(sy / cellSize) * gridW) + Math.floor(sx / cellSize);
+                    if (cellTaken.has(cell)) continue;
+                    if (dimFactor(n) < 0.5) continue;
+                }
+                const st = labelStyleFor(n);
+                // Yakın bantta tam ad, uzakta kısa etiket.
+                const text = (isHovered || zoom >= LOD_BRANCH) ? n._full : n._short;
+                if (!text) continue;
+                const color = isHovered ? getNodeColor(n.group) : '#E6EDF3';
+                const sp = labelSprite(text, st.size, st.weight, color);
+                // Dört aday konum: sağ, sol, üst, alt.
+                const cands = [
+                    [sx + r + 5, sy - sp.h / 2],
+                    [sx - r - 5 - sp.w, sy - sp.h / 2],
+                    [sx - sp.w / 2, sy - r - 4 - sp.h],
+                    [sx - sp.w / 2, sy + r + 4]
+                ];
+                let px = null, py = null;
+                for (let c = 0; c < cands.length; c++) {
+                    if (bitsFree(cands[c][0], cands[c][1], sp.w, sp.h)) {
+                        px = cands[c][0]; py = cands[c][1]; break;
+                    }
+                }
+                if (px === null) {
+                    if (!isHovered) continue;
+                    px = cands[0][0]; py = cands[0][1];
+                }
+                bitsMark(px, py, sp.w, sp.h);
+                if (!isHovered) {
+                    cellTaken.add((Math.floor(sy / cellSize) * gridW) + Math.floor(sx / cellSize));
+                }
+                placedLabels.push({ x: px, y: py, w: sp.w, h: sp.h, id: n.id });
+                placed++;
+                ctx.globalAlpha = Math.min(1, lodFade(n)) * (isHovered ? 1 : Math.max(0.35, dimFactor(n)));
+                if (sp.canvas) {
+                    ctx.drawImage(sp.canvas, Math.round(px), Math.round(py));
+                } else {
+                    ctx.font = sp.font;
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = color;
+                    ctx.fillText(text, px + 3, py + sp.h / 2);
+                }
+                ctx.globalAlpha = 1;
+            }
+            window.__graphStats.labels = placedLabels.length;
+            window.__graphStats.labelMs = performance.now() - t0;
+        }
+
+        // ---- U6: topluluk gövdeleri (convex hull + etiket + rozet) ----
+        let hullCache = null;
+        let hullCacheDirty = true;
+        function convexHull(pts) {
+            if (pts.length < 3) return pts;
+            const p = pts.slice().sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+            const cross2 = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+            const lower = [];
+            for (let i = 0; i < p.length; i++) {
+                while (lower.length >= 2 && cross2(lower[lower.length - 2], lower[lower.length - 1], p[i]) <= 0) lower.pop();
+                lower.push(p[i]);
+            }
+            const upper = [];
+            for (let i = p.length - 1; i >= 0; i--) {
+                while (upper.length >= 2 && cross2(upper[upper.length - 2], upper[upper.length - 1], p[i]) <= 0) upper.pop();
+                upper.push(p[i]);
+            }
+            lower.pop(); upper.pop();
+            return lower.concat(upper);
+        }
+
+        function computeHulls() {
+            const groups = new Map();
+            for (let i = 0; i < simNodes.length; i++) {
+                const n = simNodes[i];
+                if (n._level <= 1) continue;
+                const cid = n._cid;
+                if (!cid) continue;
+                let g = groups.get(cid);
+                if (!g) { g = []; groups.set(cid, g); }
+                g.push(n);
+            }
+            const out = [];
+            groups.forEach((members, cid) => {
+                if (members.length < 6) return;
+                const hull = convexHull(members.map(m => [m.x, m.y]));
+                if (hull.length < 3) return;
+                let cx = 0, cy = 0;
+                members.forEach(m => { cx += m.x; cy += m.y; });
+                const head = members.slice().sort((a, b) => b._imp - a._imp)[0];
+                out.push({
+                    cid: cid, hull: hull, size: members.length,
+                    cx: cx / members.length, cy: cy / members.length,
+                    color: communityColor(members[0]),
+                    label: (head && head.community_label) ? String(head.community_label) : (head ? head._short : cid)
+                });
+            });
+            out.sort((a, b) => b.size - a.size);
+            hullCache = out.slice(0, 12);
+            hullCacheDirty = false;
+        }
+
+        let hullBuiltAt = 0;
+        function drawHulls() {
+            const band = lodBand(zoom);
+            if (band < 1 || band > 2) return;
+            // Gövde hesabı benzetim sürerken her karede değil, en çok 250 ms'de
+            // bir tazelenir: 1000 düğümde convex hull kare bütçesini yer.
+            const now = performance.now();
+            if ((hullCacheDirty && now - hullBuiltAt > 250) || !hullCache) {
+                computeHulls();
+                hullBuiltAt = now;
+            }
+            if (!hullCache) return;
+            for (let i = 0; i < hullCache.length; i++) {
+                const h = hullCache[i];
+                ctx.beginPath();
+                for (let j = 0; j < h.hull.length; j++) {
+                    const p = h.hull[j];
+                    if (j === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+                }
+                ctx.closePath();
+                ctx.globalAlpha = 0.08;
+                ctx.fillStyle = h.color;
+                ctx.fill();
+                ctx.globalAlpha = 0.30;
+                ctx.strokeStyle = h.color;
+                ctx.lineWidth = 1.2 / zoom;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function drawHullLabels() {
+            const band = lodBand(zoom);
+            if (band < 1 || band > 2 || !hullCache) return;
+            for (let i = 0; i < hullCache.length; i++) {
+                const h = hullCache[i];
+                const sx = h.cx * zoom + panX, sy = h.cy * zoom + panY;
+                if (sx < 0 || sy < 0 || sx > width || sy > height) continue;
+                const txt = h.label + '  (' + h.size + ')';
+                const sp = labelSprite(txt, 11, '600', h.color);
+                const px = sx - sp.w / 2, py = sy - sp.h / 2;
+                if (!bitsFree(px, py, sp.w, sp.h)) continue;
+                bitsMark(px, py, sp.w, sp.h);
+                ctx.globalAlpha = 0.9;
+                if (sp.canvas) ctx.drawImage(sp.canvas, Math.round(px), Math.round(py));
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        // ---- U7: mini harita (bitmap önbellekli) ----
+        const MINIMAP_W = 160, MINIMAP_H = 110, MINIMAP_PAD = 12;
+        let minimapCanvas = null;
+        let minimapDirty = true;
+        let minimapBox = null;   // dünya kutusu
+
+        function minimapRect() {
+            return { x: width - MINIMAP_W - MINIMAP_PAD, y: height - MINIMAP_H - MINIMAP_PAD - 36, w: MINIMAP_W, h: MINIMAP_H };
+        }
+        function buildMinimap() {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            const pts = [];
+            for (let i = 0; i < simNodes.length; i++) {
+                const n = simNodes[i];
+                if (n._level > 3) continue;
+                pts.push(n);
+                if (n.x < x0) x0 = n.x;
+                if (n.x > x1) x1 = n.x;
+                if (n.y < y0) y0 = n.y;
+                if (n.y > y1) y1 = n.y;
+            }
+            if (!pts.length || !isFinite(x0)) { minimapCanvas = null; minimapDirty = false; return; }
+            const pad = 40;
+            x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+            minimapBox = { x0: x0, y0: y0, x1: x1, y1: y1 };
+            try {
+                const cv = document.createElement('canvas');
+                cv.width = MINIMAP_W; cv.height = MINIMAP_H;
+                const c2 = cv.getContext('2d');
+                c2.fillStyle = 'rgba(8, 11, 16, 0.86)';
+                c2.fillRect(0, 0, MINIMAP_W, MINIMAP_H);
+                c2.strokeStyle = '#1F2B42';
+                c2.strokeRect(0.5, 0.5, MINIMAP_W - 1, MINIMAP_H - 1);
+                const sc = Math.min(MINIMAP_W / (x1 - x0), MINIMAP_H / (y1 - y0));
+                for (let i = 0; i < pts.length; i++) {
+                    const n = pts[i];
+                    c2.fillStyle = getNodeColor(n.group);
+                    const mx = (n.x - x0) * sc, my = (n.y - y0) * sc;
+                    const rr = n._level <= 1 ? 2.2 : 1.3;
+                    c2.fillRect(mx - rr, my - rr, rr * 2, rr * 2);
+                }
+                minimapCanvas = cv;
+                minimapBox.scale = sc;
+            } catch (e) { minimapCanvas = null; }
+            minimapDirty = false;
+        }
+        let minimapBuiltAt = 0;
+        function drawMinimap() {
+            const now = performance.now();
+            if ((minimapDirty && now - minimapBuiltAt > 250) || !minimapCanvas) {
+                buildMinimap();
+                minimapBuiltAt = now;
+            }
+            if (!minimapCanvas || !minimapBox) return;
+            const R = minimapRect();
+            ctx.drawImage(minimapCanvas, R.x, R.y);
+            // Görünüm dikdörtgeni
+            const sc = minimapBox.scale;
+            const vx0 = (-panX / zoom - minimapBox.x0) * sc;
+            const vy0 = (-panY / zoom - minimapBox.y0) * sc;
+            const vw = (width / zoom) * sc, vh = (height / zoom) * sc;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(R.x, R.y, R.w, R.h);
+            ctx.clip();
+            ctx.strokeStyle = '#00F0FF';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(R.x + vx0, R.y + vy0, vw, vh);
+            ctx.restore();
+        }
+        function minimapPan(mx, my) {
+            if (!minimapBox || !minimapBox.scale) return false;
+            const R = minimapRect();
+            if (mx < R.x || my < R.y || mx > R.x + R.w || my > R.y + R.h) return false;
+            const wx = minimapBox.x0 + (mx - R.x) / minimapBox.scale;
+            const wy = minimapBox.y0 + (my - R.y) / minimapBox.scale;
+            panX = width / 2 - wx * zoom;
+            panY = height / 2 - wy * zoom;
+            userAdjustedView = true;
+            requestRender();
+            return true;
+        }
+
+        // ---- Görünüm tweeni (U5: tıkla-dala-sığdır 250 ms) ----
+        let tween = null;
+        function tweenTo(z, px, py, ms) {
+            tween = { z0: zoom, x0: panX, y0: panY, z1: z, x1: px, y1: py, t0: performance.now(), ms: ms || 250 };
+            requestRender();
+        }
+        function stepTween() {
+            if (!tween) return false;
+            const k = Math.min(1, (performance.now() - tween.t0) / tween.ms);
+            const e = k < 0.5 ? 2 * k * k : -1 + (4 - 2 * k) * k;
+            zoom = tween.z0 + (tween.z1 - tween.z0) * e;
+            panX = tween.x0 + (tween.x1 - tween.x0) * e;
+            panY = tween.y0 + (tween.y1 - tween.y0) * e;
+            if (k >= 1) { tween = null; syncDetailState(); relayoutGraph(); return false; }
+            return true;
+        }
+
+        function boundsOf(list) {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            for (let i = 0; i < list.length; i++) {
+                const n = list[i];
+                if (typeof n.x !== 'number' || isNaN(n.x)) continue;
+                if (n.x < x0) x0 = n.x;
+                if (n.x > x1) x1 = n.x;
+                if (n.y < y0) y0 = n.y;
+                if (n.y > y1) y1 = n.y;
+            }
+            if (!isFinite(x0)) return null;
+            return { x0: x0, y0: y0, x1: x1, y1: y1 };
+        }
+
+        // U3: sığdırma dikdörtgeninden örtüler (efsane, breadcrumb, mini harita,
+        // düğmeler) düşülür; düğüm efsanenin altında kalmaz.
+        function viewInsets() {
+            const lg = document.getElementById('legend');
+            const top = (lg && lg.offsetHeight ? lg.offsetHeight : 26) + 14;
+            return { top: top, bottom: 46, left: 8, right: MINIMAP_W + 2 * MINIMAP_PAD };
+        }
+
+        function fitNodesToView(list, ms) {
+            const b = boundsOf(list);
+            if (!b) return;
+            const ins = viewInsets();
+            const availW = Math.max(80, width - ins.left - ins.right);
+            const availH = Math.max(80, height - ins.top - ins.bottom);
+            const spanX = Math.max(100, b.x1 - b.x0 + 100);
+            const spanY = Math.max(100, b.y1 - b.y0 + 100);
+            const z = Math.max(0.05, Math.min(1.85, Math.min(availW / spanX, availH / spanY) * 0.92));
+            const midX = (b.x0 + b.x1) / 2, midY = (b.y0 + b.y1) / 2;
+            const px = ins.left + availW / 2 - midX * z;
+            const py = ins.top + availH / 2 - midY * z;
+            if (ms) { tweenTo(z, px, py, ms); return; }
+            zoom = z; panX = px; panY = py;
+            syncDetailState();
+            relayoutGraph();
+            requestRender();
+        }
+
+        function fitToView() {
+            if (isPanning) return;
+            width = canvas.width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 300);
+            height = canvas.height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 250);
+            const targetNodes = nodes.filter(n => isNodeVisible(n) && isNodeInScope(n));
+            if (targetNodes.length === 0) return;
+            fitNodesToView(targetNodes, 0);
+        }
+
+        function zoomIn() { applyZoom(zoom * 1.25, width / 2, height / 2); }
+        function zoomOut() { applyZoom(zoom / 1.25, width / 2, height / 2); }
+
+        // ---- U5: breadcrumb ----
+        function ancestorChain(id) {
+            const chain = [];
+            let cur = id, guard = 0;
+            while (cur && guard++ < 32) {
+                chain.unshift(cur);
+                cur = treeParent.get(cur);
+            }
+            return chain;
+        }
+        function updateBreadcrumb() {
+            const el = document.getElementById('breadcrumb');
+            if (!el) return;
+            if (!selectedNodeId || !nodeMap.has(selectedNodeId)) {
+                el.style.display = 'none';
+                el.innerHTML = '';
+                return;
+            }
+            const chain = ancestorChain(selectedNodeId);
+            const parts = chain.map(id => {
+                const n = nodeMap.get(id);
+                const label = n ? n._short : id;
+                return '<span class="crumb" onclick="focusNodeById(' + JSON.stringify(id).replace(/"/g, '&quot;') + ')">' + label + '</span>';
+            });
+            el.innerHTML = parts.join(' › ');
+            el.style.display = 'block';
+        }
+
+        function focusNodeById(id) {
+            const n = nodeMap.get(String(id));
+            if (!n) return;
+            selectedNodeId = n.id;
+            expandedBranches.add(n.id);
+            recomputeIsolation();
+            relayoutGraph();
+            updateBreadcrumb();
+            const branch = [];
+            computeBranchSet(n.id).forEach(bid => {
+                const bn = nodeMap.get(bid);
+                if (bn && isNodeVisible(bn)) branch.push(bn);
+            });
+            userAdjustedView = true;
+            settledFitDone = true;
+            fitNodesToView(branch.length ? branch : [n], 250);
+        }
+
+        // ---- U7: arama + yol göster ----
+        let searchHighlight = null;
+        let pathHighlight = null;
+
+        function toggleSearch() {
+            const box = document.getElementById('searchBox');
+            if (!box || !box.classList) return;
+            box.classList.toggle('open');
+            const inp = document.getElementById('searchInput');
+            if (box.classList.contains('open') && inp && inp.focus) inp.focus();
+        }
+
+        function searchNodes(q) {
+            const needle = String(q || '').toLocaleLowerCase('tr');
+            if (needle.length < 2) return [];
+            const hits = [];
+            for (let i = 0; i < nodes.length && hits.length < 400; i++) {
+                const n = nodes[i];
+                const hay = (n._full + ' ' + (n.info || '')).toLocaleLowerCase('tr');
+                const at = hay.indexOf(needle);
+                if (at < 0) continue;
+                hits.push({ n: n, score: (at === 0 ? 0 : 1) + n._level * 0.1 - n._imp });
+            }
+            hits.sort((a, b) => a.score - b.score);
+            return hits.slice(0, 8).map(h => h.n);
+        }
+
+        function onSearchInput(q) {
+            const box = document.getElementById('searchResults');
+            if (!box) return;
+            box.innerHTML = '';
+            const hits = searchNodes(q);
+            hits.forEach(n => {
+                const d = document.createElement('div');
+                d.className = 'search-hit';
+                d.textContent = n._short + '  · ' + n.group;
+                d.onclick = function () { flyToNode(n.id); };
+                box.appendChild(d);
+            });
+            window.__graphStats.searchHits = hits.length;
+        }
+
+        function flyToNode(id) {
+            const n = nodeMap.get(String(id));
+            if (!n) return;
+            expandedBranches.add(n.id);
+            const p = treeParent.get(n.id);
+            if (p) expandedBranches.add(p);
+            selectedNodeId = n.id;
+            searchHighlight = n.id;
+            recomputeIsolation();
+            relayoutGraph();
+            updateBreadcrumb();
+            userAdjustedView = true;
+            settledFitDone = true;
+            tweenTo(Math.max(zoom, 1.3), width / 2 - n.x * Math.max(zoom, 1.3), height / 2 - n.y * Math.max(zoom, 1.3), 250);
+        }
+
+        // İki düğüm arasında ağaç + wikilink üzerinden en kısa yol (BFS).
+        function showPath(fromId, toId) {
+            const start = String(fromId), goal = String(toId);
+            if (!nodeMap.has(start) || !nodeMap.has(goal)) return null;
+            const prev = new Map();
+            const seen = new Set([start]);
+            const q = [start];
+            while (q.length) {
+                const cur = q.shift();
+                if (cur === goal) break;
+                const nb = neighborIds.get(cur);
+                if (!nb) continue;
+                nb.forEach(x => {
+                    if (seen.has(x)) return;
+                    seen.add(x); prev.set(x, cur); q.push(x);
+                });
+            }
+            if (!seen.has(goal)) { pathHighlight = null; return null; }
+            const path = [goal];
+            let cur = goal;
+            while (prev.has(cur)) { cur = prev.get(cur); path.unshift(cur); }
+            pathHighlight = new Set(path);
+            requestRender();
+            return path;
+        }
+
+        // ---- Çizim ----
         let hoveredNode = null;
         let draggedNode = null;
         let isDragging = false;
         let startX = 0, startY = 0;
+        let hoverTimer = null;
 
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const rect = canvas.getBoundingClientRect();
-            const mx = e.clientX - rect.left;
-            const my = e.clientY - rect.top;
-
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-            applyZoom(zoom * zoomFactor, mx, my);
+            applyZoom(zoom * zoomFactor, e.clientX - rect.left, e.clientY - rect.top);
         }, { passive: false });
 
-        canvas.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-        });
+        canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
         canvas.addEventListener('mousedown', (e) => {
             const rect = canvas.getBoundingClientRect();
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
-
-            // Middle or right click always pans
+            if (minimapPan(mx, my)) return;
             if (e.button === 1 || e.button === 2) {
                 isPanning = true;
                 panStartX = e.clientX - panX;
@@ -1631,11 +2553,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 requestRender();
                 return;
             }
-
             if (hoveredNode && isNodeInScope(hoveredNode) && (!isIsolated || currentScope === 'all')) {
                 draggedNode = hoveredNode;
-                startX = mx;
-                startY = my;
+                startX = mx; startY = my;
                 isDragging = false;
                 alpha = 0.35;
             } else {
@@ -1647,6 +2567,31 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             requestRender();
         });
 
+        function applyHover(n) {
+            if (n === hoveredNode) return;
+            hoveredNode = n;
+            focusNode = n;
+            computeFocusSets(n);
+            if (n) {
+                canvas.style.cursor = 'pointer';
+                infoBox.style.display = 'block';
+                const col = getNodeColor(n.group);
+                let extraBadge = '';
+                if (n.group === 'community') {
+                    const count = communityMembers.get(String(n.id)) || n.member_count || 0;
+                    const open = expandedCommunities.has(String(n.id));
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:10px; font-weight:600;">🔮 ' + count + ' üye — tıkla: ' + (open ? 'kapat' : 'aç') + '</span>';
+                } else if (n.id.includes('MEMORY') || n.id.includes('BELLEK_HARITASI')) {
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:10px; font-weight:600;">📑 İndeks Kataloğu</span>';
+                }
+                infoBox.innerHTML = '<b style="color:' + col + '; font-size:13px;">' + n._full + '</b> <span style="color:#8B949E; font-size:11px;">[' + n.group + ']</span> <span style="color:#00FF9D; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>' + extraBadge + '<br/><span style="color:#C9D1D9; font-size:11px; line-height:1.4;">' + (n.info || '') + '</span>';
+            } else {
+                canvas.style.cursor = isPanning ? 'grabbing' : 'default';
+                infoBox.style.display = 'none';
+            }
+            requestRender();
+        }
+
         function handleMouseMove(e) {
             if (isPanning) {
                 panX = e.clientX - panStartX;
@@ -1654,7 +2599,6 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 requestRender();
                 return;
             }
-
             const rect = canvas.getBoundingClientRect();
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
@@ -1663,10 +2607,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const distMoved = Math.hypot(mx - startX, my - startY);
                 if (distMoved > 4) {
                     isDragging = true;
-                    const wx = (mx - panX) / zoom;
-                    const wy = (my - panY) / zoom;
-                    draggedNode.x = wx;
-                    draggedNode.y = wy;
+                    draggedNode.x = (mx - panX) / zoom;
+                    draggedNode.y = (my - panY) / zoom;
                     alpha = 0.25;
                 }
                 requestRender();
@@ -1675,43 +2617,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
             const wx = (mx - panX) / zoom;
             const wy = (my - panY) / zoom;
-            const prevHovered = hoveredNode;
-            hoveredNode = null;
-
-            for (let i = nodes.length - 1; i >= 0; i--) {
-                const n = nodes[i];
-                if (!isNodeVisible(n)) continue;
-                if (!isNodeInScope(n) && (isIsolated || currentScope !== 'all')) continue;
-                const r = n.val || 12;
-                const dx = n.x - wx;
-                const dy = n.y - wy;
-                if (dx * dx + dy * dy < (r + 3) * (r + 3)) {
-                    hoveredNode = n;
-                    break;
-                }
-            }
-
-            if (hoveredNode !== prevHovered) {
-                requestRender();
-            }
-
-            if (hoveredNode) {
-                canvas.style.cursor = 'pointer';
-                infoBox.style.display = 'block';
-                const col = getNodeColor(hoveredNode.group);
-                let extraBadge = '';
-                if (hoveredNode.group === 'community') {
-                    const count = communityMembers.get(String(hoveredNode.id)) || hoveredNode.member_count || 0;
-                    const open = expandedCommunities.has(String(hoveredNode.id));
-                    extraBadge = `<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:10px; font-weight:600;">🔮 ${count} üye — tıkla: ${open ? 'kapat' : 'aç'}</span>`;
-                } else if (hoveredNode.id.includes('MEMORY') || hoveredNode.id.includes('BELLEK_HARITASI')) {
-                    extraBadge = `<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:10px; font-weight:600;">📑 İndeks Kataloğu (Görsel karmaşayı önlemek için 200+ indeks çizgisi gizlendi)</span>`;
-                }
-                infoBox.innerHTML = `<b style="color:${col}; font-size:13px;">${hoveredNode.name}</b> <span style="color:#8B949E; font-size:11px;">[${hoveredNode.group}]</span> <span style="color:#00FF9D; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>${extraBadge}<br/><span style="color:#C9D1D9; font-size:11px; line-height:1.4;">${hoveredNode.info || ''}</span>`;
-            } else {
-                canvas.style.cursor = isPanning ? 'grabbing' : 'default';
-                infoBox.style.display = 'none';
-            }
+            const hit = nodeAt(wx, wy);
+            // U5: 80 ms gecikme — hızlı geçişlerde bilgi kutusu titremez.
+            if (hit === hoveredNode) return;
+            if (hoverTimer) clearTimeout(hoverTimer);
+            if (!hit) { applyHover(null); return; }
+            hoverTimer = setTimeout(() => { hoverTimer = null; applyHover(hit); }, 80);
         }
 
         window.addEventListener('mousemove', handleMouseMove);
@@ -1719,24 +2630,33 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         function handleMouseUp(e) {
             if (draggedNode && !isDragging && (!e || e.button === 0)) {
                 if (draggedNode.group === 'community') {
-                    // Topluluk düğümü kademeli açılır/kapanır; Python tarafına
-                    // seçim gönderilmez çünkü açılacak bir rapor dosyası yok.
                     toggleCommunity(draggedNode.id);
-                    draggedNode = null;
-                    isDragging = false;
-                    isPanning = false;
+                    draggedNode = null; isDragging = false; isPanning = false;
                     requestRender();
                     return;
                 }
-                // Faz 6: yapısal bir düğüme (dal) tıklamak o dalın yapraklarını
-                // açar/kapatır — ayrı bir "raporları göster" düğmesi yoktur.
                 selectedNodeId = draggedNode.id;
                 if (!isDetailNode(draggedNode)) {
+                    // U5: dala tıkla -> dal açılır ve görünüm O DALA sığdırılır
+                    // (bütüne değil), 250 ms tween ile.
                     toggleBranchExpansion(draggedNode.id);
                     recomputeIsolation();
-                    relayoutAndFit(0.6, false);
+                    relayoutGraph();
+                    updateBreadcrumb();
+                    alpha = Math.max(alpha, 0.5);
+                    if (expandedBranches.has(draggedNode.id)) {
+                        const branch = [];
+                        computeBranchSet(draggedNode.id).forEach(bid => {
+                            const bn = nodeMap.get(bid);
+                            if (bn && isNodeVisible(bn)) branch.push(bn);
+                        });
+                        userAdjustedView = true;
+                        settledFitDone = true;
+                        fitNodesToView(branch.length ? branch : [draggedNode], 250);
+                    }
                 } else {
                     recomputeIsolation();
+                    updateBreadcrumb();
                 }
                 const url = 'entropy-node://select?id=' + encodeURIComponent(draggedNode.id);
                 window.location.href = url;
@@ -1744,374 +2664,318 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             draggedNode = null;
             isDragging = false;
             isPanning = false;
-            if (canvas) {
-                canvas.style.cursor = hoveredNode ? 'pointer' : 'default';
-            }
+            if (canvas) canvas.style.cursor = hoveredNode ? 'pointer' : 'default';
             requestRender();
         }
 
         window.addEventListener('mouseup', handleMouseUp);
         window.addEventListener('blur', () => {
-            isPanning = false;
-            draggedNode = null;
-            isDragging = false;
+            isPanning = false; draggedNode = null; isDragging = false;
             requestRender();
         });
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+                e.preventDefault();
+                const box = document.getElementById('searchBox');
+                if (box && box.classList && !box.classList.contains('open')) toggleSearch();
+                else { const i = document.getElementById('searchInput'); if (i && i.focus) i.focus(); }
+            } else if (e.key === 'Escape') {
+                const box = document.getElementById('searchBox');
+                if (box && box.classList && box.classList.contains('open')) toggleSearch();
+                searchHighlight = null;
+                pathHighlight = null;
+                requestRender();
+            }
+        });
 
-        function zoomIn() {
-            applyZoom(zoom * 1.25, width / 2, height / 2);
+        function drawCurvedLink(s, t, curvFactor) {
+            ctx.moveTo(s.x, s.y);
+            const dx = t.x - s.x;
+            const dy = t.y - s.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 3 && typeof ctx.quadraticCurveTo === 'function') {
+                let nx = -dy / dist;
+                let ny = dx / dist;
+                const mx = (s.x + t.x) * 0.5;
+                const my = (s.y + t.y) * 0.5;
+                if (mx * nx + my * ny < 0) { nx = -nx; ny = -ny; }
+                const h = Math.min(26.0, dist * curvFactor);
+                ctx.quadraticCurveTo(mx + nx * h, my + ny * h, t.x, t.y);
+            } else {
+                ctx.lineTo(t.x, t.y);
+            }
         }
 
-        function zoomOut() {
-            applyZoom(zoom / 1.25, width / 2, height / 2);
+        // U8: 40+ çocuklu ebeveynde kenarlar merkeze değil, ebeveynin çevresindeki
+        // 24 px'lik halkaya bağlanır — yıldız merkezi kararmaz.
+        const FAN_THRESHOLD = 40;
+        const FAN_RADIUS = 24;
+        function fanOrigin(parent, child) {
+            if (!parent || (parent._childCount || 0) < FAN_THRESHOLD) return parent;
+            const dx = child.x - parent.x, dy = child.y - parent.y;
+            const d = Math.hypot(dx, dy) || 1;
+            const r = Math.min(FAN_RADIUS, d * 0.5);
+            return { x: parent.x + dx / d * r, y: parent.y + dy / d * r };
         }
 
-        function fitToView() {
-            if (isPanning) return;
-            // Sığdırma her zaman güncel panel ölçüsüne göre.
-            width = canvas.width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 300);
-            height = canvas.height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 250);
-            const targetNodes = nodes.filter(n => isNodeVisible(n) && isNodeInScope(n));
-            if (targetNodes.length === 0) return;
-
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            targetNodes.forEach(n => {
-                if (n.x < minX) minX = n.x;
-                if (n.x > maxX) maxX = n.x;
-                if (n.y < minY) minY = n.y;
-                if (n.y > maxY) maxY = n.y;
-            });
-
-            const spanX = Math.max(100, maxX - minX + 100);
-            const spanY = Math.max(100, maxY - minY + 100);
-
-            const scaleX = width / spanX;
-            const scaleY = height / spanY;
-            zoom = Math.max(0.05, Math.min(1.85, Math.min(scaleX, scaleY) * 0.88));
-
-            const midX = (minX + maxX) / 2;
-            const midY = (minY + maxY) / 2;
-            panX = width / 2 - midX * zoom;
-            panY = height / 2 - midY * zoom;
-            requestRender();
+        // U2: görünüm alanı kırpması (culling). Çizim ve etiket yalnızca
+        // görünümün %30 marjı içindeki düğümleri işler.
+        function viewportWorldRect(margin) {
+            const m = margin === undefined ? 0.3 : margin;
+            const w = width / zoom, h = height / zoom;
+            const x0 = -panX / zoom - w * m, y0 = -panY / zoom - h * m;
+            return { x0: x0, y0: y0, x1: x0 + w * (1 + 2 * m), y1: y0 + h * (1 + 2 * m) };
         }
-
-        // Çakışan etiketler: aynı karede daha önce çizilen etiketlerin ekran dikdörtgenleri.
-        // Düğümler düzey sırasıyla gelir (çekirdek, dallar, yapraklar); önce gelen kazanır.
-        let placedLabels = [];
 
         function render() {
             isRendering = false;
-            // Detay eşiği geçildiyse benzetim kümesi tazelenir ve yerleşim
-            // yeniden ısıtılır: yeni giren yapraklar tohum konumlarında donmasın.
-            if (syncDetailState()) {
-                alpha = Math.max(alpha, 0.5);
-                settledFitDone = false;
-            }
+            const tFrame = performance.now();
+            // U2: bant değişimi görünür kümeyi tazeler, benzetimi ISITMAZ.
+            if (syncDetailState()) relayoutGraph();
+            const tweening = stepTween();
             tickPhysics();
-            placedLabels = [];
 
+            const tDraw = performance.now();
             ctx.save();
-            if (typeof ctx.clearRect === 'function') {
-                ctx.clearRect(0, 0, width, height);
-            }
+            if (typeof ctx.clearRect === 'function') ctx.clearRect(0, 0, width, height);
             ctx.fillStyle = '#080B10';
             ctx.fillRect(0, 0, width, height);
-
             ctx.translate(panX, panY);
             ctx.scale(zoom, zoom);
 
-            // 1. Draw Links with Organic Bézier Synapses (Decoupled from Catalog Index Spiderwebs)
-            const bgLinks = [];
-            const treeLinks = [];      // Ana dal/gövde kenarları: hafif eğri
-            const leafLinks = [];      // Yaprak kenarları: düz ve ince
-            const semanticLinks = [];
-            const similarityLinks = [];   // Yakınlık (k-NN) kenarları: her zaman soluk çizilir
-            // Gövde = çekirdekten çıkan ya da bir dal/küme düğümüne giden kenar.
-            const TRUNK_TARGETS = { 'hub': 1, 'project': 1, 'skill': 1, 'mcp': 1, 'subbranch': 1, 'office': 1, 'agent': 1 };
+            const vr = viewportWorldRect(0.3);
+            const inView = (n) => (n.x >= vr.x0 && n.x <= vr.x1 && n.y >= vr.y0 && n.y <= vr.y1);
 
-            links.forEach(l => {
-                if (l.is_catalog_link) return; // Completely hide catalog index spiderwebs!
-                const s = l.sourceNode;
-                const t = l.targetNode;
-                if (!s || !t) return;
-                if (!isNodeVisible(s) || !isNodeVisible(t)) return;
-
-                const sInScope = isNodeInScope(s);
-                const tInScope = isNodeInScope(t);
-                const bothInScope = sInScope && tInScope;
-
-                if (!bothInScope) {
-                    // Kapsam dışı arka plan kenarları yalnızca yakınlaşınca çizilir;
-                    // uzaktan bakışta yüzlerce soluk çizgi yalnızca gürültü ekliyordu.
-                    if ((!isIsolated || currentScope === 'all') && zoom >= 1.0) {
-                        bgLinks.push(l);
-                    }
-                } else if (s !== hoveredNode && t !== hoveredNode) {
-                    if (l.is_similarity_link) {
-                        similarityLinks.push(l);
-                    } else if (l.is_tree_link) {
-                        if (TRUNK_TARGETS[t.group] || s.group === 'ego') treeLinks.push(l);
-                        else leafLinks.push(l);
-                    } else if (zoom >= 1.35) {
-                        // Anlamsal çapraz bağlantılar (wikilink) detay düzeyidir: ağaç
-                        // yapısı okunabilsin diye yalnızca yakınlaşınca ya da üzerine
-                        // gelinince gösterilir.
-                        semanticLinks.push(l);
-                    }
-                }
-            });
-
-            function drawCurvedLink(s, t, curvFactor) {
-                ctx.moveTo(s.x, s.y);
-                const dx = t.x - s.x;
-                const dy = t.y - s.y;
-                const dist = Math.hypot(dx, dy);
-                if (dist > 3 && typeof ctx.quadraticCurveTo === 'function') {
-                    let nx = -dy / dist;
-                    let ny = dx / dist;
-                    const mx = (s.x + t.x) * 0.5;
-                    const my = (s.y + t.y) * 0.5;
-                    if (mx * nx + my * ny < 0) { nx = -nx; ny = -ny; }
-                    const h = Math.min(26.0, dist * curvFactor);
-                    ctx.quadraticCurveTo(mx + nx * h, my + ny * h, t.x, t.y);
-                } else {
-                    ctx.lineTo(t.x, t.y);
-                }
+            // Çizilecek düğüm kümesi: LOD + kapsam + görünüm kırpması.
+            const viewNodes = new Set();
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                if (isNaN(n.x) || isNaN(n.y)) continue;
+                if (!isNodeVisible(n)) continue;
+                if (!isNodeInScope(n) && isIsolated && currentScope !== 'all') continue;
+                // Yapısal düğümler her zaman çizilir (ZMLT tutarlılığı),
+                // yapraklar yalnız görünüm alanında (U2 culling).
+                if (n._level >= 4 && !inView(n)) continue;
+                viewNodes.add(n);
             }
 
-            // Inactive / Out-of-Scope Background Links
-            if (bgLinks.length > 0) {
-                ctx.lineWidth = 0.8;
-                ctx.strokeStyle = 'rgba(31, 43, 66, 0.10)';
+            drawHulls();
+
+            const band = lodBand(zoom);
+            const trunkLinks = [];
+            const leafLinks = [];
+            const wikiLinks = [];
+            const simLinksDraw = [];
+            for (let i = 0; i < simLinks.length; i++) {
+                const l = simLinks[i];
+                const s = l.sourceNode, t = l.targetNode;
+                if (!viewNodes.has(s) || !viewNodes.has(t)) continue;
+                if (s === hoveredNode || t === hoveredNode) continue;
+                const kind = linkKind(l);
+                if (kind === 'trunk') trunkLinks.push(l);
+                // Yapısal düğüme (level <= 3) giden ağaç kenarı her bantta
+                // çizilir; yalnız YAPRAK kenarları bant 2'de açılır.
+                else if (kind === 'tree') { if (band >= 2 || t._level <= 3) leafLinks.push(l); }
+                else if (kind === 'similarity') {
+                    // U8: benzerlik kenarı yalnız topluluk içi; topluluklar arası
+                    // bağ hover'da görünür.
+                    if (band >= 1 && s._cid && s._cid === t._cid) simLinksDraw.push(l);
+                } else if (band >= 2) wikiLinks.push(l);
+            }
+
+            // Gövde kenarları: bundle alanı geldiyse Bezier kontrol noktalarıyla
+            // demetlenmiş, yoksa hafif eğri.
+            if (trunkLinks.length) {
+                ctx.lineWidth = 1.6 / zoom;
+                ctx.strokeStyle = 'rgba(56, 139, 253, 0.45)';
                 ctx.beginPath();
-                for (let i = 0; i < bgLinks.length; i++) {
-                    const l = bgLinks[i];
-                    drawCurvedLink(l.sourceNode, l.targetNode, 0.08);
+                for (let i = 0; i < trunkLinks.length; i++) {
+                    const l = trunkLinks[i];
+                    if (Array.isArray(l.bundle) && l.bundle.length >= 2) {
+                        ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
+                        for (let k = 0; k < l.bundle.length; k++) {
+                            const p = l.bundle[k];
+                            ctx.lineTo(p[0], p[1]);
+                        }
+                        ctx.lineTo(l.targetNode.x, l.targetNode.y);
+                    } else {
+                        drawCurvedLink(l.sourceNode, l.targetNode, 0.06);
+                    }
                 }
                 ctx.stroke();
             }
 
-            // Yakınlık kenarları: benzer raporları birbirine bağlayan kısa, soluk
-            // çizgiler. Topluluk tonuyla boyanır; grafiğin "organik doku"su budur.
-            if (similarityLinks.length > 0) {
-                ctx.lineWidth = 0.7;
-                for (let i = 0; i < similarityLinks.length; i++) {
-                    const l = similarityLinks[i];
-                    ctx.strokeStyle = communityTint(l.sourceNode, 0.22);
-                    ctx.beginPath();
-                    ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
+            if (leafLinks.length) {
+                ctx.lineWidth = 0.8 / zoom;
+                ctx.strokeStyle = 'rgba(56, 139, 253, 0.22)';
+                ctx.beginPath();
+                for (let i = 0; i < leafLinks.length; i++) {
+                    const l = leafLinks[i];
+                    const o = fanOrigin(l.sourceNode, l.targetNode);
+                    ctx.moveTo(o.x, o.y);
                     ctx.lineTo(l.targetNode.x, l.targetNode.y);
+                }
+                ctx.stroke();
+            }
+
+            if (simLinksDraw.length) {
+                // Renk başına tek yol: 500+ benzerlik kenarında ayrı ayrı
+                // stroke() çağırmak kare süresinin yarısını yiyordu.
+                ctx.lineWidth = 0.7 / zoom;
+                const byTint = new Map();
+                for (let i = 0; i < simLinksDraw.length; i++) {
+                    const l = simLinksDraw[i];
+                    const key = communityIndex(l.sourceNode) % TOL_12.length;
+                    let b = byTint.get(key);
+                    if (!b) { b = []; byTint.set(key, b); }
+                    b.push(l);
+                }
+                byTint.forEach((group, key) => {
+                    ctx.strokeStyle = communityTint(group[0].sourceNode, 0.18);
+                    ctx.beginPath();
+                    for (let i = 0; i < group.length; i++) {
+                        ctx.moveTo(group[i].sourceNode.x, group[i].sourceNode.y);
+                        ctx.lineTo(group[i].targetNode.x, group[i].targetNode.y);
+                    }
+                    ctx.stroke();
+                });
+            }
+
+            // Wikilink: kesikli, ağırlığa göre 0,8–2 px.
+            if (wikiLinks.length) {
+                if (typeof ctx.setLineDash === 'function') ctx.setLineDash([4 / zoom, 4 / zoom]);
+                ctx.strokeStyle = 'rgba(167, 139, 250, 0.40)';
+                // Ağırlık üç kalınlık kovasına yuvarlanır; kova başına tek yol.
+                const buckets = [[], [], []];
+                for (let i = 0; i < wikiLinks.length; i++) {
+                    const l = wikiLinks[i];
+                    const w = (typeof l.weight === 'number') ? Math.max(0.8, Math.min(2, 0.8 + l.weight * 1.2)) : 1.0;
+                    buckets[w < 1.2 ? 0 : (w < 1.7 ? 1 : 2)].push(l);
+                }
+                const bw = [0.8, 1.4, 2.0];
+                for (let b = 0; b < 3; b++) {
+                    if (!buckets[b].length) continue;
+                    ctx.lineWidth = bw[b] / zoom;
+                    ctx.beginPath();
+                    for (let i = 0; i < buckets[b].length; i++) {
+                        drawCurvedLink(buckets[b][i].sourceNode, buckets[b][i].targetNode, 0.12);
+                    }
+                    ctx.stroke();
+                }
+                if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
+            }
+
+            // Yol vurgusu (U7)
+            if (pathHighlight) {
+                ctx.lineWidth = 2.6 / zoom;
+                ctx.strokeStyle = '#00FF9D';
+                ctx.beginPath();
+                for (let i = 0; i < simLinks.length; i++) {
+                    const l = simLinks[i];
+                    if (pathHighlight.has(l.sourceNode.id) && pathHighlight.has(l.targetNode.id)) {
+                        ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
+                        ctx.lineTo(l.targetNode.x, l.targetNode.y);
+                    }
+                }
+                ctx.stroke();
+            }
+
+            // Hover kenarları
+            if (hoveredNode) {
+                ctx.lineWidth = 2.4 / zoom;
+                for (let i = 0; i < links.length; i++) {
+                    const l = links[i];
+                    if (l.is_catalog_link) continue;
+                    const s = l.sourceNode, t = l.targetNode;
+                    if (!s || !t) continue;
+                    if (s !== hoveredNode && t !== hoveredNode) continue;
+                    try {
+                        const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
+                        grad.addColorStop(0, getNodeColor(s.group));
+                        grad.addColorStop(1, getNodeColor(t.group));
+                        ctx.strokeStyle = grad;
+                    } catch (err) {
+                        ctx.strokeStyle = getNodeColor((s === hoveredNode ? t : s).group);
+                    }
+                    ctx.beginPath();
+                    drawCurvedLink(s, t, 0.12);
                     ctx.stroke();
                 }
             }
 
-            // Semantic Cross-References (Genuine Wikilinks between reports) - Soft Violet Dashes
-            if (semanticLinks.length > 0) {
-                ctx.lineWidth = 1.1;
-                ctx.strokeStyle = 'rgba(167, 139, 250, 0.40)';
-                if (typeof ctx.setLineDash === 'function') ctx.setLineDash([4, 4]);
-                ctx.beginPath();
-                for (let i = 0; i < semanticLinks.length; i++) {
-                    const l = semanticLinks[i];
-                    drawCurvedLink(l.sourceNode, l.targetNode, 0.12);
-                }
-                ctx.stroke();
-                if (typeof ctx.setLineDash === 'function') ctx.setLineDash([]);
-            }
-
-            // Yaprak kenarları: düz, ince — sektör içinde kısa kaldıkları için
-            // eğri gerekmez ve düz çizgi ağacın okunurluğunu artırır.
-            if (leafLinks.length > 0) {
-                ctx.lineWidth = 0.9;
-                ctx.strokeStyle = 'rgba(56, 139, 253, 0.26)';
-                ctx.beginPath();
-                for (let i = 0; i < leafLinks.length; i++) {
-                    const l = leafLinks[i];
-                    ctx.moveTo(l.sourceNode.x, l.sourceNode.y);
-                    ctx.lineTo(l.targetNode.x, l.targetNode.y);
-                }
-                ctx.stroke();
-            }
-
-            // Ana dal (gövde) kenarları: hafif eğri, biraz daha kalın.
-            if (treeLinks.length > 0) {
-                ctx.lineWidth = 1.5;
-                ctx.strokeStyle = 'rgba(56, 139, 253, 0.44)';
-                ctx.beginPath();
-                for (let i = 0; i < treeLinks.length; i++) {
-                    const l = treeLinks[i];
-                    drawCurvedLink(l.sourceNode, l.targetNode, 0.06);
-                }
-                ctx.stroke();
-            }
-
-            // 2. Draw Hovered Links with Radiant Gradient Synaptic Glow
-            if (hoveredNode) {
-                ctx.lineWidth = 2.4;
-                links.forEach(l => {
-                    if (l.is_catalog_link) return; // Never shoot 200 laser lines across the screen on hover!
-                    const s = l.sourceNode;
-                    const t = l.targetNode;
-                    if (!s || !t) return;
-                    if (s === hoveredNode || t === hoveredNode) {
-                        const other = (s === hoveredNode ? t : s);
-                        try {
-                            const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
-                            grad.addColorStop(0, getNodeColor(s.group));
-                            grad.addColorStop(1, getNodeColor(t.group));
-                            ctx.strokeStyle = grad;
-                        } catch (e) {
-                            ctx.strokeStyle = getNodeColor(other.group);
-                        }
-                        ctx.beginPath();
-                        drawCurvedLink(s, t, 0.12);
-                        ctx.stroke();
-                    }
-                });
-            }
-
-            // 3. Draw Nodes and Anti-Collision Pill Labels
-            nodes.forEach(n => {
-                if (!isNodeVisible(n) || isNaN(n.x) || isNaN(n.y)) return;
-
+            // Düğümler
+            let drawn = 0;
+            viewNodes.forEach(n => {
                 const inScope = isNodeInScope(n);
                 if (!inScope && isIsolated && currentScope !== 'all') return;
-
                 const color = getNodeColor(n.group);
                 const isHovered = (n === hoveredNode);
-                // Uzaklaşınca düğümler toz tanesine dönüyordu: ekranda en az ~3 px kalsın.
                 const r = Math.max((n.val || 12) * (isHovered ? 1.3 : 1.0), 3 / Math.max(zoom, 0.05));
+                const fade = lodFade(n);
+                if (fade <= 0.01) return;
+                ctx.globalAlpha = (inScope ? 1.0 : 0.08) * nodeAlphaFactor(n) * fade * dimFactor(n);
 
-                // Kapsam solukluğu (Faz 4) ile zaman/geçerlilik solukluğu (Faz 5.6)
-                // çarpılır: kapsam dışı VE pencere dışı bir düğüm iki kat siliktir.
-                ctx.globalAlpha = (inScope ? 1.0 : 0.08) * nodeAlphaFactor(n);
-
-                // Outer Glow on Hover or Hub or Subbranch
-                if (isHovered || n.group === 'ego' || n.group === 'hub' || n.group === 'subbranch') {
+                if (isHovered || n._level <= 1 || n.id === searchHighlight) {
                     try {
                         const glow = ctx.createRadialGradient(n.x, n.y, r * 0.2, n.x, n.y, r * 2.2);
-                        glow.addColorStop(0, color + 'aa');
+                        glow.addColorStop(0, (n.id === searchHighlight ? '#00FF9D' : color) + 'aa');
                         glow.addColorStop(1, color + '00');
                         ctx.fillStyle = glow;
-                    } catch (e) {
-                        ctx.fillStyle = color;
-                    }
+                    } catch (e) { ctx.fillStyle = color; }
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r * 2.2, 0, Math.PI * 2);
                     ctx.fill();
-                } else {
-                    // Hale topluluk tonunda: aynı topluluğun düğümleri gözle
-                    // ayırt edilebilir bir doku oluşturur.
-                    ctx.fillStyle = communityTint(n, 0.20);
+                } else if (n._level <= 3 || band >= 3) {
+                    // Topluluk halesi yalnız yapısal düğümlerde ve en yakın
+                    // bantta: 700 yaprakta ek daire çizmek çizim süresini
+                    // ikiye katlıyordu (topluluk dokusu hull ile veriliyor).
+                    ctx.fillStyle = communityTint(n, 0.18);
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r * 1.5, 0, Math.PI * 2);
                     ctx.fill();
                 }
 
-                // Inner Solid Circle
                 ctx.fillStyle = color;
                 ctx.beginPath();
                 ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Cekirdek: ikonu olan gruplarda (ofis/ajan/sorgu) beyaz nokta
-                // yerine ikon cizilir; boylece dugum turu renkten bagimsiz da
-                // okunur ve efsanedeki ikonla birebir eslesir.
-                const icon = getNodeIcon(n.group);
+                const icon = (n._level <= 3) ? getNodeIcon(n.group) : '';
                 if (icon) {
                     ctx.save();
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.font = `${Math.max(r * 1.1, 8)}px "Segoe UI Emoji", "Segoe UI Symbol", sans-serif`;
+                    ctx.font = Math.max(r * 1.1, 8) + 'px "Segoe UI Emoji", "Segoe UI Symbol", sans-serif';
                     ctx.fillText(icon, n.x, n.y);
                     ctx.restore();
-                } else {
+                } else if (n._level <= 3) {
                     ctx.fillStyle = '#FFFFFF';
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
                     ctx.fill();
                 }
-
-                // Pill Label: Level of Detail (LOD) - Hubs & Subbranches visible by default, leaves visible when hovered or zoomed
-                const lvl = (n.group === 'ego') ? 0
-                    : (n.group === 'hub' || n.group === 'project' || n.group === 'skill') ? 1
-                    : (n.group === 'subbranch') ? 2 : 3;
-                // Etiketler ekran ölçeğinde çizilir (aşağıda); bu yüzden hangi düzeyin
-                // hangi yakınlıkta görüneceği burada ayarlanır, boyut hep okunur kalır.
-                const labelZoomFloor = [0, 0, 0.7, 1.35][lvl];
-                const shouldDrawLabel = inScope && (isHovered || zoom >= labelZoomFloor);
-
-                if (shouldDrawLabel) {
-                    let labelText = n.name || '';
-                    if (!isHovered && labelText.length > 24) {
-                        labelText = labelText.substring(0, 22) + '..';
-                    }
-
-                    // Tipografi düzeye göre: çekirdek > ana dal > alt dal > yaprak.
-                    // Tek yazı ailesi, monospace karışımı yok; pil etiketler aynı yükseklikte.
-                    const level = (n.group === 'ego') ? 0
-                        : (n.group === 'hub' || n.group === 'project' || n.group === 'skill') ? 1
-                        : (n.group === 'subbranch') ? 2 : 3;
-                    const isHeader = level <= 2;
-                    const fontSize = [13, 11.5, 10.5, 10][level];
-                    const weight = level === 0 ? '700' : (level === 1 ? '600' : (level === 2 ? '600' : '400'));
-                    ctx.font = `${weight} ${fontSize}px "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif`;
-                    
-                    if (isHovered) {
-                        if (n._hoverTextWidth === undefined) {
-                            n._hoverTextWidth = ctx.measureText(labelText).width;
-                        }
-                    } else if (n._textWidth === undefined) {
-                        n._textWidth = ctx.measureText(labelText).width;
-                    }
-                    const textWidth = isHovered ? n._hoverTextWidth : n._textWidth;
-                    // Piksel sabit etiket: yakınlık ne olursa olsun yazı 10–13 px kalır.
-                    // (Önceden dünya ölçeğindeydi: sığdırma 0.48'de 10 px yazı 5 px oluyordu.)
-                    const pillX = r * zoom + 6;
-                    const pillY = -9;
-                    // Ekran dikdörtgeni; daha önce yerleşmiş bir etiketle çakışıyorsa
-                    // (üzerine gelinmemişse) bu etiket bu karede çizilmez.
-                    const sx = n.x * zoom + panX + pillX, sy = n.y * zoom + panY + pillY;
-                    const sw = textWidth + 10, sh = 18;
-                    let collides = false;
-                    if (!isHovered && lvl > 0) {
-                        for (let i = 0; i < placedLabels.length; i++) {
-                            const q = placedLabels[i];
-                            if (sx < q.x + q.w + 4 && sx + sw + 4 > q.x && sy < q.y + q.h + 2 && sy + sh + 2 > q.y) { collides = true; break; }
-                        }
-                    }
-                    if (collides) { ctx.globalAlpha = 1.0; return; }
-                    placedLabels.push({ x: sx, y: sy, w: sw, h: sh });
-                    ctx.save();
-                    ctx.translate(n.x, n.y);
-                    ctx.scale(1 / zoom, 1 / zoom);
-                    const pillW = textWidth + 10;
-                    const pillH = 18;
-
-                    ctx.fillStyle = isHovered ? (color + '44') : 'rgba(8, 11, 16, 0.88)';
-                    ctx.strokeStyle = isHovered ? color : 'rgba(31, 43, 66, 0.85)';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    if (typeof ctx.roundRect === 'function') {
-                        ctx.roundRect(pillX, pillY, pillW, pillH, 4);
-                    } else {
-                        ctx.rect(pillX, pillY, pillW, pillH);
-                    }
-                    ctx.fill();
-                    ctx.stroke();
-
-                    ctx.fillStyle = isHovered ? color : '#E6EDF3';
-                    ctx.fillText(labelText, pillX + 5, pillY + 13);
-                    ctx.restore();
-                }
-
                 ctx.globalAlpha = 1.0;
+                drawn++;
             });
 
             ctx.restore();
 
-            const needNext = (alpha >= alphaMin && !isPanning) || !!draggedNode;
+            // Etiketler ve mini harita ekran uzayında (zoom'dan bağımsız).
+            drawLabels(viewNodes);
+            drawHullLabels();
+            drawMinimap();
+
+            window.__graphStats.drawnNodes = drawn;
+            window.__graphStats.drawnLinks = trunkLinks.length + leafLinks.length + wikiLinks.length + simLinksDraw.length;
+            window.__graphStats.zoom = zoom;
+            window.__graphStats.band = band;
+            window.__graphStats.drawMs = performance.now() - tDraw;
+            window.__graphStats.frameMs = performance.now() - tFrame;
+            const fr = window.__graphStats.frames;
+            fr.push(window.__graphStats.frameMs);
+            if (fr.length > 240) fr.shift();
+
+            const needNext = tweening || (alpha >= alphaMin && !isPanning) || !!draggedNode;
             if (needNext) {
                 isRendering = true;
                 requestAnimationFrame(render);
@@ -2128,10 +2992,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         initNodePositions();
         relayoutGraph();
         fitToView();
-        // Sığdırma zoom'u değiştirdiği için detay eşiği burada belli olur;
-        // benzetim kümesi son duruma göre yeniden kurulur (yoksa gizli yapraklar
-        // fizikte kalıp yapısal düğümleri birbirinden uzağa iterdi).
-        lastDetailState = detailsGloballyVisible();
+        lastDetailState = lodBand(zoom);
         relayoutGraph();
         fitToView();
         alpha = 1.0;
@@ -2433,6 +3294,13 @@ class KnowledgeGraphWidget(QFrame):
                 pass
 
     def closeEvent(self, event):
+        # Faz 8: pencere birden cok kez kapatilinca ayni sinyalleri tekrar
+        # cozmek libpyside'in "Failed to disconnect" RuntimeWarning'ini
+        # basiyordu; cozme yalnizca ilk kapanista yapilir.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         try:
             bus.report_created.disconnect(self._on_report_created)
         except Exception:
@@ -2527,6 +3395,9 @@ class KnowledgeGraphWidget(QFrame):
             known_projects.append(self.active_project_dir.name)
         if self.vault_manager.projects_dir.exists():
             for p_sub in self.vault_manager.projects_dir.iterdir():
+                # Faz 8/M2: `Projects/test_*` pytest kalıntısıdır, proje değil.
+                if is_test_artifact_name(p_sub.name):
+                    continue
                 if p_sub.is_dir() and p_sub.name not in known_projects:
                     known_projects.append(p_sub.name)
 
@@ -2793,6 +3664,7 @@ class KnowledgeGraphWidget(QFrame):
                 links.append({"source": "subhub-cog-semantic", "target": sb_id, "is_tree_link": True})
 
         # 4. Cognitive Memory Nodes from SQLite
+        cog_name_counts: Dict[str, int] = {}
         try:
             import sqlite3
             if self.cognitive_memory.db_path.exists():
@@ -2803,7 +3675,11 @@ class KnowledgeGraphWidget(QFrame):
                         c_id, cat, content, imp = row[0], row[1], row[2], row[3]
                         if c_id not in node_ids:
                             node_ids.add(c_id)
-                            short_name = content[:26] + ("..." if len(content) > 26 else "")
+                            # Faz 8/M2: ad İLK SATIRDAN gelir, satır sonu
+                            # taşımaz ve ≤ 40 karakterdir. Eskiden ilk 26
+                            # karakter ham alınıyordu; "# Pazar araştırması\n\nOfis:"
+                            # gibi 46 düğüm aynı ada düşüyordu.
+                            short_name = _cognitive_node_name(content, cog_name_counts)
 
                             if cat == "episodic":
                                 p_hub = "subhub-cog-episodic"
@@ -2933,10 +3809,16 @@ class KnowledgeGraphWidget(QFrame):
                 effective_parent = parent_hub
                 node_group = grp
             elif is_report:
+                # Faz 8/M6: ön bilgideki `skill`/`tags` sınıflandırmaya girer;
+                # eskiden `tags=None` geçiliyordu ve eşleşmeyen her rapor
+                # varsayılan dala (çöp kutusu) düşüyordu.
+                fm_tags = list(o_node.get("tags") or [])
+                if o_node.get("skill"):
+                    fm_tags.insert(0, f"skill:{o_node['skill']}")
                 parent_hub, cluster_id, cluster_grp = classify_report_to_hub(
                     title=o_name,
                     path_str=o_path,
-                    tags=None,
+                    tags=fm_tags or None,
                     registered_skills=registered_skills,
                     known_projects=known_projects
                 )
@@ -3114,7 +3996,7 @@ class KnowledgeGraphWidget(QFrame):
         for n in nodes:
             n["community"] = communities.get(n["id"], 0)
 
-        return {
+        data = {
             "nodes": nodes,
             "links": links,
             "similarity_links": len(sim_links),
@@ -3122,6 +4004,29 @@ class KnowledgeGraphWidget(QFrame):
             "known_projects": known_projects,
             "registered_skills": registered_skills
         }
+
+        # Faz 8: temizlik + zenginleştirme (bkz. entropy.memory.graph_enrich).
+        # Sarkan/katalog/öz-döngü kenarları düşer; `level`, `degree`,
+        # `child_count`, `short_label`, `importance`, `t_valid_from/to`,
+        # `type`, `community_id/label/size` ve kenar `kind`/`weight` eklenir.
+        if (os.environ.get("ENTROPY_GRAPH_ENRICH") or "").strip().lower() in ("0", "false", "off"):
+            # Ölçüm/karşılaştırma kaçış kapısı: ham (Faz 7) çıktı döner.
+            return data
+        store = getattr(self, "graph_store", None)
+        if store is None:
+            try:
+                from entropy.memory.graph_store import GraphStore
+                # Aynı SQLite dosyası paylaşılır: ayrı bir bağlantı açmak
+                # testlerde geçici veritabanını atlayıp gerçek belleğe düşerdi.
+                store = GraphStore(memory=self.cognitive_memory)
+            except Exception:
+                store = None
+        try:
+            data = enrich_graph(data, graph_store=store)
+        except Exception:
+            # Zenginleştirme çökerse graf yine çizilir (ham veri geriye uyumlu).
+            pass
+        return data
 
     def refresh_graph(self):
         """Re-generate unified graph JSON and update WebEngine canvas and Scope Selector."""

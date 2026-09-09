@@ -67,6 +67,9 @@ a = Analysis(
         'entropy.ui.widgets.timeline_panel',
         'entropy.ui.widgets.notification_center',
         'entropy.ui.widgets.provider_badge',
+        # Faz 8 pencere/yerlesim yardimcilari.
+        'entropy.ui.widgets.frameless',
+        'entropy.ui.widgets.flow_layout',
         'entropy.agents',
         # Faz 5 posta kutusu ve kimlik
         'entropy.agents.mailbox',
@@ -127,6 +130,10 @@ a = Analysis(
         # Faz 5 graf katmani
         'entropy.memory.graph_store',
         'entropy.memory.reconcile',
+        # Faz 8 graf zenginlestirme (Louvain icin networkx).
+        'entropy.memory.graph_enrich',
+        'networkx',
+        'networkx.algorithms.community',
         'entropy.memory.office_memory',
         'entropy.memory.supabase.cognitive_memory',
         'numpy',

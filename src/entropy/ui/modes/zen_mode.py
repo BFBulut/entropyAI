@@ -28,6 +28,7 @@ from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
 from entropy.ui.widgets.report_inbox import InboxBadge
 from entropy.ui.widgets.command_palette import install_command_palette
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
@@ -45,7 +46,8 @@ from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
-from entropy.ui.window_sizing import fit_window_to_screen
+from entropy.ui.widgets.frameless import FramelessWindowHelper
+from entropy.ui.window_sizing import fit_window_to_screen, maximize_window_to_screen
 
 # Faz 6: 1366x768 ekranda da taşmayan asgari boyut ve ekran doluluk oranı.
 ZEN_MIN_SIZE = (1100, 680)
@@ -74,11 +76,20 @@ class ZenModeWindow(QMainWindow):
         self._init_ui()
         self._connect_signals()
 
-        # Faz 6: pencere ekranın tamamını değil, kullanılabilir alanın en çok
-        # %92'sini kaplar ve ortalanır. Böylece görev çubuğu görünür kalır ve
-        # ikinci pencere (Agent Desk) aynı ekranda yaşayabilir.
+        # Faz 8: cercevesiz pencereye tasima (ust cubuktan surukleme), cift
+        # tikla maksimize ve kenarlardan boyutlandirma eklenir.
+        self.frameless = FramelessWindowHelper(self, handle=self.header_frame)
+
+        # Faz 6/8: minimum kullanilabilir alana kirpilir, sonra pencere
+        # kullanilabilir alanin tamamina maksimize edilir (kullanici Zen'i
+        # "tam ekrandan cikmis" gordugu icin; bkz. maximize_window_to_screen).
         self.setMinimumSize(*ZEN_MIN_SIZE)
         fit_window_to_screen(self, ratio=ZEN_SCREEN_RATIO, min_size=ZEN_MIN_SIZE)
+        maximize_window_to_screen(self, min_size=ZEN_MIN_SIZE)
+
+    def toggle_maximize(self) -> None:
+        """Maksimize <-> geri (ust cubuk dugmesi ve cift tiklama)."""
+        self.frameless.toggle_maximize()
 
     def _init_ui(self):
         central = QWidget()
@@ -88,21 +99,22 @@ class ZenModeWindow(QMainWindow):
         root_layout.setSpacing(10)
 
         # 1. Top Header Bar
-        header = QFrame()
-        header.setObjectName("cardFrame")
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(16, 8, 16, 8)
-        h_layout.setSpacing(12)
+        # Faz 8: Chat ile ayni akan (wrap eden) ust cubuk. Yatay kaydirma
+        # alani sagdaki dugmeleri gorunmez kiliyordu; artik satir atlar.
+        header = FlowHeaderFrame(margins=(16, 8, 16, 8))
+        h_layout = header.flow()
 
         # Title Badge
-        title = QLabel("<b style='color:#00F0FF; font-size:15px; letter-spacing:0.5px;'>ENTROPY AI</b> <span style='color:#8B949E; font-size:11px; margin-left:4px;'>ZEN WORKSTATION</span>")
+        # Faz 8: baslik 346 -> ~150 px (akan cubukta satir sayisini dusurur).
+        title = QLabel("<b style='color:#00F0FF; font-size:15px; letter-spacing:0.5px;'>ENTROPY AI</b>")
+        title.setToolTip("Entropy AI — Zen Workstation")
         title.setStyleSheet("background: transparent; border: none; padding: 2px 0;")
         h_layout.addWidget(title)
 
         # Agent Desk düğmesi: başlığın hemen sağında (Chat ile aynı konum).
         # Pencere bağımsız bir üst penceredir; ikinci kez basınca yenisi
         # kurulmaz, açık olan öne gelir (bkz. desk.window.open_desk_window).
-        self.desk_btn = QPushButton("🏢 Entropy Agent Desk")
+        self.desk_btn = QPushButton("🏢 Desk")  # Faz 8: 246 -> ~90 px
         self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
         self.desk_btn.setStyleSheet("""
             QPushButton {
@@ -122,7 +134,7 @@ class ZenModeWindow(QMainWindow):
         h_layout.addSpacing(8)
 
         # Project Selector Button
-        self.project_btn = QPushButton(f"📁 Proje: {self.bridge.active_project_dir.name}")
+        self.project_btn = QPushButton(f"📁 {self.bridge.active_project_dir.name}")  # Faz 8
         self.project_btn.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -175,6 +187,10 @@ class ZenModeWindow(QMainWindow):
         # yan yana kalıyor, araya sanki bir ayraç düşmüş gibi görünüyordu.
         # Boşken ne olduğunu yazan bir yer tutucu koyarız (işlev değişmez).
         apply_model_placeholder(self.model_combo, models)
+        # Faz 8: en uzun model adi combo'yu 300 px'e sisiriyordu.
+        self.model_combo.setMaximumWidth(180)
+        self.model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.model_combo.setMinimumContentsLength(10)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
 
@@ -219,7 +235,7 @@ class ZenModeWindow(QMainWindow):
         h_layout.addSpacing(8)
 
         # New Chat Button
-        btn_new_chat = QPushButton("+ Yeni Sohbet")
+        btn_new_chat = QPushButton("+ Yeni")
         btn_new_chat.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -239,36 +255,46 @@ class ZenModeWindow(QMainWindow):
         h_layout.addWidget(btn_new_chat)
 
         # Mode Switch Buttons
-        btn_floating = QPushButton("Floating Mod")
+        btn_floating = QPushButton("◎ Floating")
         btn_floating.clicked.connect(lambda: bus.mode_requested.emit("floating"))
         h_layout.addWidget(btn_floating)
 
-        btn_chat = QPushButton("Chat Mod")
+        btn_chat = QPushButton("💬 Chat")
         btn_chat.clicked.connect(lambda: bus.mode_requested.emit("chat"))
         h_layout.addWidget(btn_chat)
 
+        # Faz 8: cercevesiz pencerede sistem baslik cubugu yok; kucult /
+        # maksimize / kapat dugmeleri burada saglanir (eskiden yalnizca ✕
+        # vardi, pencere ne kucultulebiliyor ne geri alinabiliyordu).
+        self.btn_minimize = QPushButton("─")
+        self.btn_minimize.setFixedWidth(30)
+        self.btn_minimize.setToolTip("Küçült")
+        self.btn_minimize.setStyleSheet(
+            "background-color:#141C2C; color:#8B949E; border:1px solid #1F2B42; font-weight:bold;"
+        )
+        self.btn_minimize.clicked.connect(self.showMinimized)
+        h_layout.addWidget(self.btn_minimize)
+
+        self.btn_maximize = QPushButton("❐")
+        self.btn_maximize.setFixedWidth(30)
+        self.btn_maximize.setToolTip("Ekranı kapla / geri al (üst çubuğa çift tıklama da yapar)")
+        self.btn_maximize.setStyleSheet(
+            "background-color:#141C2C; color:#00F0FF; border:1px solid #1F2B42; font-weight:bold;"
+        )
+        self.btn_maximize.clicked.connect(self.toggle_maximize)
+        h_layout.addWidget(self.btn_maximize)
+
         btn_close = QPushButton("✕")
         btn_close.setFixedWidth(30)
+        btn_close.setToolTip("Kapat")
         btn_close.setStyleSheet("background-color: #2D1418; color: #FF4D4D; border: 1px solid #5C2025; font-weight: bold;")
         btn_close.clicked.connect(self.close)
         h_layout.addWidget(btn_close)
 
-        # Faz 6: ust cubuk cok sayida rozet/dugme tasidigi icin ortak asgari
-        # genisligi ~2700 px'e ciktiyordu; 1366 px'lik ekranda pencerenin sag
-        # tarafi ekran disina tasiyordu. Cubuk yatay kaydirilabilir bir alana
-        # konur: icerik daralmaz, yalnizca gerektiginde kayar.
-        self.header_scroll = QScrollArea()
-        self.header_scroll.setObjectName("headerScroll")
-        self.header_scroll.setWidget(header)
-        self.header_scroll.setWidgetResizable(True)
-        self.header_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.header_scroll.setMinimumWidth(200)
-        self.header_scroll.setStyleSheet("QScrollArea#headerScroll { background: transparent; border: none; }")
-        header_h = max(header.sizeHint().height(), 44)
-        self.header_scroll.setFixedHeight(header_h + 14)
-        root_layout.addWidget(self.header_scroll)
+        # Faz 8: cubuk dogrudan duzene girer, dar pencerede satir atlar.
+        self.header_frame = header
+        header.setMinimumWidth(200)
+        root_layout.addWidget(header)
 
         # 2. Main Workstation Area (Vertical Splitter)
         main_v_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -1264,6 +1290,12 @@ class ZenModeWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
+        # Faz 8: Chat ile ayni duzeltme — tekrarli kapanislarda ayni
+        # sinyalleri yeniden cozmek RuntimeWarning uretiyordu.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         signals = [
             (bus.model_detected, self._update_model_badge),
             (bus.token_usage_updated, self._update_tokens),

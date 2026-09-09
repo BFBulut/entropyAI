@@ -148,8 +148,9 @@ def test_knowledge_graph_html_generation_and_escaping(qapp, tmp_path):
     
     # No unescaped closing script inside node payload
     assert "</script><script>" not in html_content
-    # Legend contains research reports category
-    assert "Araştırma Raporları" in html_content
+    # Legend contains research reports category.
+    # Faz 8: efsane LEGEND_DEFS'ten kuruluyor, etiket "Raporlar" olarak kisaldi.
+    assert "['Reports', 'Raporlar', ['Reports']]" in html_content
     assert "#FF0055" in html_content
     widget.close()
 
@@ -188,6 +189,15 @@ const window = {
 };
 const document = {
     documentElement: { clientWidth: 1024, clientHeight: 768 },
+    // Faz 8: toggleCategory efsane/rozet ogelerini data-cat ile soluklastiriyor.
+    querySelectorAll: () => [],
+    createElement: (tag) => ({
+        style: {}, className: '', textContent: '', children: [],
+        classList: { toggle: () => {} },
+        setAttribute: () => {}, getAttribute: () => undefined,
+        appendChild: function (c) { this.children.push(c); },
+        addEventListener: () => {}
+    }),
     getElementById: (id) => ({
         getContext: () => ({
             fillStyle: '',
@@ -207,6 +217,17 @@ const document = {
             arc: () => {},
             rect: () => {},
             roundRect: () => {},
+            // Faz 8 sablonu: hull/kavis cizimi ve kirpma.
+            closePath: () => {},
+            quadraticCurveTo: () => {},
+            clearRect: () => {},
+            strokeRect: () => {},
+            setLineDash: () => {},
+            clip: () => {},
+            drawImage: () => {},
+            globalAlpha: 1,
+            textAlign: '',
+            textBaseline: '',
             measureText: () => ({ width: 60 }),
             fillText: () => {},
             createLinearGradient: () => ({ addColorStop: () => {} }),
@@ -214,7 +235,17 @@ const document = {
         }),
         addEventListener: () => {},
         style: {},
-        classList: { toggle: () => {} }
+        classList: { toggle: () => {} },
+        // Faz 8: buildLegend efsane cubugunu DOM'a ekliyor.
+        children: [],
+        textContent: '',
+        innerHTML: '',
+        disabled: false,
+        offsetHeight: 30,
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        appendChild: function (c) { this.children.push(c); },
+        getBoundingClientRect: () => ({ left: 0, top: 0 })
     })
 };
 let requestAnimationFrame = (cb) => {};
@@ -300,6 +331,17 @@ const document = {
             arc: () => {},
             rect: () => {},
             roundRect: () => {},
+            // Faz 8 sablonu: hull/kavis cizimi ve kirpma.
+            closePath: () => {},
+            quadraticCurveTo: () => {},
+            clearRect: () => {},
+            strokeRect: () => {},
+            setLineDash: () => {},
+            clip: () => {},
+            drawImage: () => {},
+            globalAlpha: 1,
+            textAlign: '',
+            textBaseline: '',
             measureText: () => ({ width: 50 }),
             fillText: () => {},
             createLinearGradient: () => ({ addColorStop: () => {} }),
@@ -307,7 +349,17 @@ const document = {
         }),
         addEventListener: () => {},
         style: {},
-        classList: { toggle: () => {} }
+        classList: { toggle: () => {} },
+        // Faz 8: buildLegend efsane cubugunu DOM'a ekliyor.
+        children: [],
+        textContent: '',
+        innerHTML: '',
+        disabled: false,
+        offsetHeight: 30,
+        setAttribute: () => {},
+        getAttribute: () => undefined,
+        appendChild: function (c) { this.children.push(c); },
+        getBoundingClientRect: () => ({ left: 0, top: 0 })
     })
 };
 let requestAnimationFrame = (cb) => {};

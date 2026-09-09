@@ -679,7 +679,8 @@ def test_graph_control_strip_strings_present():
     ):
         assert needle in src, f"kontrol şeridinde eksik: {needle}"
     # Topluluk düğümü efsanede ve renk/ikon tablolarında.
-    assert "toggleCategory('community'" in src
+    # Faz 8: efsane LEGEND_DEFS + buildLegend ile JS'ten kuruluyor.
+    assert "['community', " in src
     assert "'community': '#FFD166'" in src
 
 
@@ -714,8 +715,13 @@ function makeEl(id) {
         classList: { toggle: function (c, v) { this[c] = v; }, },
         disabled: false,
         textContent: '',
+        className: '',
         offsetHeight: 30,
         children: [],
+        attrs: {},
+        // Faz 8: buildLegend efsaneyi JS ile kurarken data-cat yaziyor.
+        setAttribute: function (k, v) { this.attrs[k] = v; },
+        getAttribute: function (k) { return this.attrs[k]; },
         appendChild: function (c) { this.children.push(c); },
         addEventListener: function () {},
         getBoundingClientRect: function () { return { left: 0, top: 0 }; },
@@ -739,6 +745,7 @@ const document = {
     },
     createElement: function (tag) { return makeEl(tag); },
     documentElement: { clientWidth: 1000, clientHeight: 800 },
+    querySelectorAll: function () { return []; },
     addEventListener: function () {}
 };
 const window = {

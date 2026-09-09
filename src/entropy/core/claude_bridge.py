@@ -69,6 +69,22 @@ from entropy.core.task_ledger import TaskStatus, task_ledger
 # geçerli; eşik bilinçli olarak ortak tutuldu (bkz. agy_bridge.ARGV_PROMPT_SAFE_LIMIT).
 ARGV_PROMPT_SAFE_LIMIT = 26_500
 
+# Arka plan görevi başına araç adımı tavanı (Faz 8 / 1). AGY köprüsündeki
+# `MAX_STEPS_MARKER` ile AYNI dizge: kart katmanı iki sağlayıcıyı ayırt etmeden
+# "adım sınırına takıldı" hâlini tanıyabilsin diye.
+MAX_STEPS_MARKER = "[ADIM SINIRI]"
+
+# Claude Code CLI'ında adım/tur tavanı bayrağı YOK. `claude --help` (2026-09,
+# bu makinedeki sürüm) çıktısında `--max-turns` geçmiyor; bütçe tarafında
+# yalnızca şu satır var:
+#   "--max-budget-usd <amount>   Maximum dollar amount to spend on API"
+# `--help` her bilinmeyen bayrağı sessizce yutup kullanım metni bastığı için
+# (kontrol probu `--zzz-bogus` de exit 0 verdi) bayrağın varlığı yardımla
+# doğrulanamıyor; var olmayan bir bayrağı argv'ye koymak süreci daha ilk
+# saniyede düşürürdü. Bu yüzden yaptırım AKIŞ TARAFINDA sayılır ve argv bayrağı
+# bu anahtar açıkça True yapılmadıkça eklenmez.
+CLAUDE_SUPPORTS_MAX_TURNS = False
+
 # `--append-system-prompt` argv'de taşındığı için bilişsel bağlam sınırsız
 # olamaz: prompt + sistem istemi birlikte Windows komut satırı sınırına yazılır.
 # 6000 karakter (~1500 token) AGY köprüsündeki bütçeyle aynı; orada da bağlam
@@ -290,6 +306,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
+        # Arka plan görevi başına sağlayıcı oturum kimliği (Faz 8 / 3). Ofis
+        # harness'ı planlama çağrısı bitince buradan okuyup `state.json`'a
+        # yazıyor; `on_result(text, ok)` sözleşmesi kimliği taşıyamıyor ve
+        # sözleşmeyi genişletmek tüm sahte köprüleri kırardı.
+        self._background_conversations: Dict[str, str] = {}
         self._is_running: bool = False
         self._shutting_down: bool = False
         self._side_threads: List[threading.Thread] = []
@@ -516,6 +537,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         extra_dirs: Optional[List[str]] = None,
         append_system_prompt: Optional[str] = None,
         mcp_config: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ) -> List[str]:
         """
         Başsız bir Claude Code çağrısının argv'sini kurar.
@@ -563,6 +585,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             cmd.extend(["--mcp-config", mcp_config])
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
+        # Adım tavanı: CLI bayrağı bu sürümde YOK (bkz. CLAUDE_SUPPORTS_MAX_TURNS).
+        # Bayrak geldiği gün tek satır açılır; yaptırım her hâlükârda
+        # `consume_stream` sayacındadır.
+        if max_steps and CLAUDE_SUPPORTS_MAX_TURNS:
+            cmd.extend(["--max-turns", str(int(max_steps))])
         # `resume_id` açıkça verilen oturum kimliğidir (konuşma eşlemesi);
         # `resume=True` ise köprünün kendi son oturumunu sürdürür. Açık kimlik
         # önceliklidir: arka plan görevi etkileşimli sohbetin oturumuna
@@ -735,11 +762,24 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
     # Akış adaptörü
     # ------------------------------------------------------------------
 
-    def consume_stream(self, stream, sink: Optional[Callable[[str], None]] = None) -> Dict[str, object]:
+    def consume_stream(
+        self,
+        stream,
+        sink: Optional[Callable[[str], None]] = None,
+        max_steps: Optional[int] = None,
+        on_step_limit: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, object]:
         """
         Claude stream-json satırlarını bus sinyallerine çevirir.
 
-        Dönüş: {"text", "usage", "session_id", "cost_usd", "is_error"}.
+        Dönüş: {"text", "usage", "session_id", "cost_usd", "is_error",
+        "tool_steps", "step_limit_hit"}.
+
+        max_steps: `assistant` mesajlarındaki `tool_use` bloklarının tavanı.
+        Aşılınca `on_step_limit(sayaç)` çağrılır (çağıran süreci öldürür) ve
+        akış okuma DURDURULUR. None ise sayaç kapalıdır — etkileşimli sohbetin
+        uzun araç zincirini kesmek istemiyoruz; AGY köprüsündeki sözleşmenin
+        birebir aynısı.
         Ayrı metot olması kasıtlı: sohbet ve arka plan yolları aynı çeviriyi
         paylaşır ve test bu metodu sahte bir satır listesiyle doğrudan
         sürebilir (süreç kurmadan).
@@ -749,6 +789,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         session_id: Optional[str] = None
         cost = 0.0
         is_error = False
+        tool_steps = 0
+        step_limit_hit = False
 
         for raw_line in stream:
             if not raw_line:
@@ -802,6 +844,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                             bus.terminal_output_received.emit(f"[🧠 Düşünce]: {thought}\n")
                             bus.core_pulse_triggered.emit(0.5)
                     elif btype == "tool_use":
+                        # Adım sayacı: Claude'un araç çağrısı olayı tek biçimde
+                        # gelir (assistant mesajında `tool_use` bloğu).
+                        tool_steps += 1
                         name = block.get("name", "Araç")
                         params = json.dumps(block.get("input") or {}, ensure_ascii=False)[:300]
                         bus.terminal_output_received.emit(
@@ -811,6 +856,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 turn_usage = parse_usage(message.get("usage"))
                 if turn_usage:
                     usage = turn_usage
+                if max_steps and not step_limit_hit and tool_steps > int(max_steps):
+                    step_limit_hit = True
+                    is_error = True
+                    if on_step_limit is not None:
+                        try:
+                            on_step_limit(tool_steps)
+                        except Exception:
+                            pass
+                    break
                 continue
 
             if ev_type == "user":
@@ -849,6 +903,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "session_id": session_id,
             "cost_usd": cost,
             "is_error": is_error,
+            "tool_steps": tool_steps,
+            "step_limit_hit": step_limit_hit,
         }
 
     # ------------------------------------------------------------------
@@ -1226,6 +1282,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
@@ -1233,6 +1290,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         conversation_id burada `--resume <session-id>` olur (agy'de
         `--conversation`); iki bayrağın adı farklı, anlamı aynı olduğu için
         sözleşme tek parametrede birleşti.
+
+        max_steps: akıştaki `tool_use` bloklarının tavanı. Aşılırsa süreç
+        `terminate_background_task` ile öldürülür ve görev `[ADIM SINIRI]`
+        hatasıyla `failed` biter. None ise sayaç kapalı. CLI'da karşılık gelen
+        bir bayrak olmadığı için (bkz. CLAUDE_SUPPORTS_MAX_TURNS) yaptırımın
+        tamamı akış tarafındadır.
         """
         with self._lock:
             if self._shutting_down:
@@ -1246,9 +1309,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write, conversation_id),
+                  save_report, agent, needs_write, conversation_id, max_steps),
             daemon=True,
         ).start()
+
+    def background_conversation_id(self, task_id: str) -> Optional[str]:
+        """Biten arka plan görevinin Claude oturum kimliği (`--resume` girdisi)."""
+        with self._lock:
+            return self._background_conversations.get(task_id)
 
     @staticmethod
     def _notify_result(on_result, text: str, success: bool) -> None:
@@ -1272,6 +1340,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
         conversation_id: Optional[str] = None,
+        max_steps: Optional[int] = None,
     ) -> None:
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -1326,12 +1395,23 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 agent=agent,
                 skip_permissions=True,
                 resume_id=conversation_id,
+                max_steps=max_steps,
             )
 
             result: Dict[str, object] = {}
             ret_code = -1
             execution_error = None
             proc = None
+            step_limit = {"error": None}
+
+            def _on_step_limit(count: int, _task_id=task_id) -> None:
+                step_limit["error"] = (
+                    f"{MAX_STEPS_MARKER} Araç adımı sınırı aşıldı "
+                    f"({count} > {int(max_steps or 0)}); görev durduruldu."
+                )
+                bus.terminal_output_received.emit(f"\n[{step_limit['error']}]\n")
+                self.terminate_background_task(_task_id)
+
             try:
                 stdin_payload = self._apply_stdin_prompt(cmd)
                 proc = subprocess.Popen(
@@ -1358,7 +1438,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
                 readline_fn = getattr(proc.stdout, "readline", None)
                 stream = iter(readline_fn, "") if callable(readline_fn) else iter(proc.stdout)
-                result = self.consume_stream(stream)
+                result = self.consume_stream(
+                    stream, max_steps=max_steps, on_step_limit=_on_step_limit
+                )
                 if writer is not None:
                     writer.join(timeout=5.0)
                 try:
@@ -1380,6 +1462,18 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                         self._kill_tree(proc, wait_budget=2.0)
                 except Exception:
                     pass
+
+            # Adım sınırı, süreç öldürülürken doğan boru hatalarının ÖNÜNDE
+            # gelir: kullanıcı "görev neden bitti" sorusunun gerçek yanıtını
+            # görmeli, öldürmenin yan etkisini değil.
+            if step_limit["error"]:
+                execution_error = step_limit["error"]
+
+            # Oturum kimliği: ofis konuşmasının sürdürülebilmesi için saklanır.
+            session_id = result.get("session_id")
+            if session_id:
+                with self._lock:
+                    self._background_conversations[task_id] = str(session_id)
 
             full_text = str(result.get("text", "") or "").strip()
             success = (

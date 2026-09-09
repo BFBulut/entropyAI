@@ -544,7 +544,12 @@ def test_cognitive_memory_subbranches_and_zero_overlap(qapp, tmp_path):
     # cx/cy yerine ax/ay. zoomIn/zoomOut merkezi, tekerlek fare konumunu verir.
     assert "function applyZoom(newZoom, ax, ay)" in GRAPH_HTML_TEMPLATE
     assert "panStartX = ax - panX;" in GRAPH_HTML_TEMPLATE
-    assert "applyZoom(zoom * zoomFactor, mx, my);" in GRAPH_HTML_TEMPLATE
+    # Faz 8: tekerlek capasi ara mx/my degiskeni yerine dogrudan
+    # olay konumundan (clientX/Y - rect) hesaplaniyor; davranis ayni.
+    assert (
+        "applyZoom(zoom * zoomFactor, e.clientX - rect.left, e.clientY - rect.top);"
+        in GRAPH_HTML_TEMPLATE
+    )
 
     # 3. Build unified graph with sample Obsidian data
     vm = ObsidianVaultManager(vault_path=tmp_path)

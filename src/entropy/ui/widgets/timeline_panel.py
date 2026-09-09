@@ -269,6 +269,12 @@ class TimelinePanel(QFrame):
             self.event_activated.emit(str(event.get("kind", "")), str(event.get("target", "")))
 
     def closeEvent(self, event):  # noqa: N802
+        # Faz 8: tekrarli kapanislarda ayni sinyali yeniden cozmek
+        # libpyside'in "Failed to disconnect" uyarisini basiyordu.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         for signal, slot in (
             (bus.report_created, self._on_bus_event),
             (bus.task_completed, self._on_task_completed),

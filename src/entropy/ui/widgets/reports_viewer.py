@@ -227,6 +227,8 @@ class ReportsViewerWidget(QFrame):
         self.report_center = ReportCenterWidget(parent=self, store=self.inbox_strip.store)
         self.report_center.report_opened.connect(self.open_report_by_path_or_id)
         self.report_center.unread_changed.connect(self._on_inbox_unread_changed)
+        # Faz 8: "Tümü" düğmesi tam listeye geçirir (süzgeçleri sıfırlar).
+        self.report_center.show_all_requested.connect(self.show_all_reports)
         self.layout.addWidget(self.report_center, 1)
 
         # Splitter between Report List and Report Content
@@ -643,6 +645,12 @@ class ReportsViewerWidget(QFrame):
         self.refresh_reports()
 
     def closeEvent(self, event):
+        # Faz 8: tekrar kapanislarda "Failed to disconnect" RuntimeWarning'i
+        # uretmesin; cozme yalnizca gercekten bagliyken yapilir.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         try:
             bus.report_created.disconnect(self._on_report_created)
         except Exception:
@@ -1033,6 +1041,22 @@ class ReportsViewerWidget(QFrame):
             "date_label": date_label,
         })
         return meta
+
+    @Slot()
+    def show_all_reports(self) -> None:
+        """Süzgeçleri sıfırlayıp tam rapor listesini gösterir (Faz 8).
+
+        Rapor Merkezi kartları özettir; kullanıcı "toplam raporlar görünmüyor"
+        dediğinde asıl istediği bu ham listedir.
+        """
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+        self.filter_combo.blockSignals(True)
+        self.filter_combo.setCurrentIndex(0)  # "Tümü"
+        self.filter_combo.blockSignals(False)
+        self._rebuild_list()
+        self.list_widget.setFocus()
 
     def refresh_reports(self):
         """Obsidian kasasından ve proje klasörlerinden rapor künyelerini yeniden yükler."""

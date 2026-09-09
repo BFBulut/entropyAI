@@ -237,6 +237,13 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         self.last_skill_confidence: float = 0.0
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
+        # Arka plan görevi başına agy konuşma kimliği (Faz 8 / 3); ofis
+        # harness'ı planlama çağrısından sonra buradan okur. `on_result`
+        # sözleşmesi (metin, başarı) kimliği taşıyamıyor.
+        self._background_conversations: Dict[str, str] = {}
+        # Konuşma başına en son görülen KÜMÜLATİF usage; sürdürülen turun
+        # gerçek maliyeti bunun farkıdır.
+        self._conversation_usage_base: Dict[str, Dict[str, int]] = {}
         self._is_running: bool = False
         # Kapanış bayrağı: shutdown() sonrası hiçbir yeni agy süreci başlamamalı.
         # Aksi hâlde aboutToQuit ile süreç sonu arasında sıraya girmiş bir görev
@@ -653,6 +660,29 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         )
         thread.start()
 
+    def _conversation_usage_delta(
+        self, conversation_id: str, usage: Dict[str, int], store_only: bool = False
+    ) -> Dict[str, int]:
+        """
+        Kümülatif konuşma usage'ını BU turun maliyetine indirger.
+
+        Taban, aynı konuşmanın önceki turunda görülen kümülatif değerdir; yeni
+        kümülatif her çağrıda saklanır. `store_only=True` yalnızca tabanı kurar
+        (konuşmanın ilk turu). Negatif fark 0'a kırpılır: agy kimi zaman
+        oturumu sıfırlıyor ve eksi maliyet muhasebeyi bozardı.
+        """
+        with self._state_lock:
+            base = dict(self._conversation_usage_base.get(conversation_id) or {})
+            self._conversation_usage_base[conversation_id] = dict(usage)
+        if store_only or not base:
+            return dict(usage)
+        return {k: max(0, int(v or 0) - int(base.get(k, 0) or 0)) for k, v in usage.items()}
+
+    def background_conversation_id(self, task_id: str) -> Optional[str]:
+        """Biten arka plan görevinin agy konuşma kimliği (`--conversation` girdisi)."""
+        with self._lock:
+            return self._background_conversations.get(task_id)
+
     @staticmethod
     def _notify_result(on_result, text: str, success: bool) -> None:
         """Geri çağrıyı korumalı çağırır; geri çağrının hatası köprüyü düşürmez."""
@@ -957,6 +987,14 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                 bus.terminal_output_received.emit(resp)
                                 full_response_acc.append(resp)
 
+                            # Konuşma kimliği: ofis çağrıları (plan → değerlendirme
+                            # → yeniden plan) aynı agy konuşmasında sürsün diye
+                            # saklanır. Alt kartlar bunu HİÇ kullanmaz.
+                            conv = data.get("conversation_id") or result.get("conversation_id")
+                            if conv:
+                                with self._lock:
+                                    self._background_conversations[task_id] = str(conv)
+
                             # Her arka plan görevi yeni bir konuşma olduğundan agy'nin
                             # kümülatif "usage" değeri doğrudan bu görevin maliyetidir.
                             usage = result.get("usage")
@@ -1007,6 +1045,16 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
             full_text = "".join(full_response_acc).strip()
             success = ret_code == 0 and len(full_text) > 0 and execution_error is None
+
+            # Sürdürülen konuşmada agy'nin `usage` alanı KÜMÜLATİFTİR: ikinci
+            # tur, birincinin token'larını da içerir. Taban çıkarılmazsa aynı
+            # token ofis bütçesinden iki kez düşer ve bütçe erken tükenir.
+            if task_usage and conversation_id:
+                task_usage = self._conversation_usage_delta(conversation_id, task_usage)
+            elif task_usage:
+                conv_now = self._background_conversations.get(task_id)
+                if conv_now:
+                    self._conversation_usage_delta(conv_now, task_usage, store_only=True)
 
             # Görev maliyeti oturum sayacına eklenir ve rozet yenilenir; ledger'a da
             # yazılır ki damıtma/konsolidasyon gibi işlerin gerçek kotası izlenebilsin.

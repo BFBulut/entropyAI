@@ -89,6 +89,11 @@ class TerminalPaneWidget(QFrame):
         self.clear_terminal()
 
     def closeEvent(self, event):
+        # Faz 8: ikinci kapanista uyari basmasin.
+        if not getattr(self, "_bus_connected", True):
+            super().closeEvent(event)
+            return
+        self._bus_connected = False
         try:
             bus.terminal_output_received.disconnect(self.append_text)
         except Exception:

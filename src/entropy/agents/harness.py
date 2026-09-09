@@ -62,6 +62,10 @@ EVAL_SUMMARY_CHARS = 6000
 
 STATE_FILENAME = "state.json"
 
+# `state.json` içinde karta değil OFİSE ait alanların anahtarı (konuşma kimliği
+# gibi). Kart kimlikleri zaman damgasıyla başlar, çakışma olamaz.
+OFFICE_STATE_KEY = "__office__"
+
 # Kabul eşiği: bunun altındaki alt kart bir kez yeniden koşar.
 GRADE_THRESHOLD = 0.6
 MAX_SUBTASKS = 5
@@ -72,6 +76,89 @@ MAX_ATTEMPTS = 2  # ilk koşu + bir retry
 # "harca, sonra bak" düzeni her seferinde bütçeyi bir alt kart boyu aşıyordu.
 # Değer ölçüme dayanıyor: agy alt kartları tipik olarak 20–40k token yakıyor.
 SUBCARD_TOKEN_ESTIMATE = 30_000
+
+# Uyarlanabilir tahmin sınırları (Faz 8 / 2). Sabit 30k hem küçük kartlarda
+# bütçeyi gereksiz yere kilitliyor hem de büyük kartlarda yetersiz kalıyordu.
+SUBCARD_ESTIMATE_FLOOR = 8_000
+SUBCARD_ESTIMATE_CEILING = 40_000
+# İstem karakterinden token'a: /4 token, ×3 ise araç turlarıyla bağlamın
+# büyüme çarpanı (ölçüm: alt kart istemi tipik olarak toplam maliyetin ~1/3'ü).
+SUBCARD_PROMPT_MULTIPLIER = 3
+# Geçmiş medyanına güvenlik payı.
+SUBCARD_MEDIAN_MARGIN = 1.2
+
+
+def _median(values: List[int]) -> Optional[float]:
+    data = sorted(int(v) for v in values if v)
+    if not data:
+        return None
+    mid = len(data) // 2
+    return float(data[mid]) if len(data) % 2 else (data[mid - 1] + data[mid]) / 2.0
+
+
+def estimate_subcard_tokens(
+    prompt_chars: int = 0,
+    office: Optional[str] = None,
+    ledger=None,
+    board: Optional[TaskBoard] = None,
+) -> Dict[str, object]:
+    """
+    Bir alt kartın BEKLENEN maliyeti; {"tokens": N, "source": "medyan|istem|taban"}.
+
+    Sıra: istem karakterinden türeyen taban tahmin ile ofisin ledger'daki
+    BAŞARILI alt kart medyanının (×1.2) büyüğü alınır, sonra [8k, 40k] aralığına
+    kırpılır. Medyan yoksa (ofisin ilk turu) yalnızca istem konuşur. Kaynak
+    etiketi kart dosyasına yazılır: bütçe kararının neye dayandığı sonradan
+    denetlenebilmeli.
+    """
+    prompt_est = int(max(0, int(prompt_chars)) / 4 * SUBCARD_PROMPT_MULTIPLIER)
+    value = float(prompt_est)
+    source = "istem" if prompt_est else "taban"
+
+    median = None
+    if office and board is not None:
+        median = _median(_office_subcard_costs(office, board, ledger))
+    if median:
+        scaled = median * SUBCARD_MEDIAN_MARGIN
+        if scaled >= value:
+            value = scaled
+            source = "medyan"
+
+    tokens = int(min(SUBCARD_ESTIMATE_CEILING, max(SUBCARD_ESTIMATE_FLOOR, value)))
+    if tokens == SUBCARD_ESTIMATE_FLOOR and value <= SUBCARD_ESTIMATE_FLOOR:
+        source = "taban"
+    return {"tokens": tokens, "source": source}
+
+
+def _office_subcard_costs(office: str, board: TaskBoard, ledger=None) -> List[int]:
+    """Ofisin BAŞARIYLA biten alt kartlarının ledger'daki gerçek maliyetleri."""
+    if ledger is None:
+        try:
+            from entropy.core.task_ledger import task_ledger as ledger  # type: ignore
+        except Exception:
+            return []
+    costs: List[int] = []
+    try:
+        cards = board.list()
+    except Exception:
+        return []
+    for card in cards:
+        if card.office != office or not card.parent:
+            continue
+        try:
+            rec = ledger.get_task(f"card-{card.id}")
+        except Exception:
+            rec = None
+        if not rec or str(rec.get("status") or "").upper() != "SUCCESS":
+            continue
+        value = rec.get("total_tokens")
+        if value in (None, ""):
+            continue
+        try:
+            costs.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return costs
 
 # Orkestratör çıktısında kod üretimi izi (A9). Alt ajanlar için GEÇERSİZ:
 # yalnızca plan/rapor üretmesi gereken orkestratöre uygulanır.
@@ -224,6 +311,67 @@ class OfficeHarness:
                 logger.warning("Ofis durumu yazılamadı: %s", path)
             return entry
 
+    # -- ofis konuşması (Faz 8 / 3) -------------------------------------
+
+    def conversation_key(self) -> str:
+        """
+        `ConversationMap` anahtarı: `office:<ad>`.
+
+        Önek şart: kullanıcının sohbet konuşmaları da aynı dosyada duruyor ve
+        ofis adı bir sohbet kimliğiyle çakışırsa iki oturum birbirine karışırdı.
+        """
+        return f"office:{self.office_name}"
+
+    def office_conversation_id(self, provider: str) -> Optional[str]:
+        """Ofisin sağlayıcı başına süren konuşma kimliği (yoksa None)."""
+        entry = self._state().get(OFFICE_STATE_KEY) or {}
+        value = (entry.get("conversation_id") or {}).get((provider or "").lower())
+        return str(value) if value else None
+
+    def remember_office_conversation(self, provider: str, conversation_id: str) -> None:
+        """
+        Kimliği ofis `state.json`'ına ve `ConversationMap`'e yazar.
+
+        state.json birincil kaynak: ofis klasörü silinince kimlik de gider.
+        ConversationMap kopyası yalnızca kimlik panelinin ofis oturumlarını
+        görebilmesi için.
+        """
+        provider = (provider or "").lower()
+        if not provider or not conversation_id:
+            return
+        with self._lock:
+            entry = dict(self._state().get(OFFICE_STATE_KEY) or {})
+            conv = dict(entry.get("conversation_id") or {})
+            if conv.get(provider) == str(conversation_id):
+                return
+            conv[provider] = str(conversation_id)
+        self._save_card_state(OFFICE_STATE_KEY, conversation_id=conv)
+        try:
+            from entropy.core.identity import conversation_map
+
+            conversation_map.set(self.conversation_key(), provider, str(conversation_id))
+        except Exception:
+            logger.debug("Ofis konuşması eşlemeye yazılamadı: %s", self.office_name)
+
+    def forget_office_conversation(self) -> None:
+        """Ofis arşivlenince/silinince konuşma kimliği düşer."""
+        try:
+            from entropy.core.identity import conversation_map
+
+            conversation_map.forget(self.conversation_key())
+        except Exception:
+            pass
+        try:
+            with self._lock:
+                state = self._state()
+                if OFFICE_STATE_KEY in state:
+                    state[OFFICE_STATE_KEY].pop("conversation_id", None)
+                    self._state_path().write_text(
+                        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+        except OSError:
+            pass
+
     def _emit(self, card_id: str, phase: str) -> None:
         try:
             from entropy.core.event_bus import bus
@@ -296,6 +444,22 @@ class OfficeHarness:
         if not budget:
             return None
         return int(budget) - int(self._card_state(card_id).get("tokens", 0))
+
+    def subcard_estimate(self, child: Optional[TaskCard] = None) -> Dict[str, object]:
+        """
+        Alt kart için uyarlanabilir maliyet tahmini (Faz 8 / 2).
+
+        İstem uzunluğu kartın hedef+ölçüt metninden okunur; ofisin geçmişi
+        varsa medyan baskındır. Sabit 30k tahmini küçük kartlarda bütçeyi boş
+        yere kilitliyor, büyüklerde ise yetmiyordu.
+        """
+        prompt_chars = 0
+        if child is not None:
+            prompt_chars = len(child.goal or "") + sum(len(c or "") for c in (child.criteria or []))
+            prompt_chars += len(child.title or "") + len(child.notes or "")
+        return estimate_subcard_tokens(
+            prompt_chars=prompt_chars, office=self.office_name, board=self.board
+        )
 
     def _can_afford(self, card_id: str, estimate: int = SUBCARD_TOKEN_ESTIMATE) -> bool:
         """
@@ -792,13 +956,24 @@ class OfficeHarness:
         for child in to_start:
             # ÇAĞRI ÖNCESİ kontrol: kalan bütçe bir alt kartı taşımıyorsa
             # süreç hiç başlatılmaz (C1b).
-            if not self._can_afford(card_id):
+            estimate = self.subcard_estimate(child)
+            # Tahmin kart dosyasına yazılır: hangi sayıya göre "sığmıyor"
+            # denildiği kartın kendisinden okunabilmeli.
+            note = f"Tahmin: {estimate['tokens']} token (kaynak: {estimate['source']})"
+            if note not in (child.notes or ""):
+                child = replace(
+                    child,
+                    notes=((child.notes + "\n") if child.notes else "") + note,
+                )
+                self.board.update(child)
+            if not self._can_afford(card_id, int(estimate["tokens"])):
                 remaining = self._remaining_budget(card_id)
                 self._terminate_children(card_id)
                 self._fail(
                     card_id,
                     f"Bütçe yetersiz: kalan ≈ {remaining} token, alt kart tahmini "
-                    f"{SUBCARD_TOKEN_ESTIMATE} token. Yeni alt kart başlatılmadı.",
+                    f"{estimate['tokens']} token (kaynak: {estimate['source']}). "
+                    "Yeni alt kart başlatılmadı.",
                 )
                 return
             if not self._spend(card_id, _estimate_tokens(child.goal, *(child.criteria or []))):
@@ -1192,9 +1367,16 @@ class OfficeHarness:
         task_name: str,
         prompt: str,
         on_result: Callable[[str, bool], None],
+        resume: bool = True,
     ) -> bool:
         """
         Orkestratör/değerlendirici çağrısı: rapor kaydedilmez, mod accept-edits.
+
+        `resume=True` (varsayılan): plan → değerlendirme → yeniden plan AYNI
+        sağlayıcı konuşmasında sürer. Eskiden her ofis çağrısı sıfır bağlamla
+        başlıyor ve orkestratör kendi planını değerlendirirken planı hiç
+        görmüyordu. Alt kartlar bu yoldan geçmez: onların temiz bağlam ilkesi
+        korunur.
 
         `save_report=False` çünkü bu iki çağrının çıktısı JSON; kasaya rapor
         olarak düşerse hem gürültü hem de damıtma girdisi olurdu. `mode="plan"`
@@ -1210,12 +1392,26 @@ class OfficeHarness:
         if bridge is None:
             return False
         body = (spec.prompt.strip() + "\n\n") if (spec and spec.prompt) else ""
+
+        def _wrapped(text: str, ok: bool, _provider=provider, _task_id=task_id) -> None:
+            # Kimlik geri çağrıdan ÖNCE saklanır: `_on_plan` zinciri senkron
+            # köprüde hemen değerlendirmeye geçebiliyor ve o çağrı kimliği
+            # görmeliydi.
+            try:
+                getter = getattr(bridge, "background_conversation_id", None)
+                new_id = getter(_task_id) if callable(getter) else None
+                if new_id:
+                    self.remember_office_conversation(_provider, new_id)
+            except Exception:
+                logger.debug("Ofis konuşma kimliği okunamadı: %s", _task_id)
+            on_result(text, ok)
+
         kwargs = dict(
             task_id=task_id,
             task_name=task_name,
             prompt=body + prompt,
             mode="accept-edits",
-            on_result=on_result,
+            on_result=_wrapped,
             save_report=False,
             agent=agent_name or None,
             # Planlama ve değerlendirme yalnızca metin üretir: paylaşımlı okuma
@@ -1226,9 +1422,15 @@ class OfficeHarness:
             # yok sayılıyordu.
             project_path=str(self._workdir()),
         )
+        # Konuşma sürdürme: agy `--conversation`, Claude `--resume`; köprü
+        # sözleşmesinde tek ad (`conversation_id`).
+        if resume:
+            existing = self.office_conversation_id(provider)
+            if existing:
+                kwargs["conversation_id"] = existing
         from entropy.agents.tasks import _accepts_kwarg
 
-        for optional in ("needs_write", "project_path"):
+        for optional in ("needs_write", "project_path", "conversation_id"):
             if not _accepts_kwarg(bridge.send_background_task_async, optional):
                 kwargs.pop(optional, None)
         try:

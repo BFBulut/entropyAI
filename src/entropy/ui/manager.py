@@ -11,7 +11,11 @@ from entropy.core.provider import create_bridge, switch_provider
 from entropy.ui.modes.chat_mode import CHAT_MIN_SIZE, CHAT_SCREEN_RATIO, ChatModeWindow
 from entropy.ui.modes.floating_mode import FloatingModeWidget
 from entropy.ui.modes.zen_mode import ZEN_MIN_SIZE, ZEN_SCREEN_RATIO, ZenModeWindow
-from entropy.ui.window_sizing import fit_window_to_screen
+from entropy.ui.window_sizing import (
+    clamp_window_into_screen,
+    fit_window_to_screen,
+    maximize_window_to_screen,
+)
 
 class EntropyUIManager(QObject):
     """Controls window lifecycles and mode transitions for Entropy AI."""
@@ -141,14 +145,25 @@ class EntropyUIManager(QObject):
         if self.current_mode == "zen":
             self.floating_widget.hide()
             self.chat_window.hide()
-            # Faz 6: tam ekran yerine kullanilabilir alanin %92'si, ortalanmis.
-            # Gorev cubugu erisilebilir kalir ve Agent Desk ayni ekranda acilabilir.
-            fit_window_to_screen(
-                self.zen_window,
-                ratio=ZEN_SCREEN_RATIO,
-                min_size=ZEN_MIN_SIZE,
-                screen=active_screen,
-            )
+            # Faz 8: Zen acilista kullanilabilir alanin TAMAMINI kaplar.
+            # (Faz 6'daki %92 orani kullaniciya "tam ekrandan cikmis" 1766x949
+            # bir pencere olarak gorunuyordu.) Gorev cubugu yine erisilebilir,
+            # cunku tam ekran degil `availableGeometry` kullanilir. Kullanici
+            # pencereyi tasidiysa/kuculttuyse geometrisine dokunulmaz.
+            if not self.zen_window.isVisible():
+                maximize_window_to_screen(
+                    self.zen_window,
+                    min_size=ZEN_MIN_SIZE,
+                    screen=active_screen,
+                )
+            else:
+                fit_window_to_screen(
+                    self.zen_window,
+                    ratio=ZEN_SCREEN_RATIO,
+                    min_size=ZEN_MIN_SIZE,
+                    screen=active_screen,
+                    keep_preferred=True,
+                )
             self.zen_window.show()
             self.zen_window.raise_()
             self.zen_window.activateWindow()
@@ -179,6 +194,20 @@ class EntropyUIManager(QObject):
             self.chat_window.show()
             self.chat_window.raise_()
             self.chat_window.activateWindow()
+
+        # Faz 8: hangi moda gecilirse gecilsin gorunur pencere kullanilabilir
+        # alanin icinde kalir (kullanici onu ekran disina surukledikten sonra
+        # mod degistirse bile "hicbir sey olmuyor" durumu olusmaz).
+        active = {
+            "zen": self.zen_window,
+            "chat": self.chat_window,
+            "floating": self.floating_widget,
+        }.get(self.current_mode)
+        if active is not None and active.isVisible():
+            try:
+                clamp_window_into_screen(active, screen=active_screen)
+            except Exception:
+                pass
 
         bus.mode_changed.emit(self.current_mode)
 

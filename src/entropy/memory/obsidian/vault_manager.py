@@ -23,7 +23,9 @@ _GRAPH_MEMORY_CACHE: Dict[str, Tuple[str, Dict[str, List[Dict[str, str]]]]] = {}
 # Grafik verisi surumu. Dugum alanlari degistiginde artirilir; imzanin onune
 # eklendigi icin eski onbellek girdileri (eksik alanli) otomatik gecersiz olur.
 # v2 (Faz 5.1/5.2): dugumlere type, importance, t_valid_from, t_valid_to.
-_GRAPH_SCHEMA_VERSION = "v2"
+# v4 (Faz 8): kod blogu ayiklama, test kalintisi ve arsiv dizinlerinin haric
+# tutulmasi, rapor dugumlerine on bilgi etiketleri (`tags`, `skill`).
+_GRAPH_SCHEMA_VERSION = "v4"
 
 # Kasa kategorisi -> birlesik graf dugum turu (graph_store.NODE_TYPES).
 _VAULT_GROUP_TO_TYPE: Dict[str, str] = {
@@ -76,6 +78,8 @@ KIND_IMPORTANCE: Dict[str, float] = {
 # Rapor taramasının hiç girmediği alt ağaçlar: arşiv, eski AgentDesk artıkları
 # ve ofis grafının kendi not deposu (bunlar rapor değildir).
 _REPORT_SCAN_SKIP_DIRS = frozenset({"_archive", "AgentDesk", ".obsidian", ".trash"})
+# Graf taramasında küçük harfe indirgenmiş karşılaştırma yapılır.
+_GRAPH_SCAN_SKIP_DIRS = frozenset(d.lower() for d in _REPORT_SCAN_SKIP_DIRS)
 
 
 def _report_kind_from_path(file: Path) -> str:
@@ -254,6 +258,49 @@ def _frontmatter_list(text: str, key: str) -> List[str]:
         if stripped:
             break
     return [v for v in out if v]
+
+
+# Faz 8/M1: kod bloklari ve satir ici kod. Raporlarin govdesinde `[[wikilink]]`
+# ORNEKLERI geciyor (sozdizimi anlatan bolumler); bunlar gercek bag sanilip
+# 376 sarkan kenar uretiyordu (olcum 2026-09-09). Ayikamadan once kod
+# bolgeleri metinden dusurulur.
+_CODE_FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_INDENTED_CODE_RE = re.compile(r"(?m)^(?: {4}|\t).*$")
+
+# Faz 8/M2: pytest kalintisi proje dizinleri (`Projects/test_*`). Kasada gercek
+# proje gibi duruyor ve 196 yaprak tasiyordu.
+_TEST_ARTIFACT_PREFIXES = ("test_", "tmp_", "pytest-")
+
+
+def strip_code_spans(text: str) -> str:
+    """Cit'li/girintili kod bloklarini ve satir ici kodu bosluga cevirir."""
+    if not text:
+        return ""
+    out = _CODE_FENCE_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    out = _INLINE_CODE_RE.sub(" ", out)
+    out = _INDENTED_CODE_RE.sub("", out)
+    return out
+
+
+def is_test_artifact_name(name: str) -> bool:
+    """Ad bir test kalintisi proje/dizin adi mi (graftan haric tutulur)."""
+    low = (name or "").strip().lower()
+    return any(low.startswith(p) for p in _TEST_ARTIFACT_PREFIXES)
+
+
+def is_test_artifact_path(file: Path) -> bool:
+    """`Projects/test_*` (ya da tmp_/pytest-) altindaki dosyalar graftan cikar."""
+    parts = [p for p in file.parts]
+    lower = [p.lower() for p in parts]
+    for anchor in ("projects", "skills"):
+        idx = 0
+        while anchor in lower[idx:]:
+            i = lower.index(anchor, idx)
+            if i + 1 < len(parts) and is_test_artifact_name(parts[i + 1]):
+                return True
+            idx = i + 1
+    return False
 
 
 def _graph_disk_cache_enabled() -> bool:
@@ -581,8 +628,10 @@ class ObsidianVaultManager:
         Supports [[Target]], [[Target|Alias]], [[Target#Header]], [[Target#Header|Alias]].
         """
         links = []
-        for match in self.WIKILINK_PATTERN.finditer(content):
+        for match in self.WIKILINK_PATTERN.finditer(strip_code_spans(content)):
             target = match.group("target").strip()
+            if not target or "\n" in target:
+                continue
             if target.lower().endswith(".md"):
                 target = target[:-3]
             alias = match.group("alias").strip() if match.group("alias") else target
@@ -785,7 +834,18 @@ class ObsidianVaultManager:
         skipped: Set[Path] = set()
         file_ids: Dict[Path, str] = {}
 
+        node_by_id: Dict[str, Dict[str, Any]] = {}
         for file in files:
+            if _GRAPH_SCAN_SKIP_DIRS.intersection(p.lower() for p in file.parts):
+                # Faz 8/M2: arşiv ve eski AgentDesk artıkları grafa girmez;
+                # `_archive/<tarih>/office_*/` altında 24 kez tekrar eden aynı
+                # adlı not grafikte tek düğüm gibi görünüyordu (ölçüm: 2 grup ×24).
+                skipped.add(file)
+                continue
+            if is_test_artifact_path(file):
+                # Faz 8/M2: pytest kalintisi projeler graftan cikar.
+                skipped.add(file)
+                continue
             name = file.stem
             category = file.parent.name
             skill_of_query = _query_page_skill(file)
@@ -847,13 +907,15 @@ class ObsidianVaultManager:
 
             if node_id not in node_ids:
                 node_ids.add(node_id)
-                nodes.append({
+                node = {
                     "id": node_id,
                     "name": name,
                     "group": category,
                     "path": str(file),
                     **_graph_node_fields(category, file),
-                })
+                }
+                nodes.append(node)
+                node_by_id[node_id] = node
 
             if office_role is not None and office_role[1] == "office":
                 try:
@@ -888,6 +950,21 @@ class ObsidianVaultManager:
             is_heavy_catalog = (file.stem in ["BELLEK_HARITASI", "MEMORY"])
             try:
                 content = file.read_text(encoding="utf-8", errors="ignore")
+                # Faz 8/M6: on bilgideki `tags`/`skill` rapor siniflandirmasinda
+                # kullanilir; icerik zaten burada okundugu icin ek G/C yok.
+                node = node_by_id.get(source_id)
+                if node is not None and content.lstrip("﻿").startswith("---"):
+                    fm = _read_frontmatter(file)
+                    tag_line = fm.get("tags", "")
+                    tags = [
+                        t.strip().strip("[]").strip('"').strip("'")
+                        for t in tag_line.split(",")
+                    ]
+                    tags = [t for t in tags if t]
+                    if tags:
+                        node["tags"] = tags
+                    if fm.get("skill"):
+                        node["skill"] = fm["skill"]
                 extracted = self.extract_wikilinks(content)
                 is_catalog = is_heavy_catalog or (len(extracted) > 25)
                 for item in extracted:
