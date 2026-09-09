@@ -245,3 +245,20 @@ def test_archive_stale_rejects_paths_outside_vault(tmp_path):
     assert result["moved"] == []
     assert result["skipped"][0]["reason"] == "kasa_disi"
     assert outside.is_dir()
+
+
+def test_archive_stale_skips_office_revived_before_move(tmp_path):
+    """Kuru koşumdan sonra künyesi yazılan ofis arşive TAŞINMAZ."""
+    root = tmp_path / "Entropy"
+    ghost = root / "Desk" / "Offices" / "dogrulama"
+    _write(ghost / "layout.json", "{}")
+    plan = find_ghost_offices(vault_path=tmp_path)
+    assert [p["name"] for p in plan] == ["dogrulama"]
+
+    # Arada ofis gerçekten kuruldu (künye yazıldı).
+    _write(ghost / "OFFICE.md", "---\nname: dogrulama\n---\n")
+
+    done = archive_stale(plan, vault_path=tmp_path, dry_run=False, date="2026-09-09")
+    assert done["moved"] == []
+    assert done["skipped"][0]["reason"] == "artik_gercek_ofis"
+    assert (ghost / "OFFICE.md").is_file()

@@ -202,9 +202,16 @@ def test_quiet_threshold_setting_roundtrip(tmp_path):
 # ------------------------------------------------------------ widget akışı
 
 @pytest.fixture
-def center(qapp, tmp_path):
+def center(qapp, tmp_path, monkeypatch):
+    from entropy.ui.widgets import report_center as rc_mod
     from entropy.ui.widgets.report_center import ReportCenterWidget
     from entropy.ui.widgets.report_inbox import ReportInboxStore
+
+    # Yalıtım: widget kurulduğunda `mailbox_entries()` KULLANICININ kasasındaki
+    # Entropy posta kutusunu okuyor; okunmamış bir `report` mesajı varsa
+    # sayımlar (unread_count) ve kart sırası kayıyordu. Testler kullanıcı
+    # durumuna bağlı olmamalı: posta kutusu kaynağı boşa alınır.
+    monkeypatch.setattr(rc_mod, "mailbox_entries", lambda *a, **k: [])
 
     store = ReportInboxStore(path=tmp_path / "inbox.json")
     widget = ReportCenterWidget(store=store)

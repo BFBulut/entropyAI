@@ -330,7 +330,14 @@ def office_layout_path(office: str) -> Optional[Path]:
 def load_layout(office: str = "", furniture_lib: Optional[FurnitureLibrary] = None,
                 asset_lib: Optional[AssetLibrary] = None) -> Layout:
     """
-    Ofisin düzenini yükler; yoksa varsayılanı ofis klasörüne kopyalar.
+    Ofisin düzenini yükler; KAYITLI ofisin klasörüne varsayılanı kopyalar.
+
+    "Hayalet ofis" kuralı: bu işlev ofis klasörü AÇMAZ. Eskiden `mkdir(parents)`
+    ile her ada klasör açıyordu; kayıt defterinden silinen ya da arşive taşınan
+    bir ofis sahnede seçili kaldığında `<kasa>/Entropy/Desk/Offices/<ad>/`
+    yalnızca `layout.json` ile yeniden beliriyordu (künyesiz ofis; kasa
+    hijyeni her turda aynı klasörleri arşivliyordu). Artık künye (`OFFICE.md`)
+    yoksa diske hiç dokunulmaz, sahne bellekteki varsayılan düzenle çizilir.
 
     Kopyalama başarısız olursa (kasa yolu yok, yazma izni yok) sessizce
     varsayılan düzenle devam edilir: sahne her koşulda çizilmelidir.
@@ -342,11 +349,12 @@ def load_layout(office: str = "", furniture_lib: Optional[FurnitureLibrary] = No
             if path.is_file():
                 with open(path, "r", encoding="utf-8") as fh:
                     return parse_layout(json.load(fh), furniture_lib, source=str(path))
-            default_path = alib.path("default-layout-1.json")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(default_path, path)
-            with open(path, "r", encoding="utf-8") as fh:
-                return parse_layout(json.load(fh), furniture_lib, source=str(path))
+            # Yalnızca künyesi olan (kayıtlı) ofise düzen yazılır.
+            if (path.parent / "OFFICE.md").is_file():
+                default_path = alib.path("default-layout-1.json")
+                shutil.copyfile(default_path, path)
+                with open(path, "r", encoding="utf-8") as fh:
+                    return parse_layout(json.load(fh), furniture_lib, source=str(path))
         except Exception:
             pass
     return parse_layout(alib.default_layout(), furniture_lib, source="default")

@@ -386,3 +386,41 @@ def test_paint_renders_pixels(qapp):
               for y in range(0, image.height(), 17)}
     assert len(colors) > 12
     scene.deleteLater()
+
+
+# --------------------------------------------------------------- hayalet ofis
+
+
+def _ghost_vault(tmp_path, monkeypatch):
+    """`config.obsidian_vault_path` geçici kasaya bağlanır (kullanıcı kasası değil)."""
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "obsidian_vault_path", str(tmp_path), raising=False)
+    return tmp_path / "Entropy" / "Desk" / "Offices"
+
+
+def test_load_layout_kayitsiz_ofise_klasor_acmaz(tmp_path, monkeypatch):
+    """Künyesiz (silinmiş/arşivlenmiş) ofis adı diskte klasör YARATMAMALI."""
+    from entropy.desk.engine.layout import load_layout
+
+    offices = _ghost_vault(tmp_path, monkeypatch)
+    layout = load_layout("hayalet-ofis")
+
+    assert not (offices / "hayalet-ofis").exists()
+    assert layout.source == "default"
+    assert layout.cols > 0  # sahne yine de çizilebilir
+
+
+def test_load_layout_kayitli_ofise_varsayilani_kopyalar(tmp_path, monkeypatch):
+    """`OFFICE.md` künyesi olan ofise varsayılan düzen bir kez yazılır."""
+    from entropy.desk.engine.layout import load_layout
+
+    offices = _ghost_vault(tmp_path, monkeypatch)
+    office_dir = offices / "gercek"
+    office_dir.mkdir(parents=True)
+    (office_dir / "OFFICE.md").write_text("---\nname: gercek\n---\n", encoding="utf-8")
+
+    layout = load_layout("gercek")
+
+    assert (office_dir / "layout.json").is_file()
+    assert layout.source == str(office_dir / "layout.json")

@@ -26,6 +26,45 @@ def qapp():
     return app
 
 @pytest.fixture(autouse=True)
+def flush_qt_deferred_deletes():
+    """
+    Her testten sonra Qt'nin bekleyen `DeferredDelete` olaylarını boşaltır.
+
+    Neden: testlerde olay döngüsü koşmadığı için `deleteLater()` çağrıları
+    hiç işlenmiyordu; üst düzey (top-level) pencere sayısı koşum boyunca
+    birikiyordu (yalnız üç arayüz dosyasında 155'e çıkıyor). ~155. canlı
+    pencereden sonra offscreen Qt bir sonraki `show()` çağrısında süreci
+    sessizce öldürüyordu (çıkış kodu 127, traceback/olay günlüğü kaydı yok);
+    tam paket koşumu her seferinde ~%90-95'te,
+    `test_focus_mode_hides_and_restores_side_panels` üzerinde düşüyordu.
+    Boşaltmayla sayı 155 -> 63'e iniyor ve koşum tamamlanıyor.
+    """
+    app = QApplication.instance()
+    before = {id(w) for w in app.topLevelWidgets()} if app is not None else set()
+    yield
+    try:
+        from PySide6.QtCore import QEvent
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Testin kendi açtığı üst düzey pencereler kapatılır; başkasının
+        # (önceki testlerin/oturum düzeneğinin) pencerelerine dokunulmaz.
+        for widget in list(app.topLevelWidgets()):
+            if id(widget) in before:
+                continue
+            try:
+                widget.close()
+                widget.deleteLater()
+            except Exception:
+                pass
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def cleanup_task_scheduler():
     """Ensure background TaskScheduler threads are stopped after every test."""
     yield

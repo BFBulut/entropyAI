@@ -152,6 +152,13 @@ def archive_stale(
         if not src.is_dir():
             skipped.append({"path": str(src), "reason": "klasor_degil"})
             continue
+        # Kuru koşumla gerçek taşıma arasında ofis canlanmış olabilir: liste
+        # `find_ghost_offices()` ile üretilip dakikalar sonra uygulandığında,
+        # bu arada künyesi yazılan (yani ARTIK gerçek olan) bir ofis arşive
+        # gidiyordu. Taşımadan hemen önce künye yeniden doğrulanır.
+        if (src / "OFFICE.md").is_file():
+            skipped.append({"path": str(src), "reason": "artik_gercek_ofis"})
+            continue
 
         dst = archive_dir / src.name
         n = 2
