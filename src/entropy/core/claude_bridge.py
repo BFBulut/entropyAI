@@ -244,6 +244,32 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         return 0
 
+    @staticmethod
+    def process_env() -> Optional[Dict[str, str]]:
+        """
+        Claude CLI çağrılarının ortamı; `claude_config_dir` doluysa izole profil.
+
+        `CLAUDE_CONFIG_DIR` Claude Code'un oturum ve ayar dizinini komple
+        taşıyor. Ayar BOŞSA None döner ve süreç ortamı hiç kopyalanmaz —
+        varsayılan davranış kullanıcının kendi profili olmalı, yoksa güncelleme
+        herkesi habersizce çıkışa düşürürdü.
+        """
+        try:
+            from entropy.core.config import config
+
+            target = (getattr(config, "claude_config_dir", "") or "").strip()
+        except Exception:
+            return None
+        if not target:
+            return None
+        env = dict(os.environ)
+        env["CLAUDE_CONFIG_DIR"] = str(Path(target).expanduser())
+        try:
+            Path(target).expanduser().mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return env
+
     @property
     def is_running(self) -> bool:
         return self._is_running
@@ -280,6 +306,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 encoding="utf-8",
                 errors="replace",
                 creationflags=self._creationflags(),
+                env=self.process_env(),
                 timeout=20,
             )
         except Exception as e:
@@ -359,6 +386,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         project_dir: Optional[Path] = None,
         agent: Optional[str] = None,
         resume: bool = False,
+        resume_id: Optional[str] = None,
         skip_permissions: bool = False,
         extra_dirs: Optional[List[str]] = None,
         append_system_prompt: Optional[str] = None,
@@ -393,7 +421,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             cmd.extend(["--mcp-config", mcp_config])
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
-        if resume and self.current_session_id:
+        # `resume_id` açıkça verilen oturum kimliğidir (konuşma eşlemesi);
+        # `resume=True` ise köprünün kendi son oturumunu sürdürür. Açık kimlik
+        # önceliklidir: arka plan görevi etkileşimli sohbetin oturumuna
+        # sızmamalı.
+        if resume_id:
+            cmd.extend(["--resume", str(resume_id)])
+        elif resume and self.current_session_id:
             cmd.extend(["--resume", self.current_session_id])
 
         effort_m = re.search(r"(?:^|\s)/effort\s+(low|medium|high|xhigh|max)\b", prompt, re.IGNORECASE)
@@ -839,6 +873,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 encoding="utf-8",
                 errors="replace",
                 creationflags=self._creationflags(),
+                env=self.process_env(),
                 cwd=str(project_dir) if project_dir.exists() else None,
             )
             writer = self._feed_stdin(proc, stdin_payload)
@@ -916,8 +951,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         save_report: bool = True,
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
+        conversation_id: Optional[str] = None,
     ) -> None:
-        """AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında."""
+        """
+        AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
+
+        conversation_id burada `--resume <session-id>` olur (agy'de
+        `--conversation`); iki bayrağın adı farklı, anlamı aynı olduğu için
+        sözleşme tek parametrede birleşti.
+        """
         with self._lock:
             if self._shutting_down:
                 # Sessiz dönüş çağıranı asılı bırakıyordu; ret de bir sonuçtur.
@@ -930,7 +972,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write),
+                  save_report, agent, needs_write, conversation_id),
             daemon=True,
         ).start()
 
@@ -955,6 +997,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         save_report: bool = True,
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
+        conversation_id: Optional[str] = None,
     ) -> None:
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -1008,6 +1051,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 project_dir=project_dir,
                 agent=agent,
                 skip_permissions=True,
+                resume_id=conversation_id,
             )
 
             result: Dict[str, object] = {}
@@ -1026,6 +1070,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     encoding="utf-8",
                     errors="replace",
                     creationflags=self._creationflags(),
+                    env=self.process_env(),
                     cwd=str(project_dir) if project_dir.exists() else None,
                 )
                 writer = self._feed_stdin(proc, stdin_payload)

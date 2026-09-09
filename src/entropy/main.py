@@ -96,6 +96,28 @@ def main():
     except Exception as e:
         print(f"[{config.app_name}] Ajan izleyicileri başlatılamadı: {e}")
 
+    # Posta kutuları (Faz 5): ofis/ajan/Entropy gelen kutularını izler ve
+    # değişimde bus.mailbox_updated yayar. QFileSystemWatcher + yoklama birlikte
+    # çünkü kasa çoğu kurulumda OneDrive altında ve yalnız izleyici olay kaçırıyor.
+    mailbox_watcher = None
+    try:
+        from entropy.agents.mailbox import MailboxWatcher
+
+        mailbox_watcher = MailboxWatcher()
+        mailbox_watcher.start()
+    except Exception as e:
+        print(f"[{config.app_name}] Posta kutusu izleyicisi başlatılamadı: {e}")
+
+    # Kimlik/durum katmanı: giriş, hesap, kota ipucu. Problar model ÇAĞIRMAZ
+    # (claude auth status --json / agy models), bu yüzden açılışta koşmaları
+    # kota harcamaz.
+    try:
+        from entropy.core.identity import identity
+
+        identity.start()
+    except Exception as e:
+        print(f"[{config.app_name}] Kimlik katmanı başlatılamadı: {e}")
+
     # Ofis zincirleri kesintiden sürer: uygulama kapandığında köprü süreçleri
     # ölüyor ama kart dosyalarında durum `running` kalıyordu. Model çağrısı
     # ürettiği için ayarla kapatılabilir (config.desk_auto_resume).
@@ -185,6 +207,17 @@ def main():
             pass
         try:
             stop_agent_watchers()
+        except Exception:
+            pass
+        try:
+            if mailbox_watcher is not None:
+                mailbox_watcher.stop()
+        except Exception:
+            pass
+        try:
+            from entropy.core.identity import identity
+
+            identity.stop()
         except Exception:
             pass
         try:

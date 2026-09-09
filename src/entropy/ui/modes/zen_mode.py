@@ -27,6 +27,11 @@ from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
 from entropy.ui.widgets.report_inbox import InboxBadge
+from entropy.ui.widgets.command_palette import install_command_palette
+from entropy.ui.widgets.focus_mode import install_focus_mode
+from entropy.ui.widgets.notification_center import NotificationCenter
+from entropy.ui.widgets.provider_badge import ProviderStatusBadge
+from entropy.ui.widgets.timeline_panel import TimelinePanel
 from entropy.ui.widgets.ui_polish import apply_model_placeholder
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
@@ -189,6 +194,12 @@ class ZenModeWindow(QMainWindow):
         h_layout.addWidget(self.inbox_badge)
         bus.report_inbox_unread.connect(self._on_inbox_unread)
 
+        # Faz 5.4/5.5: iki saglayici icin giris/kota/oturum penceresi rozeti.
+        # Giris yoksa kirmizi ve ipucu "/login <provider>".
+        self.provider_badge = ProviderStatusBadge()
+        self.provider_badge.login_requested.connect(self._on_provider_login_requested)
+        h_layout.addWidget(self.provider_badge)
+
         h_layout.addSpacing(8)
 
         # New Chat Button
@@ -256,11 +267,32 @@ class ZenModeWindow(QMainWindow):
         tasks_tab_layout.addWidget(tasks_split)
         self.tasks_tab = tasks_tab
 
+        # Rapor Merkezi kartlarindaki "Orkestratore sor" yaniti sohbete duser;
+        # kopru kart uzerinden /ask komutuna gecsin diye burada baglanir.
+        try:
+            self.reports_viewer.report_center.bridge = self.bridge
+            self.reports_viewer.report_center.orchestrator_answer.connect(
+                self._on_orchestrator_answer
+            )
+        except AttributeError:
+            pass
+
         self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
         self.left_tabs.addTab(self.skills_widget, "🎯 Yetenekler")
         self.left_tabs.addTab(tasks_tab, "⏰ Görevler")
         self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
         self.left_tabs.addTab(self.agents_widget, "🤖 Ajanlar")
+
+        # Yasam tarzi arayuz (Faz 5.5): "bugun ne oldu" zaman cizelgesi ve
+        # bus olaylarinin son 50'sini tutan bildirim merkezi. Ikisi de tikla
+        # -> ilgili yer akisini destekler.
+        self.timeline_panel = TimelinePanel()
+        self.timeline_panel.event_activated.connect(self._on_timeline_activated)
+        self.left_tabs.addTab(self.timeline_panel, "🗓 Bugun")
+
+        self.notification_center = NotificationCenter()
+        self.notification_center.notification_activated.connect(self._on_notification_activated)
+        self.left_tabs.addTab(self.notification_center, "🔔 Bildirimler")
         top_h_splitter.addWidget(self.left_tabs)
 
         # Center Column: Organic Visual Core & Cyber Telemetry Workstation
@@ -461,6 +493,16 @@ class ZenModeWindow(QMainWindow):
 
         main_v_splitter.setSizes([520, 340])
         root_layout.addWidget(main_v_splitter)
+
+        # Odak modu (Ctrl+Shift+F): tek panel. Merkez sutun kalir, yan paneller
+        # gizlenir; cikista eski gorunurluk aynen geri gelir.
+        self.focus_mode = install_focus_mode(
+            self,
+            primary=center_col,
+            secondary=[self.left_tabs, self.knowledge_graph, self.terminal_pane],
+        )
+        # Komut paleti (Ctrl+K): komutlar, yetenekler, ajanlar, ofisler, raporlar.
+        install_command_palette(self, on_activated=self._on_palette_activated)
 
         self._load_chat_history()
         self._load_persisted_session_to_terminal()
@@ -724,6 +766,61 @@ class ZenModeWindow(QMainWindow):
         """Baskı sinyali: rozeti son bilinen oranla tazeler."""
         self._last_context_pressure = float(ratio or 0.0)
         self._apply_context_badge()
+
+    @Slot(str, str)
+    def _on_orchestrator_answer(self, office: str, body: str):
+        """
+        "Orkestratore sor" yaniti sohbete "🏢 <ofis>" balonuyla duser.
+
+        Yanit sohbete yazilir cunku bu bir diyalogdur: soru ve cevap ayni akista
+        kalmali, kartin icinde kaybolmamali.
+        """
+        from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html
+
+        self.chat_browser.append(
+            build_chat_bubble_html(f"🏢 {office}", str(body or ""))
+        )
+
+    @Slot(str, str, str)
+    def _on_palette_activated(self, kind: str, payload: str, label: str):
+        """
+        Komut paleti secimi. Rapor acilir, kalan her sey giris satirina yazilir;
+        palet hicbir seyi kendiliginden calistirmaz (yanlis tiklama kota yakar).
+        """
+        if kind == "report":
+            self._open_report_path(payload)
+            return
+        self.chat_input.setText(payload if payload.endswith(" ") else payload + " ")
+        self.chat_input.setFocus()
+
+    @Slot(str, str)
+    def _on_timeline_activated(self, kind: str, target: str):
+        """Zaman cizelgesi satiri: rapor/aktarim okuyucuda acilir."""
+        if kind in ("report", "handoff") and target:
+            self._open_report_path(target)
+
+    @Slot(str, str)
+    def _on_notification_activated(self, target_kind: str, target: str):
+        """Bildirim: rapor acilir, yetenek/ajan ilgili sekmeye goturur."""
+        if target_kind == "report" and target:
+            self._open_report_path(target)
+            return
+        tab_map = {
+            "skill": self.skills_widget,
+            "agent": self.agents_widget,
+            "task": getattr(self, "tasks_tab", None),
+        }
+        widget = tab_map.get(target_kind)
+        if widget is not None:
+            index = self.left_tabs.indexOf(widget)
+            if index >= 0:
+                self.left_tabs.setCurrentIndex(index)
+
+    @Slot(str)
+    def _on_provider_login_requested(self, provider: str):
+        """Saglayici rozetine tiklandi: giris komutunu giris satirina yazar."""
+        self.chat_input.setText(f"/login {provider} ")
+        self.chat_input.setFocus()
 
     @Slot(int)
     def _on_inbox_unread(self, count: int):

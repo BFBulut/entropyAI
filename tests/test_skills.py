@@ -153,10 +153,14 @@ def test_zen_mode_skills_tab_and_pdf(qapp, tmp_path, monkeypatch):
     zen.show()
 
     # Sol dock sekmeleri: Raporlar, Yetenekler, Görevler, MCP, Ajanlar
+    # (Faz 5.5'te "Bugun" zaman çizelgesi ve "Bildirimler" merkezi eklendi.)
     tab_names = [zen.left_tabs.tabText(i) for i in range(zen.left_tabs.count())]
-    for expected in ("Raporlar", "Yetenekler", "Görevler", "MCP", "Ajanlar"):
+    for expected in ("Raporlar", "Yetenekler", "Görevler", "MCP", "Ajanlar",
+                     "Bugun", "Bildirimler"):
         assert any(expected in t for t in tab_names), f"{expected} sekmesi yok: {tab_names}"
-    assert zen.left_tabs.count() == 5
+    assert zen.left_tabs.count() == 7
+    assert hasattr(zen, "timeline_panel")
+    assert hasattr(zen, "notification_center")
     assert hasattr(zen, "skills_widget")
     assert hasattr(zen, "chat_pdf_btn")
 

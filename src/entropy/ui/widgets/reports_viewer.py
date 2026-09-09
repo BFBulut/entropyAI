@@ -21,6 +21,7 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
+from entropy.ui.widgets.report_center import ReportCenterWidget
 from entropy.ui.widgets.report_inbox import ReportInboxStrip
 from entropy.ui.widgets.ui_polish import apply_list_polish
 
@@ -212,6 +213,17 @@ class ReportsViewerWidget(QFrame):
         self.inbox_strip.report_opened.connect(self.open_report_by_path_or_id)
         self.inbox_strip.unread_changed.connect(self._on_inbox_unread_changed)
         self.layout.addWidget(self.inbox_strip)
+        # Faz 5.5: seridin yerini Rapor Merkezi aldi (kumeleme + digest + onem x
+        # aciliyet + guven esigi). Serit nesnesi kaldirilmadi cunku okundu/pin/
+        # arsiv deposunu ve rozet sozlesmesini paylasiyorlar; yalnizca gizlenir,
+        # boylece ayni bilgi ekranda iki kez gorunmez.
+        self.inbox_strip.setVisible(False)
+
+        # Rapor Merkezi: sekmenin ust yarisi. Alt yari liste + okuyucudur.
+        self.report_center = ReportCenterWidget(parent=self, store=self.inbox_strip.store)
+        self.report_center.report_opened.connect(self.open_report_by_path_or_id)
+        self.report_center.unread_changed.connect(self._on_inbox_unread_changed)
+        self.layout.addWidget(self.report_center, 1)
 
         # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -419,9 +431,9 @@ class ReportsViewerWidget(QFrame):
         zoom_out_btn.clicked.connect(self._zoom_out_text)
         bar_layout.addWidget(zoom_out_btn)
 
-        self.btn_open_obsidian = QPushButton("🔗 Obsidian")
-        self.btn_open_obsidian.setFixedHeight(22)
-        self.btn_open_obsidian.setToolTip("Seçili raporu Obsidian kasasında aç")
+        self.btn_open_obsidian = QPushButton("🔗")
+        self.btn_open_obsidian.setFixedSize(26, 22)
+        self.btn_open_obsidian.setToolTip("Obsidian — seçili raporu Obsidian kasasında açar")
         self.btn_open_obsidian.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -437,9 +449,9 @@ class ReportsViewerWidget(QFrame):
         self.btn_open_obsidian.clicked.connect(self._open_in_obsidian)
         bar_layout.addWidget(self.btn_open_obsidian)
 
-        self.btn_open_folder = QPushButton("📁 Klasör")
-        self.btn_open_folder.setFixedHeight(22)
-        self.btn_open_folder.setToolTip("Raporun bulunduğu klasörü dosya yöneticisinde aç")
+        self.btn_open_folder = QPushButton("📁")
+        self.btn_open_folder.setFixedSize(26, 22)
+        self.btn_open_folder.setToolTip("Klasör — raporun bulunduğu klasörü dosya yöneticisinde açar")
         self.btn_open_folder.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -455,9 +467,9 @@ class ReportsViewerWidget(QFrame):
         self.btn_open_folder.clicked.connect(self._open_containing_folder)
         bar_layout.addWidget(self.btn_open_folder)
 
-        copy_btn = QPushButton("📋 Kopyala")
-        copy_btn.setFixedHeight(22)
-        copy_btn.setToolTip("Rapor Metnini Panoya Kopyala")
+        copy_btn = QPushButton("📋")
+        copy_btn.setFixedSize(26, 22)
+        copy_btn.setToolTip("Kopyala — rapor metnini panoya alır")
         copy_btn.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -472,9 +484,9 @@ class ReportsViewerWidget(QFrame):
         copy_btn.clicked.connect(self._copy_content)
         bar_layout.addWidget(copy_btn)
 
-        expand_btn = QPushButton("↗ Tam Ekran")
-        expand_btn.setFixedHeight(22)
-        expand_btn.setToolTip("Raporu tam ekran ayrı pencerede aç")
+        expand_btn = QPushButton("↗")
+        expand_btn.setFixedSize(26, 22)
+        expand_btn.setToolTip("Tam ekran — raporu ayrı pencerede açar")
         expand_btn.setStyleSheet("""
             QPushButton {
                 background-color: #141C2C;
@@ -490,8 +502,8 @@ class ReportsViewerWidget(QFrame):
         expand_btn.clicked.connect(self._open_current_standalone)
         bar_layout.addWidget(expand_btn)
 
-        distill_btn = QPushButton("🧠 Sentezle")
-        distill_btn.setFixedHeight(22)
+        distill_btn = QPushButton("🧠")
+        distill_btn.setFixedSize(26, 22)
         distill_btn.setToolTip(
             "Bu araştırma raporu otomatik olarak bilişsel belleğe alınmıştır.\n"
             "Harici veya elle düzenlenmiş notları belleğe ve RAG indeksine yeniden sentezlemek için kullanabilirsiniz."
@@ -514,9 +526,9 @@ class ReportsViewerWidget(QFrame):
         distill_btn.clicked.connect(self._distill_current_report)
         bar_layout.addWidget(distill_btn)
 
-        delete_btn = QPushButton("🗑️ Sil")
-        delete_btn.setFixedHeight(22)
-        delete_btn.setToolTip("Seçili raporu diskten ve hafızadan sil")
+        delete_btn = QPushButton("🗑️")
+        delete_btn.setFixedSize(26, 22)
+        delete_btn.setToolTip("Sil — seçili raporu diskten ve hafızadan kaldırır")
         delete_btn.setStyleSheet("""
             QPushButton {
                 background-color: #261418;
@@ -581,7 +593,7 @@ class ReportsViewerWidget(QFrame):
         self.splitter.setStretchFactor(1, 2)
         self.splitter.setSizes([200, 380])
 
-        self.layout.addWidget(self.splitter)
+        self.layout.addWidget(self.splitter, 1)
 
         # Auto-refresh on signals
         self.active_project_dir = Path(config.default_project_path)
@@ -1053,6 +1065,12 @@ class ReportsViewerWidget(QFrame):
         # Gelen seridi ayni kunye listesinden beslenir: ikinci bir tarama yok.
         try:
             self.inbox_strip.set_entries(entries)
+        except (AttributeError, RuntimeError):
+            pass
+        # Rapor Merkezi de ayni listeden beslenir; posta kutusu mesajlarini
+        # kendisi ekler (kasa taramasi ikinci kez yapilmaz).
+        try:
+            self.report_center.set_entries(entries)
         except (AttributeError, RuntimeError):
             pass
 

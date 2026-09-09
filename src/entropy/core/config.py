@@ -128,6 +128,12 @@ class EntropyConfig(BaseModel):
     # Doğrudan Anthropic API köprüsü (ClaudeApiBridge) için yer tutucu izin
     # bayrağı. Uygulama YOK; açık olsa bile bugün hiçbir kod yolu API çağırmaz.
     allow_claude_api: bool = False
+    # Claude Code için isteğe bağlı "Entropy profili": doluysa CLI çağrılarına
+    # CLAUDE_CONFIG_DIR ortam değişkeni olarak verilir ve oturum/ayarlar
+    # kullanıcının kendi profilinden yalıtılır. BOŞ (varsayılan) bırakılırsa
+    # kullanıcının profili kullanılır — çünkü izole profile geçmek yeniden giriş
+    # demektir ve bu kullanıcının açık kararı olmalı.
+    claude_config_dir: str = ""
     obsidian_vault_path: Path = Field(default_factory=_default_obsidian_vault)
     default_project_path: Path = Field(default_factory=lambda: APP_ROOT)
     default_mode: str = "floating"  # "floating", "zen", "chat"
@@ -185,6 +191,7 @@ class EntropyConfig(BaseModel):
                 "allow_claude_api": self.allow_claude_api,
                 "desk_geometry": self.desk_geometry,
                 "desk_auto_resume": self.desk_auto_resume,
+                "claude_config_dir": self.claude_config_dir,
             }
             # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
             # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
@@ -226,6 +233,8 @@ class EntropyConfig(BaseModel):
                     self.desk_geometry = data["desk_geometry"]
                 if isinstance(data.get("desk_auto_resume"), bool):
                     self.desk_auto_resume = data["desk_auto_resume"]
+                if isinstance(data.get("claude_config_dir"), str):
+                    self.claude_config_dir = data["claude_config_dir"]
         except Exception as e:
             print(f"[Entropy Config] Ayarlar okunamadı ({SETTINGS_FILE}): {e}", file=sys.stderr)
 

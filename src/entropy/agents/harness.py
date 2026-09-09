@@ -33,6 +33,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from entropy.agents.mailbox import (
+    emit_terminal,
+    instructions_section,
+    pending_instructions,
+    report_to_entropy,
+)
 from entropy.agents.offices import OfficeRegistry, OfficeSpec
 from entropy.agents.registry import AgentRegistry
 from entropy.agents.tasks import (
@@ -297,7 +303,7 @@ class OfficeHarness:
                 out.append(child)
         return out
 
-    def _fail(self, card_id: str, reason: str) -> None:
+    def _fail(self, card_id: str, reason: str, terminal_status: str = "failed") -> None:
         card = self.board.get(card_id)
         if card is not None:
             summary = (card.summary or "").strip()
@@ -306,6 +312,11 @@ class OfficeHarness:
         self._save_card_state(card_id, phase=PHASE_FAILED)
         self._release(card_id)
         self._emit(card_id, PHASE_FAILED)
+        # TERMİNAL SÖZLEŞMESİ: başarısız/iptal de bir sondur. Bus sinyali
+        # yetmiyordu — uygulama kapalıyken biten zincirin sonucu hiçbir yere
+        # yazılmıyor ve kart dışarıdan "asılı" görünüyordu.
+        emit_terminal(card_id, self.office_name, terminal_status, reason,
+                      vault_path=self.board.vault_path)
 
     def _claim(self, card_id: str) -> bool:
         with OfficeHarness._active_lock:
@@ -358,8 +369,20 @@ class OfficeHarness:
             skills = ", ".join(spec.skills) if spec.skills else "-"
             members.append(f"- {spec.name} ({spec.role or 'genel'}) · {spec.description} · yetenekler: {skills}")
         criteria = "\n".join(f"- {c}" for c in (card.criteria or [])) or "- (belirtilmedi)"
+        # Posta kutusu planlamadan ÖNCE okunur: kullanıcının `/ask <ofis>` ile
+        # bıraktığı soru/talimat plana girmezse kutu yalnızca arşiv olurdu.
+        # Okunanlar `mark_read` ile işaretlenir; aynı yön ikinci planlamada
+        # tekrar enjekte edilip alt görevleri çoğaltmasın diye.
+        try:
+            inbox = instructions_section(
+                pending_instructions(self.office_name, vault_path=self.board.vault_path)
+            )
+        except Exception:
+            inbox = ""
+        inbox_block = f"{inbox}\n\n" if inbox else ""
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
+            f"{inbox_block}"
             f"[ÜST KART]\nBaşlık: {card.title}\nHedef: {card.goal or card.title}\n"
             f"Kabul ölçütleri:\n{criteria}\n\n"
             f"[ATANABİLİR AJANLAR]\n" + ("\n".join(members) or "- (yok)") + "\n\n"
@@ -656,6 +679,27 @@ class OfficeHarness:
         self._release(card_id)
         self._emit(card_id, PHASE_DONE)
 
+        # Rapor Entropy'nin gelen kutusuna düşer (Rapor Merkezi kaynağı), sonra
+        # terminal olay. Sıra önemli: rozet sayacı raporu görmeden artmamalı.
+        try:
+            report_to_entropy(
+                self.office_name,
+                card.title or card_id,
+                report,
+                task_id=card_id,
+                output_paths=outputs,
+                vault_path=self.board.vault_path,
+            )
+        except Exception:
+            logger.warning("Ofis raporu Entropy gelen kutusuna yazılamadı: %s", card_id)
+        emit_terminal(
+            card_id,
+            self.office_name,
+            "completed",
+            f"{len(children)} alt görev tamamlandı; ortalama not {avg if avg is not None else '-'}.",
+            vault_path=self.board.vault_path,
+        )
+
     def _write_office_report(self, card: TaskCard, body: str):
         try:
             from entropy.memory.wiki import write_query_page  # type: ignore
@@ -743,7 +787,7 @@ class OfficeHarness:
                     self.board.stop(child.id)
                 except Exception:
                     pass
-        self._fail(card_id, "Kullanıcı isteğiyle durduruldu.")
+        self._fail(card_id, "Kullanıcı isteğiyle durduruldu.", terminal_status="canceled")
         return True
 
     @classmethod

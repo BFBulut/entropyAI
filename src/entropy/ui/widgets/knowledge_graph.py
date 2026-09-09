@@ -457,6 +457,40 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             text-decoration: line-through;
         }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        /* Faz 5.6 kontrol şeridi: efsanenin hemen altında, zaman kaydırıcısı +
+           tür/önem filtreleri + "yalnızca geçerli". Efsanenin içine konsaydı
+           kategori düğmeleriyle karışırdı. */
+        #graphControls {
+            position: absolute;
+            left: 10px;
+            /* Efsanenin altına yerleşir; kesin değer yüklemede JS ile efsanenin
+               gerçek yüksekliğine göre düzeltilir (efsane sarınca büyüyor). */
+            top: 56px;
+            font-size: 11px;
+            background: rgba(14, 20, 32, 0.92);
+            border: 1px solid #1F2B42;
+            border-radius: 6px;
+            padding: 5px 10px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            backdrop-filter: blur(6px);
+            z-index: 10;
+            max-width: calc(100vw - 20px);
+            color: #C9D1D9;
+        }
+        .ctrl-group { display: flex; align-items: center; gap: 5px; }
+        .ctrl-group.disabled { opacity: 0.35; }
+        #graphControls select, #graphControls input[type=range] {
+            background: #0E1420;
+            color: #00F0FF;
+            border: 1px solid #1F2B42;
+            border-radius: 4px;
+            font-size: 11px;
+            padding: 1px 4px;
+        }
+        #graphControls input[type=range] { width: 120px; padding: 0; }
         #controls {
             position: absolute;
             bottom: 12px;
@@ -519,6 +553,37 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="legend-item" onclick="toggleCategory('hub-offices', this)"><span class="dot" style="background:#FFC94D;"></span> 🏢 Ofis Kümesi</div>
         <div class="legend-item" onclick="toggleCategory('concept', this)"><span class="dot" style="background:#9BE9A8;"></span> 📗 Kavramlar</div>
         <div class="legend-item" onclick="toggleCategory('entity', this)"><span class="dot" style="background:#8CC8FF;"></span> 🏷 Varlıklar</div>
+        <div class="legend-item" onclick="toggleCategory('community', this)"><span class="dot" style="background:#FFD166;"></span> 🔮 Topluluklar</div>
+    </div>
+    <div id="graphControls">
+        <div class="ctrl-group" id="grpTime">
+            <span title="Kaydırıcıyı geçmişe çekince o tarihte henüz oluşmamış düğümler solar.">🕓 Zaman</span>
+            <input type="range" id="timeSlider" min="0" max="100" value="100"
+                   oninput="onTimeSlider(this.value)" title="Bellek zaman penceresi">
+            <span id="timeLabel">şimdi</span>
+        </div>
+        <div class="ctrl-group" id="grpType">
+            <span title="Yalnızca seçili düğüm türünü göster">🏷 Tür</span>
+            <select id="typeFilter" onchange="onTypeFilter(this.value)">
+                <option value="">tümü</option>
+            </select>
+        </div>
+        <div class="ctrl-group" id="grpImportance">
+            <span title="Önem puanı bu eşiğin altındaki düğümler gizlenir">⭐ Önem</span>
+            <input type="range" id="importanceSlider" min="0" max="100" value="0"
+                   oninput="onImportanceSlider(this.value)" title="En düşük önem">
+            <span id="importanceLabel">0.00</span>
+        </div>
+        <div class="ctrl-group" id="grpValid">
+            <label title="Geçersizleştirilmiş (t_valid_to dolu) düğümleri gizler; çift zamanlı bellekte varsayılan görünüm budur.">
+                <input type="checkbox" id="onlyValid" checked onchange="onOnlyValid(this.checked)">
+                yalnızca geçerli
+            </label>
+        </div>
+        <div class="ctrl-group" id="grpCommunity">
+            <button class="ctrl-btn" style="width:auto; padding:0 8px;" onclick="collapseAllCommunities()"
+                    title="Bütün toplulukları kapat (açılış görünümü)">⊟ toplulukları kapat</button>
+        </div>
     </div>
     <div id="controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Yakınlaştır">+</button>
@@ -603,14 +668,222 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             // bilissel bellekten cikan kavram/varlik yapraklari.
             'hub-offices': true,
             'concept': true,
+            // Faz 5.6: topluluk (özet) düğümleri. Açılışta görünür, üyeleri kapalı.
+            'community': true,
             'entity': true
         };
 
+        // ---- Faz 5.6: çift zamanlı bellek kontrolleri ----
+        //
+        // Alanlar bellek ajanının (Faz 5.1/5.2) ürettiği düğümlerden gelir:
+        //   type           — CoALA düğüm etiketi (episode/fact/entity/...)
+        //   importance     — 0..1 önem puanı
+        //   t_valid_from   — olgunun geçerli olmaya başladığı an
+        //   t_valid_to     — geçersizleştirildiği an (boşsa hâlâ geçerli)
+        //   group=community + member_count — topluluk (özet) düğümü
+        //
+        // HİÇBİRİ ZORUNLU DEĞİL. Alan yoksa ilgili kontrol pasifleşir ve grafik
+        // Faz 4'teki gibi davranır; eski kasalarda hiçbir şey bozulmaz.
+
+        function parseGraphTime(v) {
+            if (v === null || v === undefined || v === '') return null;
+            if (typeof v === 'number') {
+                // Saniye cinsinden unix damgası da olabilir; ms'ye normalize et.
+                return v < 1e11 ? v * 1000 : v;
+            }
+            const parsed = Date.parse(String(v));
+            return isNaN(parsed) ? null : parsed;
+        }
+
+        // Alanları bir kez çözüp düğüme yaz: 1000+ düğümde her karede yeniden
+        // ayrıştırmak kare süresini kabul edilemez biçimde büyütürdü.
+        let hasTimeData = false;
+        let hasImportanceData = false;
+        let hasValidityData = false;
+        let hasCommunityData = false;
+        const nodeTypes = [];
+        const communityMembers = new Map();  // topluluk id -> üye sayısı
+
+        nodes.forEach(n => {
+            n._tFrom = parseGraphTime(n.t_valid_from);
+            n._tTo = parseGraphTime(n.t_valid_to);
+            n._imp = (typeof n.importance === 'number') ? n.importance : null;
+            n._type = n.type || '';
+            if (n._tFrom !== null) hasTimeData = true;
+            if (n._tTo !== null) hasValidityData = true;
+            if (n._imp !== null) hasImportanceData = true;
+            if (n._type && nodeTypes.indexOf(n._type) < 0) nodeTypes.push(n._type);
+            if (n.group === 'community') {
+                hasCommunityData = true;
+                if (typeof n.member_count === 'number' && n.member_count > 0) {
+                    // Topluluk düğümünün yarıçapı üye sayısıyla büyür (log:
+                    // 5 üyeli ile 500 üyeli topluluk arasında 10x fark olmasın).
+                    n.val = Math.max(n.val || 12, 12 + Math.log(1 + n.member_count) * 6);
+                }
+            }
+        });
+
+        // Üyelik: düğümde community_id / parent_hub, ya da member_of kenarı.
+        function memberCommunityOf(n) {
+            if (!n || n.group === 'community') return null;
+            if (n.community_id) return String(n.community_id);
+            if (n.parent_hub && communityIds.has(String(n.parent_hub))) return String(n.parent_hub);
+            return n._memberOf || null;
+        }
+
+        const communityIds = new Set();
+        nodes.forEach(n => { if (n.group === 'community') communityIds.add(String(n.id)); });
+        links.forEach(l => {
+            if (!l || l.type !== 'member_of') return;
+            const src = String(l.source && l.source.id ? l.source.id : l.source);
+            const dst = String(l.target && l.target.id ? l.target.id : l.target);
+            if (communityIds.has(dst)) {
+                const node = nodeMap.get(src);
+                if (node) node._memberOf = dst;
+            }
+        });
+        nodes.forEach(n => {
+            const cid = memberCommunityOf(n);
+            if (cid) communityMembers.set(cid, (communityMembers.get(cid) || 0) + 1);
+        });
+
+        let timeMin = Infinity, timeMax = -Infinity;
+        nodes.forEach(n => {
+            if (n._tFrom !== null) {
+                if (n._tFrom < timeMin) timeMin = n._tFrom;
+                if (n._tFrom > timeMax) timeMax = n._tFrom;
+            }
+        });
+        if (!isFinite(timeMin) || !isFinite(timeMax) || timeMax <= timeMin) {
+            hasTimeData = false;
+        }
+
+        // Açılışta topluluklar KAPALI: tasarım "açılışta topluluk düğümleri,
+        // tıklayınca kademeli açılma" diyor.
+        const expandedCommunities = new Set();
+        let timeCursor = 1.0;        // 0..1, 1 = şimdi
+        let minImportance = 0.0;     // 0..1
+        let typeFilter = '';         // '' = tümü
+        let onlyValid = true;        // t_valid_to dolu olanları gizle
+
+        function timeCursorMs() {
+            if (!hasTimeData) return Infinity;
+            return timeMin + (timeMax - timeMin) * timeCursor;
+        }
+
+        // Zaman penceresi dışında mı? (soluk çizilir, gizlenmez: kullanıcı
+        // "burada bir şey vardı" bilgisini kaybetmesin)
+        function isOutsideTimeWindow(n) {
+            if (!hasTimeData || n._tFrom === null) return false;
+            return n._tFrom > timeCursorMs();
+        }
+
+        function isInvalidated(n) {
+            return hasValidityData && n._tTo !== null && n._tTo <= timeCursorMs();
+        }
+
+        // Topluluk kapalıyken üyeleri gizlenir (kademeli açılma).
+        function isCollapsedMember(n) {
+            if (!hasCommunityData) return false;
+            const cid = memberCommunityOf(n);
+            return !!cid && !expandedCommunities.has(cid);
+        }
+
+        function toggleCommunity(id) {
+            const key = String(id);
+            if (expandedCommunities.has(key)) expandedCommunities.delete(key);
+            else expandedCommunities.add(key);
+            relayoutAndFit(0.6, false);
+            return expandedCommunities.has(key);
+        }
+
+        function collapseAllCommunities() {
+            expandedCommunities.clear();
+            relayoutAndFit(0.6, false);
+        }
+
+        function onTimeSlider(value) {
+            timeCursor = Math.max(0, Math.min(1, Number(value) / 100));
+            const label = document.getElementById('timeLabel');
+            if (label) {
+                if (!hasTimeData) label.textContent = 'veri yok';
+                else if (timeCursor >= 1) label.textContent = 'şimdi';
+                else label.textContent = new Date(timeCursorMs()).toISOString().slice(0, 10);
+            }
+            requestRender();
+        }
+
+        function onImportanceSlider(value) {
+            minImportance = Math.max(0, Math.min(1, Number(value) / 100));
+            const label = document.getElementById('importanceLabel');
+            if (label) label.textContent = minImportance.toFixed(2);
+            relayoutAndFit(0.4, false);
+        }
+
+        function onTypeFilter(value) {
+            typeFilter = String(value || '');
+            relayoutAndFit(0.4, false);
+        }
+
+        function onOnlyValid(checked) {
+            onlyValid = !!checked;
+            requestRender();
+        }
+
+        // Kontrol şeridini veriye göre kur: alan yoksa grup pasifleşir.
+        function initGraphControls() {
+            const setDisabled = (groupId, inputId, disabled) => {
+                const group = document.getElementById(groupId);
+                if (group && group.classList) group.classList.toggle('disabled', disabled);
+                const input = document.getElementById(inputId);
+                if (input) input.disabled = disabled;
+            };
+            setDisabled('grpTime', 'timeSlider', !hasTimeData);
+            setDisabled('grpImportance', 'importanceSlider', !hasImportanceData);
+            setDisabled('grpValid', 'onlyValid', !hasValidityData);
+            setDisabled('grpType', 'typeFilter', nodeTypes.length === 0);
+            const community = document.getElementById('grpCommunity');
+            if (community && community.classList) {
+                community.classList.toggle('disabled', !hasCommunityData);
+            }
+            const select = document.getElementById('typeFilter');
+            if (select && select.appendChild && typeof document.createElement === 'function') {
+                nodeTypes.slice().sort().forEach(t => {
+                    const option = document.createElement('option');
+                    option.value = t;
+                    option.textContent = t;
+                    select.appendChild(option);
+                });
+            }
+            const label = document.getElementById('timeLabel');
+            if (label) label.textContent = hasTimeData ? 'şimdi' : 'veri yok';
+            // Şerit efsanenin altına: efsane sarınca sabit 56 px yetmiyor.
+            const legend = document.getElementById('legend');
+            const strip = document.getElementById('graphControls');
+            if (legend && strip && strip.style && legend.offsetHeight) {
+                strip.style.top = (legend.offsetHeight + 16) + 'px';
+            }
+        }
+        initGraphControls();
+
         // Rapor kümesi açma/kapama düğümü YOKTUR. Tüm yapraklar her zaman
         // görünür; tıklama yalnızca seçim yapar, yerleşimi yeniden kurmaz.
+        // (Faz 5.6: topluluk düğümleri bunun istisnasıdır — kademeli açılır.)
         function isNodeVisible(n) {
             if (!n) return false;
-            return isCategoryActive(n.group);
+            if (!isCategoryActive(n.group)) return false;
+            if (typeFilter && n._type && n._type !== typeFilter) return false;
+            if (minImportance > 0 && n._imp !== null && n._imp < minImportance) return false;
+            if (isCollapsedMember(n)) return false;
+            return true;
+        }
+
+        // Çizim solukluğu: pencere dışı / geçersizleştirilmiş düğümler görünür
+        // ama silik kalır. 1.0 = tam, 0 = çizme.
+        function nodeAlphaFactor(n) {
+            if (isInvalidated(n)) return onlyValid ? 0.10 : 0.45;
+            if (isOutsideTimeWindow(n)) return 0.12;
+            return 1.0;
         }
 
         function isCategoryActive(group) {
@@ -756,7 +1029,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'query': '#C792EA',
             'hub-offices': '#FFC94D',
             'concept': '#9BE9A8',
-            'entity': '#8CC8FF'
+            'entity': '#8CC8FF',
+            'community': '#FFD166'
         };
 
         // Grup ikonlari: efsanedeki dizgeyle ayni. Ikon yalnizca ofis/ajan/sorgu
@@ -768,7 +1042,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             'query': '🔎',
             'hub-offices': '🏢',
             'concept': '📗',
-            'entity': '🏷'
+            'entity': '🏷',
+            'community': '🔮'
         };
 
         function getNodeIcon(group) {
@@ -1262,7 +1537,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 infoBox.style.display = 'block';
                 const col = getNodeColor(hoveredNode.group);
                 let extraBadge = '';
-                if (hoveredNode.id.includes('MEMORY') || hoveredNode.id.includes('BELLEK_HARITASI')) {
+                if (hoveredNode.group === 'community') {
+                    const count = communityMembers.get(String(hoveredNode.id)) || hoveredNode.member_count || 0;
+                    const open = expandedCommunities.has(String(hoveredNode.id));
+                    extraBadge = `<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:10px; font-weight:600;">🔮 ${count} üye — tıkla: ${open ? 'kapat' : 'aç'}</span>`;
+                } else if (hoveredNode.id.includes('MEMORY') || hoveredNode.id.includes('BELLEK_HARITASI')) {
                     extraBadge = `<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:10px; font-weight:600;">📑 İndeks Kataloğu (Görsel karmaşayı önlemek için 200+ indeks çizgisi gizlendi)</span>`;
                 }
                 infoBox.innerHTML = `<b style="color:${col}; font-size:13px;">${hoveredNode.name}</b> <span style="color:#8B949E; font-size:11px;">[${hoveredNode.group}]</span> <span style="color:#00FF9D; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>${extraBadge}<br/><span style="color:#C9D1D9; font-size:11px; line-height:1.4;">${hoveredNode.info || ''}</span>`;
@@ -1276,6 +1555,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         function handleMouseUp(e) {
             if (draggedNode && !isDragging && (!e || e.button === 0)) {
+                if (draggedNode.group === 'community') {
+                    // Topluluk düğümü kademeli açılır/kapanır; Python tarafına
+                    // seçim gönderilmez çünkü açılacak bir rapor dosyası yok.
+                    toggleCommunity(draggedNode.id);
+                    draggedNode = null;
+                    isDragging = false;
+                    isPanning = false;
+                    requestRender();
+                    return;
+                }
                 const url = 'entropy-node://select?id=' + encodeURIComponent(draggedNode.id);
                 window.location.href = url;
             }
@@ -1537,7 +1826,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 // Uzaklaşınca düğümler toz tanesine dönüyordu: ekranda en az ~3 px kalsın.
                 const r = Math.max((n.val || 12) * (isHovered ? 1.3 : 1.0), 3 / Math.max(zoom, 0.05));
 
-                ctx.globalAlpha = inScope ? 1.0 : 0.08;
+                // Kapsam solukluğu (Faz 4) ile zaman/geçerlilik solukluğu (Faz 5.6)
+                // çarpılır: kapsam dışı VE pencere dışı bir düğüm iki kat siliktir.
+                ctx.globalAlpha = (inScope ? 1.0 : 0.08) * nodeAlphaFactor(n);
 
                 // Outer Glow on Hover or Hub or Subbranch
                 if (isHovered || n.group === 'ego' || n.group === 'hub' || n.group === 'subbranch') {

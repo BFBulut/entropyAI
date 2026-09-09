@@ -562,9 +562,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         save_report: bool = True,
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
+        conversation_id: Optional[str] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
+
+        conversation_id: agy'nin `--conversation <id>` bayrağı. Verilirse çağrı
+        AYNI agy konuşmasını sürdürür; Entropy'nin konuşma kimliği ile sağlayıcı
+        oturumu `core.identity.ConversationMap` üzerinden eşlenir. None ise her
+        arka plan görevi kendi sıfır bağlamıyla koşar (eski davranış).
 
         agent: agy'nin --agent seçeneği; araç kullanımı kısıtlı bir alt ajan (ör.
         damıtma) ile çalıştırmak için. None ise varsayılan ajan.
@@ -600,7 +606,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         thread = threading.Thread(
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
-                  save_report, agent, needs_write),
+                  save_report, agent, needs_write, conversation_id),
             daemon=True
         )
         thread.start()
@@ -626,6 +632,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         save_report: bool = True,
         agent: Optional[str] = None,
         needs_write: Optional[bool] = None,
+        conversation_id: Optional[str] = None,
     ):
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
@@ -702,6 +709,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 cmd.extend(["--model", self.selected_model])
             if agent:
                 cmd.extend(["--agent", agent])
+            if conversation_id:
+                cmd.extend(["--conversation", str(conversation_id)])
 
             effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', prompt, re.IGNORECASE)
             if effort_m:

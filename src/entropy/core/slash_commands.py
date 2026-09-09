@@ -236,6 +236,30 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         usage="/desk  |  /desk task <ofis> <başlık> :: <hedef>  |  /desk stop <kart>",
     ),
     SlashCommand(
+        name="/ask",
+        description="Bir ofisin posta kutusuna soru/talimat bırakır; ofis planlarken okur.",
+        category="builtin",
+        badge="✉️ POSTA",
+        color="#00F0FF",
+        usage="/ask <ofis> <soru>",
+    ),
+    SlashCommand(
+        name="/chat",
+        description="Entropy AI ile bir ofis/ajan arasında agentic sohbetin bir turunu başlatır.",
+        category="builtin",
+        badge="💬 SOHBET",
+        color="#9D00FF",
+        usage="/chat <ofis|ajan> <mesaj>",
+    ),
+    SlashCommand(
+        name="/login",
+        description="Sağlayıcı giriş durumu (agy/Claude) ve giriş yönlendirmesi; model çağırmaz.",
+        category="builtin",
+        badge="🔑 KİMLİK",
+        color="#FFA657",
+        usage="/login [agy|claude]",
+    ),
+    SlashCommand(
         name="/wiki",
         description="Playbook'tan kavram ve varlık wiki sayfalarını üretir (model çağırmaz).",
         category="builtin",
@@ -602,9 +626,22 @@ def _handle_desk(args: str) -> str:
                     + _html_escape(cost) + ")"
                 )
             state = ", ".join(parts) or "boşta"
+            # Pano verisi tek üreticiden (mailbox.office_status) okunur; `/desk`
+            # ve Agent Desk aynı sayıları göstersin diye.
+            try:
+                from entropy.agents.mailbox import office_status
+
+                info = office_status(spec.name, vault_path=offices.vault_path)
+                unread = int(info.get("inbox_unread") or 0)
+                last = (info.get("recent_terminal") or [])[-1:]
+            except Exception:
+                unread, last = 0, []
+            extra = f" · ✉️ {unread} okunmamış" if unread else ""
+            if last:
+                extra += f" · son olay: {_html_escape(str(last[0].get('status')))}"
             rows.append(
                 f"🏢 <b>{_html_escape(spec.name)}</b> — {_html_escape(spec.purpose or '-')}<br/>"
-                f"<span style='color:#8B949E;font-size:11px;'>{state}</span>"
+                f"<span style='color:#8B949E;font-size:11px;'>{state}{extra}</span>"
             )
         if not rows:
             return ("<b>🏢 Agent Desk</b><br/>Tanımlı ofis yok. "
@@ -685,6 +722,134 @@ def _handle_desk(args: str) -> str:
     )
 
 
+def _handle_ask(args: str) -> str:
+    """
+    `/ask <ofis> <soru>` — ofisin posta kutusuna `question` bırakır.
+
+    Model ÇAĞIRMAZ ve kota harcamaz: mesaj yalnızca kutuya yazılır. Ofis o
+    soruyu bir sonraki planlamada okur (harness `pending_instructions` ile plan
+    prompt'una ekler); acil yanıt isteniyorsa `/chat <ofis> ...` kullanılır —
+    ayrım bilinçli, biri asenkron yön verme, öteki senkron sohbet.
+    """
+    from entropy.agents.mailbox import ask_office, office_mailbox
+    from entropy.agents.offices import OfficeRegistry
+
+    args = (args or "").strip()
+    if not args:
+        return ("<b>✉️ Ofise Sor</b><br/>Kullanım: "
+                "<code>/ask &lt;ofis&gt; &lt;soru&gt;</code>")
+    office_name, _, question = args.partition(" ")
+    question = question.strip()
+    offices = OfficeRegistry()
+    if offices.get(office_name) is None:
+        known = ", ".join(s.name for s in offices.list()) or "(yok)"
+        return (f"<b>✉️ Ofise Sor</b><br/>'{_html_escape(office_name)}' adında ofis yok.<br/>"
+                f"Mevcut: {_html_escape(known)}")
+    if not question:
+        return ("<b>✉️ Ofise Sor</b><br/>Soru boş olamaz: "
+                f"<code>/ask {_html_escape(office_name)} &lt;soru&gt;</code>")
+    try:
+        msg = ask_office(office_name, question)
+    except Exception as exc:
+        return f"<b>✉️ Ofise Sor</b><br/>Mesaj yazılamadı: {_html_escape(exc)}"
+    unread = office_mailbox(office_name).unread_count()
+    return (
+        f"<b>✉️ 🏢 {_html_escape(office_name)} posta kutusuna bırakıldı</b><br/>"
+        f"{_html_escape(question)}<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Mesaj: <code>{_html_escape(msg.id)}</code> · "
+        f"kutuda {unread} okunmamış · ofis bir sonraki planlamada okur. "
+        f"Hemen konuşmak için: <code>/chat {_html_escape(office_name)} &lt;mesaj&gt;</code></span>"
+    )
+
+
+def _handle_login(args: str) -> str:
+    """
+    `/login [agy|claude]` — YALNIZCA yönlendirme.
+
+    Giriş akışını Entropy başlatmaz: iki CLI da tarayıcı tabanlı OAuth istiyor ve
+    onu bir alt süreçten sürüklemek hem kırılgan hem de kullanıcının kimlik
+    bilgisini görünmez bir yere taşımak olurdu. Burada durum probu koşar ve ne
+    yapılacağı yazılır.
+    """
+    from entropy.core.identity import PROVIDERS, identity, login_guidance
+
+    name = (args or "").strip().lower().split()[0] if (args or "").strip() else ""
+    targets = [name] if name in PROVIDERS else list(PROVIDERS)
+    if name and name not in PROVIDERS:
+        return (f"<b>🔑 Giriş</b><br/>Bilinmeyen sağlayıcı '{_html_escape(name)}'. "
+                f"Geçerli: {', '.join(PROVIDERS)}.")
+    rows = []
+    for provider in targets:
+        status = identity.refresh(provider)
+        if status.logged_in:
+            detail = " · ".join(x for x in [
+                f"hesap: {status.account_hint or 'bilinmiyor'}",
+                f"plan: {status.plan}" if status.plan else "",
+                f"kota: {status.quota_hint}",
+                status.session_window,
+            ] if x)
+            rows.append(
+                f"✅ <b>{_html_escape(provider)}</b> — giriş açık<br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>{_html_escape(detail)}</span>"
+            )
+        else:
+            guide = _html_escape(login_guidance(provider)).replace("\n", "<br/>")
+            err = f"<br/><span style='color:#FF7B72;font-size:11px;'>Son hata: {_html_escape(status.last_error)}</span>" if status.last_error else ""
+            rows.append(
+                f"⛔ <b>{_html_escape(provider)}</b> — giriş yok{err}<br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>{guide}</span>"
+            )
+    return "<b>🔑 Sağlayıcı Kimliği</b><br/>" + "<br/><br/>".join(rows)
+
+
+def _handle_chat(args: str, bridge=None) -> str:
+    """
+    `/chat <ofis|ajan> <mesaj>` — agentic sohbetin BİR turunu başlatır.
+
+    Tur arka planda koşar (köprü çağrısı saniyeler sürüyor) ve yanıt posta
+    kutusuna `report` olarak düşer; sohbete "🏢 <ofis>" balonu olarak arayüz
+    basar. Burada senkron beklenseydi Zen/Chat penceresi donardı.
+    """
+    import threading as _threading
+
+    from entropy.agents.offices import OfficeRegistry
+    from entropy.agents.registry import AgentRegistry
+    from entropy.core.identity import AgenticChat
+
+    args = (args or "").strip()
+    if not args:
+        return ("<b>💬 Agentic Sohbet</b><br/>Kullanım: "
+                "<code>/chat &lt;ofis|ajan&gt; &lt;mesaj&gt;</code>")
+    target, _, message = args.partition(" ")
+    message = message.strip()
+    kind = "office" if OfficeRegistry().get(target) is not None else (
+        "agent" if AgentRegistry().get(target) is not None else ""
+    )
+    if not kind:
+        return (f"<b>💬 Agentic Sohbet</b><br/>'{_html_escape(target)}' adında ofis ya da ajan yok. "
+                "<code>/offices</code> · <code>/agents</code>")
+    if not message:
+        return (f"<b>💬 Agentic Sohbet</b><br/>Mesaj boş olamaz: "
+                f"<code>/chat {_html_escape(target)} &lt;mesaj&gt;</code>")
+
+    conversation_id = (
+        getattr(bridge, "current_conversation_id", None)
+        or getattr(bridge, "current_session_id", None)
+        or "entropy-chat"
+    )
+    chat = AgenticChat(str(conversation_id), target, target_kind=kind)
+    _threading.Thread(target=lambda: (chat.send(message), chat.close()), daemon=True).start()
+    provider = chat._target_provider()
+    return (
+        f"<b>💬 Agentic Sohbet · 🏢 {_html_escape(target)}</b><br/>"
+        f"{_html_escape(message)}<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Karşı taraf "
+        f"{_html_escape(provider)} sağlayıcısında yanıtlıyor; konuşma kimliği "
+        f"<code>{_html_escape(str(conversation_id))}</code>. Yanıt gelen kutusuna "
+        f"düşünce sohbette 🏢 balonu olarak görünür.</span>"
+    )
+
+
 def _handle_wiki(args: str) -> str:
     """
     `/wiki <yetenek>`: playbook'tan kavram/varlık sayfalarını elle üretir.
@@ -760,6 +925,9 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         /distill all             bekleyen tüm yetenekler için başlatır
         /distill index           kasadaki raporları yeteneklere yeniden eşler
         /distill stop [<yetenek>|all]  zincirlenen damıtmayı durdurur
+        /ask <ofis> <soru>       ofisin posta kutusuna soru bırakır (asenkron)
+        /chat <ofis|ajan> <msj>  agentic sohbetin bir turunu başlatır
+        /login [agy|claude]      sağlayıcı giriş durumu ve giriş yönlendirmesi
         /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
         /wiki <yetenek>          playbook'tan kavram/varlık sayfaları üretir (model yok)
         /lint [<yetenek>|all]    wiki sağlık denetimi; wiki/lint.md yazar
@@ -797,6 +965,15 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_offices(args)
     if head_low == "/desk":
         return _handle_desk(args)
+
+    # Posta kutusu ve kimlik (Faz 5): üçü de model çağırmaz. /chat yalnızca turu
+    # KUYRUĞA alır ve hemen döner; asıl köprü çağrısı arka planda koşar.
+    if head_low == "/ask":
+        return _handle_ask(args)
+    if head_low == "/login":
+        return _handle_login(args)
+    if head_low == "/chat":
+        return _handle_chat(args, bridge)
 
     # Wiki katmanı: ikisi de model çağırmaz, bu yüzden yerel komuttur.
     if head_low == "/wiki":

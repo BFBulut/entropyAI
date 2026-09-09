@@ -20,6 +20,60 @@ _GRAPH_CACHE_FILE = STATE_DIR / "cache" / "graph_data.json"
 _GRAPH_CACHE_MAX_VAULTS = 3
 _GRAPH_MEMORY_CACHE: Dict[str, Tuple[str, Dict[str, List[Dict[str, str]]]]] = {}
 
+# Grafik verisi surumu. Dugum alanlari degistiginde artirilir; imzanin onune
+# eklendigi icin eski onbellek girdileri (eksik alanli) otomatik gecersiz olur.
+# v2 (Faz 5.1/5.2): dugumlere type, importance, t_valid_from, t_valid_to.
+_GRAPH_SCHEMA_VERSION = "v2"
+
+# Kasa kategorisi -> birlesik graf dugum turu (graph_store.NODE_TYPES).
+_VAULT_GROUP_TO_TYPE: Dict[str, str] = {
+    "Reports": "report",
+    "reports": "report",
+    "query": "report",
+    "office": "office",
+    "agent": "agent",
+    "skill": "procedure",
+    "concept": "entity",
+    "entity": "entity",
+    "Daily": "episode",
+    "community": "community",
+}
+
+
+def _graph_node_type(group: str) -> str:
+    """Kasa grubundan graf dugum turu; bilinmeyen grup anlamsal olgudur."""
+    return _VAULT_GROUP_TO_TYPE.get(group, "fact")
+
+
+def _graph_node_fields(group: str, file: Optional[Path]) -> Dict[str, Any]:
+    """
+    UI'nin zaman kaydiricisi ve filtreleri icin ortak alanlar.
+
+    `t_valid_from`: dosyanin olusturulma/degistirilme zamani (epoch). Kasa
+    OneDrive'da oldugu icin mtime'a icerik dogrulugu icin degil, YALNIZCA
+    zaman ekseni icin guvenilir kabul edilir. `t_valid_to` None = hala gecerli.
+    `importance`: kaynak turunden taban puan (graph_store.SOURCE_IMPORTANCE ile
+    ayni tablodan gelir).
+    """
+    node_type = _graph_node_type(group)
+    t_from = 0.0
+    if file is not None:
+        try:
+            t_from = float(file.stat().st_mtime)
+        except OSError:
+            t_from = 0.0
+    base = {
+        "report": 0.6, "session": 0.4, "fact": 0.5, "episode": 0.4,
+        "procedure": 0.55, "entity": 0.35, "task": 0.5, "agent": 0.5,
+        "office": 0.5, "community": 0.5,
+    }.get(node_type, 0.5)
+    return {
+        "type": node_type,
+        "importance": base,
+        "t_valid_from": t_from,
+        "t_valid_to": None,
+    }
+
 
 def _query_page_skill(file: Path) -> Optional[str]:
     """
@@ -482,7 +536,8 @@ class ObsidianVaultManager:
                 h.update(f"|{st.st_size}|{st.st_mtime_ns}|".encode("ascii"))
             except OSError:
                 h.update(b"|?|")
-        return h.hexdigest(), files
+        # Surum oneki: dugum alanlari degisince eski onbellek girdileri duser.
+        return f"{_GRAPH_SCHEMA_VERSION}-{h.hexdigest()}", files
 
     def _load_graph_disk_cache(self, signature: str) -> Optional[Dict[str, List[Dict[str, str]]]]:
         if not _graph_disk_cache_enabled():
@@ -624,7 +679,8 @@ class ObsidianVaultManager:
                     "id": node_id,
                     "name": name,
                     "group": category,
-                    "path": str(file)
+                    "path": str(file),
+                    **_graph_node_fields(category, file),
                 })
 
             if office_role is not None and office_role[1] == "office":
@@ -649,6 +705,7 @@ class ObsidianVaultManager:
                         "name": skill_of_query,
                         "group": "skill",
                         "path": str(file.parents[2]),
+                        **_graph_node_fields("skill", None),
                     })
                 query_skill_links.append((node_id, skill_id))
 
@@ -702,6 +759,7 @@ class ObsidianVaultManager:
                         "name": member.strip(),
                         "group": "agent",
                         "path": "",
+                        **_graph_node_fields("agent", None),
                     })
             links.append({
                 "source": office_id,
@@ -720,6 +778,7 @@ class ObsidianVaultManager:
                     "name": office_id.split("/", 1)[1],
                     "group": "office",
                     "path": "",
+                    **_graph_node_fields("office", None),
                 })
             links.append({
                 "source": report_id,
@@ -732,3 +791,68 @@ class ObsidianVaultManager:
         _GRAPH_MEMORY_CACHE[vault_key] = (signature, data)
         self._save_graph_disk_cache(signature, data)
         return {"nodes": list(nodes), "links": list(links)}
+
+    def build_graph_with_communities(
+        self,
+        graph_store: Any = None,
+        scopes: Optional[List[str]] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Kasa grafigi + birlesik graftan gelen topluluk dugumleri.
+
+        UI (Faz 5.6) acilista topluluk dugumlerini gosterip tiklayinca uyeleri
+        acar; zaman kaydiricisi `t_valid_from`/`t_valid_to`, filtreler `type` ve
+        `importance` alanlarini kullanir. `graph_store` verilmezse yalnizca kasa
+        grafigi doner (yeni alanlar yine vardir) - bellek katmani yoksa UI
+        bozulmaz.
+        """
+        base = self.build_knowledge_graph()
+        nodes: List[Dict[str, Any]] = list(base["nodes"])
+        links: List[Dict[str, Any]] = list(base["links"])
+        if graph_store is None:
+            return {"nodes": nodes, "links": links}
+
+        known = {n["id"] for n in nodes}
+        try:
+            communities = graph_store.list_communities()
+        except Exception:
+            return {"nodes": nodes, "links": links}
+
+        for comm in communities:
+            if comm.id in known:
+                continue
+            known.add(comm.id)
+            node = graph_store.get_node(comm.id)
+            nodes.append({
+                "id": comm.id,
+                "name": comm.label or comm.id,
+                "group": "community",
+                "path": "",
+                "type": "community",
+                "importance": float(getattr(node, "importance", 0.5) or 0.5),
+                "t_valid_from": float(getattr(node, "created_at", 0.0) or 0.0),
+                "t_valid_to": None,
+                "member_count": comm.member_count,
+                "summary": comm.summary,
+            })
+            for edge in graph_store.get_edges(dst=comm.id, edge_type="member_of", valid_only=True):
+                if edge.src not in known:
+                    continue
+                links.append({
+                    "source": edge.src,
+                    "target": comm.id,
+                    "alias": "community",
+                    "type": "member_of",
+                    "is_catalog_link": False,
+                    "t_valid_from": edge.t_valid_from,
+                    "t_valid_to": edge.t_valid_to,
+                })
+        if scopes is not None:
+            allowed = set(scopes)
+            keep = {
+                n["id"] for n in nodes
+                if n.get("scope", "general") in allowed or "scope" not in n
+            }
+            nodes = [n for n in nodes if n["id"] in keep]
+            links = [l for l in links if l["source"] in keep and l["target"] in keep]
+        return {"nodes": nodes, "links": links}

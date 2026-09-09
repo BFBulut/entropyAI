@@ -23,6 +23,12 @@ from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.skills.manager import SkillManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
+from entropy.ui.widgets.command_palette import install_command_palette
+from entropy.ui.widgets.focus_mode import install_focus_mode
+from entropy.ui.widgets.notification_center import NotificationCenter
+from entropy.ui.widgets.provider_badge import ProviderStatusBadge
+from entropy.ui.widgets.report_center import ReportCenterWidget
+from entropy.ui.widgets.timeline_panel import TimelinePanel
 from entropy.ui.widgets.report_inbox import (
     InboxBadge, ReportInboxStrip, collect_recent_entries,
 )
@@ -387,6 +393,11 @@ class ChatModeWindow(QMainWindow):
         h_layout.addWidget(self.inbox_badge)
         bus.report_inbox_unread.connect(self._on_inbox_unread)
 
+        # Saglayici durum rozeti — Zen ust cubugundakiyle ayni bilesen (parite).
+        self.provider_badge = ProviderStatusBadge()
+        self.provider_badge.login_requested.connect(self._on_provider_login_requested)
+        h_layout.addWidget(self.provider_badge)
+
         btn_zen = QPushButton("Zen Mode")
         btn_zen.setFixedHeight(24)
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
@@ -537,6 +548,16 @@ class ChatModeWindow(QMainWindow):
 
         self._append_message("Entropy AI", "Hazır. Yerel Antigravity CLI üzerinden güvenle çalışıyorum.", is_system=True)
 
+        # Yasam tarzi arayuz (Faz 5.5), Zen ile paralel:
+        # Ctrl+Shift+F odak modu (yalnizca sohbet kalir),
+        # Ctrl+K komut paleti (komut/yetenek/ajan/ofis/rapor).
+        self.focus_mode = install_focus_mode(
+            self,
+            primary=self.chat_browser,
+            secondary=[self.side_panel_container, self.terminal_drawer],
+        )
+        install_command_palette(self, on_activated=self._on_palette_activated)
+
     def _connect_signals(self):
         bus.model_detected.connect(self._update_model_badge)
         bus.token_usage_updated.connect(self._update_tokens)
@@ -619,9 +640,69 @@ class ChatModeWindow(QMainWindow):
             self.inbox_strip.set_entries(collect_recent_entries())
             self.inbox_strip.report_opened.connect(self._open_inbox_report)
             self.inbox_strip.unread_changed.connect(self._on_inbox_unread_changed)
-            self.side_panel.addTab(self.inbox_strip, "📥 Gelen")
+            self.inbox_strip.setVisible(False)
+
+            # Faz 5.5: "Gelen" sekmesi Rapor Merkezi'dir (kumeleme + digest +
+            # onem x aciliyet + guven esigi). Zen ile paralel; deposu seritle
+            # ortak, boylece okundu/pin/arsiv iki yuzeyde ayni.
+            self.report_center = ReportCenterWidget(
+                parent=self, store=self.inbox_strip.store, bridge=self.bridge
+            )
+            self.report_center.set_entries(collect_recent_entries())
+            self.report_center.report_opened.connect(self._open_inbox_report)
+            self.report_center.unread_changed.connect(self._on_inbox_unread_changed)
+            self.report_center.orchestrator_answer.connect(self._on_orchestrator_answer)
+            self.side_panel.addTab(self.report_center, "📥 Gelen")
+
+            self.timeline_panel = TimelinePanel()
+            self.timeline_panel.event_activated.connect(self._on_timeline_activated)
+            self.side_panel.addTab(self.timeline_panel, "🗓 Bugun")
+
+            self.notification_center = NotificationCenter()
+            self.notification_center.notification_activated.connect(
+                self._on_notification_activated
+            )
+            self.side_panel.addTab(self.notification_center, "🔔 Bildirimler")
             self.side_panel_layout.addWidget(self.side_panel)
         return self.side_panel
+
+    @Slot(str, str)
+    def _on_orchestrator_answer(self, office: str, body: str):
+        """
+        "Orkestratore sor" yaniti sohbete "🏢 <ofis>" balonuyla duser.
+
+        Yanit sohbete yazilir cunku bu bir diyalogdur: kullanicinin sorusu ve
+        ofisin cevabi ayni akista kalmali, kartin icinde kaybolmamali.
+        """
+        from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html
+
+        self.chat_browser.append(
+            build_chat_bubble_html(f"🏢 {office}", str(body or ""))
+        )
+
+    @Slot(str, str, str)
+    def _on_palette_activated(self, kind: str, payload: str, label: str):
+        """Komut paleti secimi: rapor acilir, kalan her sey giris satirina yazilir."""
+        if kind == "report":
+            self._open_inbox_report(payload)
+            return
+        self.input_field.setText(payload if payload.endswith(" ") else payload + " ")
+        self.input_field.setFocus()
+
+    @Slot(str, str)
+    def _on_timeline_activated(self, kind: str, target: str):
+        if kind in ("report", "handoff") and target:
+            self._open_inbox_report(target)
+
+    @Slot(str, str)
+    def _on_notification_activated(self, target_kind: str, target: str):
+        if target_kind == "report" and target:
+            self._open_inbox_report(target)
+
+    @Slot(str)
+    def _on_provider_login_requested(self, provider: str):
+        self.input_field.setText(f"/login {provider} ")
+        self.input_field.setFocus()
 
     @Slot(int)
     def _on_inbox_unread(self, count: int):

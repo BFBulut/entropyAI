@@ -86,6 +86,18 @@ class EntropyEventBus(QObject):
     offices_updated = Signal(str)        # ofis adı ("" = birden çok/bilinmiyor)
     office_progress = Signal(str, str, str)  # ofis, üst kart id, aşama
 
+    # Posta kutusu (Faz 5): bir ofis/ajan/Entropy gelen kutusuna mesaj düştü ya
+    # da bir mesaj okundu/onaylandı işaretlendi. Argümanlar sahip türü
+    # ("office"|"agent"|"entropy") ve sahip adı. Kutunun kendisi diskte; sinyal
+    # yalnızca "bak" der, içerik taşımaz — mesajı iki taraf da dosyadan okur ve
+    # tek gerçek kaynak korunur.
+    mailbox_updated = Signal(str, str)   # owner_kind, owner_name
+
+    # Sağlayıcı kimlik/durum katmanı (Faz 5): giriş var mı, hangi hesap, kota
+    # ipucu, son hata. Sözlük olarak taşınır çünkü alanlar sağlayıcıya göre
+    # değişiyor ve her yeni alan için sinyal imzası değiştirilemez.
+    provider_status_updated = Signal(str, dict)  # provider, ProviderStatus.to_dict()
+
     # İşçi iş parçacıklarından ana iş parçacığına iş taşır. Alıcı bir QObject slotu
     # olduğu için bağlantı kuyruklu olur; lambda alıcı olsaydı doğrudan işçide
     # koşar ve Qt nesnelerine oradan dokunulurdu.

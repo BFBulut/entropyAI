@@ -59,7 +59,17 @@ a = Analysis(
         'entropy.ui.widgets.task_board_widget',
         'entropy.ui.widgets.ui_polish',
         'entropy.ui.widgets.report_inbox',
+        # Faz 5 UI parcalari
+        'entropy.ui.widgets.report_center',
+        'entropy.ui.widgets.command_palette',
+        'entropy.ui.widgets.focus_mode',
+        'entropy.ui.widgets.timeline_panel',
+        'entropy.ui.widgets.notification_center',
+        'entropy.ui.widgets.provider_badge',
         'entropy.agents',
+        # Faz 5 posta kutusu ve kimlik
+        'entropy.agents.mailbox',
+        'entropy.core.identity',
         'entropy.agents.registry',
         'entropy.agents.compile',
         'entropy.agents.tasks',
@@ -88,6 +98,9 @@ a = Analysis(
         'entropy.memory.wiki',
         'entropy.memory.lint',
         'entropy.memory.agent_memory',
+        # Faz 5 graf katmani
+        'entropy.memory.graph_store',
+        'entropy.memory.reconcile',
         'entropy.memory.office_memory',
         'entropy.memory.supabase.cognitive_memory',
         'numpy',

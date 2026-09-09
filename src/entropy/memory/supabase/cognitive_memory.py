@@ -975,6 +975,15 @@ class CognitiveMemorySystem:
 
         # Also run pruning during dream cycle
         self.prune_decayed_memories()
+
+        # Faz 5: graf katmanı konsolidasyonu (LLM'siz, kota harcamaz). Graf
+        # katmanı yoksa veya şema kurulamazsa rüya döngüsü bozulmamalıdır.
+        try:
+            from entropy.memory.graph_store import GraphStore
+            GraphStore(memory=self).consolidate()
+        except Exception:
+            pass
+
         return synthesized_rules
 
     _PLACEHOLDER_RE = re.compile(r"^Konsolide Bilişsel Özet \(\d{4}-\d{2}-\d{2}\): \d+ bölümsel etkileşimden damıtıldı\.?$")

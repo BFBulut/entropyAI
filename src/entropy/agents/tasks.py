@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from entropy.agents.mailbox import emit_terminal
 from entropy.agents.registry import (
     AgentRegistry,
     parse_frontmatter,
@@ -600,6 +601,8 @@ class TaskBoard:
             pass
         self._write(replace(card, status="failed", finished_at=_now(),
                             summary="Kullanıcı isteğiyle durduruldu."))
+        emit_terminal(card.id, card.office or card.agent or "entropy", "canceled",
+                      "Kullanıcı isteğiyle durduruldu.", vault_path=self.vault_path)
         return killed
 
     # -- tamamlama ------------------------------------------------------
@@ -635,6 +638,16 @@ class TaskBoard:
             output_paths=outputs,
         )
         self._write(card)
+        # TERMİNAL SÖZLEŞMESİ (A2A): kart kapandığı ANDA terminal olay yayılır.
+        # `review` de bir sondur — koşu bitti, karar insanın; asılı görevle
+        # bitmiş görevi ayırt edebilmenin tek yolu bu olay.
+        emit_terminal(
+            card.id,
+            card.office or card.agent or "entropy",
+            "completed" if ok else "failed",
+            (summary or "")[:500],
+            vault_path=self.vault_path,
+        )
 
     def _write_wiki_page(self, card: TaskCard, body: str):
         try:
