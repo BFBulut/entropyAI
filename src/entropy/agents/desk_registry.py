@@ -126,6 +126,53 @@ class DeskProject:
     goal: str = ""
     charter: str = ""
     path: Optional[Path] = None
+    # Faz 10-C: proje artık bir DEPO ve bir DAL demektir. Üçü de isteğe
+    # bağlıdır ve eski `PROJECT.md` dosyalarında hiç bulunmaz; ön bilgi
+    # ayrıştırıcısı `front.get(...)` desenli olduğu için geriye uyum bedava.
+    repo_path: str = ""      # boş = depo bağlı değil (kart tek dizinde koşar)
+    base_branch: str = ""    # boş = deponun HEAD'i
+    worktree_root: str = ""  # boş = `<repo>/../.entropy-worktrees`
+
+    @property
+    def has_repo(self) -> bool:
+        return bool((self.repo_path or "").strip())
+
+
+def validate_project_repo(repo_path: str, base_branch: str = "") -> str:
+    """
+    Proje deposunu KAYIT ANINDA doğrular; model çağırmaz, kota harcamaz.
+
+    Boş `repo_path` geçerlidir (depo bağlı değil). Dönüş: hata mesajı ya da
+    boş dize. Yol uzunluğu kontrolü Windows ölçümüne dayanıyor: `core.longpaths`
+    kapalıyken uzun worktree yolları `Filename too long` ile ölüyor.
+    """
+    repo = (repo_path or "").strip()
+    if not repo:
+        return ""
+    from entropy.agents import worktrees as _wt
+
+    path = Path(repo)
+    if not path.is_dir():
+        return f"Depo yolu bulunamadı: {repo}"
+    if not _wt.git_available():
+        return "`git` bulunamadı: depo bağlanamaz."
+    proc = _wt._git(path, "rev-parse", "--show-toplevel")
+    if proc.returncode != 0:
+        return f"Bu klasör bir git deposu değil: {repo}"
+    top = Path((proc.stdout or "").strip())
+    try:
+        same = top.resolve() == path.resolve()
+    except OSError:
+        same = str(top) == str(path)
+    if not same:
+        return f"Alt klasör verildi; deponun kökü: {top}"
+    branch = (base_branch or "").strip()
+    if branch and not _wt.branch_exists(path, branch):
+        return f"'{branch}' dalı bu depoda yok."
+    root = _paths.worktree_root_for(path)
+    if not _wt.path_length_ok(root / "ofis" / ("k" * 40)):
+        return "Worktree kökü çok uzun (uzun yol desteği kapalı)."
+    return ""
 
 
 @dataclass
@@ -577,6 +624,75 @@ class DeskRegistry:
         self._notify(spec.name)
         return replace(spec, path=path)
 
+    def archive(self, name: str, dry_run: bool = False) -> Dict[str, object]:
+        """
+        Ofisi arşive alır: ÖNCE kart worktree'leri, sonra klasör ve izler.
+
+        Sıra önemlidir (Faz 10-D): ofis klasörü taşındıktan sonra kart
+        dosyaları okunamaz ve izole çalışma ağaçları diskte yetim kalırdı.
+        Canlı etkileşimli terminaller de burada söndürülür — kapanan ofisin
+        ajanı arka planda konuşmaya devam etmemeli.
+
+        Dönüş: `vault_hygiene.archive_office` çıktısı + `worktrees` özeti.
+        """
+        from entropy.memory.vault_hygiene import archive_office
+
+        released: List[str] = []
+        closed: List[str] = []
+        if not dry_run:
+            released, closed = self._release_office_runtime(name)
+        out = archive_office(
+            name, vault_path=self.vault_path, dry_run=bool(dry_run)
+        )
+        if isinstance(out, dict):
+            out["worktrees"] = released
+            out["interactive_closed"] = closed
+        self._notify(name)
+        return out
+
+    def _release_office_runtime(self, name: str) -> tuple:
+        """Ofis kartlarının worktree'lerini ve canlı terminallerini bırakır."""
+        from entropy.agents import worktrees as _wt
+        from entropy.agents.tasks import TaskBoard
+
+        released: List[str] = []
+        closed: List[str] = []
+        try:
+            board = TaskBoard(vault_path=self.vault_path)
+            cards = [c for c in board.list(office=name) if c.office == name]
+        except Exception:
+            logger.warning("Ofis kartları okunamadı: %s", name, exc_info=True)
+            return released, closed
+        for card in cards:
+            if (card.worktree or "").strip():
+                try:
+                    _wt.release_worktree(card, force=True, vault_path=self.vault_path)
+                    released.append(card.worktree)
+                except Exception:
+                    logger.warning(
+                        "Worktree bırakılamadı: %s", card.id, exc_info=True
+                    )
+        # Canlı etkileşimli terminaller: köprü hangi görev kimliklerinin açık
+        # olduğunu biliyor; yalnızca BU ofisin kartları kapatılır.
+        wanted = {f"card-{c.id}" for c in cards}
+        for provider in ("agy", "claude"):
+            bridge = TaskBoard._bridge_cache.get(provider)
+            if bridge is None:
+                continue
+            try:
+                ids = list(bridge.interactive_task_ids())
+            except Exception:
+                continue
+            for task_id in ids:
+                if task_id not in wanted:
+                    continue
+                try:
+                    if bridge.close_interactive(task_id, reason="ofis arşivlendi"):
+                        closed.append(task_id)
+                except Exception:
+                    logger.warning("Terminal kapatılamadı: %s", task_id)
+        return released, closed
+
     def delete(self, name: str) -> bool:
         target = self.office_dir(name)
         if not target.is_dir():
@@ -733,17 +849,32 @@ class DeskRegistry:
             goal=str(front.get("goal") or ""),
             charter=body,
             path=path,
+            repo_path=str(front.get("repo_path") or ""),
+            base_branch=str(front.get("base_branch") or ""),
+            worktree_root=str(front.get("worktree_root") or ""),
         )
 
     def create_project(self, office_name: str, project: DeskProject) -> DeskProject:
         if not (project.name or "").strip():
             raise ValueError("Proje adı boş olamaz.")
+        # Depo bağlıysa ÖNCE doğrula: geçersiz yol/dal kaydedilmez. Aksi hâlde
+        # kart koşana kadar hata görünmüyor ve worktree açılışında ölüyordu.
+        problem = validate_project_repo(project.repo_path, project.base_branch)
+        if problem:
+            raise ValueError(problem)
         path = self.projects_dir(office_name) / project.name / PROJECT_FILENAME
         path.parent.mkdir(parents=True, exist_ok=True)
         body = (project.charter or "").strip()
         if not body.startswith("#"):
             body = f"# {project.name}\n\n{body}".strip()
-        front = {"name": project.name, "office": office_name, "goal": project.goal}
+        front = {
+            "name": project.name,
+            "office": office_name,
+            "goal": project.goal,
+            "repo_path": project.repo_path or "",
+            "base_branch": project.base_branch or "",
+            "worktree_root": project.worktree_root or "",
+        }
         path.write_text(f"{render_frontmatter(front)}\n\n{body}\n", encoding="utf-8")
         self._notify(office_name)
         return replace(project, office=office_name, path=path)

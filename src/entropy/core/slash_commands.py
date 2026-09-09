@@ -647,7 +647,12 @@ def _desk_usage() -> str:
         "<code>/desk</code> · <code>/desk office add &lt;ad&gt; :: &lt;amaç&gt;</code> · "
         "<code>/desk office rm &lt;ad&gt;</code><br/>"
         "<code>/desk agent add|edit|rm &lt;ofis&gt; &lt;ad&gt; :: &lt;açıklama&gt;</code><br/>"
-        "<code>/desk project add &lt;ofis&gt; &lt;ad&gt; :: &lt;hedef&gt;</code><br/>"
+        "<code>/desk project add &lt;ofis&gt; &lt;ad&gt; :: &lt;hedef&gt;</code> · "
+        "<code>… :: &lt;depo yolu&gt; [dal]</code><br/>"
+        "<code>/desk templates</code> · "
+        "<code>/desk create &lt;ofis&gt; --template &lt;ad&gt;</code><br/>"
+        "<code>/desk review &lt;kart&gt;</code> · "
+        "<code>/desk push &lt;kart&gt;</code><br/>"
         "<code>/desk task &lt;ofis&gt; [@proje] &lt;başlık&gt; :: &lt;hedef&gt;</code> · "
         "<code>/desk stop &lt;kart&gt;</code><br/>"
         "<code>/desk msg &lt;ofis&gt; :: &lt;talimat&gt;</code>"
@@ -702,15 +707,32 @@ def _handle_desk_admin(verb: str, rest: str, offices) -> str:
         office_name, project_name = names[0], names[1]
         if offices.get(office_name) is None:
             return f"<b>🏢 Proje</b><br/>'{_html_escape(office_name)}' adında ofis yok."
+        # Faz 10-C: proje artık bir DEPO ve bir DAL olabilir.
+        # `:: <repo> [dal]` — ilk parça var olan bir klasörse depo sayılır,
+        # değilse eski davranış (hedef metni) korunur. Geriye uyum bedava.
+        repo_path, base_branch, goal = "", "", detail
+        if detail:
+            first, _, tail = detail.partition(" ")
+            if Path(first.strip().strip('"')).is_dir():
+                repo_path = first.strip().strip('"')
+                base_branch = tail.strip()
+                goal = ""
         try:
             project = offices.create_project(
-                office_name, DeskProject(name=project_name, goal=detail, charter=detail)
+                office_name,
+                DeskProject(name=project_name, goal=goal, charter=goal,
+                            repo_path=repo_path, base_branch=base_branch),
             )
         except Exception as exc:
             return f"<b>🏢 Proje</b><br/>Yazılamadı: {_html_escape(exc)}"
+        repo_note = (
+            f"Depo: <code>{_html_escape(project.repo_path)}</code> @ "
+            f"<code>{_html_escape(project.base_branch or 'HEAD')}</code><br/>"
+            if project.repo_path else ""
+        )
         return (
             f"<b>🏢 Proje</b><br/>{_html_escape(office_name)} / "
-            f"{_html_escape(project.name)} oluşturuldu.<br/>"
+            f"{_html_escape(project.name)} oluşturuldu.<br/>{repo_note}"
             f"<span style='color:#8B949E;font-size:11px;'>Karta bağlamak için: "
             f"<code>/desk task {_html_escape(office_name)} @{_html_escape(project.name)} "
             f"&lt;başlık&gt; :: &lt;hedef&gt;</code></span>"
@@ -766,6 +788,107 @@ def _handle_desk_admin(verb: str, rest: str, offices) -> str:
         f"<span style='color:#8B949E;font-size:11px;'>Tanım: "
         f"<code>{_html_escape(str(agents.agent_file(agent_name)))}</code></span>"
     )
+
+
+def _handle_desk_phase10(verb: str, rest: str, offices, board) -> str:
+    """
+    `/desk templates|create|review|push` (Faz 10-C).
+
+    Hepsi YEREL: şablon okuma, ofis yazma, `git diff` okuma. Tek istisna
+    `push`: uzak depoya yazar ve YALNIZCA bu komuttan çağrılır — harness ve
+    `prepare_review` push'a hiç dokunmaz.
+    """
+    from entropy.agents import templates as _tpl
+
+    if verb in ("template", "templates"):
+        rows = _tpl.list_templates(getattr(offices, "vault_path", None))
+        if not rows:
+            return "<b>🏢 Şablonlar</b><br/>Şablon bulunamadı."
+        body = "<br/>".join(
+            f"<code>{_html_escape(r['name'])}</code> — {_html_escape(r['title'])} · "
+            f"{_html_escape(', '.join(r['agents']))}"
+            for r in rows
+        )
+        return (f"<b>🏢 Ekip Şablonları</b><br/>{body}<br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>Kullanım: "
+                f"<code>/desk create &lt;ofis&gt; --template &lt;ad&gt;</code></span>")
+
+    if verb == "create":
+        parts = rest.split()
+        if not parts:
+            return _desk_usage()
+        office_name = parts[0]
+        template = ""
+        for i, tok in enumerate(parts[1:], start=1):
+            if tok == "--template" and i + 1 < len(parts):
+                template = parts[i + 1]
+        if not template:
+            return ("<b>🏢 Ofis</b><br/>Kullanım: "
+                    "<code>/desk create &lt;ofis&gt; --template &lt;ad&gt;</code>")
+        try:
+            office = _tpl.create_office_from_template(
+                template, office_name, desk=offices
+            )
+        except FileExistsError:
+            return f"<b>🏢 Ofis</b><br/>'{_html_escape(office_name)}' zaten var."
+        except Exception as exc:
+            return f"<b>🏢 Ofis</b><br/>Açılamadı: {_html_escape(exc)}"
+        roster = ", ".join(s.name for s in offices.agents(office_name).list())
+        return (
+            f"<b>🏢 Ofis Açıldı</b><br/>{_html_escape(office.name)} "
+            f"({_html_escape(template)} şablonu)<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>Kadro: "
+            f"{_html_escape(roster)} · sağlayıcı "
+            f"<code>{_html_escape(office.default_provider)}</code></span>"
+        )
+
+    # review / push: kart kimliği ister
+    if not rest.strip():
+        return _desk_usage()
+    card = board.get(rest.strip())
+    if card is None:
+        return f"<b>🏢 İnceleme</b><br/>'{_html_escape(rest.strip())}' kimlikli kart yok."
+    from entropy.agents import pr_flow as _pr
+
+    project = None
+    if card.office and card.project:
+        project = offices.get_project(card.office, card.project)
+    base = (project.base_branch if project is not None else "") or ""
+
+    if verb == "review":
+        data = _pr.prepare_review(card, base_branch=base)
+        gh = "kurulu" if _pr.gh_available() else "kurulu değil"
+        return (
+            f"<b>🏢 İnceleme</b><br/>{_html_escape(card.title)}<br/>"
+            f"{_html_escape(str(data.get('summary') or ''))}<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>gh: {gh} · dalı göndermek "
+            f"için <code>/desk push {_html_escape(card.id)}</code></span>"
+        )
+
+    # verb == "push" — açık kullanıcı eylemi
+    result = _pr.push_branch(card, confirm=True)
+    if not result.get("pushed"):
+        why = result.get("skipped") or result.get("error") or "bilinmeyen neden"
+        return f"<b>🏢 Dal Gönderilmedi</b><br/>{_html_escape(str(why))}"
+    review = _pr.prepare_review(card, base_branch=base)
+    pr = _pr.create_draft_pr(card, office=card.office, base_branch=base, review=review)
+    if pr.get("skipped"):
+        return (f"<b>🏢 Dal Gönderildi</b><br/>"
+                f"<code>{_html_escape(str(result.get('branch')))}</code><br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>Taslak PR açılmadı "
+                f"({_html_escape(str(pr.get('skipped')))}); yerel dal + diff özeti "
+                f"geçerli.</span>")
+    url = str(pr.get("url") or "")
+    if url:
+        try:
+            from dataclasses import replace as _replace
+
+            board.update(_replace(card, pr_url=url))
+        except Exception:
+            pass
+    return (f"<b>🏢 Taslak PR</b><br/>"
+            f"<code>{_html_escape(str(result.get('branch')))}</code><br/>"
+            f"{_html_escape(url or 'PR açıldı')}")
 
 
 def _handle_desk(args: str) -> str:
@@ -846,6 +969,11 @@ def _handle_desk(args: str) -> str:
 
     if verb in ("office", "agent", "project"):
         return _handle_desk_admin(verb, rest, offices)
+
+    # Faz 10-C: şablondan ofis, inceleme özeti ve (yalnızca kullanıcı eylemiyle)
+    # dal gönderme. Üçü de yerel: model çağırmaz, kota harcamaz.
+    if verb in ("template", "templates", "create", "review", "push"):
+        return _handle_desk_phase10(verb, rest, offices, board)
 
     if verb == "msg":
         # Faz 9 / B-9.3: Entropy → orkestratör talimat yolu. Model ÇAĞIRMAZ;

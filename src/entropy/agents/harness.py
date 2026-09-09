@@ -43,7 +43,7 @@ from entropy.agents.mailbox import (
     report_to_entropy,
 )
 from entropy.agents.desk_registry import DeskOffice, DeskRegistry
-from entropy.agents.compile import resolve_model
+from entropy.agents.compile import claude_tools_list, is_orchestrator, resolve_model
 from entropy.agents.registry import VALID_PROVIDERS, AgentRegistry, default_provider
 from entropy.agents.tasks import (
     ALL_CARDS,
@@ -60,6 +60,56 @@ from entropy.agents.tasks import (
 from entropy.core.project_lock import LOCK_TIMEOUT_MARKER
 
 logger = logging.getLogger(__name__)
+
+
+class WriteLockHolder:
+    """
+    Proje yazma kilidini KENDİ iş parçacığında tutan sahip.
+
+    Neden gerekli: `core.project_lock` kilidi iş parçacığına bağlıdır
+    (`release_write` sahibi olmayan iş parçacığında `RuntimeError` atar). Takip
+    turunda kilit arayüz iş parçacığında alınır (`bridge.send_followup` →
+    `on_followup_start`) ama köprünün işçi iş parçacığında bırakılır
+    (`on_followup_end`); doğrudan çağrılsaydı kilit sonsuza dek kalırdı.
+    Burada tek bir yardımcı iş parçacığı hem alır hem bırakır.
+    """
+
+    def __init__(self, project_path: str):
+        self.project_path = str(project_path)
+        self._acquired = threading.Event()
+        self._release = threading.Event()
+        self._ok = False
+        self._thread: Optional[threading.Thread] = None
+
+    def acquire(self, timeout: float = 5.0) -> bool:
+        from entropy.core.project_lock import project_lock_manager
+
+        def _hold():
+            try:
+                self._ok = bool(
+                    project_lock_manager.acquire_write(self.project_path, timeout=timeout)
+                )
+            except Exception:
+                self._ok = False
+            self._acquired.set()
+            if not self._ok:
+                return
+            self._release.wait()
+            try:
+                project_lock_manager.release_write(self.project_path)
+            except Exception:
+                logger.debug("Yazma kilidi bırakılamadı: %s", self.project_path)
+
+        self._thread = threading.Thread(target=_hold, daemon=True,
+                                        name="entropy-followup-lock")
+        self._thread.start()
+        self._acquired.wait(timeout=timeout + 2.0)
+        return bool(self._ok)
+
+    def release(self) -> None:
+        self._release.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
 # Kilit yüzünden başlayamayan alt kart en çok bu kadar kez sıraya geri konur;
 # sonrası gerçek bir kilitlenmedir ve sonsuz döngüye dönüşmemeli.
@@ -187,6 +237,14 @@ MAX_RESEARCH_QUERIES = 3
 # Planlama bağlamına giren ofis raporu sayısı ve rapor başına karakter (B1).
 CONTEXT_REPORT_COUNT = 3
 CONTEXT_REPORT_CHARS = 1200
+
+# Plan isteminin karakter bütçesi (Faz 10 düzeltmesi). Canlı koşuda tek plan
+# çağrısı 38k token ölçüldü (`e2e_state.json` → `measured_tokens`); en şişkin
+# bölüm "bilgi tazeleme" idi (ofis belleği + 3 rapor sınırsız birleşiyordu).
+# Bütçe İSTEM metnine uygulanır, sistem istemine değil.
+PLAN_CONTEXT_MAX_CHARS = 2000     # [BİLGİ TAZELEME] bloğu
+PLAN_PROJECT_MAX_CHARS = 1500     # [PROJE] bloğu (tüzük uzun olabiliyor)
+PLAN_PROMPT_MAX_CHARS = 12000     # toplam tavan
 
 
 def orchestrator_produced_code(text: str) -> bool:
@@ -396,6 +454,13 @@ class OfficeHarness:
         self.bridge_factory = bridge_factory
         self._lock = threading.RLock()
         self._starting: set = set()
+        # Faz 10-D: takip turu SÜREN kartlar. Bu kartlar `running` değildir
+        # (ilk turda kapandılar) ama yazma kilidini yeniden aldıkları için
+        # ofisin `max_parallel` bütçesinden bir yer tutarlar; sayaç olmasaydı
+        # pompa aynı anda ikinci bir yazma kartı başlatırdı.
+        self._followup_active: set = set()
+        # kart kimliği → o tur için kilidi tutan `WriteLockHolder`.
+        self._followup_locks: Dict[str, WriteLockHolder] = {}
 
     # -- yardımcılar ----------------------------------------------------
 
@@ -1105,6 +1170,62 @@ class OfficeHarness:
                 logger.debug("rules_updated sinyali yayılamadı: %s", self.office_name)
         return stored
 
+    # -- proje deposu ve kart worktree'si (Faz 10-C) ---------------------
+
+    def _project_of(self, card: TaskCard, parent: Optional[TaskCard] = None):
+        """Kartın (ya da üstünün) bağlı olduğu ofis projesi; yoksa `None`."""
+        name = (card.project or "") or ((parent.project if parent else "") or "")
+        if not name:
+            return None
+        try:
+            return self.offices.get_project(self.office_name, name)
+        except Exception:
+            return None
+
+    def _worktree_eligible(self, child: TaskCard, parent: Optional[TaskCard] = None) -> bool:
+        """Bu alt kart izole bir çalışma ağacında koşabilir mi (proje deposu var mı)."""
+        if (child.worktree or "").strip():
+            return True
+        project = self._project_of(child, parent)
+        return bool(project is not None and (project.repo_path or "").strip())
+
+    def _ensure_worktree(self, child: TaskCard, parent: Optional[TaskCard] = None) -> str:
+        """
+        Alt kartın izole çalışma ağacını açar; yolunu döndürür ("" = açılmadı).
+
+        Worktree açma BAŞARISIZ olursa kart ölmez: eski tek-dizin yoluna düşer
+        ve nedeni kart notuna yazılır. Özellik opt-in'dir — projede `repo_path`
+        yoksa bu kod yolu hiç çalışmaz.
+        """
+        if (child.worktree or "").strip() and Path(child.worktree).is_dir():
+            return child.worktree
+        project = self._project_of(child, parent)
+        repo = (project.repo_path or "").strip() if project is not None else ""
+        if not repo:
+            return ""
+        from entropy.agents import worktrees as _wt
+
+        try:
+            path = _wt.create_worktree(
+                repo,
+                self.office_name,
+                child.id,
+                base_branch=(project.base_branch or ""),
+                root=(project.worktree_root or None),
+            )
+        except _wt.WorktreeError as exc:
+            note = f"Worktree açılamadı ({exc}); kart ofis çalışma dizininde koşuyor."
+            logger.warning("%s: %s", child.id, note)
+            if note not in (child.notes or ""):
+                self.board.update(replace(
+                    child, notes=((child.notes + "\n") if child.notes else "") + note
+                ))
+            return ""
+        self.board.update(replace(
+            child, worktree=str(path), branch=_wt.branch_name(child.id)
+        ))
+        return str(path)
+
     def _child_lead_sections(self, child: TaskCard) -> List[str]:
         """Alt kart isteminin baş bölümleri: doğuş talimatı, kaldığın yer, yorum."""
         spawn = self.spawn_section(child.id, agent=child.agent or "")
@@ -1238,10 +1359,11 @@ class OfficeHarness:
             except Exception:
                 project = None
             if project is not None:
-                project_block = (
+                project_block = trim_to_sections(
                     f"[PROJE — {project.name}]\n{project.goal}\n"
-                    f"{(project.charter or '').strip()}\n\n"
-                )
+                    f"{(project.charter or '').strip()}",
+                    PLAN_PROJECT_MAX_CHARS,
+                ) + "\n\n"
         # B1 — bilgi tazeleme: orkestratör planlamadan ÖNCE ofis belleğini ve
         # son raporları görür. Eskiden her planlama sıfır bağlamla başlıyor ve
         # aynı iş turlarca yeniden keşfediliyordu.
@@ -1254,7 +1376,10 @@ class OfficeHarness:
                 parts.append(memory_ctx)
             if reports_ctx:
                 parts.append(f"[SON RAPORLAR]\n{reports_ctx}")
-            context_block = "\n\n".join(parts) + "\n\n"
+            # Bütçe: bellek + 3 rapor birleşince blok 5k karakteri aşabiliyordu.
+            context_block = trim_to_sections(
+                "\n\n".join(parts), PLAN_CONTEXT_MAX_CHARS
+            ) + "\n\n"
         # Araştırma notu alt adımı yalnızca kadroda WebSearch yetkili ajan
         # varsa istenir; yoksa orkestratör dolduramayacağı bir alan uyduruyordu.
         research_block = ""
@@ -1280,7 +1405,7 @@ class OfficeHarness:
         # Doğuş talimatı EN BAŞTA: orkestratör de bir ajandır ve planlamadan
         # önce panoyu/mimariyi/kuralları okumak zorundadır.
         spawn = self.spawn_section(card.id)
-        return (
+        prompt = (
             f"{spawn}\n\n"
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
             f"{project_block}"
@@ -1303,6 +1428,26 @@ class OfficeHarness:
             ' "architecture_notes": ["(isteğe bağlı) mimari kararın, ARCHITECTURE.md\'ye eklenecek"]'
             f"{research_schema}" + "}"
         )
+        # Ölçüm günlüğe düşer: "38k token" gibi bir sayı bir daha yalnızca
+        # kullanım kaydından değil, istem uzunluğundan da izlenebilsin.
+        logger.info(
+            "Plan istemi: %d karakter (bağlam %d, proje %d, kutu %d, doğuş %d)",
+            len(prompt), len(context_block), len(project_block),
+            len(inbox_block), len(spawn),
+        )
+        if len(prompt) > PLAN_PROMPT_MAX_CHARS:
+            # Tavan aşıldıysa ŞEMA değil BAĞLAM kırpılır: şema bozulursa plan
+            # ayrıştırılamaz ve tur tamamen boşa gider.
+            overflow = len(prompt) - PLAN_PROMPT_MAX_CHARS
+            for block in (context_block, project_block, inbox_block):
+                if overflow <= 0 or not block:
+                    continue
+                keep = max(0, len(block) - overflow - 2)
+                shrunk = (trim_to_sections(block.strip(), keep) + "\n\n") if keep else ""
+                overflow -= len(block) - len(shrunk)
+                prompt = prompt.replace(block, shrunk, 1)
+            logger.info("Plan istemi bütçeye kırpıldı: %d karakter", len(prompt))
+        return prompt
 
     def _roster_provider(self, office: DeskOffice) -> str:
         """
@@ -1479,9 +1624,82 @@ class OfficeHarness:
         self.render_board()
         self._save_card_state(card_id, phase=PHASE_RUNNING)
         self._emit(card_id, PHASE_RUNNING)
+        # Makbuzun `## Plan` bölümü plan biter bitmez okunabilir olsun.
+        self._write_receipt(card_id)
         self._pump(card_id)
 
     # -- 2. yürütme -----------------------------------------------------
+
+    # -- etkileşimli takip turları (Faz 10-D) ----------------------------
+
+    def _followup_hooks(self, child_id: str, project_path: str, needs_write: bool):
+        """
+        Takip turu kancaları: yazma kilidi + ofis paralellik sayacı.
+
+        Köprü ilk finalize'da kilitleri BIRAKIR (doğrulandı:
+        `agy_bridge._execute_background_task_worker`, ilk turdan sonra
+        `_release_locks()`), yani bekleyen terminal ne kilit ne de kapasite
+        tutar. Takip turu başlarken yazma kilidi YENİDEN alınır; alınamazsa
+        `False` dönülür ve köprü takip mesajını hiç göndermez (iki ajanı aynı
+        dosyalara salmaktansa kullanıcıya "kilit meşgul" demek doğrudur).
+        """
+
+        def _start(task_id: str, _cid=child_id, _path=project_path,
+                   _write=needs_write) -> bool:
+            if _write:
+                holder = WriteLockHolder(_path)
+                if not holder.acquire(timeout=5.0):
+                    self._emit_card_stream(
+                        _cid,
+                        "error",
+                        "Takip turu başlatılamadı: proje yazma kilidi meşgul.",
+                    )
+                    return False
+                with self._lock:
+                    self._followup_locks[_cid] = holder
+            with self._lock:
+                self._followup_active.add(_cid)
+            return True
+
+        def _end(task_id: str, _cid=child_id) -> None:
+            with self._lock:
+                self._followup_active.discard(_cid)
+                holder = self._followup_locks.pop(_cid, None)
+            if holder is not None:
+                holder.release()
+
+        return _start, _end
+
+    def release_followup(self, child_id: str) -> None:
+        """
+        Kartın takip turu kaydını (kilit + sayaç) koşulsuz bırakır.
+
+        Kart arşivlenirken / terminal kapatılırken çağrılır: yarım kalmış bir
+        turun kilidi ofisi süresiz kilitlemesin.
+        """
+        with self._lock:
+            self._followup_active.discard(child_id)
+            holder = self._followup_locks.pop(child_id, None)
+        if holder is not None:
+            holder.release()
+
+    def _emit_card_stream(self, card_id: str, kind: str, text: str) -> None:
+        """Kart künyeli `bus.agent_stream` olayı (sahne bölmesi bunu basar)."""
+        try:
+            from entropy.core.event_bus import bus
+            from entropy.core.provider import build_agent_stream_event
+
+            child = self.board.get(card_id)
+            bus.agent_stream.emit(build_agent_stream_event(
+                kind,
+                text,
+                task_id=f"card-{card_id}",
+                card_id=card_id,
+                office=self.office_name,
+                agent=(child.agent if child else "") or "entropy",
+            ))
+        except Exception:
+            logger.debug("Kart akış olayı yayılamadı: %s", card_id)
 
     def _pump(self, card_id: str) -> None:
         """
@@ -1501,11 +1719,24 @@ class OfficeHarness:
             # Yazma niyetli alt kart varsa paralellik fiilen 1'dir: proje yazma
             # kilidi tekildir ve ikinci kart zaten 60 sn bekleyip ölürdü. Okuma
             # niyetli kartlar paylaşımlı kilitle gerçekten paralel koşar.
+            #
+            # Faz 10-C: worktree'li kartta yazma kilidi KARTIN KENDİ ağacına
+            # düşer (her kart ayrı dizin, ayrı kilit), bu yüzden kısıt yalnızca
+            # izole ağaçta koşamayacak yazma kartları için geçerli.
             limit = int(office.max_parallel or 1)
-            if any(card_needs_write(c, agent_spec=self.registry.get(c.agent) if c.agent else None)
-                   for c in (running + backlog)):
+            if any(
+                card_needs_write(c, agent_spec=self.registry.get(c.agent) if c.agent else None)
+                and not self._worktree_eligible(c, card)
+                for c in (running + backlog)
+            ):
                 limit = 1
-            free = max(0, limit - len(running))
+            # Takip turu SÜREN kartlar da kapasite tutar (Faz 10-D): kart
+            # `running` değil ama ajanı canlı ve yazma kilidini elinde.
+            busy = len(running) + len(
+                {c.id for c in children if c.id in self._followup_active}
+                - {c.id for c in running}
+            )
+            free = max(0, limit - busy)
             # `_starting`: köprü geri çağrıyı SENKRON verdiğinde (test taklidi ya
             # da anında hata) `board.run` içinden yeniden _pump'a giriliyor ve
             # aynı alt kart iki kez başlatılabiliyordu. Başlatılan kimlik önce
@@ -1543,14 +1774,34 @@ class OfficeHarness:
             if not self._spend(card_id, _estimate_tokens(child.goal, *(child.criteria or []))):
                 self._fail_budget(card_id, "yürütme")
                 return
+            # Worktree bütçe kontrolünden SONRA açılır: sığmayan bir kart için
+            # disk üstünde ağaç bırakmanın anlamı yok.
+            parent = self.board.get(card_id)
+            worktree = self._ensure_worktree(child, parent)
+            if worktree:
+                child = self.board.get(child.id) or child
+            # Faz 10-D: etkileşimli kip. Kart bir Desk ofis kartıdır, kanca
+            # ikilisi kilidi ve paralellik sayacını harness'ta yönetir.
+            needs_write = card_needs_write(
+                child, agent_spec=self.registry.get(child.agent) if child.agent else None
+            )
+            lock_path = worktree or str(self._workdir())
+            start_hook, end_hook = self._followup_hooks(
+                child.id, lock_path, needs_write
+            )
             self.board.run(
                 child.id,
                 bridge_factory=self.bridge_factory,
+                interactive=True,
+                on_followup_start=start_hook,
+                on_followup_end=end_hook,
                 on_done=lambda cid, ok, _p=card_id: self._on_child_done(_p, cid, ok),
                 # Alt ajan ofisin defterinden çözülür ve ofisin çalışma
                 # dizininde koşar; derlenmiş tanım orada duruyor.
                 agent_registry=self.registry,
-                project_path=str(self._workdir()),
+                # Worktree'li kart KENDİ ağacında koşar: hem `--add-dir` hem
+                # dosya haritası hem de yazma kilidi o ağaca bağlanır.
+                project_path=worktree or str(self._workdir()),
                 # Faz 10-A: istemin başına doğuş talimatı + (varsa) kontrol
                 # noktasından sürdürme + koşan karta gelen yorumlar.
                 lead_sections=self._child_lead_sections(child),
@@ -1585,6 +1836,8 @@ class OfficeHarness:
             child = self._close_child(child, ok)
             self.collect_rule_candidates(child.agent, child.summary or "", source=child.id)
         self.render_board()
+        # Makbuz artımlı: kullanıcı koşu sürerken `## İlerleme` bölümünü okur.
+        self._write_receipt(card_id)
         self._pump(card_id)
 
     def _close_child(self, child: TaskCard, ok: bool) -> TaskCard:
@@ -1750,6 +2003,180 @@ class OfficeHarness:
 
     # -- kapanış --------------------------------------------------------
 
+    # -- makbuz (Faz 10-C / 10.9) ----------------------------------------
+    #
+    # Makbuz AYRI bir klasör değildir: `Offices/<ofis>/reports/<kart>.md`
+    # makbuzun kendisidir. Üçüncü bir gerçek kaynak açmamak Faz 9'un P0-2
+    # dersidir (kart deposu ikiye bölünmüştü). Bölüm başlıkları sözleşmedir;
+    # UI onları ayrıştırarak makbuz sekmesini kurar.
+
+    RECEIPT_SECTIONS = (
+        "Plan", "İlerleme", "Değerlendirme", "Kanıt", "Değişiklikler",
+        "PR", "Maliyet", "Yorumlar",
+    )
+
+    def _cost_line(self, card_id: str) -> str:
+        state = self._card_state(card_id)
+        budget = self._budget(card_id)
+        spent = int(state.get("tokens", 0) or 0)
+        measured = int(state.get("measured_tokens", 0) or 0)
+        office = self.office
+        provider = (office.default_provider if office else "") or default_provider()
+        cap = f"{budget}" if budget else "sınırsız"
+        return (f"{spent} / {cap} token (ölçülen {measured}, gerisi tahmin) · "
+                f"sağlayıcı: {provider}")
+
+    def _comments_lines(self, card: TaskCard, children: List[TaskCard]) -> List[str]:
+        """Kutudaki yorumlar (OKUNMUŞ dâhil): kullanıcı yorumunun izi görünür."""
+        try:
+            from entropy.agents.mailbox import office_mailbox
+
+            box = office_mailbox(self.office_name, vault_path=self.board.vault_path)
+            wanted = {card.id} | {c.id for c in children}
+            msgs = [m for m in box.list()
+                    if m.kind in ("instruction", "question") and m.task_id in wanted]
+        except Exception:
+            return ["(yorum okunamadı)"]
+        if not msgs:
+            return ["(yorum yok)"]
+        return [f"- `{m.created_at}` · {' '.join((m.text or '').split())[:400]}" for m in msgs]
+
+    def _receipt_body(
+        self,
+        card: TaskCard,
+        children: List[TaskCard],
+        review: Optional[dict] = None,
+        avg=None,
+    ) -> str:
+        """
+        Makbuzun tam gövdesi. Alt başlıklar `###` KALIR: rapor kartın
+        "## Sonuç" bölümüne de yazılıyor ve bölüm ayrıştırıcısı yalnızca dört
+        bilinen `## ` başlığında kesiyor (`Hedef`, `Kabul ölçütleri`, `Notlar`,
+        `Sonuç`) — makbuz başlıkları o dörtlüyle çakışmaz.
+        """
+        project = self._project_of(card)
+        head = [f"# {card.title}", "", f"Ofis: {self.office_name}"]
+        if project is not None:
+            repo = (project.repo_path or "").strip()
+            head.append(
+                f"Proje: {project.name}"
+                + (f" · depo: `{repo}` @ `{project.base_branch or 'HEAD'}`" if repo else "")
+            )
+        if card.branch or any(c.branch for c in children):
+            branches = sorted({c.branch for c in children if c.branch} | ({card.branch} if card.branch else set()))
+            head.append("Dallar: " + ", ".join(f"`{b}`" for b in branches))
+        head.append("")
+
+        lines = list(head)
+        lines += ["## Plan", ""]
+        if children:
+            lines += ["| Alt görev | Ajan | Sağlayıcı | Ölçüt |", "|---|---|---|---|"]
+            for child in children:
+                lines.append(
+                    f"| {child.title} | {child.agent or '-'} | {child.provider or '-'} | "
+                    f"{len(child.criteria or [])} |"
+                )
+        else:
+            lines.append("(plan henüz üretilmedi)")
+        lines += ["", "## İlerleme", ""]
+        if children:
+            for child in children:
+                headline = f"### {child.title} · {child.agent} · {child.status}"
+                if child.grade is not None:
+                    headline += f" · not {child.grade}"
+                lines.append(headline)
+                if child.verdict:
+                    lines.append(f"_{child.verdict}_")
+                if child.checkpoint:
+                    lines.append(f"Kontrol noktası: `{child.checkpoint}`")
+                lines.append((child.summary or "(çıktı yok)").strip())
+                # Faz 10-D: etkileşimli kartın takip turları da makbuza girer;
+                # ilk turdan sonra konuşulanlar aksi hâlde hiçbir yerde yoktu.
+                from entropy.agents.tasks import followup_notes
+
+                for note in followup_notes(child):
+                    lines.append(f"- {note}")
+                lines.append("")
+        else:
+            lines += ["(alt kart yok)", ""]
+        lines += ["## Değerlendirme", ""]
+        lines.append(
+            f"{len(children)} alt görev · ortalama not "
+            f"{avg if avg is not None else '-'}"
+        )
+        if card.verdict:
+            lines.append(card.verdict)
+        lines += ["", "## Kanıt", ""]
+        proofs = [f"- `{c.id}`: {c.proof}" for c in children if (c.proof or "").strip()]
+        lines += proofs or ["(kanıt bloğu yok)"]
+        lines += ["", "## Değişiklikler", ""]
+        from entropy.agents.pr_flow import changes_section
+
+        lines.append(changes_section(review))
+        lines += ["", "## PR", ""]
+        urls = [c.pr_url for c in children if (c.pr_url or "").strip()]
+        if card.pr_url:
+            urls.insert(0, card.pr_url)
+        if urls:
+            lines += [f"- {u}" for u in urls]
+        else:
+            lines.append("PR açılmadı (yerel dal + diff özeti geçerli).")
+        lines += ["", "## Maliyet", "", self._cost_line(card.id)]
+        lines += ["", "## Yorumlar", ""]
+        lines += self._comments_lines(card, children)
+        return "\n".join(lines).strip()
+
+    def _child_review(self, children: List[TaskCard]) -> Optional[dict]:
+        """Alt kartların worktree'lerinden birleşik değişiklik özeti."""
+        from entropy.agents.pr_flow import prepare_review
+
+        rows: List[dict] = []
+        branches: List[str] = []
+        for child in children:
+            if not (child.worktree or "").strip():
+                continue
+            project = self._project_of(child)
+            data = prepare_review(child, base_branch=(project.base_branch if project else ""))
+            if data.get("branch"):
+                branches.append(str(data["branch"]))
+            rows.extend(list(data.get("files") or []))
+        if not branches:
+            return None
+        added = sum(int(r.get("added") or 0) for r in rows)
+        removed = sum(int(r.get("removed") or 0) for r in rows)
+        return {
+            "branch": ", ".join(branches),
+            "files": rows,
+            "file_count": len(rows),
+            "added": added,
+            "removed": removed,
+            "summary": (f"Dallar: {', '.join(branches)} · {len(rows)} dosya, "
+                        f"+{added}/-{removed} satır"),
+        }
+
+    def _write_receipt(self, card_id: str) -> Optional[Path]:
+        """
+        Makbuzu ARTIMLI günceller (plan sonrası ve her alt kart bitişinde).
+
+        Koşu bitmeden de okunabilmesi için: kullanıcı `## İlerleme` bölümünü
+        iş sürerken görür. Hata yutulur; makbuz kartı öldürmez.
+        """
+        try:
+            card = self.board.get(card_id)
+            if card is None:
+                return None
+            children = self._children(card)
+            graded = [c.grade for c in children if c.grade is not None]
+            avg = round(sum(graded) / len(graded), 3) if graded else None
+            body = self._receipt_body(card, children, review=None, avg=avg)
+            path = self.offices.reports_dir(self.office_name) / f"{card.id}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            return path
+        except Exception:
+            logger.warning("Makbuz güncellenemedi: %s", card_id, exc_info=True)
+            return None
+
     def _finalize(self, card_id: str) -> None:
         card = self.board.get(card_id)
         if card is None:
@@ -1757,22 +2184,13 @@ class OfficeHarness:
         children = self._children(card)
         graded = [c.grade for c in children if c.grade is not None]
         avg = round(sum(graded) / len(graded), 3) if graded else None
-        lines = [f"# {card.title}", "", f"Ofis: {self.office_name}", ""]
         outputs = list(card.output_paths or [])
         for child in children:
-            # Başlık seviyesi kasıtlı olarak `###`: rapor kartın "## Sonuç"
-            # bölümüne yazılıyor ve `##` kullanılırsa kart geri okunduğunda
-            # bölüm ayrıştırıcısı özeti ilk alt başlıkta kesiyordu.
-            head = f"### {child.title} · {child.agent} · {child.status}"
-            if child.grade is not None:
-                head += f" · not {child.grade}"
-            lines.append(head)
-            if child.verdict:
-                lines.append(f"_{child.verdict}_")
-            lines.append((child.summary or "(çıktı yok)").strip())
-            lines.append("")
             outputs.extend(child.output_paths or [])
-        report = "\n".join(lines).strip()
+        # Kart `review`'a geçerken inceleme künyesi üretilir: yerel yol
+        # BİRİNCİL (push yok, ağ yok, `gh` şart değil).
+        review = self._child_review(children)
+        report = self._receipt_body(card, children, review=review, avg=avg)
 
         # Ofisin KENDİ rapor klasörü (Desk verisi); wiki sayfası ayrıca yazılır
         # ama bellek katmanı kurulu değilse rapor hiçbir yerde kalmıyordu.
@@ -1959,6 +2377,19 @@ class OfficeHarness:
         offices = offices or DeskRegistry()
         board = board or TaskBoard(vault_path=offices.vault_path)
         resumed: List[str] = []
+        # Faz 10-D: açılışta yetim worktree'ler yeniden denenir. Kalanlar
+        # kuyrukta durur ve `office_status.orphan_worktrees` ile şeritte
+        # görünür — sessizce birikirlerse disk dolar ve dallar çakışır.
+        try:
+            from entropy.agents import worktrees as _wt
+
+            res = _wt.retry_orphans(offices.vault_path)
+            logger.info(
+                "Yetim worktree temizliği: %d temizlendi, %d kaldı.",
+                len(res.get("cleared") or []), len(res.get("remaining") or []),
+            )
+        except Exception:
+            logger.warning("Yetim worktree temizliği yapılamadı.", exc_info=True)
         try:
             # İki kök de taranır: yarım kalan zincirin üst kartı ofis kasasında.
             cards = board.list(office=ALL_CARDS)
@@ -2012,6 +2443,17 @@ class OfficeHarness:
         olarak düşerse hem gürültü hem de damıtma girdisi olurdu. `mode="plan"`
         kullanılmaz: agy'de plan modu 200+ adımlık keşif döngüsü açıyor ve tek
         bir planlama çağrısı ~900k token'a çıkıyordu.
+
+        ARAÇ SÖZLEŞMESİ (Faz 10 düzeltmesi): kip `accept-edits` olduğu için
+        Claude köprüsü eskiden bu yola `Edit/Write/Bash` veriyordu ve canlı
+        koşuda orkestratör 3 `Bash` çağrısı yaptı — "orkestratör kod yazmaz"
+        kuralı yalnızca istem metnindeydi. Artık ajanın `tools_policy`'sinden
+        türeyen AÇIK araç listesi köprüye geçirilir (`claude_tools_list`;
+        orkestratörde politika ne yazarsa yazsın salt-okunur). İzin kipi
+        değişmez: yazma aracı listede olmadığı için izin istemi doğmaz.
+        agy CLI'ında araç kısıtlama bayrağı YOK (`agy --help`: yalnızca
+        `--sandbox`), orada yaptırım derlenmiş ajan kuralları +
+        `orchestrator_produced_code` çıktı denetimiyle sürer.
         """
         spec = self.registry.get(agent_name) if agent_name else None
         provider = self.agent_provider(spec, office)
@@ -2080,7 +2522,18 @@ class OfficeHarness:
                 kwargs["model"] = run_model
             payload = agent_spec_payload(spec)
             if payload:
+                # Künyede `tools_policy` var; orkestratörde yürürlükteki
+                # politika salt-okunurdur (kart dosyasında ne yazarsa yazsın),
+                # sistem istemi de aynı sözleşmeyi görsün diye düzeltilir.
+                if is_orchestrator(spec):
+                    payload["tools_policy"] = "read-only"
                 kwargs["agent_spec"] = payload
+            try:
+                allowed = claude_tools_list(spec)
+            except Exception:
+                allowed = []
+            if allowed:
+                kwargs["tools"] = allowed
 
         # Akış künyesi: orkestratör/değerlendirici çağrıları da sahnede kime
         # ait olduğu belli olsun diye etiketlenir (kart yolu zaten geçiriyordu).
@@ -2090,7 +2543,7 @@ class OfficeHarness:
             "card_id": str(task_id or "").replace("card-", "", 1),
         }
         for optional in ("needs_write", "project_path", "conversation_id",
-                         "model", "agent_spec", "stream_meta"):
+                         "model", "agent_spec", "stream_meta", "tools"):
             if not _accepts_kwarg(bridge.send_background_task_async, optional):
                 kwargs.pop(optional, None)
         try:
@@ -2099,3 +2552,29 @@ class OfficeHarness:
             logger.exception("Ofis çağrısı başlatılamadı: %s", agent_name)
             return False
         return True
+
+def release_followup_for(card_id: str) -> bool:
+    """
+    Kart kimligi hangi CANLI harness a aitse takip turu kaydini birakir.
+
+    Faz 10-C: terminal bolmesindeki "Kapat" yalnizca kopruyu kapatiyordu;
+    yarim kalan bir takip turunun proje yazma kilidi harness uzerinde asili
+    kaliyor ve ofis bir daha yazamiyordu. Bolme harness nesnesini bilmez,
+    bu yuzden arama modul duzeyinde yapilir. Idempotenttir.
+    """
+    cid = str(card_id or "").replace("card-", "", 1).strip()
+    if not cid:
+        return False
+    with OfficeHarness._active_lock:
+        harnesses = list(OfficeHarness._active.values())
+    hit = False
+    for harness in harnesses:
+        try:
+            if cid in getattr(harness, "_followup_active", ()) or (
+                cid in getattr(harness, "_followup_locks", {})
+            ):
+                hit = True
+            harness.release_followup(cid)
+        except Exception:
+            logger.debug("Takip turu birakilamadi: %s", cid, exc_info=True)
+    return hit

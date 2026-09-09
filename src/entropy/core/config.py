@@ -331,6 +331,15 @@ class EntropyConfig(BaseModel):
     # açık; kapatma imkânı var çünkü sürdürme model çağrısı demektir ve kotasını
     # kontrol etmek isteyen kullanıcı uygulamayı sessiz açabilmeli.
     desk_auto_resume: bool = True
+    # Etkileşimli kart kipi (Faz 10-C): kartın CLI süreci ilk sonuçtan sonra da
+    # canlı kalır ve sahnedeki bölmeden yazılan mesaj aynı sürece düşer (gerçek
+    # terminal girdisi). Kapatıldığında Faz 10-B davranışına dönülür: süreç ilk
+    # `result` ile biter, takip mesajı gönderilemez.
+    desk_interactive_cards: bool = True
+    # Boşta bekleyen etkileşimli sürecin ömrü (saniye). Süre dolunca stdin
+    # kapatılır ve süreç sonlandırılır; kullanıcı bölmeyi açık unutsa bile CLI
+    # süreci ve oturum belleği sonsuza dek yaşamaz.
+    desk_interactive_idle_timeout_s: int = 600
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
@@ -464,6 +473,8 @@ class EntropyConfig(BaseModel):
                 "allow_claude_api": self.allow_claude_api,
                 "desk_geometry": self.desk_geometry,
                 "desk_auto_resume": self.desk_auto_resume,
+                "desk_interactive_cards": self.desk_interactive_cards,
+                "desk_interactive_idle_timeout_s": self.desk_interactive_idle_timeout_s,
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
                 "claude_workspace_dir": self.claude_workspace_dir,
@@ -518,6 +529,11 @@ class EntropyConfig(BaseModel):
                     self.desk_geometry = data["desk_geometry"]
                 if isinstance(data.get("desk_auto_resume"), bool):
                     self.desk_auto_resume = data["desk_auto_resume"]
+                if isinstance(data.get("desk_interactive_cards"), bool):
+                    self.desk_interactive_cards = data["desk_interactive_cards"]
+                idle_s = data.get("desk_interactive_idle_timeout_s")
+                if isinstance(idle_s, int) and not isinstance(idle_s, bool) and idle_s > 0:
+                    self.desk_interactive_idle_timeout_s = idle_s
                 if isinstance(data.get("claude_config_dir"), str):
                     self.claude_config_dir = data["claude_config_dir"]
                 if isinstance(data.get("claude_isolated"), bool):

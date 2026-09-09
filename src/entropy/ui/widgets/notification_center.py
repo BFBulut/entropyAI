@@ -46,6 +46,9 @@ EVENT_META = {
     "agents": ("🤖", "Ajanlar", "agent"),
     "provider": ("🔑", "Sağlayıcı", "provider"),
     "graph": ("🌐", "Bellek", "graph"),
+    # Faz 10-D: sessiz bellek istisnaları artık görünür. Tıklama Bellek
+    # denetçisine ("memory" hedefi) götürür.
+    "memory": ("⚠️", "Bellek uyarısı", "memory"),
 }
 
 
@@ -150,6 +153,9 @@ class NotificationCenter(QFrame):
         mailbox_signal = getattr(bus, "mailbox_updated", None)
         if mailbox_signal is not None:
             pairs.append((mailbox_signal, self._on_mailbox_updated))
+        memory_signal = getattr(bus, "memory_error", None)
+        if memory_signal is not None:
+            pairs.append((memory_signal, self._on_memory_error))
         provider_signal = getattr(bus, "provider_status_updated", None)
         if provider_signal is not None:
             pairs.append((provider_signal, self._on_provider_status))
@@ -189,6 +195,20 @@ class NotificationCenter(QFrame):
     @Slot(str, str)
     def _on_mailbox_updated(self, owner_kind: str, owner_name: str) -> None:
         self.add("mailbox", f"{owner_kind}/{owner_name} kutusu güncellendi", str(owner_name))
+
+    @Slot(dict)
+    def _on_memory_error(self, payload: dict) -> None:
+        """
+        `bus.memory_error` → "Bellek uyarısı" girdisi.
+
+        Yük {where, message, ts}. Sinyal bellek katmanının İŞÇİ iş
+        parçacığından gelebilir; alıcı QObject slotudur (lambda değil), Qt
+        bağlantıyı kuyruklar.
+        """
+        data = payload if isinstance(payload, dict) else {}
+        where = str(data.get("where") or "bellek")
+        message = str(data.get("message") or "bilinmeyen hata")
+        self.add("memory", f"{where}: {message}", where)
 
     @Slot(str, dict)
     def _on_provider_status(self, provider: str, status: dict) -> None:

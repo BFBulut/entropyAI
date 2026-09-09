@@ -192,6 +192,14 @@ class TaskCard:
     # aynı tek kaynağı okur.
     checkpoint: str = ""
     proof: str = ""
+    # Faz 10-C. `worktree`: bu kartın izole çalışma ağacının MUTLAK yolu
+    # (boş = ofisin ortak `_workdir()`'i; eski kartlar böyle kalır).
+    # `branch`: o ağacın dalı (`desk/<kart-id>`). `pr_url`: taslak PR bağlantısı
+    # ("" = PR açılmadı). Üçü de kart ön bilgisinde durur; UI ve harness aynı
+    # tek kaynağı okur, ikinci bir defter açılmaz.
+    worktree: str = ""
+    branch: str = ""
+    pr_url: str = ""
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -216,6 +224,9 @@ class TaskCard:
             "budget_tokens": int(self.budget_tokens or 0),
             "intent": self.intent,
             "checkpoint": self.checkpoint,
+            "worktree": self.worktree,
+            "branch": self.branch,
+            "pr_url": self.pr_url,
             # Kanıt ön bilgide tek satıra sıkıştırılır: YAML çok satırlı değer
             # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
             # sonucu ikiye bölerdi.
@@ -346,6 +357,57 @@ def _accepts_kwarg(func, name: str) -> bool:
     if name in params:
         return True
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def interactive_cards_enabled() -> bool:
+    """`config.desk_interactive_cards` bayrağı (içe aktarım tembel: döngü yok)."""
+    try:
+        from entropy.core.config import config
+
+        return bool(getattr(config, "desk_interactive_cards", True))
+    except Exception:
+        return False
+
+
+def is_desk_card(card: "TaskCard") -> bool:
+    """
+    Kart bir Desk OFİS kartı mı? (Entropy'nin kendi kartlarında `office` boştur.)
+
+    Etkileşimli kip yalnızca ofis kartlarında açılır: Entropy'nin kendi arka
+    plan görevleri (damıtma, konsolidasyon) bittiğinde süreç ölmeli, canlı
+    kalan bir terminal orada yalnızca kota ve kilit tutardı.
+    """
+    return bool(str(getattr(card, "office", "") or "").strip())
+
+
+def followup_lock_hooks(project_path: Optional[str], needs_write: bool):
+    """
+    Varsayılan takip turu kancaları: yazma niyetli kartta proje yazma kilidi.
+
+    Köprü ilk finalize'da kilitleri bırakır (bekleyen terminal koşan kart
+    değildir); takip turu YENİDEN kilit ister. Ofis harness'ı kendi
+    kancalarını geçer (sayaç da tutar), bu ikili yalnızca harness'sız
+    (doğrudan `TaskBoard.run`) yol içindir.
+    """
+    if not needs_write or not project_path:
+        return None, None
+    from entropy.core.project_lock import project_lock_manager
+
+    target = str(project_path)
+
+    def _start(_task_id: str) -> bool:
+        try:
+            return bool(project_lock_manager.acquire_write(target, timeout=5.0))
+        except Exception:
+            return False
+
+    def _end(_task_id: str) -> None:
+        try:
+            project_lock_manager.release_write(target)
+        except Exception:
+            pass
+
+    return _start, _end
 
 
 def resolve_card_model(card: "TaskCard", agent_spec=None, provider: str = "") -> str:
@@ -584,6 +646,9 @@ class TaskBoard:
             intent=str(front.get("intent") or "").strip().lower(),
             checkpoint=str(front.get("checkpoint") or ""),
             proof=str(front.get("proof") or ""),
+            worktree=str(front.get("worktree") or ""),
+            branch=str(front.get("branch") or ""),
+            pr_url=str(front.get("pr_url") or ""),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -625,9 +690,22 @@ class TaskBoard:
         return replace(card, path=path)
 
     def delete(self, task_id: str) -> bool:
-        path = self.card_file(task_id)
+        card = self.get(task_id)
+        path = self.card_file(task_id) if card is None else (card.path or self.card_file(task_id))
         if not path.is_file():
             return False
+        # Faz 10-C: kart gidiyorsa izole çalışma ağacı da gider. Silme
+        # BAŞARISIZ olabilir (Windows dosya kilidi, ölçüm: rc=255); o durumda
+        # kayıt ertelenmiş temizlik kuyruğuna düşer ve kart yine silinir.
+        if card is not None and (card.worktree or ""):
+            try:
+                from entropy.agents import worktrees as _wt
+
+                _wt.release_worktree(card, force=True, vault_path=self.vault_path)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Kart worktree'si kaldırılamadı: %s", task_id, exc_info=True
+                )
         try:
             path.unlink()
         except OSError:
@@ -912,6 +990,19 @@ class TaskBoard:
         parts.append(CHECKPOINT_DISCIPLINE)
         parts.append(proof_discipline(card_needs_write(card, agent_spec=agent_spec)))
         parts.append(RULE_DISCIPLINE)
+        # Faz 10-C: worktree'li kartta ajan HANGİ dizinde olduğunu bilmeli.
+        # Ölçüm: izole kipte `Bash` aracı git deposunun dışında koşuyordu ve
+        # `git status` "not a git repository" diyordu; artık cwd worktree ama
+        # ajanın da başka bir depoya yazmaya kalkmaması için beyan gerekiyor.
+        if (card.worktree or "").strip():
+            parts.append(
+                "[ÇALIŞMA DİZİNİ]\n"
+                f"Bu görevin TEK çalışma dizinin: {card.worktree}\n"
+                f"Burası bir git worktree'sidir; dalı `{card.branch or 'desk/' + card.id}`. "
+                "Git komutlarını bu dizinde çalıştır.\n"
+                "Bütün okuma/yazma bu dizinin İÇİNDE olacak; başka bir depo "
+                "yoluna yazma, dal değiştirme (`git checkout`/`git switch` yok)."
+            )
         files_block = self.project_file_section(project_path)
         if files_block:
             parts.append(files_block)
@@ -927,6 +1018,9 @@ class TaskBoard:
         agent_registry=None,
         project_path: Optional[str] = None,
         lead_sections: Optional[List[str]] = None,
+        interactive: Optional[bool] = None,
+        on_followup_start: Optional[Callable[[str], object]] = None,
+        on_followup_end: Optional[Callable[[str], object]] = None,
     ) -> Optional[str]:
         """
         Kartı arka planda çalıştırır; ledger görev kimliğini döndürür.
@@ -939,6 +1033,11 @@ class TaskBoard:
         işçi iş parçacığında). Ofis harness'ı sıradaki alt kartı buradan
         başlatır; Qt sinyaline bağlanmak zorunda kalsaydı harness bir olay
         döngüsü olmadan (arka plan görevi, test) çalışamazdı.
+
+        `interactive` (Faz 10-D): None ise karttan türetilir — Desk OFİS
+        kartında ve `config.desk_interactive_cards` açıkken True, Entropy'nin
+        kendi kartlarında her zaman False. Kanca verilmezse yazma niyetli kart
+        için varsayılan proje kilidi kancaları takılır (`followup_lock_hooks`).
         """
         card = self.get(card_id)
         if card is None:
@@ -1027,12 +1126,28 @@ class TaskBoard:
         # Ofis kartı kendi çalışma dizininde koşar; derlenmiş ajan tanımı orada.
         if project_path:
             kwargs["project_path"] = str(project_path)
+
+        # Faz 10-D: etkileşimli kip YALNIZCA Desk ofis kartında açılır.
+        want_interactive = (
+            is_desk_card(card) if interactive is None else bool(interactive)
+        ) and interactive_cards_enabled()
+        if want_interactive:
+            if on_followup_start is None and on_followup_end is None:
+                on_followup_start, on_followup_end = followup_lock_hooks(
+                    kwargs.get("project_path"), needs_write
+                )
+            kwargs["interactive"] = True
+            if on_followup_start is not None:
+                kwargs["on_followup_start"] = on_followup_start
+            if on_followup_end is not None:
+                kwargs["on_followup_end"] = on_followup_end
         # `needs_write` bilmeyen dar köprü sözleşmeleri (ve sahte köprüler) için
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
         for optional in ("needs_write", "project_path", "max_steps", "model",
-                         "agent_spec", "stream_meta"):
+                         "agent_spec", "stream_meta", "interactive",
+                         "on_followup_start", "on_followup_end"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):
@@ -1166,3 +1281,92 @@ class TaskBoard:
             )
         except Exception:
             return
+
+
+# ---------------------------------------------------------------------------
+# Takip turu kaydı (Faz 10-D)
+# ---------------------------------------------------------------------------
+
+FOLLOWUP_NOTE_PREFIX = "Takip turu"
+
+
+def followup_note_line(payload: Dict[str, object]) -> str:
+    """`bus.task_followup_completed` yükünden tek satırlık makbuz notu."""
+    turn = int(payload.get("turn") or 0)
+    text = " ".join(str(payload.get("text") or "").split())[:200]
+    usage = payload.get("usage") or {}
+    tokens = 0
+    if isinstance(usage, dict):
+        tokens = int(usage.get("total_tokens") or 0)
+    ok = "tamam" if payload.get("success") else "yanıtsız"
+    return (
+        f"{FOLLOWUP_NOTE_PREFIX} {turn} · {ok} · {tokens} token · "
+        f"{text or '(metin yok)'}"
+    )
+
+
+def followup_notes(card: "TaskCard") -> List[str]:
+    """Kartın notlarındaki takip turu satırları (makbuz bu listeyi basar)."""
+    return [
+        line.strip()
+        for line in (getattr(card, "notes", "") or "").splitlines()
+        if line.strip().startswith(FOLLOWUP_NOTE_PREFIX)
+    ]
+
+
+def record_followup(
+    payload: Dict[str, object],
+    board: Optional["TaskBoard"] = None,
+    vault_path: Optional[Path | str] = None,
+) -> bool:
+    """
+    Takip turu özetini kartın `## Notlar` bölümüne ekler.
+
+    Ledger token toplamı KÖPRÜDE güncelleniyor; burada yalnızca insanın
+    okuyacağı iz yazılır (makbuzun `## İlerleme` bölümü bu satırları basar).
+    """
+    if not isinstance(payload, dict):
+        return False
+    card_id = str(payload.get("card_id") or "").strip()
+    if not card_id:
+        task_id = str(payload.get("task_id") or "")
+        card_id = task_id[5:] if task_id.startswith("card-") else ""
+    if not card_id:
+        return False
+    board = board or TaskBoard(vault_path=vault_path)
+    card = board.get(card_id)
+    if card is None:
+        return False
+    line = followup_note_line(payload)
+    if line in (card.notes or ""):
+        return False
+    notes = ((card.notes + "\n") if card.notes else "") + line
+    board.update(replace(card, notes=notes))
+    return True
+
+
+_followup_recorder_installed = False
+
+
+def connect_followup_recorder(vault_path: Optional[Path | str] = None) -> bool:
+    """
+    `bus.task_followup_completed` → kart notu köprüsünü BİR KEZ bağlar.
+
+    İki kez bağlanırsa aynı tur iki kez yazılırdı; bayrak modül düzeyinde.
+    """
+    global _followup_recorder_installed
+    if _followup_recorder_installed:
+        return False
+    from entropy.core.event_bus import bus
+
+    def _handler(payload, _vault=vault_path):
+        try:
+            record_followup(payload, vault_path=_vault)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Takip turu notu yazılamadı", exc_info=True
+            )
+
+    bus.task_followup_completed.connect(_handler)
+    _followup_recorder_installed = True
+    return True

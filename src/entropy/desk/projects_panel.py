@@ -12,13 +12,15 @@ yoksa panel boş ama çalışır durumda kalır (Desk penceresi çökmesin).
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTextBrowser,
-    QVBoxLayout,
+    QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
+    QPushButton, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from entropy.core.event_bus import bus
@@ -36,22 +38,135 @@ def load_desk_registry() -> Optional[Any]:
         return None
 
 
-class ProjectEditDialog(QDialog):
-    """Yeni proje formu: ad, hedef, kapsam metni."""
+DEFAULT_WORKTREE_DIRNAME = ".entropy-worktrees"
 
-    def __init__(self, parent=None, office: str = ""):
+
+def git_branches(repo_path: str) -> List[str]:
+    """
+    Depodaki yerel dallar (`git branch --list`). Git yoksa, yol depo değilse ya
+    da komut zaman aşımına uğrarsa boş liste döner; form o zaman SERBEST METİN
+    kutusuna düşer (kullanıcı dal adını elle yazabilsin).
+    """
+    path = Path(str(repo_path or ""))
+    if not path.is_dir():
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "branch", "--list", "--format=%(refname:short)"],
+            cwd=str(path), capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+
+
+def is_git_repo(repo_path: str) -> bool:
+    """Yol bir git deposu mu (`.git` klasörü ya da dosyası)."""
+    path = Path(str(repo_path or ""))
+    return path.is_dir() and (path / ".git").exists()
+
+
+def default_worktree_root(repo_path: str) -> str:
+    """`<repo>/../.entropy-worktrees` — depo dışında, kardeş klasörde."""
+    path = Path(str(repo_path or "").strip())
+    if not str(path) or str(path) == ".":
+        return ""
+    return str((path.parent / DEFAULT_WORKTREE_DIRNAME).resolve()) if path.name else ""
+
+
+def validate_project_form(data: Dict[str, str]) -> str:
+    """
+    Form doğrulaması → hata metni ("" = geçerli).
+
+    Ad kontrolü buradadır (sözleşme yalnızca depoyu doğrular). Depo için
+    GERÇEK sözleşme `desk_registry.validate_project_repo(repo_path,
+    base_branch)`; mesajı olduğu gibi kırmızı ipuca basılır (uzun yol,
+    alt klasör, eksik dal gibi durumları yalnızca o bilir). Sözleşme yoksa
+    aşağıdaki yerel kurallara düşülür.
+    """
+    if not str(data.get("name", "")).strip():
+        return "Proje adı zorunludur."
+    repo = str(data.get("repo_path", "")).strip()
+    branch_value = str(data.get("base_branch", "")).strip()
+    try:
+        from entropy.agents.desk_registry import validate_project_repo  # type: ignore
+
+        if callable(validate_project_repo):
+            message = str(validate_project_repo(repo, branch_value) or "")
+            if message:
+                return message
+            if not repo and branch_value:
+                return "Dal verildi ama depo yolu boş."
+            return ""
+    except Exception:
+        pass
+    if repo:
+        if not Path(repo).is_dir():
+            return "Depo yolu bulunamadı."
+        if not is_git_repo(repo):
+            return "Bu klasör bir git deposu değil (.git yok)."
+        branch = str(data.get("base_branch", "")).strip()
+        branches = git_branches(repo)
+        if branch and branches and branch not in branches:
+            return f"“{branch}” dalı depoda yok."
+    elif str(data.get("base_branch", "")).strip():
+        return "Dal verildi ama depo yolu boş."
+    return ""
+
+
+class ProjectEditDialog(QDialog):
+    """Proje formu: ad, hedef, kapsam + depo yolu / taban dal / worktree kökü."""
+
+    def __init__(self, parent=None, office: str = "", project: Any = None):
         super().__init__(parent)
         self.setWindowTitle(f"Yeni Proje — {office}" if office else "Yeni Proje")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(460)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("kisa-proje-adi")
+        self.name_input.textChanged.connect(self._revalidate)
         form.addRow("Ad:", self.name_input)
         self.goal_input = QLineEdit()
         self.goal_input.setPlaceholderText("Bu proje neyi başarmalı?")
         form.addRow("Hedef:", self.goal_input)
+
+        # --- Faz 10-C: proje = depo -----------------------------------
+        repo_row = QHBoxLayout()
+        repo_row.setSpacing(4)
+        self.repo_input = QLineEdit()
+        self.repo_input.setPlaceholderText("depo klasörü (git)")
+        self.repo_input.textChanged.connect(self._on_repo_changed)
+        repo_row.addWidget(self.repo_input, 1)
+        self.repo_browse_btn = QPushButton("…")
+        self.repo_browse_btn.setFixedWidth(30)
+        self.repo_browse_btn.setToolTip("Klasör seç")
+        self.repo_browse_btn.clicked.connect(self.browse_repo)
+        repo_row.addWidget(self.repo_browse_btn)
+        repo_host = QWidget()
+        repo_host.setLayout(repo_row)
+        form.addRow("Depo yolu:", repo_host)
+
+        self.branch_combo = QComboBox()
+        self.branch_combo.setEditable(True)   # git yoksa serbest metin
+        self.branch_combo.setToolTip(
+            "Taban dal; depodan okunur, git yoksa elle yazılabilir."
+        )
+        self.branch_combo.currentTextChanged.connect(self._revalidate)
+        form.addRow("Taban dal:", self.branch_combo)
+
+        self.worktree_input = QLineEdit()
+        self.worktree_input.setPlaceholderText(f"<depo>/../{DEFAULT_WORKTREE_DIRNAME}")
+        form.addRow("Worktree kökü:", self.worktree_input)
         layout.addLayout(form)
+
+        self.hint_label = QLabel("")
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setStyleSheet("color:#F85149; font-size:11px;")
+        self.hint_label.setVisible(False)
+        layout.addWidget(self.hint_label)
         layout.addWidget(QLabel("Kapsam / notlar:"))
         self.charter_input = QPlainTextEdit()
         self.charter_input.setMinimumHeight(90)
@@ -67,17 +182,80 @@ class ProjectEditDialog(QDialog):
         buttons.addWidget(self.save_btn)
         layout.addLayout(buttons)
 
+        if project is not None:
+            self._prefill(project)
+        self._revalidate()
+
+    def _prefill(self, project: Any) -> None:
+        self.name_input.setText(str(spec_field(project, "name", "")))
+        self.goal_input.setText(str(spec_field(project, "goal", "")))
+        self.charter_input.setPlainText(str(spec_field(project, "charter", "")))
+        self.repo_input.setText(str(spec_field(project, "repo_path", "") or ""))
+        base = str(spec_field(project, "base_branch", "") or "")
+        if base:
+            if self.branch_combo.findText(base) < 0:
+                self.branch_combo.addItem(base)
+            self.branch_combo.setCurrentText(base)
+        self.worktree_input.setText(str(spec_field(project, "worktree_root", "") or ""))
+
+    # ------------------------------------------------------------ depo
+
+    @Slot()
+    def browse_repo(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "Depo klasörü seç", self.repo_input.text())
+        if chosen:
+            self.repo_input.setText(chosen)
+
+    @Slot(str)
+    def _on_repo_changed(self, text: str) -> None:
+        """Depo değişince dal listesi ve worktree kökü varsayılanı tazelenir."""
+        repo = str(text or "").strip()
+        current = self.branch_combo.currentText().strip()
+        branches = git_branches(repo)
+        self.branch_combo.blockSignals(True)
+        self.branch_combo.clear()
+        if branches:
+            self.branch_combo.addItems(branches)
+            preferred = current if current in branches else (
+                "main" if "main" in branches else
+                ("master" if "master" in branches else branches[0])
+            )
+            self.branch_combo.setCurrentText(preferred)
+        else:
+            self.branch_combo.setCurrentText(current)
+        self.branch_combo.blockSignals(False)
+        if repo and not self.worktree_input.text().strip():
+            self.worktree_input.setPlaceholderText(default_worktree_root(repo))
+        self._revalidate()
+
+    def validation_error(self) -> str:
+        return validate_project_form(self.get_data())
+
+    @Slot()
+    def _revalidate(self) -> None:
+        """Kırmızı ipucu + Kaydet düğmesinin etkinliği tek yerden yönetilir."""
+        error = self.validation_error()
+        self.hint_label.setText(error)
+        self.hint_label.setVisible(bool(error))
+        self.save_btn.setEnabled(not error)
+
     def _on_save(self) -> None:
-        if not self.name_input.text().strip():
-            QMessageBox.warning(self, "Eksik Bilgi", "Proje adı zorunludur.")
+        error = self.validation_error()
+        if error:
+            QMessageBox.warning(self, "Eksik Bilgi", error)
             return
         self.accept()
 
     def get_data(self) -> Dict[str, str]:
+        repo = self.repo_input.text().strip()
+        worktree_root = self.worktree_input.text().strip() or default_worktree_root(repo)
         return {
             "name": self.name_input.text().strip(),
             "goal": self.goal_input.text().strip(),
             "charter": self.charter_input.toPlainText().strip(),
+            "repo_path": repo,
+            "base_branch": self.branch_combo.currentText().strip(),
+            "worktree_root": worktree_root if repo else "",
         }
 
 
@@ -301,13 +479,28 @@ class ProjectsPanel(QFrame):
         """Diyalogsuz ekleme yolu (test edilebilir)."""
         if self.desk is None or not self.office or not data.get("name"):
             return False
+        error = validate_project_form(dict(data))
+        if error:
+            bus.terminal_output_received.emit(f"[Projeler] Geçersiz form: {error}\n")
+            return False
         try:
             from entropy.agents.desk_registry import DeskProject  # type: ignore
 
-            project = DeskProject(
-                name=data["name"], office=self.office,
-                goal=data.get("goal", ""), charter=data.get("charter", ""),
-            )
+            fields = {
+                "name": data["name"], "office": self.office,
+                "goal": data.get("goal", ""), "charter": data.get("charter", ""),
+            }
+            # Faz 10-C alanları sözleşmede varsa geçilir; ajan katmanı henüz
+            # eklemediyse proje eski alanlarla yaratılır (form çökmesin).
+            for key in ("repo_path", "base_branch", "worktree_root"):
+                if data.get(key):
+                    fields[key] = data[key]
+            try:
+                project = DeskProject(**fields)
+            except TypeError:
+                for key in ("repo_path", "base_branch", "worktree_root"):
+                    fields.pop(key, None)
+                project = DeskProject(**fields)
             self.desk.create_project(self.office, project)
         except Exception as exc:
             bus.terminal_output_received.emit(f"[Projeler] Proje eklenemedi: {exc}\n")

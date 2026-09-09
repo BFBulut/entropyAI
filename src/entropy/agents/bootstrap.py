@@ -105,6 +105,15 @@ def bootstrap_agents(
                 result.offices_ready.append(office.name)
             except Exception:
                 logger.warning("Ofis hazırlanamadı: %s", office.name)
+        # Faz 10-D: takip turu özetlerini kart notlarına yazan dinleyici.
+        # Bir kez bağlanır; bağlanmazsa etkileşimli turlar hiçbir yerde iz
+        # bırakmazdı (ledger toplamı köprüde, insan okuyacak özet burada).
+        try:
+            from entropy.agents.tasks import connect_followup_recorder
+
+            connect_followup_recorder(vault_path=vault_path)
+        except Exception:
+            logger.warning("Takip turu dinleyicisi bağlanamadı.", exc_info=True)
         result.roots = compile_roots(project_dir)
         result.compiled = registry.compile_all(project_dir)
         logger.info(

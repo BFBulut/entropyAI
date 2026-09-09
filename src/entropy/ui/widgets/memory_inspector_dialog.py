@@ -40,6 +40,77 @@ def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
     return meta, body
 
 
+# Denetçide gösterilecek en fazla hata satırı: liste 200'e kadar büyüyebilir,
+# diyalog kaydırma alanını şişirmesin.
+MAX_SHOWN_ERRORS = 10
+
+
+def format_memory_errors(errors: Any, limit: int = MAX_SHOWN_ERRORS) -> str:
+    """
+    `mem.last_errors` girdilerini okunur satırlara çevirir (Qt'siz).
+
+    Girdi sözleşmesi {where, message, ts}; eksik alanlar sessizce atlanır.
+    Liste boşsa boş metin döner — çağıran bölümü hiç göstermez ("hata yok"
+    satırı da yanıltıcı olurdu, hata kaydı tutulmuyor olabilir).
+    """
+    rows: List[str] = []
+    for item in list(errors or [])[-int(limit):][::-1]:
+        if not isinstance(item, dict):
+            rows.append(str(item))
+            continue
+        where = str(item.get("where") or "bellek")
+        message = str(item.get("message") or "")
+        stamp = ""
+        try:
+            ts = float(item.get("ts") or 0.0)
+            if ts:
+                import time as _time
+
+                stamp = _time.strftime("%H:%M:%S", _time.localtime(ts)) + "  "
+        except (TypeError, ValueError):
+            stamp = ""
+        rows.append(f"{stamp}{where}: {message}".strip())
+    return "\n".join(rows)
+
+
+class MemoryErrorsSection(QFrame):
+    """
+    Bellek denetçisinin "Son hatalar" bölümü.
+
+    Veri `CognitiveMemorySystem.last_errors` listesinden BİREBİR okunur;
+    burada yeniden sınıflandırılmaz. Bellek nesnesi verilmezse ya da liste
+    boşsa bölüm gizlenir.
+    """
+
+    TITLE = "⚠️ Son hatalar"
+
+    def __init__(self, mem: Any = None, parent=None, limit: int = MAX_SHOWN_ERRORS):
+        super().__init__(parent)
+        self.limit = int(limit)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(4)
+        self.title_label = QLabel(f"<b style='color:#FF9F4D;'>{self.TITLE}</b>")
+        layout.addWidget(self.title_label)
+        self.body = QTextBrowser()
+        self.body.setMaximumHeight(120)
+        self.body.setStyleSheet(
+            "background-color:#0E1420; color:#F0F6FC; border:1px solid #3A2A18;"
+            " border-radius:4px; font-size:11px;"
+        )
+        layout.addWidget(self.body)
+        self.set_memory(mem)
+
+    def set_memory(self, mem: Any) -> str:
+        text = format_memory_errors(getattr(mem, "last_errors", None), self.limit)
+        self.body.setPlainText(text)
+        self.setVisible(bool(text))
+        return text
+
+    def text(self) -> str:
+        return self.body.toPlainText()
+
+
 class MemoryInspectorDialog(QDialog):
     """Rich interactive modal showing node content, cognitive metrics, and related memories."""
 
@@ -80,6 +151,19 @@ class MemoryInspectorDialog(QDialog):
         self.layout.setSpacing(10)
 
         self._render_node_details()
+
+    def _append_errors_section(self) -> None:
+        """Faz 10-D: bellek katmanının sessiz hataları denetçide görünür."""
+        try:
+            section = MemoryErrorsSection(self.cog, parent=self)
+        except Exception:
+            return
+        self.errors_section = section
+        if section.text():
+            self.layout.addWidget(section)
+        else:
+            section.setParent(None)
+            section.deleteLater()
 
     def _render_node_details(self):
         # Clear previous layout if any
@@ -158,6 +242,7 @@ class MemoryInspectorDialog(QDialog):
             self._render_report_node(report_file)
         else:
             self._render_generic_node()
+        self._append_errors_section()
 
     def _render_cognitive_node(self, node: CognitiveMemoryNode):
         # Header

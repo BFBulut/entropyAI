@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DESK_ROOT_SUBDIR",
     "DESK_SUBDIR",
+    "DESK_TEMPLATES_SUBDIR",
+    "WORKTREE_ROOT_DIRNAME",
     "MIGRATION_LOG_SUBPATH",
     "LEGACY_DESK_ROOT_SUBDIRS",
     "LEGACY_DESK_SUBDIRS",
@@ -48,6 +50,8 @@ __all__ = [
     "vault_root",
     "desk_root",
     "desk_offices_dir",
+    "desk_templates_dir",
+    "worktree_root_for",
     "migrations_log_path",
     "legacy_desk_roots",
     "legacy_desk_offices_dirs",
@@ -60,6 +64,12 @@ __all__ = [
 DESK_ROOT_SUBDIR = "Desk"
 DESK_SUBDIR = "Desk/Offices"
 MIGRATION_LOG_SUBPATH = "Desk/_migrations.log"
+# Ekip şablonları (Faz 10-C). Ofis DEĞİL: şablon yalnızca kullanıcı bir ofis
+# açarken uygulanır; tohum ofis yasağı ihlal edilmez.
+DESK_TEMPLATES_SUBDIR = "Desk/Templates"
+
+# Kart başına git worktree kökünün klasör adı; depoya KOMŞU açılır.
+WORKTREE_ROOT_DIRNAME = ".entropy-worktrees"
 
 # Eski kökler. Sıra önemlidir: geçiş bunları bu sırayla tüketir.
 LEGACY_DESK_ROOT_SUBDIRS = ("Entropy/Desk",)
@@ -97,6 +107,25 @@ def desk_offices_dir(vault_path: Optional[Path | str] = None) -> Path:
 def migrations_log_path(vault_path: Optional[Path | str] = None) -> Path:
     """`<kasa>/Desk/_migrations.log`."""
     return vault_root(vault_path) / MIGRATION_LOG_SUBPATH
+
+
+def desk_templates_dir(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Desk/Templates` — ekip şablonlarının kasadaki kökü (Faz 10-C)."""
+    return vault_root(vault_path) / DESK_TEMPLATES_SUBDIR
+
+
+def worktree_root_for(repo_path: Path | str) -> Path:
+    """
+    Bir deponun kart worktree'lerinin kökü: `<repo>/../.entropy-worktrees`.
+
+    İki ölçüme dayanıyor (Faz 10 araştırma notu §1.3): depo İÇİNDEKİ bir kök
+    (`<repo>/.worktrees`) üst deponun `git status` çıktısını `?? .worktrees/`
+    ile kirletiyor; 358 karakterlik bir yol ise `core.longpaths` kapalıyken
+    `Filename too long` ile ölüyor. Depoya KOMŞU kök ikisini de çözer: git
+    durumu temiz kalır ve yol kısa olur.
+    """
+    repo = Path(repo_path)
+    return repo.parent / WORKTREE_ROOT_DIRNAME
 
 
 def legacy_desk_roots(vault_path: Optional[Path | str] = None) -> List[Path]:

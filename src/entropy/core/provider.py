@@ -18,8 +18,10 @@ ile gelir; iki köprü de onu miras alır, böylece bağlam baskısı mantığı
 from __future__ import annotations
 
 import re
+import threading
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 # Desteklenen sağlayıcılar. "claude_api" kasıtlı olarak burada yok: API anahtarı
 # tespit edilse bile ücretli olduğu için kullanıcı açıkça açmadan seçilemez
@@ -311,6 +313,208 @@ def emit_agent_stream(kind: str, text: str = "", **kwargs) -> Optional[Dict[str,
     except Exception:
         pass
     return payload
+
+
+# ----------------------------------------------------------------------
+# Etkileşimli kart oturumu (Faz 10-C)
+# ----------------------------------------------------------------------
+#
+# Kartın süreci, ilk `result` olayından SONRA da canlı kalır: kullanıcı sahnede
+# sprite'a tıklayıp açtığı bölmeye yazınca aynı sürece yeni bir kullanıcı olayı
+# düşer ve ajan kaldığı yerden devam eder. Böylece bölme "kartın geçmişi" değil,
+# gerçek bir terminal girdisi olur.
+#
+# Neden ortak dosya: iki köprü de aynı davranışı vermek zorunda (sahne, kartın
+# hangi CLI ile koştuğunu bilmez). Fark yalnızca stdin'e yazılan NDJSON şeması
+# ve o şema her köprüde zaten var — buraya `payload_builder` olarak geçirilir.
+
+# Takip mesajı üst sınırı. Sınırsız bırakılırsa bölmeye yapıştırılan bir dosya
+# dökümü, argv/stdin yolunda kırpılmadan sürece gider ve turun bağlamını tek
+# başına doldurur; reddetmek, sessizce kırpmaktan dürüsttür.
+INTERACTIVE_FOLLOWUP_MAX_CHARS = 4_000
+
+# Boşta bekleyen etkileşimli sürecin ömrü. Kullanıcı bölmeyi açık unutursa
+# CLI süreci (ve oturum belleği) sonsuza dek yaşamasın diye.
+INTERACTIVE_IDLE_TIMEOUT_S = 600.0
+
+
+def followup_rejection(text: Optional[str]) -> Optional[str]:
+    """
+    Takip mesajını doğrular; sorun varsa TÜRKÇE gerekçe, yoksa None döner.
+
+    Doğrulama köprülerde iki kez yazılmasın diye burada; gerekçe metni doğrudan
+    `agent_stream` "error" balonuna basılır.
+    """
+    body = str(text or "")
+    if not body.strip():
+        return "Takip mesajı boş."
+    if len(body) > INTERACTIVE_FOLLOWUP_MAX_CHARS:
+        return (
+            f"Takip mesajı çok uzun ({len(body)} karakter); "
+            f"en fazla {INTERACTIVE_FOLLOWUP_MAX_CHARS} karakter."
+        )
+    return None
+
+
+class InteractiveSession:
+    """
+    Canlı kalan bir kart sürecinin turlar arası durumu.
+
+    İşçi iş parçacığı `wait_for_followup()` ile bloke olur; kullanıcı arayüzü
+    `send()` çağırınca uyanır ve akışı okumaya devam eder. İki taraf da aynı
+    `threading.Event` üzerinden buluşur, yoklama (polling) yok — yalnızca boşta
+    zaman aşımını görebilmek için kısa dilimlerle beklenir.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        proc: Any,
+        payload_builder: Callable[[str], str],
+        *,
+        idle_timeout: float = INTERACTIVE_IDLE_TIMEOUT_S,
+        on_followup_start: Optional[Callable[[str], Any]] = None,
+        on_followup_end: Optional[Callable[[str], Any]] = None,
+    ):
+        self.task_id = task_id
+        self.proc = proc
+        self._payload_builder = payload_builder
+        self.idle_timeout = float(idle_timeout)
+        self.on_followup_start = on_followup_start
+        self.on_followup_end = on_followup_end
+        self.turn = 0
+        self.last_text: str = ""
+        self.close_reason: str = ""
+        self._nudge = threading.Event()
+        self._closed = threading.Event()
+        self._lock = threading.Lock()
+
+    # -- durum ------------------------------------------------------
+    @property
+    def closed(self) -> bool:
+        return self._closed.is_set()
+
+    def alive(self) -> bool:
+        """Süreç hâlâ koşuyor mu? (poll() None ise evet)"""
+        try:
+            return self.proc is not None and self.proc.poll() is None
+        except Exception:
+            return False
+
+    # -- kullanıcı tarafı -------------------------------------------
+    def send(self, text: str) -> bool:
+        """
+        Takip mesajını sürecin stdin'ine yazar ve işçiyi uyandırır.
+
+        `on_followup_start` kancası AÇIKÇA False dönerse mesaj gönderilmez:
+        harness o anda proje yazma kilidini alamamıştır ve tur başlatmak iki
+        ajanı aynı dosyalara salmak olurdu.
+        """
+        if self.closed or not self.alive():
+            return False
+        stdin = getattr(self.proc, "stdin", None)
+        if stdin is None or getattr(stdin, "closed", False):
+            return False
+        if self.on_followup_start is not None:
+            try:
+                if self.on_followup_start(self.task_id) is False:
+                    return False
+            except Exception:
+                pass
+        with self._lock:
+            try:
+                stdin.write(self._payload_builder(str(text)))
+                stdin.flush()
+            except Exception:
+                return False
+        self.last_text = str(text)
+        self._nudge.set()
+        return True
+
+    def close(self, reason: str = "") -> None:
+        """stdin'i kapatır ve bekleyen işçiyi salıverir (süreci çağıran öldürür)."""
+        if reason and not self.close_reason:
+            self.close_reason = reason
+        self._closed.set()
+        self._nudge.set()
+        stdin = getattr(self.proc, "stdin", None)
+        try:
+            if stdin is not None and not getattr(stdin, "closed", False):
+                stdin.close()
+        except Exception:
+            pass
+
+    # -- işçi tarafı -------------------------------------------------
+    def wait_for_followup(self, slice_s: float = 0.25) -> bool:
+        """
+        Yeni bir takip mesajı bekler.
+
+        True: yeni tur başlasın. False: oturum kapandı (kullanıcı kapattı,
+        süreç öldü ya da boşta zaman aşımı doldu).
+        """
+        deadline = time.monotonic() + self.idle_timeout
+        while True:
+            if self._closed.is_set():
+                return False
+            if self._nudge.wait(timeout=max(0.01, min(slice_s, self.idle_timeout))):
+                self._nudge.clear()
+                if self._closed.is_set():
+                    return False
+                self.turn += 1
+                return True
+            if not self.alive():
+                self.close("süreç kapandı")
+                return False
+            if time.monotonic() >= deadline:
+                self.close("boşta zaman aşımı")
+                return False
+
+    def finish_turn(self) -> None:
+        """Takip turu bitti: harness'ın yazma kilidini bırakması için kanca."""
+        if self.on_followup_end is None:
+            return
+        try:
+            self.on_followup_end(self.task_id)
+        except Exception:
+            pass
+
+
+class InteractiveSessionRegistry:
+    """task_id → InteractiveSession defteri (köprü başına bir tane)."""
+
+    def __init__(self):
+        self._sessions: Dict[str, InteractiveSession] = {}
+        self._lock = threading.Lock()
+
+    def register(self, session: InteractiveSession) -> None:
+        with self._lock:
+            self._sessions[session.task_id] = session
+
+    def get(self, task_id: str) -> Optional[InteractiveSession]:
+        with self._lock:
+            return self._sessions.get(task_id)
+
+    def pop(self, task_id: str) -> Optional[InteractiveSession]:
+        with self._lock:
+            return self._sessions.pop(task_id, None)
+
+    def active_ids(self) -> List[str]:
+        with self._lock:
+            return list(self._sessions.keys())
+
+    def close(self, task_id: str, reason: str = "") -> bool:
+        session = self.get(task_id)
+        if session is None:
+            return False
+        session.close(reason)
+        return True
+
+    def close_all(self, reason: str = "uygulama kapanıyor") -> int:
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            session.close(reason)
+        return len(sessions)
 
 
 @runtime_checkable

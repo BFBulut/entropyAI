@@ -88,6 +88,7 @@ class FakeOfficeRegistry:
     def __init__(self, offices=None):
         self._offices = list(offices or [])
         self.created, self.updated, self.deleted = [], [], []
+        self.archived = []
 
     def list(self):
         return list(self._offices)
@@ -115,6 +116,16 @@ class FakeOfficeRegistry:
                 self._offices[i] = FakeSpec(merged)
                 return self._offices[i]
         return None
+
+    def archive(self, name, dry_run=False):
+        """
+        Faz 10-C: panel arsivlemeyi artik kayit defterinin `archive()`
+        sozlesmesinden gecirir (once worktree/etkilesimli surec, sonra
+        klasor). Bu test CRUD'u olcuyor; sirayi olcen test
+        `test_ui_phase9_boards_and_models.py` icinde gercek DeskRegistry ile.
+        """
+        self.archived.append(name)
+        return {"count": 0, "worktrees": [], "interactive_closed": []}
 
     def delete(self, name):
         self.deleted.append(name)

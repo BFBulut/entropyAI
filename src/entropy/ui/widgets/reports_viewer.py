@@ -1195,6 +1195,17 @@ class ReportsViewerWidget(QFrame):
         self.meta_panel.setToolTip(str(path))
         self.meta_panel.setVisible(True)
 
+    def _with_receipt_view(self, text: str) -> str:
+        """Makbuz bölümlü özeti (varsa); ayrıştırıcı yoksa boş metin."""
+        try:
+            from entropy.desk.receipt import is_receipt, parse_receipt, receipt_html
+
+            if not is_receipt(text):
+                return ""
+            return receipt_html(parse_receipt(text)) + "<hr/>"
+        except Exception:
+            return ""
+
     def _on_item_clicked(self, item: QListWidgetItem):
         path_str = item.data(Qt.ItemDataRole.UserRole) if item else None
         if not path_str:
@@ -1212,5 +1223,9 @@ class ReportsViewerWidget(QFrame):
 
             from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
             rendered_html = render_markdown_to_html(cleaned, base_dir=p.parent)
+            # Faz 10-C: ofis raporu = makbuz. Sözleşme bölümleri varsa (Plan /
+            # Kanıt / PR …) belgenin başına Desk'tekiyle AYNI bölümlü özet
+            # eklenir (salt okuma, yorum kutusu yok); altında ham rapor durur.
+            rendered_html = self._with_receipt_view(cleaned) + rendered_html
             self.content_browser.setHtml(rendered_html)
             self.content_browser.verticalScrollBar().setValue(0)

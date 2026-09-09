@@ -207,6 +207,12 @@ class SkillDefinition:
     version: str = "1.0.0"
     tags: List[str] = None
 
+# Kullanıcının etkin/pasif yetenek durumu. Modül düzeyinde tutulur ki testler
+# (conftest) tek yerden başka bir köke yönlendirebilsin: `Path.home()` doğrudan
+# `__init__` içinde okunduğunda yalıtılmamış bir `SkillManager()` kullanıcının
+# gerçek `~/.entropy/skills_state.json` dosyasına yazıyordu.
+USER_SKILLS_STATE_FILE = Path.home() / ".entropy" / "skills_state.json"
+
 GLOBAL_SKILLS_DIR = APP_ROOT / "skills"
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     _mei_skills = Path(sys._MEIPASS) / "skills"
@@ -259,7 +265,7 @@ class SkillManager:
         if self._isolated_root is not None:
             self.state_file = self._isolated_root / ".skills_state.json"
         else:
-            self.state_file = Path.home() / ".entropy" / "skills_state.json"
+            self.state_file = Path(USER_SKILLS_STATE_FILE)
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
         except Exception:

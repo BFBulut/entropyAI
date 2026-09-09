@@ -38,8 +38,12 @@ MAX_STEPS_MARKER = "[ADIM SINIRI]"
 from entropy.core.masking import mask_tool_output
 import entropy.core.provider as provider_mod
 from entropy.core.provider import (
+    INTERACTIVE_IDLE_TIMEOUT_S,
+    InteractiveSession,
+    InteractiveSessionRegistry,
     ProviderCommonMixin,
     agent_definitions_dir as _agent_definitions_dir,
+    followup_rejection,
     list_agent_definitions as _list_agent_definitions,
 )
 
@@ -262,6 +266,12 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         self.last_skill_confidence: float = 0.0
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
+        # Etkileşimli kartlar (Faz 10-C): ilk sonuçtan sonra da canlı kalan
+        # kart süreçleri. Defter köprüye ait, sahne task_id ile erişir.
+        self._interactive_sessions = InteractiveSessionRegistry()
+        # Görev başına akış etiketi: `send_followup` kart bağlamını (ajan/ofis)
+        # sinyalde koruyabilsin diye saklanır.
+        self._interactive_stream_meta: Dict[str, dict] = {}
         # Arka plan görevi başına agy konuşma kimliği (Faz 8 / 3); ofis
         # harness'ı planlama çağrısından sonra buradan okur. `on_result`
         # sözleşmesi (metin, başarı) kimliği taşıyamıyor.
@@ -293,19 +303,23 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         self.conversation_history = config_module.load_chat_history()
 
 
-    def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
+    def _apply_stdin_prompt(self, cmd: List[str], force: bool = False) -> Optional[str]:
         """
         Uzun prompt'u argv'den çıkarıp stdin NDJSON yüküne çevirir.
 
         cmd içindeki "-p <prompt>" çiftini bulur; prompt ARGV_PROMPT_SAFE_LIMIT'i
         aşıyorsa argümanı boşaltır, "--input-format stream-json" ekler ve
         Popen'e yazılacak satırı döndürür. Aşmıyorsa cmd'ye dokunmaz, None döner.
+
+        force=True (etkileşimli kart): uzunluğa BAKILMAZ. İlk istem de stdin'den
+        gider, çünkü takip mesajlarının aynı borudan akabilmesi için sürecin
+        `--input-format stream-json` ile başlaması gerekir.
         """
         try:
             idx = cmd.index("-p")
         except ValueError:
             return None
-        if idx + 1 >= len(cmd) or not prompt_via_stdin(cmd[idx + 1]):
+        if idx + 1 >= len(cmd) or not (force or prompt_via_stdin(cmd[idx + 1])):
             return None
         payload = build_stdin_prompt_payload(cmd[idx + 1])
         cmd[idx + 1] = ""
@@ -314,7 +328,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         return payload
 
     @staticmethod
-    def _feed_stdin(proc, payload: Optional[str]):
+    def _feed_stdin(proc, payload: Optional[str], keep_open: bool = False):
         """
         Yükü sürecin stdin'ine ayrı bir iş parçacığından yazıp kapatır.
 
@@ -324,6 +338,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         agy bu sırada 64 KB'lık stdout tamponunu doldurursa iki taraf da
         birbirini bekler ve görev asılı kalır (klasik boru kilitlenmesi).
         Yazımı arka plana alarak okuma döngüsü hemen başlayabilir.
+
+        keep_open=True (etkileşimli kart): yük yazıldıktan sonra stdin KAPANMAZ;
+        takip mesajları aynı borudan gider. Kapatmayı oturum (`close`) üstlenir.
         """
         if not payload or getattr(proc, "stdin", None) is None:
             return
@@ -335,6 +352,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             except Exception:
                 pass
             finally:
+                if keep_open:
+                    return
                 try:
                     proc.stdin.close()
                 except Exception:
@@ -767,9 +786,24 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
         stream_meta: Optional[dict] = None,
+        interactive: bool = False,
+        on_followup_start: Optional[Callable[[str], object]] = None,
+        on_followup_end: Optional[Callable[[str], object]] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
+
+        interactive: etkileşimli kart kipi (Faz 10-C). True ve
+        `config.desk_interactive_cards` açıksa süreç ilk `result` olayından
+        sonra da CANLI kalır; kart her zamanki gibi finalize edilir (ledger,
+        rapor, `task_completed`) ama sahnedeki bölmeden `send_followup` ile
+        yeni turlar başlatılabilir. Bayrak kapalıysa eski davranış aynen kalır.
+
+        on_followup_start(task_id) / on_followup_end(task_id): takip turunun
+        başında ve sonunda çağrılan kancalar. Proje yazma kilidini yeniden alıp
+        bırakmak harness'ın işidir (kilit API'si `agents/**` içinde); köprü
+        yalnızca kancayı sunar. `on_followup_start` açıkça False dönerse takip
+        mesajı gönderilmez (kilit alınamadı).
 
         stream_meta: `bus.agent_stream` yükünü etiketleyen bağlam
         ({"agent", "office", "card_id"}). Çağıran (ofis harness'ı / görev
@@ -820,7 +854,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
-                  model, agent_spec, stream_meta),
+                  model, agent_spec, stream_meta, interactive,
+                  on_followup_start, on_followup_end),
             daemon=True
         )
         thread.start()
@@ -834,20 +869,69 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         kullanılan `build_stdin_prompt_payload` ile birebir aynıdır — ikinci bir
         şema icat edilmez. Süreç yoksa, stdin borusu yoksa ya da kapanmışsa
         False döner (çağıran o zaman kullanıcıya "terminal kapalı" der).
+
+        Etkileşimli kipte (Faz 10-C) mesaj oturuma verilir: işçi iş parçacığı
+        uyanır, akış yeniden `working`e döner ve turun sonunda
+        `bus.task_followup_completed` yayılır.
         """
-        if not text or not str(text).strip():
+        emit_stream = self._agent_stream_emitter(task_id, self._stream_meta_for(task_id))
+        reason = followup_rejection(text)
+        if reason:
+            emit_stream("error", reason)
             return False
+
+        session = self._interactive_sessions.get(task_id)
+        if session is not None:
+            if session.closed or not session.alive():
+                self._interactive_sessions.pop(task_id)
+                emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
+                return False
+            if not session.send(str(text)):
+                emit_stream("error", "Takip mesajı gönderilemedi (terminal kapalı ya da kilit alınamadı).")
+                return False
+            emit_stream("status", "Takip mesajı gönderildi…", state="thinking")
+            return True
+
+        # Etkileşimli olmayan (eski) yol: süreç hâlâ koşuyorsa stdin'e yazılır.
         with self._lock:
             proc = self._background_processes.get(task_id)
         stdin = getattr(proc, "stdin", None) if proc is not None else None
         if stdin is None or getattr(stdin, "closed", False):
+            emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
             return False
         try:
             stdin.write(build_stdin_prompt_payload(str(text)))
             stdin.flush()
         except Exception:
+            emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
             return False
         return True
+
+    def _stream_meta_for(self, task_id: str) -> Optional[dict]:
+        """Kart akış etiketini (ajan/ofis/kart) görev başına hatırlar."""
+        with self._state_lock:
+            return dict(self._interactive_stream_meta.get(task_id) or {}) or None
+
+    def close_interactive(self, task_id: str, reason: str = "kullanıcı kapattı") -> bool:
+        """
+        Etkileşimli kart terminalini kapatır: stdin kapanır, süreç sonlanır.
+
+        Kartın kendisi ilk sonuçta zaten tamamlanmıştı; bu yalnızca canlı
+        kalan terminali söndürür. Bilinmeyen task_id için False.
+        """
+        session = self._interactive_sessions.get(task_id)
+        if session is None:
+            return False
+        session.close(reason)
+        # Süreç kendiliğinden çıkmazsa (stdin kapanınca çıkması beklenir)
+        # zaman aşımıyla ağaç indirilir; işçi tarafı zaten temizliyor.
+        self.terminate_background_task(task_id)
+        self._interactive_sessions.pop(task_id)
+        return True
+
+    def interactive_task_ids(self) -> List[str]:
+        """Şu an canlı olan etkileşimli kart terminalleri."""
+        return self._interactive_sessions.active_ids()
 
     def _conversation_usage_delta(
         self, conversation_id: str, usage: Dict[str, int], store_only: bool = False
@@ -898,8 +982,20 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
         stream_meta: Optional[dict] = None,
+        interactive: bool = False,
+        on_followup_start: Optional[Callable[[str], object]] = None,
+        on_followup_end: Optional[Callable[[str], object]] = None,
     ):
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
+        # Kip bayrağı köprüde değil ayarda: kullanıcı etkileşimli kartları
+        # kapattığında çağıranların hiçbirini değiştirmeden Faz 10-B davranışına
+        # dönülür.
+        interactive = bool(interactive) and bool(
+            getattr(config, "desk_interactive_cards", True)
+        )
+        if interactive:
+            with self._state_lock:
+                self._interactive_stream_meta[task_id] = dict(stream_meta or {})
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -933,6 +1029,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         # Dış `except` de son usage'ı yazabilsin diye burada bağlanır; iç blok
         # akıştan okudukça günceller.
         task_usage: Dict[str, int] = {}
+        # Birinci turun sonucu (etkileşimli kipte finalize erken çalışır).
+        card_success = False
+        interactive_session: Optional[InteractiveSession] = None
         try:
             if project_lock_manager.is_write_locked(project_dir):
                 bus.terminal_output_received.emit(
@@ -1017,12 +1116,238 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             # Popen'in kendisi hata verirse (agy bulunamadı) finally bloğu yine
             # çalışır; proc tanımsız kalmasın diye önceden bağlanıyor.
             proc = None
+            # Aynı gerekçe: süreç hiç başlamazsa finally `turn_done`u okuyor.
+            turn_done = False
+            # Etkileşimli kipte kart daha döngü içindeyken finalize edilir;
+            # bayrak, döngü sonrasında ikinci kez finalize edilmesini engeller.
+            interactive_finalized = False
+
+            def _usage_key() -> str:
+                """
+                Kümülatif usage tabanının anahtarı.
+
+                agy aynı süreçteki turlarda `usage`ı BÜYÜTEREK verir; taban
+                çıkarılmazsa ikinci turun maliyetine birincininki de eklenir.
+                Konuşma kimliği biliniyorsa o, yoksa göreve özel anahtar.
+                """
+                with self._lock:
+                    conv = self._background_conversations.get(task_id)
+                return str(conv) if conv else f"task:{task_id}"
+
+            def _release_locks() -> None:
+                """Proje kilidini bırakır (bir kez; bayraklar sıfırlanır)."""
+                nonlocal write_acquired, read_acquired
+                if write_acquired:
+                    try:
+                        project_lock_manager.release_write(project_dir)
+                    except Exception:
+                        pass
+                    write_acquired = False
+                if read_acquired:
+                    try:
+                        project_lock_manager.release_read(project_dir)
+                    except Exception:
+                        pass
+                    read_acquired = False
+
+            def _finalize_followup(turn: int) -> None:
+                """
+                Takip turunu sonuçlandırır.
+
+                Kart zaten `task_completed` ile kapandığı için ikinci bir
+                tamamlanma sinyali yayılamaz; bölmeyi güncelleyen arayüz
+                `bus.task_followup_completed` dinler. Ledger'da YENİ SÜTUN
+                açılmaz: aynı satırın token toplamları artırılır.
+                """
+                text = "".join(full_response_acc).strip()
+                ok = bool(text) and execution_error is None
+                turn_usage = self._conversation_usage_delta(
+                    _usage_key(), dict(task_usage or {})
+                ) if task_usage else {}
+
+                if turn_usage:
+                    with self._state_lock:
+                        self.last_background_usage = dict(turn_usage)
+                        self.background_total_tokens += turn_usage.get("total_tokens", 0)
+                    bus.token_usage_updated.emit(turn_usage.get("total_tokens", 0))
+                    try:
+                        prev = task_ledger.get_task(task_id) or {}
+                        merged = {
+                            k: int(prev.get(k) or 0) + int(turn_usage.get(k) or 0)
+                            for k in ("input_tokens", "output_tokens", "total_tokens")
+                        }
+                        task_ledger.record_task_success(
+                            task_id=task_id,
+                            summary=mask_tool_output(text)[:300],
+                            usage=merged,
+                        )
+                    except Exception:
+                        pass
+
+                if ok:
+                    emit_stream("result", text)
+                else:
+                    emit_stream("error", execution_error or "Takip turu yanıtsız bitti.")
+                try:
+                    bus.task_followup_completed.emit({
+                        "task_id": task_id,
+                        "card_id": str((stream_meta or {}).get("card_id") or ""),
+                        "text": text,
+                        "usage": dict(turn_usage),
+                        "turn": int(turn),
+                        "success": ok,
+                    })
+                except Exception:
+                    pass
+            def _finalize_card(ret_code_override: Optional[int] = None) -> None:
+                """
+                Kartın BİRİNCİ turunu sonlandırır: token muhasebesi, ledger,
+                sahne olayı, `on_result`, rapor ve `task_completed`.
+
+                Faz 10-C'de gövde değişmedi, yalnızca ayrı bir ada taşındı:
+                etkileşimli kipte süreç canlı kalırken bile kart tam olarak eski
+                davranışla finalize edilmeli (kullanıcı sonucu beklemesin), takip
+                turları ise ayrı bir yoldan (`_finalize_followup`) raporlanır.
+
+                ret_code_override: etkileşimli kipte süreç hâlâ koştuğu için
+                `proc.wait()` çağrılmaz; turun `result` olayı başarının kendisidir.
+                """
+                nonlocal task_usage, ret_code, card_success
+                if ret_code_override is not None:
+                    ret_code = ret_code_override
+                full_text = "".join(full_response_acc).strip()
+                success = ret_code == 0 and len(full_text) > 0 and execution_error is None
+                card_success = success
+
+                # Sürdürülen konuşmada agy'nin `usage` alanı KÜMÜLATİFTİR: ikinci
+                # tur, birincinin token'larını da içerir. Taban çıkarılmazsa aynı
+                # token ofis bütçesinden iki kez düşer ve bütçe erken tükenir.
+                if task_usage and conversation_id:
+                    task_usage = self._conversation_usage_delta(conversation_id, task_usage)
+                elif task_usage:
+                    conv_now = self._background_conversations.get(task_id)
+                    if conv_now:
+                        self._conversation_usage_delta(conv_now, task_usage, store_only=True)
+
+                # Görev maliyeti oturum sayacına eklenir ve rozet yenilenir; ledger'a da
+                # yazılır ki damıtma/konsolidasyon gibi işlerin gerçek kotası izlenebilsin.
+                if task_usage:
+                    # Eşzamanlı iki arka plan görevi aynı sayacı artırıyor; okuma-
+                    # değiştirme-yazma kilitsizken bir görevin tüketimi kaybolabilir.
+                    with self._state_lock:
+                        self.last_background_usage = dict(task_usage)
+                        self.background_total_tokens += task_usage.get("total_tokens", 0)
+                        running_total = self.background_total_tokens
+                    bus.terminal_output_received.emit(
+                        f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
+                        f"(girdi {task_usage.get('input_tokens', 0):,} / çıktı {task_usage.get('output_tokens', 0):,}) — "
+                        f"arka plan toplamı {running_total:,}\n"
+                    )
+                    bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
+
+                # Record in SQLite Task Ledger
+                # Ledger özetine giden metin maskelenir: 300 karakterlik özetin
+                # tamamı bir dosya dökümüyle dolduğunda görev panelinde satır hiçbir
+                # şey anlatmıyordu (bkz. entropy.core.masking).
+                masked_text = mask_tool_output(full_text)
+                if success:
+                    task_ledger.record_task_success(task_id=task_id, summary=masked_text[:300], usage=task_usage or None)
+                elif not self._shutting_down:
+                    err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
+                    # usage ile: başarısız görev de token yaktı; sütun NULL kalırsa
+                    # ofis bütçesi bu maliyeti hiç görmüyordu (A7a).
+                    task_ledger.record_task_failure(
+                        task_id=task_id, error=err_detail, usage=task_usage or None
+                    )
+                # Kapanışta süreci biz öldürdük: işçi burada "başarısız" yazsaydı
+                # shutdown()'ın koyduğu CANCELLED'ın üstüne biner ve kullanıcı her
+                # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
+
+                # Sahne için kart bitişi: başarı "idle" (volta), hata "error".
+                if success:
+                    emit_stream("result", full_text)
+                else:
+                    emit_stream("error", execution_error or full_text or "Görev başarısız.")
+
+                # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
+                notified["done"] = True
+                self._notify_result(on_result, full_text, success)
+
+                if not save_report:
+                    bus.task_completed.emit(task_id, success)
+                    bus.terminal_output_received.emit(
+                        f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n"
+                    )
+                    return
+
+                # Generate and save research report for completed background task
+                clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
+                time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                report_title = f"Gorev_{clean_name}_{time_tag}"
+
+                try:
+                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                    vm = ObsidianVaultManager()
+
+                    report_content = f"# Otonom Görev Raporu: {task_name}\n\n"
+                    report_content += f"- **Görev Kimliği**: `{task_id}`\n"
+                    report_content += f"- **Tamamlanma Zamanı**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    report_content += f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
+                    report_content += f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
+
+                    proj_name = self.active_project_dir.name if self.active_project_dir else None
+                    # Arka plan görevi hangi yeteneğin işiyse rapor o yeteneğe atfedilir;
+                    # zamanlanmış araştırma görevleri yordam damıtmanın ana kaynağıdır ve
+                    # atıfsız rapor hiçbir yetenek için kaynak sayılmaz.
+                    task_skill = None
+                    try:
+                        detected = self.detect_skill_for_prompt(prompt)
+                        task_skill = detected.name if detected else None
+                    except Exception:
+                        task_skill = None
+                    rep_path = vm.save_research_report(
+                        report_title,
+                        report_content,
+                        tags=["otonom_gorev", task_id],
+                        project_name=proj_name,
+                        skill_name=task_skill,
+                    )
+
+                    # Store distilled summary in cognitive memory
+                    try:
+                        cog = CognitiveMemorySystem()
+                        cog.store_node(
+                            category="semantic",
+                            content=f"Otonom Görev Özeti [{task_name}]: {full_text[:300]}",
+                            importance=0.85,
+                            metadata={"source": "scheduled_task", "task_id": task_id, "path": str(rep_path)}
+                        )
+                    except Exception:
+                        pass
+
+                    bus.task_notification.emit(task_id, task_name, str(rep_path))
+                    bus.cognitive_memory_updated.emit()
+                    bus.knowledge_graph_updated.emit()
+
+                except Exception as e:
+                    bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
+                    bus.task_notification.emit(task_id, task_name, masked_text[:200])
+
+                bus.task_completed.emit(task_id, success)
+                bus.terminal_output_received.emit(
+                    f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
+                )
+
             try:
                 creationflags = 0
                 if os.name == "nt":
                     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-                stdin_payload = self._apply_stdin_prompt(cmd)
+                # Etkileşimli kipte istem HER ZAMAN stdin'den gider: takip
+                # mesajlarının aynı boruya yazılabilmesi için sürecin
+                # `--input-format stream-json` ile başlaması şart.
+                stdin_payload = self._apply_stdin_prompt(cmd, force=interactive)
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -1035,7 +1360,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     creationflags=creationflags,
                     cwd=str(project_dir) if project_dir.exists() else None
                 )
-                stdin_writer = self._feed_stdin(proc, stdin_payload)
+                stdin_writer = self._feed_stdin(proc, stdin_payload, keep_open=interactive)
                 with self._lock:
                     # Popen ile kayıt arasındaki yarış: kapanış tam bu aralıkta
                     # başladıysa süreç defterde olmadığı için öldürülmezdi.
@@ -1049,189 +1374,267 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 readline_fn = getattr(proc.stdout, "readline", None)
                 stdout_stream = iter(readline_fn, '') if callable(readline_fn) else iter(proc.stdout)
 
-                for raw_line in stdout_stream:
-                    if not raw_line:
-                        break
-                    line_str = raw_line.strip()
-                    if not line_str:
-                        continue
+                if interactive:
+                    interactive_session = InteractiveSession(
+                        task_id,
+                        proc,
+                        build_stdin_prompt_payload,
+                        idle_timeout=float(
+                            getattr(config, "desk_interactive_idle_timeout_s", None)
+                            or INTERACTIVE_IDLE_TIMEOUT_S
+                        ),
+                        on_followup_start=on_followup_start,
+                        on_followup_end=on_followup_end,
+                    )
+                    self._interactive_sessions.register(interactive_session)
 
-                    try:
-                        data = json.loads(line_str)
-                        event = data.get("event")
+                # Etkileşimli kipte okuma ilk `result` olayında kırılır: süreç
+                # canlı kalır, kart finalize edilir ve takip turları aynı
+                # akış yineleyicisinden okunmaya devam eder. Kip kapalıyken
+                # akış eskisi gibi EOF'a kadar okunur.
+                turn_done = False
+                interactive_turn = 0
+                while True:
+                    turn_done = False
+                    for raw_line in stdout_stream:
+                        if not raw_line:
+                            break
+                        line_str = raw_line.strip()
+                        if not line_str:
+                            continue
 
-                        if event == "step_update":
-                            step = data.get("step_update", {})
-                            step_type = step.get("step_type")
-                            text_delta = step.get("text_delta")
+                        try:
+                            data = json.loads(line_str)
+                            event = data.get("event")
 
-                            # Ara olaydaki kümülatif usage saklanır: süreç
-                            # `result` yayınlamadan ölürse ledger'a yazılacak
-                            # tek maliyet kaydı budur.
-                            step_usage = step.get("usage") or data.get("usage")
-                            if isinstance(step_usage, dict):
-                                s_in = int(step_usage.get("input_tokens", 0) or 0)
-                                s_out = int(step_usage.get("output_tokens", 0) or 0)
-                                task_usage = {
-                                    "input_tokens": s_in,
-                                    "output_tokens": s_out,
-                                    "thinking_tokens": int(step_usage.get("thinking_tokens", 0) or 0),
-                                    "cache_read_tokens": int(step_usage.get("cache_read_tokens", 0) or 0),
-                                    "total_tokens": int(step_usage.get("total_tokens", s_in + s_out) or 0),
-                                }
+                            if event == "step_update":
+                                step = data.get("step_update", {})
+                                step_type = step.get("step_type")
+                                text_delta = step.get("text_delta")
 
-                            # Adım sayacı: agy iki ayrı biçimde araç olayı
-                            # yayınlıyor (`step_type == "tool"` ve `tool_call`),
-                            # ikisi de sayılır. Sınır aşılınca süreç öldürülür;
-                            # istemdeki "en çok N adım" ricası yaptırımsızdı.
-                            if max_steps and not step_limit_hit:
-                                if (step_type == "tool" and step.get("state", "ACTIVE") == "ACTIVE") \
-                                        or step.get("tool_call"):
-                                    tool_steps += 1
-                                if tool_steps > int(max_steps):
-                                    step_limit_hit = True
-                                    execution_error = (
-                                        f"{MAX_STEPS_MARKER} Araç adımı sınırı aşıldı "
-                                        f"({tool_steps} > {int(max_steps)}); görev durduruldu."
-                                    )
-                                    bus.terminal_output_received.emit(f"\n[{execution_error}]\n")
-                                    self.terminate_background_task(task_id)
+                                # Ara olaydaki kümülatif usage saklanır: süreç
+                                # `result` yayınlamadan ölürse ledger'a yazılacak
+                                # tek maliyet kaydı budur.
+                                step_usage = step.get("usage") or data.get("usage")
+                                if isinstance(step_usage, dict):
+                                    s_in = int(step_usage.get("input_tokens", 0) or 0)
+                                    s_out = int(step_usage.get("output_tokens", 0) or 0)
+                                    task_usage = {
+                                        "input_tokens": s_in,
+                                        "output_tokens": s_out,
+                                        "thinking_tokens": int(step_usage.get("thinking_tokens", 0) or 0),
+                                        "cache_read_tokens": int(step_usage.get("cache_read_tokens", 0) or 0),
+                                        "total_tokens": int(step_usage.get("total_tokens", s_in + s_out) or 0),
+                                    }
+
+                                # Adım sayacı: agy iki ayrı biçimde araç olayı
+                                # yayınlıyor (`step_type == "tool"` ve `tool_call`),
+                                # ikisi de sayılır. Sınır aşılınca süreç öldürülür;
+                                # istemdeki "en çok N adım" ricası yaptırımsızdı.
+                                if max_steps and not step_limit_hit:
+                                    if (step_type == "tool" and step.get("state", "ACTIVE") == "ACTIVE") \
+                                            or step.get("tool_call"):
+                                        tool_steps += 1
+                                    if tool_steps > int(max_steps):
+                                        step_limit_hit = True
+                                        execution_error = (
+                                            f"{MAX_STEPS_MARKER} Araç adımı sınırı aşıldı "
+                                            f"({tool_steps} > {int(max_steps)}); görev durduruldu."
+                                        )
+                                        bus.terminal_output_received.emit(f"\n[{execution_error}]\n")
+                                        self.terminate_background_task(task_id)
+                                        break
+
+                                # 1. Tool execution handling
+                                if step_type == "tool":
+                                    tool_name = step.get("tool_name") or step.get("tool_info", {}).get("name") or step.get("name", "Araç")
+                                    params = step.get("tool_info", {}).get("parameters") or step.get("parameters", {})
+                                    state = step.get("state", "ACTIVE")
+                                    duration = step.get("duration_seconds", 0.0)
+                                    tool_payload = self._tool_payload(tool_name, params)
+                                    if state == "ACTIVE":
+                                        param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
+                                        bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                        emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
+                                        bus.core_pulse_triggered.emit(0.7)
+                                    elif state == "DONE":
+                                        out = step.get("output") or step.get("result") or step.get("content")
+                                        if out:
+                                            out_str = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
+                                            bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n   Sonuç: {out_str[:300]}...\n")
+                                        else:
+                                            out_str = ""
+                                            bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n")
+                                        emit_stream("tool_result", out_str, tool=tool_payload)
+                                        bus.core_pulse_triggered.emit(0.5)
+                                    elif state in ["ERROR", "FAILED"]:
+                                        err = step.get("error") or step.get("message")
+                                        if err:
+                                            bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n   Hata: {str(err)[:300]}...\n")
+                                        else:
+                                            bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n")
+                                        emit_stream("error", str(err or f"{tool_name} aracı hata verdi"), tool=tool_payload)
+                                        bus.core_pulse_triggered.emit(0.3)
+                                else:
+                                    call = step.get("tool_call")
+                                    if call:
+                                        tool_name = call.get("name", "Araç")
+                                        params = call.get("parameters") or call.get("args") or {}
+                                        param_str = json.dumps(params, ensure_ascii=False)[:300] if params else ""
+                                        if param_str:
+                                            bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                        else:
+                                            bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
+                                        tool_payload = self._tool_payload(tool_name, params)
+                                        emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
+                                        bus.core_pulse_triggered.emit(0.6)
+
+                                    res = step.get("tool_result")
+                                    if res:
+                                        tool_name = res.get("name", "Araç") if isinstance(res, dict) else "Araç"
+                                        res_content = res.get("content") or res.get("output") if isinstance(res, dict) else str(res)
+                                        if res_content:
+                                            bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n   Sonuç: {str(res_content)[:300]}...\n")
+                                        else:
+                                            bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
+                                        emit_stream(
+                                            "tool_result",
+                                            str(res_content or ""),
+                                            tool=self._tool_payload(tool_name, None),
+                                        )
+                                        bus.core_pulse_triggered.emit(0.4)
+
+                                # 2. Thinking telemetry
+                                thought = (
+                                    step.get("thought") or
+                                    step.get("reasoning") or
+                                    step.get("thinking") or
+                                    step.get("thought_delta") or
+                                    step.get("reasoning_content") or
+                                    data.get("thought") or
+                                    data.get("thought_delta") or
+                                    data.get("reasoning")
+                                )
+                                step_idx = step.get("step_index", 1)
+                                if thought and isinstance(thought, str) and thought.strip():
+                                    bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
+                                    emit_stream("thinking", thought.strip())
+                                    bus.core_pulse_triggered.emit(0.5)
+                                elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
+                                    bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünülüyor (Adım #{step_idx})...]\n")
+                                    emit_stream("status", f"Düşünülüyor (adım #{step_idx})…")
+                                    bus.core_pulse_triggered.emit(0.5)
+
+                                # 3. Text delta
+                                if text_delta:
+                                    bus.terminal_output_received.emit(text_delta)
+                                    # Kart yolunda `token_chunk_received` BUGÜNE DEK
+                                    # hiç yayılmıyordu (yalnızca sohbet yolunda);
+                                    # eski tüketiciler için geriye uyum.
+                                    bus.token_chunk_received.emit(text_delta)
+                                    emit_stream("text", text_delta)
+                                    full_response_acc.append(text_delta)
+                                    bus.core_pulse_triggered.emit(0.5)
+
+                            elif event == "result":
+                                result = data.get("result", {})
+                                resp = result.get("response", "")
+                                if not full_response_acc and resp:
+                                    bus.terminal_output_received.emit(resp)
+                                    bus.token_chunk_received.emit(resp)
+                                    emit_stream("text", resp)
+                                    full_response_acc.append(resp)
+
+                                # Konuşma kimliği: ofis çağrıları (plan → değerlendirme
+                                # → yeniden plan) aynı agy konuşmasında sürsün diye
+                                # saklanır. Alt kartlar bunu HİÇ kullanmaz.
+                                conv = data.get("conversation_id") or result.get("conversation_id")
+                                if conv:
+                                    with self._lock:
+                                        self._background_conversations[task_id] = str(conv)
+
+                                # Her arka plan görevi yeni bir konuşma olduğundan agy'nin
+                                # kümülatif "usage" değeri doğrudan bu görevin maliyetidir.
+                                usage = result.get("usage")
+                                if isinstance(usage, dict):
+                                    cum_in = int(usage.get("input_tokens", 0) or 0)
+                                    cum_out = int(usage.get("output_tokens", 0) or 0)
+                                    task_usage = {
+                                        "input_tokens": cum_in,
+                                        "output_tokens": cum_out,
+                                        "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
+                                        "cache_read_tokens": int(usage.get("cache_read_tokens", 0) or 0),
+                                        "total_tokens": int(usage.get("total_tokens", cum_in + cum_out) or 0),
+                                    }
+
+                                if interactive:
+                                    # Tur bitti; süreç canlı kalıyor. Okuma burada
+                                    # kesilmezse akış EOF beklerken kart hiç
+                                    # sonuçlanmaz ve kullanıcı boşuna bekler.
+                                    turn_done = True
                                     break
 
-                            # 1. Tool execution handling
-                            if step_type == "tool":
-                                tool_name = step.get("tool_name") or step.get("tool_info", {}).get("name") or step.get("name", "Araç")
-                                params = step.get("tool_info", {}).get("parameters") or step.get("parameters", {})
-                                state = step.get("state", "ACTIVE")
-                                duration = step.get("duration_seconds", 0.0)
-                                tool_payload = self._tool_payload(tool_name, params)
-                                if state == "ACTIVE":
-                                    param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
-                                    bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
-                                    emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
-                                    bus.core_pulse_triggered.emit(0.7)
-                                elif state == "DONE":
-                                    out = step.get("output") or step.get("result") or step.get("content")
-                                    if out:
-                                        out_str = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
-                                        bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n   Sonuç: {out_str[:300]}...\n")
-                                    else:
-                                        out_str = ""
-                                        bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n")
-                                    emit_stream("tool_result", out_str, tool=tool_payload)
-                                    bus.core_pulse_triggered.emit(0.5)
-                                elif state in ["ERROR", "FAILED"]:
-                                    err = step.get("error") or step.get("message")
-                                    if err:
-                                        bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n   Hata: {str(err)[:300]}...\n")
-                                    else:
-                                        bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n")
-                                    emit_stream("error", str(err or f"{tool_name} aracı hata verdi"), tool=tool_payload)
-                                    bus.core_pulse_triggered.emit(0.3)
-                            else:
-                                call = step.get("tool_call")
-                                if call:
-                                    tool_name = call.get("name", "Araç")
-                                    params = call.get("parameters") or call.get("args") or {}
-                                    param_str = json.dumps(params, ensure_ascii=False)[:300] if params else ""
-                                    if param_str:
-                                        bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}]\n   Parametreler: {param_str}...\n")
-                                    else:
-                                        bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
-                                    tool_payload = self._tool_payload(tool_name, params)
-                                    emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
-                                    bus.core_pulse_triggered.emit(0.6)
+                        except json.JSONDecodeError:
+                            bus.terminal_output_received.emit(raw_line)
+                            bus.token_chunk_received.emit(raw_line)
+                            emit_stream("text", raw_line)
+                            full_response_acc.append(raw_line)
 
-                                res = step.get("tool_result")
-                                if res:
-                                    tool_name = res.get("name", "Araç") if isinstance(res, dict) else "Araç"
-                                    res_content = res.get("content") or res.get("output") if isinstance(res, dict) else str(res)
-                                    if res_content:
-                                        bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n   Sonuç: {str(res_content)[:300]}...\n")
-                                    else:
-                                        bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
-                                    emit_stream(
-                                        "tool_result",
-                                        str(res_content or ""),
-                                        tool=self._tool_payload(tool_name, None),
-                                    )
-                                    bus.core_pulse_triggered.emit(0.4)
+                    if not (interactive and turn_done and interactive_session is not None):
+                        # Akış EOF'a geldi (ya da kip kapalı): eski yol.
+                        break
 
-                            # 2. Thinking telemetry
-                            thought = (
-                                step.get("thought") or
-                                step.get("reasoning") or
-                                step.get("thinking") or
-                                step.get("thought_delta") or
-                                step.get("reasoning_content") or
-                                data.get("thought") or
-                                data.get("thought_delta") or
-                                data.get("reasoning")
-                            )
-                            step_idx = step.get("step_index", 1)
-                            if thought and isinstance(thought, str) and thought.strip():
-                                bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
-                                emit_stream("thinking", thought.strip())
-                                bus.core_pulse_triggered.emit(0.5)
-                            elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
-                                bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünülüyor (Adım #{step_idx})...]\n")
-                                emit_stream("status", f"Düşünülüyor (adım #{step_idx})…")
-                                bus.core_pulse_triggered.emit(0.5)
+                    # --- Tur bitti, süreç canlı: kart/tur sonuçlandırılır ---
+                    if interactive_turn == 0:
+                        _finalize_card(ret_code_override=0)
+                        interactive_finalized = True
+                        # Kümülatif usage tabanı: sonraki turların maliyeti
+                        # bunun farkıdır (agy aynı süreçte toplamı büyütür).
+                        self._conversation_usage_delta(
+                            _usage_key(), dict(task_usage or {}), store_only=True
+                        )
+                        # Bekleyen terminal, koşan kart değildir: proje kilidi
+                        # ve ofis paralellik sayacı burada serbest bırakılır.
+                        _release_locks()
+                    else:
+                        _finalize_followup(interactive_turn)
+                        interactive_session.finish_turn()
 
-                            # 3. Text delta
-                            if text_delta:
-                                bus.terminal_output_received.emit(text_delta)
-                                # Kart yolunda `token_chunk_received` BUGÜNE DEK
-                                # hiç yayılmıyordu (yalnızca sohbet yolunda);
-                                # eski tüketiciler için geriye uyum.
-                                bus.token_chunk_received.emit(text_delta)
-                                emit_stream("text", text_delta)
-                                full_response_acc.append(text_delta)
-                                bus.core_pulse_triggered.emit(0.5)
-
-                        elif event == "result":
-                            result = data.get("result", {})
-                            resp = result.get("response", "")
-                            if not full_response_acc and resp:
-                                bus.terminal_output_received.emit(resp)
-                                bus.token_chunk_received.emit(resp)
-                                emit_stream("text", resp)
-                                full_response_acc.append(resp)
-
-                            # Konuşma kimliği: ofis çağrıları (plan → değerlendirme
-                            # → yeniden plan) aynı agy konuşmasında sürsün diye
-                            # saklanır. Alt kartlar bunu HİÇ kullanmaz.
-                            conv = data.get("conversation_id") or result.get("conversation_id")
-                            if conv:
-                                with self._lock:
-                                    self._background_conversations[task_id] = str(conv)
-
-                            # Her arka plan görevi yeni bir konuşma olduğundan agy'nin
-                            # kümülatif "usage" değeri doğrudan bu görevin maliyetidir.
-                            usage = result.get("usage")
-                            if isinstance(usage, dict):
-                                cum_in = int(usage.get("input_tokens", 0) or 0)
-                                cum_out = int(usage.get("output_tokens", 0) or 0)
-                                task_usage = {
-                                    "input_tokens": cum_in,
-                                    "output_tokens": cum_out,
-                                    "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
-                                    "cache_read_tokens": int(usage.get("cache_read_tokens", 0) or 0),
-                                    "total_tokens": int(usage.get("total_tokens", cum_in + cum_out) or 0),
-                                }
-
-                    except json.JSONDecodeError:
-                        bus.terminal_output_received.emit(raw_line)
-                        bus.token_chunk_received.emit(raw_line)
-                        emit_stream("text", raw_line)
-                        full_response_acc.append(raw_line)
+                    # Yeni tur sıfırdan birikir; adım sayacı da tur başınadır
+                    # (istem "en çok N adım" derken bir turu kastediyor).
+                    full_response_acc = []
+                    task_usage = {}
+                    tool_steps = 0
+                    step_limit_hit = False
+                    emit_stream("status", "Takip mesajı bekliyor…", state="idle")
+                    if not interactive_session.wait_for_followup():
+                        emit_stream(
+                            "status",
+                            f"Terminal kapandı ({interactive_session.close_reason or 'kapatıldı'}).",
+                            state="idle",
+                        )
+                        break
+                    interactive_turn += 1
+                    emit_stream("status", "Takip mesajı alındı; sürdürülüyor…", state="working")
 
                 # Yazıcı iş parçacigi normalde okuma bitmeden tamamlanir; yine de
                 # surec beklenmeden once kapandigi dogrulanir.
                 if stdin_writer is not None:
                     stdin_writer.join(timeout=5.0)
-                proc.stdout.close()
-                ret_code = proc.wait()
+                if interactive_finalized:
+                    # Terminal kapandı: stdin de kapatıldığı için sürecin
+                    # kendiliğinden çıkması beklenir; inatçıysa finally indirir.
+                    try:
+                        proc.stdout.close()
+                    except Exception:
+                        pass
+                    try:
+                        ret_code = proc.wait(timeout=5.0)
+                    except Exception:
+                        ret_code = -1
+                else:
+                    proc.stdout.close()
+                    ret_code = proc.wait()
 
             except Exception as e:
                 execution_error = str(e)
@@ -1241,8 +1644,16 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 full_response_acc.append(err_msg)
                 ret_code = -1
             finally:
+                # Buraya yalnızca terminal kapandıktan sonra gelinir; etkileşimli
+                # oturum defteri de burada temizlenir (aksi hâlde kapanmış bir
+                # kart için `send_followup` hâlâ True dönerdi).
                 with self._lock:
                     self._background_processes.pop(task_id, None)
+                if interactive_session is not None:
+                    interactive_session.close("tur döngüsü bitti")
+                    self._interactive_sessions.pop(task_id)
+                    with self._state_lock:
+                        self._interactive_stream_meta.pop(task_id, None)
                 # Temizlik, görevin sonucunu etkilememeli: buradaki bir istisna
                 # dış except'e sızarsa tamamlanmış bir görev FAILED kaydedilir.
                 # Bu yüzden poll() de dahil tüm blok korunur.
@@ -1257,128 +1668,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 except Exception:
                     pass
 
-            full_text = "".join(full_response_acc).strip()
-            success = ret_code == 0 and len(full_text) > 0 and execution_error is None
+            # Etkileşimli kartta finalize DÖNGÜ İÇİNDE yapıldı; burada ikinci
+            # kez çalıştırmak ledger'ı, raporu ve `on_result`u tekrarlardı.
+            if not interactive_finalized:
+                _finalize_card()
 
-            # Sürdürülen konuşmada agy'nin `usage` alanı KÜMÜLATİFTİR: ikinci
-            # tur, birincinin token'larını da içerir. Taban çıkarılmazsa aynı
-            # token ofis bütçesinden iki kez düşer ve bütçe erken tükenir.
-            if task_usage and conversation_id:
-                task_usage = self._conversation_usage_delta(conversation_id, task_usage)
-            elif task_usage:
-                conv_now = self._background_conversations.get(task_id)
-                if conv_now:
-                    self._conversation_usage_delta(conv_now, task_usage, store_only=True)
-
-            # Görev maliyeti oturum sayacına eklenir ve rozet yenilenir; ledger'a da
-            # yazılır ki damıtma/konsolidasyon gibi işlerin gerçek kotası izlenebilsin.
-            if task_usage:
-                # Eşzamanlı iki arka plan görevi aynı sayacı artırıyor; okuma-
-                # değiştirme-yazma kilitsizken bir görevin tüketimi kaybolabilir.
-                with self._state_lock:
-                    self.last_background_usage = dict(task_usage)
-                    self.background_total_tokens += task_usage.get("total_tokens", 0)
-                    running_total = self.background_total_tokens
-                bus.terminal_output_received.emit(
-                    f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
-                    f"(girdi {task_usage.get('input_tokens', 0):,} / çıktı {task_usage.get('output_tokens', 0):,}) — "
-                    f"arka plan toplamı {running_total:,}\n"
-                )
-                bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
-
-            # Record in SQLite Task Ledger
-            # Ledger özetine giden metin maskelenir: 300 karakterlik özetin
-            # tamamı bir dosya dökümüyle dolduğunda görev panelinde satır hiçbir
-            # şey anlatmıyordu (bkz. entropy.core.masking).
-            masked_text = mask_tool_output(full_text)
-            if success:
-                task_ledger.record_task_success(task_id=task_id, summary=masked_text[:300], usage=task_usage or None)
-            elif not self._shutting_down:
-                err_detail = execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}"
-                # usage ile: başarısız görev de token yaktı; sütun NULL kalırsa
-                # ofis bütçesi bu maliyeti hiç görmüyordu (A7a).
-                task_ledger.record_task_failure(
-                    task_id=task_id, error=err_detail, usage=task_usage or None
-                )
-            # Kapanışta süreci biz öldürdük: işçi burada "başarısız" yazsaydı
-            # shutdown()'ın koyduğu CANCELLED'ın üstüne biner ve kullanıcı her
-            # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
-
-            # Sahne için kart bitişi: başarı "idle" (volta), hata "error".
-            if success:
-                emit_stream("result", full_text)
-            else:
-                emit_stream("error", execution_error or full_text or "Görev başarısız.")
-
-            # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
-            notified["done"] = True
-            self._notify_result(on_result, full_text, success)
-
-            if not save_report:
-                bus.task_completed.emit(task_id, success)
-                bus.terminal_output_received.emit(
-                    f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n"
-                )
-                return
-
-            # Generate and save research report for completed background task
-            clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
-            time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-            report_title = f"Gorev_{clean_name}_{time_tag}"
-
-            try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-                from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
-                vm = ObsidianVaultManager()
-
-                report_content = f"# Otonom Görev Raporu: {task_name}\n\n"
-                report_content += f"- **Görev Kimliği**: `{task_id}`\n"
-                report_content += f"- **Tamamlanma Zamanı**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                report_content += f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
-                report_content += f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
-
-                proj_name = self.active_project_dir.name if self.active_project_dir else None
-                # Arka plan görevi hangi yeteneğin işiyse rapor o yeteneğe atfedilir;
-                # zamanlanmış araştırma görevleri yordam damıtmanın ana kaynağıdır ve
-                # atıfsız rapor hiçbir yetenek için kaynak sayılmaz.
-                task_skill = None
-                try:
-                    detected = self.detect_skill_for_prompt(prompt)
-                    task_skill = detected.name if detected else None
-                except Exception:
-                    task_skill = None
-                rep_path = vm.save_research_report(
-                    report_title,
-                    report_content,
-                    tags=["otonom_gorev", task_id],
-                    project_name=proj_name,
-                    skill_name=task_skill,
-                )
-
-                # Store distilled summary in cognitive memory
-                try:
-                    cog = CognitiveMemorySystem()
-                    cog.store_node(
-                        category="semantic",
-                        content=f"Otonom Görev Özeti [{task_name}]: {full_text[:300]}",
-                        importance=0.85,
-                        metadata={"source": "scheduled_task", "task_id": task_id, "path": str(rep_path)}
-                    )
-                except Exception:
-                    pass
-
-                bus.task_notification.emit(task_id, task_name, str(rep_path))
-                bus.cognitive_memory_updated.emit()
-                bus.knowledge_graph_updated.emit()
-
-            except Exception as e:
-                bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
-                bus.task_notification.emit(task_id, task_name, masked_text[:200])
-
-            bus.task_completed.emit(task_id, success)
-            bus.terminal_output_received.emit(
-                f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
-            )
         except Exception as outer_err:
             try:
                 task_rec = task_ledger.get_task(task_id)
@@ -2208,6 +2502,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             if self._shutting_down:
                 return {"processes": 0, "tasks": 0, "threads": 0}
             self._shutting_down = True
+        # Etkileşimli terminaller önce salıverilir: bekleyen işçi iş parçacığı
+        # `wait_for_followup`tan çıkmazsa aşağıdaki taskkill'in ardından boru
+        # hatasıyla uyanır ve kapanışı geciktirir.
+        self._interactive_sessions.close_all("uygulama kapanıyor")
+        with self._lock:
             procs = list(self._background_processes.items())
             self._background_processes.clear()
             current = self._current_process

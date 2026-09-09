@@ -178,11 +178,14 @@ def archive_office(
     Bir ofisi arşive alır: ofis klasörü + wiki sorgu sayfaları + posta kayıtları.
 
     `office` ofis adı ya da `find_*` çıktısındaki sözlük olabilir. Ofis klasörü
-    `archive_stale` ile taşınır (kuralları aynen geçerli: kasa dışı yol, zaten
-    arşivde olan yol ve künyesi doğan "gerçek ofis" reddedilir). Dosya izleri
-    ise `_archive/<tarih>/<ofis>-residue/{queries,mail}/` altına taşınır —
+    `archive_stale(..., intentional=True)` ile taşınır: kasa dışı yol ve zaten
+    arşivde olan yol yine reddedilir, ama "künyesi doğan gerçek ofis" guard'ı
+    burada UYGULANMAZ. O guard hayalet ofis taraması içindir; bilerek yapılan
+    arşivlemede koşulsuz çalıştığı için `OFFICE.md` taşıyan her ofis atlanıyor
+    ve arşivleme sessizce `count=0` dönüyordu (Faz 10-C'de ölçüldü).
+    Dosya izleri `_archive/<tarih>/<ofis>-residue/{queries,mail}/` altına taşınır —
     ofisin klasörünün İÇİNE değil, çünkü ofis klasörü hiç taşınmamış olabilir
-    (künyesi varsa `archive_stale` onu atlar) ve izler o durumda da temizlenmeli.
+    ve izler o durumda da temizlenmeli.
     """
     from entropy.memory.office_graph import desk_offices_dir
 
@@ -208,6 +211,10 @@ def archive_office(
         vault_path=vault_path,
         dry_run=dry_run,
         date=date,
+        # Bu cagri BILEREK yapilan bir arsivleme: 'hayalet ofis' taramasinin
+        # kunye guard'i burada gecerli degil (yoksa hicbir gercek ofis
+        # arsivlenemiyordu).
+        intentional=True,
     )
 
     root = _entropy_dir(vault_path)
@@ -304,6 +311,7 @@ def archive_stale(
     vault_path: Optional[Path] = None,
     dry_run: bool = True,
     date: Optional[str] = None,
+    intentional: bool = False,
 ) -> Dict[str, Any]:
     """
     Verilen klasörleri `Entropy/_archive/<tarih>/` altına TAŞIR (silmez).
@@ -348,7 +356,11 @@ def archive_stale(
         # `find_ghost_offices()` ile üretilip dakikalar sonra uygulandığında,
         # bu arada künyesi yazılan (yani ARTIK gerçek olan) bir ofis arşive
         # gidiyordu. Taşımadan hemen önce künye yeniden doğrulanır.
-        if (src / "OFFICE.md").is_file():
+        # `intentional=True`: kullanıcı/kayıt defteri BU ofisi bilerek arşive
+        # gönderdi. Ölçüldü (Faz 10-C): guard koşulsuz olduğu için künyesi olan
+        # HER gerçek ofis atlanıyordu — `DeskRegistry.archive()` ve Desk'teki
+        # "Arşivle" düğmesi sessizce hiçbir şey taşımıyor, `count=0` dönüyordu.
+        if not intentional and (src / "OFFICE.md").is_file():
             skipped.append({"path": str(src), "reason": "artik_gercek_ofis"})
             continue
 

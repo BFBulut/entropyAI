@@ -84,6 +84,33 @@ def all_agent_names(registry: Any) -> List[str]:
         return []
 
 
+TEMPLATE_NONE = "Boş"
+
+
+def list_templates() -> List[Dict[str, Any]]:
+    """
+    `entropy.agents.templates.list_templates()` guard'lı okuma.
+
+    Sözleşme yoksa boş liste döner; diyalogdaki "Şablon" kutusu yalnızca "Boş"
+    seçeneğiyle kalır (kadro önizlemesi de gizlenir).
+    """
+    try:
+        # `from entropy.agents import templates` DEĞİL: bu, paketin ÖZNİTELİĞİNİ
+        # okur; modül bir kez içe aktarıldıktan sonra `sys.modules` üzerinden
+        # konan sözleşme/sahte sürüm hiç görülmez (testler koşum sırasına göre
+        # düşüyordu). `import_module` her zaman `sys.modules`'a bakar.
+        import importlib
+
+        _templates = importlib.import_module("entropy.agents.templates")
+
+        fn = getattr(_templates, "list_templates", None)
+        if fn is None:
+            return []
+        return [dict(t) for t in (fn() or [])]
+    except Exception:
+        return []
+
+
 class OfficeEditDialog(QDialog):
     """Ofis oluştur/düzenle formu; `get_data()` sözleşme alanlarını döner."""
 
@@ -104,6 +131,27 @@ class OfficeEditDialog(QDialog):
         self.purpose_edit = QLineEdit()
         self.purpose_edit.setPlaceholderText("Bu ofis ne iş yapar?")
         form.addRow("Amaç", self.purpose_edit)
+
+        # --- Faz 10-C: ekip şablonu (yalnızca YENİ ofiste) -----------------
+        # Şablon seçilirse ofis `create_office_from_template` ile kurulur:
+        # kadro, roller ve tüzük hazır gelir. "Boş" varsayılandır — kullanıcı
+        # kadroyu elle seçmek isteyebilir.
+        self._templates = list_templates() if office is None else []
+        self.template_combo = QComboBox()
+        self.template_combo.addItem(TEMPLATE_NONE)
+        for tpl in self._templates:
+            self.template_combo.addItem(str(tpl.get("name", "")))
+        self.template_preview = QLabel("")
+        self.template_preview.setWordWrap(True)
+        self.template_preview.setStyleSheet("color:#8B949E; font-size:11px;")
+        self.template_combo.currentTextChanged.connect(self._on_template_changed)
+        if office is None:
+            form.addRow("Şablon", self.template_combo)
+            form.addRow("", self.template_preview)
+            self._on_template_changed(TEMPLATE_NONE)
+        else:
+            self.template_combo.setVisible(False)
+            self.template_preview.setVisible(False)
 
         orch_names = agents_by_role(agent_registry, "orchestrator")
         eval_names = agents_by_role(agent_registry, "evaluator")
@@ -198,6 +246,37 @@ class OfficeEditDialog(QDialog):
             pass
         self.charter_edit.setPlainText(str(spec_field(office, "charter", "")))
 
+    @Slot(str)
+    def _on_template_changed(self, name: str) -> None:
+        """Şablon kadrosunu önizler ve üye seçimini şablona göre işaretler."""
+        if name in ("", TEMPLATE_NONE):
+            self.template_preview.setText(
+                "Kadroyu elle seçersiniz; şablon uygulanmaz."
+                if self._templates else
+                "Şablon sözleşmesi bulunamadı; kadroyu elle seçin."
+            )
+            return
+        tpl = next((t for t in self._templates if str(t.get("name", "")) == name), None)
+        if tpl is None:
+            self.template_preview.setText("")
+            return
+        # Sözleşme alanları: {name, title, purpose, agents}. Eski `description`
+        # alanı geriye uyum için yedek olarak okunur.
+        agents = [str(a) for a in (tpl.get("agents") or []) if str(a)]
+        title = str(tpl.get("title") or tpl.get("name") or "")
+        purpose = str(tpl.get("purpose") or tpl.get("description") or "")
+        head = title
+        if purpose:
+            head = f"{title} — {purpose}" if title else purpose
+        self.template_preview.setText(
+            f"{head}\nKadro ({len(agents)}): " + (", ".join(agents) or "—")
+        )
+
+    def selected_template(self) -> str:
+        """Seçili şablon adı; "Boş" ya da kutu gizliyse boş metin."""
+        name = self.template_combo.currentText().strip()
+        return "" if name in ("", TEMPLATE_NONE) else name
+
     @staticmethod
     def _set_combo(combo: QComboBox, value: str) -> None:
         if not value:
@@ -236,6 +315,7 @@ class OfficeEditDialog(QDialog):
             "max_parallel": self.parallel_spin.value(),
             "budget_tokens": self.budget_spin.value(),
             "charter": self.charter_edit.toPlainText().strip(),
+            "template": self.selected_template(),
         }
 
 
@@ -409,7 +489,42 @@ class OfficesPanel(QFrame):
         dialog = OfficeEditDialog(parent=self, agent_registry=self.agent_registry)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self.apply_office_save(dialog.get_data(), original_name=None)
+        data = dialog.get_data()
+        if data.get("template") and self.create_from_template(data):
+            return
+        self.apply_office_save(data, original_name=None)
+
+    def create_from_template(self, data: Dict[str, Any]) -> bool:
+        """
+        Şablonlu kurulum: `templates.create_office_from_template(...)`.
+
+        Sözleşme yoksa ya da çağrı hata verirse False dönülür; çağıran normal
+        (şablonsuz) yola düşer, kullanıcı ofisini yine de kurabilir.
+        """
+        name = str(data.get("name", "")).strip()
+        template = str(data.get("template", "")).strip()
+        if not name or not template:
+            return False
+        try:
+            # `from entropy.agents import templates` DEĞİL: paket özniteliğini
+            # okur, `sys.modules` üzerinden konan sürümü görmez.
+            import importlib
+
+            _templates = importlib.import_module("entropy.agents.templates")
+
+            fn = getattr(_templates, "create_office_from_template", None)
+            if fn is None:
+                return False
+            fn(template, name, provider=data.get("default_provider") or None)
+        except Exception as exc:
+            bus.terminal_output_received.emit(f"[Ofisler] Şablon uygulanamadı: {exc}\n")
+            return False
+        self.current_office = name
+        self.refresh_offices()
+        signal = getattr(bus, "offices_updated", None)
+        if signal is not None:
+            signal.emit(name)
+        return True
 
     @Slot()
     def edit_current(self) -> None:
@@ -425,6 +540,9 @@ class OfficesPanel(QFrame):
         """Diyalogsuz kayıt yolu (test edilebilir): create ya da update çağırır."""
         if self.registry is None:
             return False
+        # "template" yalnızca formun kurulum yolunu seçer; ofis sözleşmesinde
+        # böyle bir alan yok, kayıt defterine sızdırılmaz.
+        data = {k: v for k, v in data.items() if k != "template"}
         office_obj = build_dataclass("entropy.agents.desk_registry", "DeskOffice", data)
         try:
             if original_name:
@@ -475,20 +593,27 @@ class OfficesPanel(QFrame):
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         try:
-            from entropy.memory.vault_hygiene import archive_office as _archive
-
-            vault_path = getattr(self.registry, "vault_path", None)
-            result = _archive(name, vault_path=vault_path, dry_run=False)
+            # Faz 10-C: dogrudan vault_hygiene.archive_office CAGRILMAZ.
+            # DeskRegistry.archive once kart worktree’lerini birakir ve canli
+            # etkilesimli surecleri kapatir, sonra klasoru arsive tasir; kestirme
+            # cagri diskte yetim worktree ve arka planda konusan ajan birakiyordu.
+            result = self.registry.archive(name, dry_run=False)
         except Exception as exc:
             bus.terminal_output_received.emit(f"[Ofisler] Arşivleme hatası: {exc}\n")
             return False
         moved = 0
+        released = 0
+        closed = 0
         try:
             moved = int(result.get("count", 0) or 0)
+            released = len(result.get("worktrees") or ())
+            closed = len(result.get("interactive_closed") or ())
         except Exception:
-            moved = 0
+            pass
         bus.terminal_output_received.emit(
-            f"[Ofisler] '{name}' arşivlendi ({moved} öğe taşındı).\n"
+            f"[Ofisler] '{name}' arşivlendi ({moved} öğe taşındı, "
+            f"{released} worktree bırakıldı, "
+            f"{closed} etkileşimli koşu kapatıldı).\n"
         )
         # Kayıt defterinden düşürme: arşiv başarılı olduktan SONRA.
         try:

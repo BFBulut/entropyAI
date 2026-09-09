@@ -201,4 +201,13 @@ def _isolate_user_state_session(tmp_path_factory):
     root = tmp_path_factory.mktemp("user_state")
     cfg_mod = sys.modules["entropy.core.config"]
     cfg_mod.SETTINGS_FILE = root / "settings.json"
+    # Yetenek etkin/pasif durumu: yalitilmamis bir `SkillManager()` kuran her
+    # test kullanicinin `~/.entropy/skills_state.json` dosyasina yaziyordu
+    # (olculdu: tam kosuda mtime degisiyordu, icerik ayni kalsa da).
+    try:
+        import entropy.skills.manager as _skills_mod
+
+        _skills_mod.USER_SKILLS_STATE_FILE = root / "skills_state.json"
+    except Exception:
+        pass
     yield root

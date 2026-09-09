@@ -707,6 +707,15 @@ def office_status(office: str, vault_path=None) -> Dict[str, object]:
         if m.terminal and (not m.task_id or any(c.id == m.task_id for c in cards))
     ][-10:]
 
+    # Faz 10-D: temizlenemeyen izole çalışma ağaçları. Şerit bu sayıyı gösterir;
+    # sıfırdan farklıysa kullanıcı diskte artık kalan ağaçları görebilmeli.
+    try:
+        from entropy.agents import worktrees as _wt
+
+        orphans = len(_wt.list_orphans(vault_path=offices.vault_path))
+    except Exception:
+        orphans = 0
+
     return {
         "office": office,
         "exists": spec is not None,
@@ -719,6 +728,7 @@ def office_status(office: str, vault_path=None) -> Dict[str, object]:
         "running": running,
         "spent_tokens": spent_total,
         "inbox_unread": inbox.unread_count(),
+        "orphan_worktrees": orphans,
         "recent_terminal": terminals,
     }
 

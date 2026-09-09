@@ -59,8 +59,12 @@ from entropy.core.project_lock import LOCK_TIMEOUT_MARKER, project_lock_manager
 # Arka plan görevinin proje kilidini bekleyeceği süre (sn); bkz. agy_bridge.
 BACKGROUND_LOCK_TIMEOUT = 60.0
 from entropy.core.provider import (
+    INTERACTIVE_IDLE_TIMEOUT_S,
+    InteractiveSession,
+    InteractiveSessionRegistry,
     ProviderCommonMixin,
     agent_definitions_dir,
+    followup_rejection,
     list_agent_definitions,
 )
 from entropy.core.task_ledger import TaskStatus, task_ledger
@@ -372,6 +376,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
         self._current_process: Optional[subprocess.Popen] = None
         self._background_processes: Dict[str, subprocess.Popen] = {}
+        # Etkileşimli kartlar (Faz 10-C): ilk sonuçtan sonra da canlı kalan
+        # kart süreçleri; sahnedeki bölme bunlara yazar.
+        self._interactive_sessions = InteractiveSessionRegistry()
+        self._interactive_stream_meta: Dict[str, dict] = {}
         # Arka plan görevi başına sağlayıcı oturum kimliği (Faz 8 / 3). Ofis
         # harness'ı planlama çağrısı bitince buradan okuyup `state.json`'a
         # yazıyor; `on_result(text, ok)` sözleşmesi kimliği taşıyamıyor ve
@@ -966,13 +974,17 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             pass
         return True
 
-    def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
+    def _apply_stdin_prompt(self, cmd: List[str], force: bool = False) -> Optional[str]:
         """
         Uzun prompt'u argv'den stdin NDJSON yoluna taşır (AGY ile aynı desen).
 
         Önce `enforce_argv_limit` çağrılır: sistem istemi argv'de kaldıysa oradan
         çıkarılır. Sonra prompt ya kendi başına uzun olduğu için ya da argv
         toplamı hâlâ sınırın üstünde kaldığı için stdin'e taşınır.
+
+        force=True (etkileşimli kart): uzunluğa bakılmaz. Takip mesajlarının
+        aynı borudan akabilmesi için süreç `--input-format stream-json` ile
+        başlamalıdır.
         """
         self.enforce_argv_limit(cmd)
         try:
@@ -981,7 +993,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             return None
         if idx + 1 >= len(cmd):
             return None
-        if not prompt_via_stdin(cmd[idx + 1]) and not argv_too_long(cmd):
+        if not force and not prompt_via_stdin(cmd[idx + 1]) and not argv_too_long(cmd):
             return None
         payload = build_stdin_prompt_payload(cmd[idx + 1])
         cmd[idx + 1] = ""
@@ -990,12 +1002,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         return payload
 
     @staticmethod
-    def _feed_stdin(proc, payload: Optional[str]):
+    def _feed_stdin(proc, payload: Optional[str], keep_open: bool = False):
         """
         Yükü ayrı iş parçacığından yazar: büyük prompt'ta boru kilitlenmesini önler.
 
         (Aynı gerekçe AGY köprüsünde ayrıntılı yazılı: biz stdin'e yazarken CLI
         stdout tamponunu doldurursa iki taraf birbirini bekler.)
+
+        keep_open=True (etkileşimli kart): stdin yazımdan sonra AÇIK kalır.
         """
         if not payload or getattr(proc, "stdin", None) is None:
             return None
@@ -1007,6 +1021,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             except Exception:
                 pass
             finally:
+                if keep_open:
+                    return
                 try:
                     proc.stdin.close()
                 except Exception:
@@ -1029,9 +1045,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         stream_meta: Optional[dict] = None,
         task_id: str = "",
         model: Optional[str] = None,
+        stop_on_result: bool = False,
     ) -> Dict[str, object]:
         """
         Claude stream-json satırlarını bus sinyallerine çevirir.
+
+        stop_on_result=True (etkileşimli kart): ilk `result` olayında okuma
+        DURUR ve dönüşte "stopped_on_result": True gelir. Yineleyici tüketilmiş
+        olmadığı için çağıran, kullanıcının takip mesajından sonra aynı akışla
+        bu metodu yeniden çağırıp bir sonraki turu okuyabilir.
 
         stream_meta / task_id / model: `bus.agent_stream` yükünün etiketi
         (ajan, ofis, kart). Sohbet yolu bunları geçmez; o zaman olaylar
@@ -1059,6 +1081,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         is_error = False
         tool_steps = 0
         step_limit_hit = False
+        stopped_on_result = False
 
         for raw_line in stream:
             if not raw_line:
@@ -1190,6 +1213,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     emit_stream("error", str(final or "").strip() or "Görev hatayla bitti.")
                 else:
                     emit_stream("result", "".join(text_parts))
+                if stop_on_result:
+                    stopped_on_result = True
+                    break
                 continue
 
         return {
@@ -1200,6 +1226,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "is_error": is_error,
             "tool_steps": tool_steps,
             "step_limit_hit": step_limit_hit,
+            "stopped_on_result": stopped_on_result,
         }
 
     # ------------------------------------------------------------------
@@ -1508,7 +1535,21 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 continue
         return dirs
 
-    def run_cwd(self, project_dir: Optional[Path]) -> Optional[str]:
+    @staticmethod
+    def _is_card_worktree(project_dir: Optional[Path]) -> bool:
+        """
+        Verilen dizin bir kart worktree'si mi (Faz 10-C).
+
+        Ölçüt tek satırlık ve git'in kendi sözleşmesi: BAĞLI (linked) bir
+        worktree'nin kökünde `.git` bir DOSYADIR (ana depoda klasördür). Kart
+        alanı köprüye taşınmadan aynı bilgiye ulaşılıyor.
+        """
+        try:
+            return project_dir is not None and (Path(project_dir) / ".git").is_file()
+        except OSError:
+            return False
+
+    def run_cwd(self, project_dir: Optional[Path], in_worktree: bool = False) -> Optional[str]:
         """
         Sürecin çalışma dizini.
 
@@ -1517,7 +1558,17 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         bellek dizini, `.claude/agents`, git durumu — literal cwd'den değil GİT
         KÖKÜNDEN çözüyor, bu yüzden depo içindeki bir alt klasör izolasyon
         sağlamıyor. Projeye dosya erişimi `--add-dir` ile verilir.
+
+        **İzolasyonun tek istisnası (Faz 10-C):** kartın `worktree` alanı
+        doluysa cwd o worktree'dir. Gerekçe ölçüldü: izole kipte cwd git
+        deposunun dışında kalıyor ve kartın `Bash` aracı `git status`
+        çalıştırdığında "not a git repository" alıyordu. Worktree kartın KENDİ
+        ağacıdır (`--add-dir` zaten oraya işaret ediyor), yani izolasyonun asıl
+        amacı — Claude'un kullanıcının deposunu proje sanması — bozulmaz.
         """
+        if in_worktree or self._is_card_worktree(project_dir):
+            if project_dir is not None and Path(project_dir).exists():
+                return str(project_dir)
         if bool(getattr(config, "claude_isolated", False)):
             try:
                 return str(config_module.claude_workspace_path())
@@ -1810,9 +1861,26 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
         stream_meta: Optional[dict] = None,
+        interactive: bool = False,
+        on_followup_start: Optional[Callable[[str], object]] = None,
+        on_followup_end: Optional[Callable[[str], object]] = None,
+        tools: Optional[List[str]] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
+
+        tools: bu koşuda CLI'a `--tools` ile verilecek AÇIK araç listesi. None
+        ise liste izin kipinden türetilir (`tools_for`). Çağıran (ör. ofis
+        harness'i) ajanın `tools_policy` künyesini biliyorsa listeyi kendisi
+        geçer: salt-okunur bir orkestratör `accept-edits` kipinde koşsa bile
+        `Edit/Write/Bash` argv'ye HİÇ girmez, yani yasak istem metnine değil
+        CLI'a yazılmış olur.
+
+        interactive / on_followup_start / on_followup_end: etkileşimli kart kipi
+        (Faz 10-C), AGY köprüsündeki sözleşmenin aynısı. Süreç ilk `result`
+        olayından sonra canlı kalır; `send_followup` yeni tur başlatır. Aynı
+        süreç sürdüğü için `--resume` GEREKMEZ ve adım sayacı tur başına
+        sıfırlanır.
 
         stream_meta: `bus.agent_stream` yükünü etiketleyen bağlam
         ({"agent", "office", "card_id"}); harness/görev pompası geçmezse boş.
@@ -1840,7 +1908,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
-                  model, agent_spec, stream_meta),
+                  model, agent_spec, stream_meta, interactive,
+                  on_followup_start, on_followup_end, tools),
             daemon=True,
         ).start()
 
@@ -1852,20 +1921,60 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         CLI'ın stream-json kullanıcı olayı, uzun prompt yolunda zaten kullanılan
         `build_stdin_prompt_payload` ile aynıdır ({"type":"user",...}); ikinci
         bir şema icat edilmez. Süreç yoksa ya da stdin borusu kapalıysa False.
+
+        Etkileşimli kipte (Faz 10-C) mesaj oturuma verilir: işçi uyanır, akış
+        yeniden `working` olur, tur bitince `bus.task_followup_completed` yayılır.
         """
-        if not text or not str(text).strip():
+        emit_stream = self._agent_stream_emitter(task_id, self._stream_meta_for(task_id))
+        reason = followup_rejection(text)
+        if reason:
+            emit_stream("error", reason)
             return False
+
+        session = self._interactive_sessions.get(task_id)
+        if session is not None:
+            if session.closed or not session.alive():
+                self._interactive_sessions.pop(task_id)
+                emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
+                return False
+            if not session.send(str(text)):
+                emit_stream("error", "Takip mesajı gönderilemedi (terminal kapalı ya da kilit alınamadı).")
+                return False
+            emit_stream("status", "Takip mesajı gönderildi…", state="thinking")
+            return True
+
         with self._lock:
             proc = self._background_processes.get(task_id)
         stdin = getattr(proc, "stdin", None) if proc is not None else None
         if stdin is None or getattr(stdin, "closed", False):
+            emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
             return False
         try:
             stdin.write(build_stdin_prompt_payload(str(text)))
             stdin.flush()
         except Exception:
+            emit_stream("error", "Terminal kapalı: kartın süreci artık çalışmıyor.")
             return False
         return True
+
+    def _stream_meta_for(self, task_id: str) -> Optional[dict]:
+        """Kart akış etiketini (ajan/ofis/kart) görev başına hatırlar."""
+        with self._state_lock:
+            return dict(self._interactive_stream_meta.get(task_id) or {}) or None
+
+    def close_interactive(self, task_id: str, reason: str = "kullanıcı kapattı") -> bool:
+        """Etkileşimli kart terminalini kapatır (stdin kapanır, süreç sonlanır)."""
+        session = self._interactive_sessions.get(task_id)
+        if session is None:
+            return False
+        session.close(reason)
+        self.terminate_background_task(task_id)
+        self._interactive_sessions.pop(task_id)
+        return True
+
+    def interactive_task_ids(self) -> List[str]:
+        """Şu an canlı olan etkileşimli kart terminalleri."""
+        return self._interactive_sessions.active_ids()
 
     def background_conversation_id(self, task_id: str) -> Optional[str]:
         """Biten arka plan görevinin Claude oturum kimliği (`--resume` girdisi)."""
@@ -1898,8 +2007,20 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
         stream_meta: Optional[dict] = None,
+        interactive: bool = False,
+        on_followup_start: Optional[Callable[[str], object]] = None,
+        on_followup_end: Optional[Callable[[str], object]] = None,
+        tools: Optional[List[str]] = None,
     ) -> None:
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
+        # Kip bayrağı ayardan; kapalıysa hiçbir çağıran değişmeden Faz 10-B
+        # davranışına dönülür.
+        interactive = bool(interactive) and bool(
+            getattr(config, "desk_interactive_cards", True)
+        )
+        if interactive:
+            with self._state_lock:
+                self._interactive_stream_meta[task_id] = dict(stream_meta or {})
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -1927,6 +2048,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         write_acquired = False
         read_acquired = False
         notified = {"done": False}
+        card_success = False
+        interactive_session: Optional[InteractiveSession] = None
+        interactive_finalized = False
         try:
             if needs_write:
                 write_acquired = project_lock_manager.acquire_write(project_dir, timeout=BACKGROUND_LOCK_TIMEOUT)
@@ -1981,7 +2105,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 max_steps=max_steps,
                 system_prompt=card_system_prompt,
                 model=model,
-                tools=self.tools_for(mode, needs_write=bool(needs_write)),
+                # Açık liste geldiyse izin kipinden türetme YAPILMAZ: çağıranın
+                # araç sözleşmesi (ajan künyesi) kipin varsayılanını ezer.
+                tools=(
+                    [str(t).strip() for t in tools if str(t).strip()]
+                    if tools else self.tools_for(mode, needs_write=bool(needs_write))
+                ),
                 agents_json=(
                     self.entropy_agents_json()
                     if getattr(config, "claude_isolated", False) else None
@@ -1994,6 +2123,65 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             proc = None
             step_limit = {"error": None}
 
+            def _release_locks() -> None:
+                """Proje kilidini bırakır (bir kez; bayraklar sıfırlanır)."""
+                nonlocal write_acquired, read_acquired
+                if write_acquired:
+                    try:
+                        project_lock_manager.release_write(project_dir)
+                    except Exception:
+                        pass
+                    write_acquired = False
+                if read_acquired:
+                    try:
+                        project_lock_manager.release_read(project_dir)
+                    except Exception:
+                        pass
+                    read_acquired = False
+
+            def _finalize_followup(turn_result: Dict[str, object], turn: int) -> None:
+                """
+                Takip turunu sonuçlandırır (kart zaten kapandığı için ayrı yol).
+
+                Ledger'da yeni sütun açılmaz: aynı satırın token toplamları
+                artırılır. Claude'un usage'ı tur başına gelir (AGY'deki gibi
+                kümülatif değil), bu yüzden taban çıkarma gerekmez.
+                """
+                text = str(turn_result.get("text", "") or "").strip()
+                ok = bool(text) and not turn_result.get("is_error")
+                turn_usage = dict(turn_result.get("usage") or {})
+                if turn_usage:
+                    with self._state_lock:
+                        self.last_background_usage = dict(turn_usage)
+                        self.background_total_tokens += turn_usage.get("total_tokens", 0)
+                    bus.token_usage_updated.emit(turn_usage.get("total_tokens", 0))
+                    try:
+                        prev = task_ledger.get_task(task_id) or {}
+                        merged = {
+                            k: int(prev.get(k) or 0) + int(turn_usage.get(k) or 0)
+                            for k in ("input_tokens", "output_tokens", "total_tokens")
+                        }
+                        task_ledger.record_task_success(
+                            task_id=task_id,
+                            summary=mask_tool_output(text)[:300],
+                            usage=merged,
+                        )
+                    except Exception:
+                        pass
+                if not ok:
+                    emit_stream("error", text or "Takip turu yanıtsız bitti.")
+                try:
+                    bus.task_followup_completed.emit({
+                        "task_id": task_id,
+                        "card_id": str((stream_meta or {}).get("card_id") or ""),
+                        "text": text,
+                        "usage": turn_usage,
+                        "turn": int(turn),
+                        "success": ok,
+                    })
+                except Exception:
+                    pass
+
             def _on_step_limit(count: int, _task_id=task_id) -> None:
                 step_limit["error"] = (
                     f"{MAX_STEPS_MARKER} Araç adımı sınırı aşıldı "
@@ -2002,8 +2190,127 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 bus.terminal_output_received.emit(f"\n[{step_limit['error']}]\n")
                 self.terminate_background_task(_task_id)
 
+            def _finalize_card(result: Dict[str, object],
+                               ret_code_override: Optional[int] = None) -> None:
+                """
+                Kartın BİRİNCİ turunu sonlandırır: adım sınırı, oturum kimliği,
+                token muhasebesi, ledger, `on_result`, rapor ve `task_completed`.
+
+                Gövde Faz 10-B ile aynı; yalnızca ayrı bir ada taşındı, çünkü
+                etkileşimli kipte kart süreç canlıyken (turun `result` olayında)
+                finalize edilir — kullanıcı sonucu beklemek zorunda kalmasın.
+
+                ret_code_override: etkileşimli kipte `proc.wait()` çağrılmaz;
+                turun `result` olayı başarının kendisidir.
+                """
+                nonlocal execution_error, ret_code, card_success
+                if ret_code_override is not None:
+                    ret_code = ret_code_override
+                # Adım sınırı, süreç öldürülürken doğan boru hatalarının ÖNÜNDE
+                # gelir: kullanıcı "görev neden bitti" sorusunun gerçek yanıtını
+                # görmeli, öldürmenin yan etkisini değil.
+                if step_limit["error"]:
+                    execution_error = step_limit["error"]
+
+                # Oturum kimliği: ofis konuşmasının sürdürülebilmesi için saklanır.
+                session_id = result.get("session_id")
+                if session_id:
+                    with self._lock:
+                        self._background_conversations[task_id] = str(session_id)
+
+                full_text = str(result.get("text", "") or "").strip()
+                success = (
+                    ret_code == 0
+                    and bool(full_text)
+                    and execution_error is None
+                    and not result.get("is_error")
+                )
+                card_success = success
+                task_usage = dict(result.get("usage") or {})
+
+                if task_usage:
+                    with self._state_lock:
+                        self.last_background_usage = dict(task_usage)
+                        self.background_total_tokens += task_usage.get("total_tokens", 0)
+                        running_total = self.background_total_tokens
+                    bus.terminal_output_received.emit(
+                        f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
+                        f"(girdi {task_usage.get('input_tokens', 0):,} / "
+                        f"çıktı {task_usage.get('output_tokens', 0):,}) — "
+                        f"arka plan toplamı {running_total:,}\n"
+                    )
+                    bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
+
+                # Ledger özeti ve tamamlanma özeti maskelenir: araç çıktısı blokları
+                # özet için bilgi taşımaz ama satırı (ve sonraki bağlamı) şişirir.
+                masked = mask_tool_output(full_text)
+                if success:
+                    task_ledger.record_task_success(
+                        task_id=task_id, summary=masked[:300], usage=task_usage or None
+                    )
+                elif not self._shutting_down:
+                    # usage ile: başarısız görev de token yaktı. Sütun NULL kalırsa
+                    # `OfficeHarness.ledger_tokens` None döner ve ofis bütçesi
+                    # gerçek maliyeti değil karakter/4 tahminini sayar — canlı
+                    # koşuda başarısız bir Claude alt kartının maliyeti muhasebeye
+                    # hiç girmedi. AGY köprüsündeki A7a davranışıyla eşitlendi.
+                    task_ledger.record_task_failure(
+                        task_id=task_id,
+                        error=execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}",
+                        usage=task_usage or None,
+                    )
+
+                notified["done"] = True
+                self._notify_result(on_result, full_text, success)
+
+                if not save_report:
+                    bus.task_completed.emit(task_id, success)
+                    bus.terminal_output_received.emit(f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n")
+                    return
+
+                clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
+                time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+                try:
+                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+
+                    vm = ObsidianVaultManager()
+                    report = (
+                        f"# Otonom Görev Raporu: {task_name}\n\n"
+                        f"- **Görev Kimliği**: `{task_id}`\n"
+                        f"- **Sağlayıcı**: claude\n"
+                        f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
+                        f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
+                    )
+                    # Rapor, görevin hangi yeteneğin işi olduğuna atfedilir: atıfsız
+                    # rapor hiçbir yetenek için damıtma kaynağı sayılmıyor (AGY
+                    # köprüsündeki davranışla aynı).
+                    try:
+                        detected = self.detect_skill_for_prompt(prompt)
+                        task_skill = detected.name if detected else None
+                    except Exception:
+                        task_skill = None
+                    rep_path = vm.save_research_report(
+                        f"Gorev_{clean_name}_{time_tag}",
+                        report,
+                        tags=["otonom_gorev", task_id],
+                        project_name=self.active_project_dir.name if self.active_project_dir else None,
+                        skill_name=task_skill,
+                    )
+                    bus.task_notification.emit(task_id, task_name, str(rep_path))
+                    bus.knowledge_graph_updated.emit()
+                except Exception as e:
+                    bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
+                    bus.task_notification.emit(task_id, task_name, masked[:200])
+
+                bus.task_completed.emit(task_id, success)
+                bus.terminal_output_received.emit(
+                    f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
+                )
+
             try:
-                stdin_payload = self._apply_stdin_prompt(cmd)
+                # Etkileşimli kipte istem her zaman stdin'den gider (takip
+                # mesajları aynı borudan akacak).
+                stdin_payload = self._apply_stdin_prompt(cmd, force=interactive)
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -2017,7 +2324,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     env=self.process_env(),
                     cwd=self.run_cwd(project_dir),
                 )
-                writer = self._feed_stdin(proc, stdin_payload)
+                writer = self._feed_stdin(proc, stdin_payload, keep_open=interactive)
                 with self._lock:
                     late = self._shutting_down
                     if not late:
@@ -2028,21 +2335,78 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
                 readline_fn = getattr(proc.stdout, "readline", None)
                 stream = iter(readline_fn, "") if callable(readline_fn) else iter(proc.stdout)
-                result = self.consume_stream(
-                    stream,
-                    max_steps=max_steps,
-                    on_step_limit=_on_step_limit,
-                    stream_meta=stream_meta,
-                    task_id=task_id,
-                    model=model,
-                )
+
+                if interactive:
+                    interactive_session = InteractiveSession(
+                        task_id,
+                        proc,
+                        build_stdin_prompt_payload,
+                        idle_timeout=float(
+                            getattr(config, "desk_interactive_idle_timeout_s", None)
+                            or INTERACTIVE_IDLE_TIMEOUT_S
+                        ),
+                        on_followup_start=on_followup_start,
+                        on_followup_end=on_followup_end,
+                    )
+                    self._interactive_sessions.register(interactive_session)
+
+                # Tur döngüsü. Kip kapalıyken tek kez döner ve akış EOF'a kadar
+                # okunur (eski davranış). Açıkken her `result` olayında okuma
+                # durur, tur sonuçlanır ve kullanıcının takip mesajı beklenir;
+                # aynı süreç sürdüğü için `--resume` gerekmez, adım sayacı da
+                # her `consume_stream` çağrısında sıfırdan başlar (tur başına).
+                interactive_turn = 0
+                while True:
+                    result = self.consume_stream(
+                        stream,
+                        max_steps=max_steps,
+                        on_step_limit=_on_step_limit,
+                        stream_meta=stream_meta,
+                        task_id=task_id,
+                        model=model,
+                        stop_on_result=interactive,
+                    )
+                    if not (
+                        interactive
+                        and result.get("stopped_on_result")
+                        and interactive_session is not None
+                    ):
+                        break
+
+                    if interactive_turn == 0:
+                        _finalize_card(result, ret_code_override=0)
+                        interactive_finalized = True
+                        # Bekleyen terminal koşan kart değildir: proje kilidi ve
+                        # ofis paralellik sayacı burada serbest kalır.
+                        _release_locks()
+                    else:
+                        _finalize_followup(result, interactive_turn)
+                        interactive_session.finish_turn()
+
+                    emit_stream("status", "Takip mesajı bekliyor…", state="idle")
+                    if not interactive_session.wait_for_followup():
+                        emit_stream(
+                            "status",
+                            f"Terminal kapandı ({interactive_session.close_reason or 'kapatıldı'}).",
+                            state="idle",
+                        )
+                        break
+                    interactive_turn += 1
+                    emit_stream("status", "Takip mesajı alındı; sürdürülüyor…", state="working")
+
                 if writer is not None:
                     writer.join(timeout=5.0)
                 try:
                     proc.stdout.close()
                 except Exception:
                     pass
-                ret_code = proc.wait()
+                if interactive_finalized:
+                    try:
+                        ret_code = proc.wait(timeout=5.0)
+                    except Exception:
+                        ret_code = -1
+                else:
+                    ret_code = proc.wait()
             except Exception as e:
                 execution_error = str(e)
                 bus.terminal_output_received.emit(
@@ -2052,6 +2416,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             finally:
                 with self._lock:
                     self._background_processes.pop(task_id, None)
+                if interactive_session is not None:
+                    interactive_session.close("tur döngüsü bitti")
+                    self._interactive_sessions.pop(task_id)
+                    with self._state_lock:
+                        self._interactive_stream_meta.pop(task_id, None)
                 self.cleanup_system_prompt_file(self.system_prompt_file_in(cmd))
                 try:
                     if proc and proc.poll() is None:
@@ -2059,105 +2428,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 except Exception:
                     pass
 
-            # Adım sınırı, süreç öldürülürken doğan boru hatalarının ÖNÜNDE
-            # gelir: kullanıcı "görev neden bitti" sorusunun gerçek yanıtını
-            # görmeli, öldürmenin yan etkisini değil.
-            if step_limit["error"]:
-                execution_error = step_limit["error"]
+            # Etkileşimli kartta finalize DÖNGÜ İÇİNDE yapıldı; ikinci kez
+            # çalıştırmak ledger'ı, raporu ve `on_result`u tekrarlardı.
+            if not interactive_finalized:
+                _finalize_card(result)
 
-            # Oturum kimliği: ofis konuşmasının sürdürülebilmesi için saklanır.
-            session_id = result.get("session_id")
-            if session_id:
-                with self._lock:
-                    self._background_conversations[task_id] = str(session_id)
-
-            full_text = str(result.get("text", "") or "").strip()
-            success = (
-                ret_code == 0
-                and bool(full_text)
-                and execution_error is None
-                and not result.get("is_error")
-            )
-            task_usage = dict(result.get("usage") or {})
-
-            if task_usage:
-                with self._state_lock:
-                    self.last_background_usage = dict(task_usage)
-                    self.background_total_tokens += task_usage.get("total_tokens", 0)
-                    running_total = self.background_total_tokens
-                bus.terminal_output_received.emit(
-                    f"[Token] {task_name}: {task_usage.get('total_tokens', 0):,} "
-                    f"(girdi {task_usage.get('input_tokens', 0):,} / "
-                    f"çıktı {task_usage.get('output_tokens', 0):,}) — "
-                    f"arka plan toplamı {running_total:,}\n"
-                )
-                bus.token_usage_updated.emit(task_usage.get("total_tokens", 0))
-
-            # Ledger özeti ve tamamlanma özeti maskelenir: araç çıktısı blokları
-            # özet için bilgi taşımaz ama satırı (ve sonraki bağlamı) şişirir.
-            masked = mask_tool_output(full_text)
-            if success:
-                task_ledger.record_task_success(
-                    task_id=task_id, summary=masked[:300], usage=task_usage or None
-                )
-            elif not self._shutting_down:
-                # usage ile: başarısız görev de token yaktı. Sütun NULL kalırsa
-                # `OfficeHarness.ledger_tokens` None döner ve ofis bütçesi
-                # gerçek maliyeti değil karakter/4 tahminini sayar — canlı
-                # koşuda başarısız bir Claude alt kartının maliyeti muhasebeye
-                # hiç girmedi. AGY köprüsündeki A7a davranışıyla eşitlendi.
-                task_ledger.record_task_failure(
-                    task_id=task_id,
-                    error=execution_error or f"Çıkış kodu: {ret_code}, yanıt uzunluğu: {len(full_text)}",
-                    usage=task_usage or None,
-                )
-
-            notified["done"] = True
-            self._notify_result(on_result, full_text, success)
-
-            if not save_report:
-                bus.task_completed.emit(task_id, success)
-                bus.terminal_output_received.emit(f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n")
-                return
-
-            clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
-            time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-            try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-
-                vm = ObsidianVaultManager()
-                report = (
-                    f"# Otonom Görev Raporu: {task_name}\n\n"
-                    f"- **Görev Kimliği**: `{task_id}`\n"
-                    f"- **Sağlayıcı**: claude\n"
-                    f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
-                    f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
-                )
-                # Rapor, görevin hangi yeteneğin işi olduğuna atfedilir: atıfsız
-                # rapor hiçbir yetenek için damıtma kaynağı sayılmıyor (AGY
-                # köprüsündeki davranışla aynı).
-                try:
-                    detected = self.detect_skill_for_prompt(prompt)
-                    task_skill = detected.name if detected else None
-                except Exception:
-                    task_skill = None
-                rep_path = vm.save_research_report(
-                    f"Gorev_{clean_name}_{time_tag}",
-                    report,
-                    tags=["otonom_gorev", task_id],
-                    project_name=self.active_project_dir.name if self.active_project_dir else None,
-                    skill_name=task_skill,
-                )
-                bus.task_notification.emit(task_id, task_name, str(rep_path))
-                bus.knowledge_graph_updated.emit()
-            except Exception as e:
-                bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
-                bus.task_notification.emit(task_id, task_name, masked[:200])
-
-            bus.task_completed.emit(task_id, success)
-            bus.terminal_output_received.emit(
-                f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"
-            )
         except Exception as outer_err:
             try:
                 rec = task_ledger.get_task(task_id)
@@ -2241,6 +2516,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             if self._shutting_down:
                 return {"processes": 0, "tasks": 0, "threads": 0}
             self._shutting_down = True
+        # Etkileşimli terminaller önce salıverilir: bekleyen işçi iş parçacığı
+        # uyanmazsa kapanış boru hatasını beklerken uzar.
+        self._interactive_sessions.close_all("uygulama kapanıyor")
+        with self._lock:
             procs = list(self._background_processes.values())
             self._background_processes.clear()
             current = self._current_process

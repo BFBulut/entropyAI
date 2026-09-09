@@ -137,6 +137,9 @@ def _office_card(board, title="Modülü yaz", office="alfa-ofisi"):
     ))
 
 
+# Değerlendiricinin boş not yanıtı (json bloğu); tek yerde durur.
+EMPTY_GRADES_JSON = '```json\n{"grades": []}\n```'
+
 GREEN_PROOF = (
     "Modül bitti.\n\n"
     "[KANIT]\n"
@@ -488,12 +491,31 @@ def test_card_scoped_comment_does_not_leak_into_plan_prompt(seeded, board, offic
 # ---------------------------------------------------------------------------
 
 
+class _FakeStdin:
+    """Yazılan NDJSON yükünü saklayan sahte boru (Faz 10-D: istem stdin'den)."""
+
+    def __init__(self):
+        self.written = []
+        self.closed = False
+
+    def write(self, payload):
+        self.written.append(payload)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
 class _FakeProc:
     def __init__(self, lines, returncode=0):
         self._lines = list(lines)
         self.returncode = returncode
         self.pid = 999010
-        self.stdin = None
+        # Etkileşimli kart kipinde (Faz 10-D) istem argv'ye değil stdin'e
+        # yazılır; stdin None olsaydı prompt hiçbir yerde görünmezdi.
+        self.stdin = _FakeStdin()
         self.stdout = self
 
     def readline(self):
@@ -551,15 +573,20 @@ def test_real_bridge_subcard_prompt_carries_spawn_and_proof_rules(
     prompts = []
     finished = threading.Event()
 
+    procs = []
+
     def fake_popen(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
         prompts.append(joined)
         if len(prompts) == 1:
-            return _FakeProc(_agy_lines(_plan("Ayrıştırıcı")))
-        if "degerlendirici" in joined:
+            proc = _FakeProc(_agy_lines(_plan("Ayrıştırıcı")))
+        elif "degerlendirici" in joined:
             finished.set()
-            return _FakeProc(_agy_lines('```json\n{"grades": []}\n```'))
-        return _FakeProc(_agy_lines(GREEN_PROOF))
+            proc = _FakeProc(_agy_lines(EMPTY_GRADES_JSON))
+        else:
+            proc = _FakeProc(_agy_lines(GREEN_PROOF))
+        procs.append(proc)
+        return proc
 
     monkeypatch.setattr("entropy.core.agy_bridge.subprocess.Popen", fake_popen)
 
@@ -568,6 +595,13 @@ def test_real_bridge_subcard_prompt_carries_spawn_and_proof_rules(
     assert harness.start(parent.id) is True
     assert _wait_until(lambda: board.get(parent.id).status in ("review", "failed"))
 
+    # İstem argv'de ya da (etkileşimli kartta) stdin yükünde olabilir; iki
+    # kaynak da taranır — kabloyu değil sözleşmeyi doğruluyoruz.
+    prompts = list(prompts) + [
+        json.loads(w)["message"]["content"]
+        for proc in procs
+        for w in getattr(proc.stdin, "written", [])
+    ]
     child_prompt = next(p for p in prompts if "GÖREV SÖZLEŞMESİ" in p)
     assert SPAWN_HEADER in child_prompt
     assert str(harness.workspace_paths()["board"]) in child_prompt
@@ -575,3 +609,159 @@ def test_real_bridge_subcard_prompt_carries_spawn_and_proof_rules(
 
     child = board.get(board.get(parent.id).children[0])
     assert child.status == "done" and "pytest" in child.proof
+
+
+def test_plan_prompt_stays_inside_its_char_budget(seeded, board, offices, vault):
+    """Şişkin ofis belleği/raporları plan istemini bütçenin üstüne çıkaramaz."""
+    from entropy.agents import harness as harness_module
+
+    reports = offices.reports_dir("alfa-ofisi")
+    reports.mkdir(parents=True, exist_ok=True)
+    for i in range(4):
+        (reports / f"rapor-{i}.md").write_text(
+            "\n\n".join(f"## Bolum {j}\n" + ("olcum satiri " * 40) for j in range(8)),
+            encoding="utf-8",
+        )
+    harness = _harness(board, offices, _ScriptedBridge([]))
+    card = _office_card(board)
+    prompt = harness.build_plan_prompt(seeded, card)
+
+    assert len(prompt) <= harness_module.PLAN_PROMPT_MAX_CHARS
+    # Şema ve doğuş talimatı kırpmadan sağ çıkar: plan ayrıştırılamazsa tur
+    # tamamen boşa giderdi.
+    assert SPAWN_HEADER in prompt and '"subtasks"' in prompt
+    if "[BİLGİ TAZELEME]" in prompt:
+        block = prompt.split("[BİLGİ TAZELEME]", 1)[1].split("[ÜST KART]", 1)[0]
+        assert len(block) <= harness_module.PLAN_CONTEXT_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# 7. Araç sözleşmesi CLI düzeyinde (Faz 10 kapanış düzeltmesi)
+# ---------------------------------------------------------------------------
+
+
+def _claude_lines(text):
+    return [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "s-tools"}) + "\n",
+        json.dumps({"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": text}]}}) + "\n",
+        json.dumps({"type": "result", "subtype": "success", "session_id": "s-tools",
+                    "usage": {"input_tokens": 10, "output_tokens": 5}}) + "\n",
+    ]
+
+
+def test_orchestrator_cli_tools_are_read_only(board, offices, tmp_path, monkeypatch):
+    """
+    GERÇEK Claude köprüsü (Popen taklidi): orkestratörün plan/değerlendirme
+    argv'sinde YALNIZCA salt-okunur araçlar var; alt kart yolunda yazma
+    araçları duruyor. Kural artık istem metninde değil CLI'da zorlanıyor.
+    """
+    import sys as _sys
+
+    from entropy.core.claude_bridge import ClaudeCodeBridge
+    from entropy.core.config import config
+
+    # `entropy.core` paketi 'config' adını config NESNESİNE bağlıyor; modül
+    # düzeyindeki sabitler için gerçek modül gerekiyor.
+    config_module = _sys.modules["entropy.core.config"]
+    from entropy.core.task_ledger import TaskLedger
+
+    # `--tools` yalnızca saf kipte argv'ye giriyor; ölçüm o kipte yapılır.
+    monkeypatch.setattr(config_module, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setattr(config, "claude_isolated", True)
+    monkeypatch.setattr(config, "claude_workspace_dir", str(tmp_path / "workspace"))
+    monkeypatch.setattr(config, "desk_interactive_cards", False)
+    monkeypatch.setattr("entropy.core.claude_bridge.task_ledger",
+                        TaskLedger(db_path=tmp_path / "ledger.db"))
+    monkeypatch.setattr(ClaudeCodeBridge, "find_claude_executable",
+                        lambda self: "claude", raising=False)
+
+    workdir = tmp_path / "proje-claude"
+    workdir.mkdir()
+    offices.create(DeskOffice(
+        name="beta-ofisi", purpose="Kod yazar.", charter="Kanıtla kapat.",
+        default_provider="claude", budget_tokens=1_000_000, workdir=str(workdir),
+    ))
+    agents = offices.agents("beta-ofisi")
+    agents.update(AgentSpec(name="isci", role="worker", description="kod yazar",
+                            provider="claude", tools_policy="read-write"))
+
+    bridge = ClaudeCodeBridge()
+    bridge.active_project_dir = tmp_path
+    monkeypatch.setattr(bridge, "_save_task_report", lambda *a, **k: "", raising=False)
+
+    calls = []
+
+    class _LazyProc(_FakeProc):
+        """Yanıtı stdin'e YAZILAN isteme göre seçer.
+
+        Claude köprüsü uzun istemi argv'ye değil `--input-format stream-json`
+        ile stdin'e yazıyor; argv'ye bakan bir taklit her turda aynı yanıtı
+        verirdi.
+        """
+
+        def __init__(self):
+            super().__init__([])
+            self.filled = False
+
+        def readline(self):
+            if not self._lines and not self.filled:
+                self.filled = True
+                import time as _time
+
+                # İstem stdin'e Popen'DAN SONRA yazılıyor; okuyucu iş parçacığı
+                # daha erken uyanırsa yanlış dalı seçerdik.
+                end = _time.time() + 5.0
+                while not self.stdin.written and _time.time() < end:
+                    _time.sleep(0.02)
+                text = " ".join(self.stdin.written)
+                if "İSTENEN ÇIKTI" in text:
+                    body = _plan("Ayrıştırıcı")
+                elif "NOT" in text and "KANIT" in text and "ölçüt" in text.lower():
+                    body = EMPTY_GRADES_JSON
+                elif "GÖREV SÖZLEŞMESİ" in text:
+                    body = GREEN_PROOF
+                else:
+                    body = EMPTY_GRADES_JSON
+                self._lines = list(_claude_lines(body))
+            return super().readline()
+
+    def fake_popen(cmd, **kwargs):
+        proc = _LazyProc()
+        calls.append(([str(c) for c in cmd], proc))
+        return proc
+
+    monkeypatch.setattr("entropy.core.claude_bridge.subprocess.Popen", fake_popen)
+
+    parent = board.create(TaskCard(
+        id=new_task_id("Beta modülü"), title="Beta modülü", status="backlog",
+        agent="orkestrator", provider="claude", goal="Modülü yaz.",
+        criteria=["Testler yeşil"], office="beta-ofisi",
+    ))
+    harness = OfficeHarness("beta-ofisi", board=board, offices=offices,
+                            bridge_factory=lambda provider: bridge)
+    assert harness.start(parent.id) is True
+    # Ölçülen şey argv; kartın bitişi değil (etkileşimli kip süreci canlı
+    # tutabiliyor). Plan + alt kart çağrıları görülünce yeterli.
+    assert _wait_until(lambda: any(
+        "GÖREV SÖZLEŞMESİ" in " ".join(proc.stdin.written) for _, proc in list(calls)
+    ), timeout=30.0)
+
+    def _tools(cmd):
+        return cmd[cmd.index("--tools") + 1].split(",")
+
+    def _cmd_for(needle):
+        for cmd, proc in calls:
+            if needle in " ".join(cmd) or needle in " ".join(proc.stdin.written):
+                return cmd
+        raise AssertionError(f"'{needle}' içeren çağrı yok ({len(calls)} çağrı)")
+
+    plan_cmd = _cmd_for("İSTENEN ÇIKTI")
+    assert _tools(plan_cmd) == ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]
+    for banned in ("Edit", "Write", "Bash"):
+        assert banned not in _tools(plan_cmd)
+    # İzin kipi değişmedi: yasak araç listesinde, izin isteminde değil.
+    assert plan_cmd[plan_cmd.index("--permission-mode") + 1] == "acceptEdits"
+
+    worker_cmd = _cmd_for("GÖREV SÖZLEŞMESİ")
+    assert "Write" in _tools(worker_cmd) and "Bash" in _tools(worker_cmd)

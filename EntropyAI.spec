@@ -20,6 +20,10 @@ a = Analysis(
         # "öğreniyor" ve var olmayan ajanları sayıyordu. Tek gerçek kaynak
         # kasadaki `Entropy/Agents` kayıt defteridir (entropy.agents.registry).
         ('src/entropy/desk/assets', 'entropy/desk/assets'),
+        # Faz 10-C: yerleşik ekip şablonları (Araştırma/Refaktör/QA/Medya).
+        # Salt veri (`OFFICE.md` + `agents/*/AGENT.md`); ilk kullanımda kasadaki
+        # `Desk/Templates` klasörüne KOPYALANIR, kasada varsa dokunulmaz.
+        ('src/entropy/desk/templates', 'entropy/desk/templates'),
     ],
     hiddenimports=[
         'PySide6',
@@ -50,6 +54,9 @@ a = Analysis(
         'entropy.memory.promoted_rules',
         'entropy.ui.widgets.rules_panel',
         'entropy.desk.terminals_panel',
+        'entropy.desk.changes_panel',
+        'entropy.desk.receipt',
+        'entropy.desk.receipt_panel',
         'entropy.ui',
         'entropy.ui.manager',
         'entropy.ui.themes.cyber_theme',
@@ -99,6 +106,13 @@ a = Analysis(
         # Faz 6: Desk kayit defteri, ofis grafigi, piksel sahne motoru,
         # pencere sigdirma ve efor secici.
         'entropy.agents.desk_registry',
+        # Faz 10-C: bu moduller yalnizca calisma aninda importlib ile
+        # cagriliyor; PyInstaller statik tarayicisi goremedigi icin paketten
+        # dusuyor ve .exe'de worktree/PR/sablon/makbuz yollari sessizce
+        # kapaniyordu.
+        'entropy.agents.worktrees',
+        'entropy.agents.pr_flow',
+        'entropy.agents.templates',
         'entropy.memory.office_graph',
         'entropy.desk.engine',
         'entropy.desk.engine.assets',

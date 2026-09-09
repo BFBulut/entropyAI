@@ -30,7 +30,17 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Yaprak düğümler arasında kurulan k-NN benzerlik kenarları. Kosinüs eşiği
 # altındaki çiftler bağlanmaz; k komşu, düğüm başına üst sınırdır.
 SIMILARITY_K = 3  # Faz 8: k=4 iken 716 benzerlik kenari (JSON %13); k=3 kumelemeyi bozmuyor
-SIMILARITY_MIN = 0.34
+# Faz 10-C kalibrasyonu: 0.34 sabit esigi KORPUS BUYUKLUGUNE duyarliydi.
+# Kucuk korpusta (60 rapor) idf agirliklari yayiliyor, iki kelimelik
+# basliklarda kosinus 0.23'e dusuyor ve HIC kenar uretilmiyordu; buyuk
+# korpusta ise ayni esik gereginden gevsekti. Artik kural "dugum basina en iyi
+# k komsu + mutlak taban": esik seyrek/yogun korpusta ayni davranir, taban
+# yalnizca anlamsiz (tek ortak yaygin belirtec) ciftleri eler.
+SIMILARITY_MIN = 0.18
+# `faz72`, `2026-09`, `v0.7.1` gibi belirtecler ayirt edici GORUNUR (idf
+# yuksek) ama anlamsal degil: normalize vektorde payi ezip gercek konu
+# belirtecinin katkisini dusururler. TF-IDF'ten cikarilirlar.
+SIMILARITY_NUMERIC_RE = re.compile(r"^[a-zçğıöşü]{0,6}\d+[a-z0-9]*$")
 # Benzerlik hesabına giren yaprak grupları (dal/hub düğümleri hariç).
 SIMILARITY_GROUPS = {"Reports", "obsidian", "semantic", "episodic", "procedural", "DailyNotes"}
 
@@ -47,6 +57,10 @@ def _similarity_tokens(name: str) -> List[str]:
     out = []
     for tok in slug.split("-"):
         if len(tok) < 4 or tok in SIMILARITY_STOPWORDS or tok.isdigit():
+            continue
+        # Faz/tarih/surum belirtecleri (faz72, 2026, v071) elenir: benzersiz
+        # olduklari icin idf'leri en yuksek, anlamsal katkilari sifir.
+        if SIMILARITY_NUMERIC_RE.match(tok):
             continue
         out.append(tok)
     return out

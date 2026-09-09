@@ -69,6 +69,11 @@ class EntropyEventBus(QObject):
     task_triggered = Signal(str, str)    # task_id, task_name
     task_completed = Signal(str, bool)   # task_id, success
     task_notification = Signal(str, str, str) # task_id, task_name, report_path_or_summary
+    # Etkileşimli kartta (Faz 10-C) bir TAKİP turu bitti. Kartın kendisi ilk
+    # sonuçta zaten `task_completed` ile kapandığı için ikinci bir tamamlanma
+    # sinyali yayılamaz; bölmeyi güncelleyen arayüz bunu dinler.
+    # Yük: {"task_id", "card_id", "text", "usage", "turn", "success"}
+    task_followup_completed = Signal(dict)
 
     # Knowledge & Reports
     report_created = Signal(str)         # report_path

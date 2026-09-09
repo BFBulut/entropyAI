@@ -97,6 +97,22 @@ def office_spend(office: str) -> Optional[dict]:
         return None
 
 
+def _worktrees_fn(name: str) -> Optional[Any]:
+    """
+    `entropy.agents.worktrees.<name>` guard'lı okuma.
+
+    `importlib.import_module` kullanılır (paket özniteliği değil): sözleşme
+    modülü henüz yoksa ya da testte yerine konmuşsa doğru nesne bulunur.
+    """
+    try:
+        import importlib
+
+        fn = getattr(importlib.import_module("entropy.agents.worktrees"), name, None)
+    except Exception:
+        return None
+    return fn if callable(fn) else None
+
+
 def desk_target_screen() -> Optional[Any]:
     """Desk'in açılacağı ekran: ikinci monitör varsa o, yoksa birincil."""
     screens = list(QGuiApplication.screens())
@@ -227,6 +243,23 @@ class AgentDeskWindow(QMainWindow):
         self.spend_label.setStyleSheet("background: transparent; border: none;")
         self.spend_label.setVisible(False)
         header.addWidget(self.spend_label)
+
+        # Faz 10-D: yetim worktree uyarısı. Sayı `office_status`ün
+        # `orphan_worktrees` alanından, o yoksa `worktrees.list_orphans`tan
+        # gelir; sıfırsa düğme hiç görünmez (boş uyarı güven kaybettirir).
+        self.orphan_btn = QPushButton("")
+        self.orphan_btn.setFixedHeight(24)
+        self.orphan_btn.setToolTip(
+            "Kapatılamamış worktree'leri yeniden temizlemeyi dener "
+            "(worktrees.retry_orphans)."
+        )
+        self.orphan_btn.clicked.connect(self.clean_orphans)
+        self.orphan_btn.setVisible(False)
+        header.addWidget(self.orphan_btn)
+        self.orphan_status = QLabel("")
+        self.orphan_status.setStyleSheet("background: transparent; border: none;")
+        self.orphan_status.setVisible(False)
+        header.addWidget(self.orphan_status)
         try:
             from entropy.ui.widgets.provider_badge import ProviderStatusBadge
 
@@ -298,6 +331,11 @@ class AgentDeskWindow(QMainWindow):
         self.memory_view = self.memory_panel.memory_view
         self.terminals_panel = TerminalsPanel(
             parent=self, office="", bridge=self.bridge, board=self.board
+        )
+        # Faz 10-D: takip turu bitince kartın Değişiklikler/Makbuz bölmeleri
+        # tazelenir (alıcı QObject slotu, lambda değil).
+        self.terminals_panel.card_refresh_requested.connect(
+            self.board_panel.refresh_card_detail
         )
         terminals_tab = QWidget()
         terminals_layout = QVBoxLayout(terminals_tab)
@@ -413,6 +451,8 @@ class AgentDeskWindow(QMainWindow):
         if not info:
             self.spend_label.setVisible(False)
             self.spend_label.setText("")
+            # Harcama panosu yoksa da yetim worktree uyarısı gösterilebilir.
+            self.refresh_orphans({})
             return
         spent = int(info.get("spent_tokens", info.get("tokens", 0)) or 0)
         budget = int(info.get("budget_tokens", info.get("budget", 0)) or 0)
@@ -427,6 +467,76 @@ class AgentDeskWindow(QMainWindow):
         )
         self.spend_label.setToolTip(self.spend_tooltip(info))
         self.spend_label.setVisible(True)
+        self.refresh_orphans(info)
+
+    # ------------------------------------------------- yetim worktree'ler
+
+    def orphan_count(self, info: Optional[dict] = None) -> int:
+        """
+        Yetim worktree sayısı.
+
+        Öncelik `office_status`ün `orphan_worktrees` alanıdır (tek üretici);
+        alan henüz yoksa `worktrees.list_orphans(vault)` guard'lı okunur.
+        İkisi de yoksa 0 — uydurma sayı gösterilmez.
+        """
+        data = info if info is not None else office_spend(self.current_office)
+        value = (data or {}).get("orphan_worktrees")
+        if isinstance(value, (list, tuple, set)):
+            return len(value)
+        if isinstance(value, int):
+            return max(0, value)
+        fn = _worktrees_fn("list_orphans")
+        if fn is None:
+            return 0
+        try:
+            return len(list(fn(config.obsidian_vault_path) or []))
+        except Exception:
+            return 0
+
+    def refresh_orphans(self, info: Optional[dict] = None,
+                        keep_status: bool = False) -> int:
+        """
+        Düğmeyi sayıya göre gösterir/gizler.
+
+        `keep_status`: temizleme sonrası çağrıda bilgi satırı KORUNUR; aksi
+        halde sonucu yazan satır aynı karede silinirdi.
+        """
+        count = self.orphan_count(info)
+        if count > 0:
+            self.orphan_btn.setText(f"🧹 {count} yetim çalışma ağacı · temizle")
+        self.orphan_btn.setVisible(count > 0)
+        if not count and not keep_status:
+            self.orphan_status.setVisible(False)
+            self.orphan_status.setText("")
+        return count
+
+    @Slot()
+    def clean_orphans(self) -> dict:
+        """`worktrees.retry_orphans(vault)` çağırır ve sonucu şeride yazar."""
+        fn = _worktrees_fn("retry_orphans")
+        if fn is None:
+            self._set_orphan_status("Temizleme sözleşmesi bulunamadı.", ok=False)
+            return {}
+        try:
+            result = dict(fn(config.obsidian_vault_path) or {})
+        except Exception as exc:
+            self._set_orphan_status(f"Temizlenemedi: {exc}", ok=False)
+            return {}
+        cleaned = int(result.get("cleaned", result.get("removed", 0)) or 0)
+        left = int(result.get("remaining", result.get("failed", 0)) or 0)
+        text = f"{cleaned} çalışma ağacı temizlendi"
+        if left:
+            text += f" · {left} kaldı"
+        self._set_orphan_status(text, ok=not left)
+        self.refresh_orphans(keep_status=True)
+        return result
+
+    def _set_orphan_status(self, text: str, ok: bool = True) -> None:
+        color = RT["accent_alt"] if ok else RT["accent_warn"]
+        self.orphan_status.setText(
+            f"<span style='color:{color}; font-size:11px;'>{text}</span>"
+        )
+        self.orphan_status.setVisible(True)
 
     @staticmethod
     def spend_tooltip(info: dict) -> str:

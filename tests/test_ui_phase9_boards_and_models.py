@@ -250,6 +250,20 @@ class _FakeOfficeRegistry:
         self._names = [n for n in self._names if n != name]
         return True
 
+    def archive(self, name, dry_run=False):
+        """
+        Faz 10-C: panel artık `vault_hygiene.archive_office`'i doğrudan değil,
+        kayıt defterinin `archive()` sözleşmesi üzerinden çağırıyor (önce kart
+        worktree'leri bırakılır, canlı etkileşimli koşular kapatılır, sonra
+        klasör taşınır). Sahte defter bu sözleşmeyi gerçek `DeskRegistry`'ye
+        devrederek sıranın gerçekten işlediğini doğrular.
+        """
+        from entropy.agents.desk_registry import DeskRegistry
+
+        return DeskRegistry(vault_path=self.vault_path).archive(
+            name, dry_run=dry_run
+        )
+
 
 @pytest.fixture
 def desk_window(app, tmp_path, monkeypatch, mixed_vault):
