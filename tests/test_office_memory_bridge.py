@@ -109,7 +109,21 @@ def test_harness_writes_office_report_memory_and_log_to_vault(tmp_path, monkeypa
     offices = OfficeRegistry(vault_path=vault)
     board = TaskBoard(vault_path=vault)
     registry.ensure_defaults()
-    offices.ensure_defaults()
+    # Faz 6: tohum ofis yok; ofisi ve kadrosunu test kurar (ajanlar ofisin
+    # KENDİ defterinde, Entropy'nin `Entropy/Agents` kadrosunda değil).
+    from entropy.agents.desk_registry import DeskOffice
+    from entropy.agents.registry import AgentSpec
+
+    offices.create(DeskOffice(
+        name="arastirma-ofisi",
+        purpose="Araştırır.",
+        charter="Kabul standartları: kaynaklı yaz.",
+    ))
+    office_agents = offices.agents("arastirma-ofisi")
+    office_agents.update(AgentSpec(name="arastirmaci", role="worker",
+                                   description="Araştırır", provider="agy"))
+    office_agents.update(AgentSpec(name="degerlendirici", role="evaluator",
+                                   description="Notlar", provider="agy"))
 
     plan = "```json\n" + json.dumps({"subtasks": [
         {"title": "Kaynak taraması", "goal": "kaynakları listele",
@@ -124,7 +138,7 @@ def test_harness_writes_office_report_memory_and_log_to_vault(tmp_path, monkeypa
     ))
 
     harness = OfficeHarness(
-        "arastirma-ofisi", board=board, registry=registry,
+        "arastirma-ofisi", board=board,
         offices=offices, bridge_factory=lambda provider: _Bridge([
             ("office-plan", plan, True),
             ("card-", "Bulgular: A, B, C", True),

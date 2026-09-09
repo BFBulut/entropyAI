@@ -44,7 +44,9 @@ def test_builtin_commands_defined():
         assert cmd.name.startswith("/")
         assert len(cmd.description) > 5
         assert cmd.category == "builtin"
-        assert cmd.badge == "⚡ AGY"
+        # Faz 6: `/effort` gibi YEREL komutlar da bu listede duruyor (AGY'ye
+        # gitmez, kota harcamaz) ve "⚡ Yerel" rozeti taşır.
+        assert cmd.badge in ("⚡ AGY", "⚡ Yerel")
 
 def test_dynamic_skill_discovery(tmp_path):
     """Verify dynamic discovery of skills without restart or update."""

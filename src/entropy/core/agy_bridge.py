@@ -161,6 +161,13 @@ def prompt_via_stdin(prompt: str) -> bool:
     return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
 
 
+# `agy -p --help`: "--effort  Reasoning effort for the current CLI session
+# (low|medium|high)". Claude'un kümesinden dar; bu yüzden seviye listesi
+# sağlayıcı başına tutulur.
+AGY_EFFORT_LEVELS = ["low", "medium", "high"]
+DEFAULT_AGY_EFFORT = "high"
+
+
 class AgyProcessBridge(ProviderCommonMixin, QObject):
     """
     Bridges Entropy AI to the authenticated local Antigravity (agy) CLI.
@@ -183,6 +190,10 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         super().__init__(parent)
         self.selected_model: str = config.selected_model
         self.current_model: str = self.selected_model or config.model_fallback_name
+        # Akıl yürütme eforu ayardan gelir; geçersiz değer güvenli varsayılana
+        # düşer (geçersiz --effort değeri turu hiç başlatmaz).
+        _effort = (getattr(config, "provider_effort", {}) or {}).get("agy", "")
+        self.selected_effort: str = _effort if _effort in AGY_EFFORT_LEVELS else DEFAULT_AGY_EFFORT
         self.current_conversation_id: Optional[str] = config.last_conversation_id
         self.total_tokens_used: int = 0
         # Arka plan görevlerinin (damıtma, konsolidasyon, zamanlanmış araştırma)
@@ -342,6 +353,24 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         config.selected_model = model_name
         config.save_settings()
         bus.model_detected.emit(model_name)
+
+    def effort_levels(self) -> List[str]:
+        """`agy --effort` seviyeleri (`agy -p --help` ile doğrulandı)."""
+        return list(AGY_EFFORT_LEVELS)
+
+    def set_effort(self, level: str) -> None:
+        """Kalıcı efor seviyesini ayarlar; geçersiz seviye reddedilir."""
+        low = (level or "").strip().lower()
+        if low not in AGY_EFFORT_LEVELS:
+            raise ValueError(
+                f"Geçersiz efor '{level}'. Geçerli: {', '.join(AGY_EFFORT_LEVELS)}."
+            )
+        self.selected_effort = low
+        try:
+            config.provider_effort["agy"] = low
+            config.save_settings()
+        except Exception:
+            pass
 
     def fetch_available_models(self) -> List[str]:
         """Dynamically fetch supported models from 'agy models' CLI."""
@@ -712,14 +741,20 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             if conversation_id:
                 cmd.extend(["--conversation", str(conversation_id)])
 
+            # Efor önceliği: prompt'taki tek seferlik `/effort <seviye>` >
+            # boost/teamwork sezgisi > kalıcı ayar (self.selected_effort).
             effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', prompt, re.IGNORECASE)
             if effort_m:
-                cmd.extend(["--effort", effort_m.group(1).lower()])
+                effort = effort_m.group(1).lower()
             elif (
                 re.search(r'(?:^|\s)/boost\b', prompt, re.IGNORECASE) or
                 any(k in prompt.lower() for k in ["otonom kodlama", "proje geliştir", "geliştir", "boost", "teamwork", "subagent", "alt ajan"])
             ):
-                cmd.extend(["--effort", "high"])
+                effort = "high"
+            else:
+                effort = self.selected_effort
+            if effort in AGY_EFFORT_LEVELS:
+                cmd.extend(["--effort", effort])
 
             # Detect any explicit Windows paths in prompt and grant access via --add-dir
             for p_obj in extract_windows_paths(prompt):
@@ -1339,9 +1374,13 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         # Regex-based /effort command detection or automatic boost/teamwork high effort
         effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', raw_user_prompt, re.IGNORECASE)
         if effort_m:
-            cmd.extend(["--effort", effort_m.group(1).lower()])
+            effort = effort_m.group(1).lower()
         elif is_boost_intent or is_teamwork_intent:
-            cmd.extend(["--effort", "high"])
+            effort = "high"
+        else:
+            effort = self.selected_effort
+        if effort in AGY_EFFORT_LEVELS:
+            cmd.extend(["--effort", effort])
 
         if image_attachments:
             for img in image_attachments:

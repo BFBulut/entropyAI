@@ -8,9 +8,10 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.core.provider import create_bridge, switch_provider
-from entropy.ui.modes.chat_mode import ChatModeWindow
+from entropy.ui.modes.chat_mode import CHAT_MIN_SIZE, CHAT_SCREEN_RATIO, ChatModeWindow
 from entropy.ui.modes.floating_mode import FloatingModeWidget
-from entropy.ui.modes.zen_mode import ZenModeWindow
+from entropy.ui.modes.zen_mode import ZEN_MIN_SIZE, ZEN_SCREEN_RATIO, ZenModeWindow
+from entropy.ui.window_sizing import fit_window_to_screen
 
 class EntropyUIManager(QObject):
     """Controls window lifecycles and mode transitions for Entropy AI."""
@@ -140,11 +141,17 @@ class EntropyUIManager(QObject):
         if self.current_mode == "zen":
             self.floating_widget.hide()
             self.chat_window.hide()
-            if active_screen:
-                geom = active_screen.geometry()
-                self.zen_window.setGeometry(geom)
-                self.zen_window.setScreen(active_screen)
-            self.zen_window.showFullScreen()
+            # Faz 6: tam ekran yerine kullanilabilir alanin %92'si, ortalanmis.
+            # Gorev cubugu erisilebilir kalir ve Agent Desk ayni ekranda acilabilir.
+            fit_window_to_screen(
+                self.zen_window,
+                ratio=ZEN_SCREEN_RATIO,
+                min_size=ZEN_MIN_SIZE,
+                screen=active_screen,
+            )
+            self.zen_window.show()
+            self.zen_window.raise_()
+            self.zen_window.activateWindow()
         elif self.current_mode == "floating":
             self.zen_window.hide()
             self.chat_window.hide()
@@ -160,11 +167,14 @@ class EntropyUIManager(QObject):
             self.zen_window.hide()
             self.floating_widget.hide()
             if active_screen and not self.chat_window.isVisible():
-                s_geom = active_screen.geometry()
-                self.chat_window.setScreen(active_screen)
-                self.chat_window.move(
-                    s_geom.x() + (s_geom.width() - self.chat_window.width()) // 2,
-                    s_geom.y() + (s_geom.height() - self.chat_window.height()) // 2
+                # Faz 6: konumlama tam ekran degil kullanilabilir alana gore;
+                # pencere gorev cubugunun altina kaymaz.
+                fit_window_to_screen(
+                    self.chat_window,
+                    ratio=CHAT_SCREEN_RATIO,
+                    min_size=CHAT_MIN_SIZE,
+                    screen=active_screen,
+                    keep_preferred=True,
                 )
             self.chat_window.show()
             self.chat_window.raise_()

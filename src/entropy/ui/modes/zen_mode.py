@@ -32,6 +32,7 @@ from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
 from entropy.ui.widgets.timeline_panel import TimelinePanel
+from entropy.ui.widgets.effort_selector import install_effort_selector
 from entropy.ui.widgets.ui_polish import apply_model_placeholder
 from entropy.ui.widgets.core_visualizer import CoreVisualizerWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
@@ -44,6 +45,12 @@ from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
+from entropy.ui.window_sizing import fit_window_to_screen
+
+# Faz 6: 1366x768 ekranda da taşmayan asgari boyut ve ekran doluluk oranı.
+ZEN_MIN_SIZE = (1100, 680)
+ZEN_SCREEN_RATIO = 0.92
+
 
 class ZenModeWindow(QMainWindow):
     """Zen Mode: Borderless fullscreen immersive AI engineering environment."""
@@ -66,6 +73,12 @@ class ZenModeWindow(QMainWindow):
 
         self._init_ui()
         self._connect_signals()
+
+        # Faz 6: pencere ekranın tamamını değil, kullanılabilir alanın en çok
+        # %92'sini kaplar ve ortalanır. Böylece görev çubuğu görünür kalır ve
+        # ikinci pencere (Agent Desk) aynı ekranda yaşayabilir.
+        self.setMinimumSize(*ZEN_MIN_SIZE)
+        fit_window_to_screen(self, ratio=ZEN_SCREEN_RATIO, min_size=ZEN_MIN_SIZE)
 
     def _init_ui(self):
         central = QWidget()
@@ -165,6 +178,9 @@ class ZenModeWindow(QMainWindow):
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
 
+        # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
+        self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
+
         h_layout.addSpacing(6)
 
         # Token Usage Counter (RULE: agent-ui-routing)
@@ -237,7 +253,22 @@ class ZenModeWindow(QMainWindow):
         btn_close.clicked.connect(self.close)
         h_layout.addWidget(btn_close)
 
-        root_layout.addWidget(header)
+        # Faz 6: ust cubuk cok sayida rozet/dugme tasidigi icin ortak asgari
+        # genisligi ~2700 px'e ciktiyordu; 1366 px'lik ekranda pencerenin sag
+        # tarafi ekran disina tasiyordu. Cubuk yatay kaydirilabilir bir alana
+        # konur: icerik daralmaz, yalnizca gerektiginde kayar.
+        self.header_scroll = QScrollArea()
+        self.header_scroll.setObjectName("headerScroll")
+        self.header_scroll.setWidget(header)
+        self.header_scroll.setWidgetResizable(True)
+        self.header_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.header_scroll.setMinimumWidth(200)
+        self.header_scroll.setStyleSheet("QScrollArea#headerScroll { background: transparent; border: none; }")
+        header_h = max(header.sizeHint().height(), 44)
+        self.header_scroll.setFixedHeight(header_h + 14)
+        root_layout.addWidget(self.header_scroll)
 
         # 2. Main Workstation Area (Vertical Splitter)
         main_v_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -488,6 +519,11 @@ class ZenModeWindow(QMainWindow):
         self.terminal_pane = TerminalPaneWidget(title="Canlı AGY Çıktı Akışı ve Terminal")
         bottom_h_splitter.addWidget(self.terminal_pane)
 
+        # Faz 6: alt panellerin ortuk asgari genisligi (579 + 517 px) kucuk
+        # ekranlarda pencereyi tasiriyordu; acik ve kucuk minimumlarla splitter
+        # oranlari serbest kalir, icerik kendi kaydirma alanlarinda daralir.
+        chat_card.setMinimumWidth(260)
+        self.terminal_pane.setMinimumWidth(240)
         bottom_h_splitter.setSizes([550, 450])
         main_v_splitter.addWidget(bottom_h_splitter)
 

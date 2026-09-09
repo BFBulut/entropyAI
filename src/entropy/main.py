@@ -3,7 +3,8 @@
 import argparse
 import sys
 from pathlib import Path
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
 from entropy.core.config import config
@@ -21,6 +22,14 @@ def main():
     from entropy.core.config import STATE_DIR
     from entropy.core.crash_log import install_crash_logging
     install_crash_logging(STATE_DIR / "logs")
+
+    # Faz 6: yuksek DPI'da olcek yuvarlanmasi (125%/150%) pencere boyutlarini
+    # ekran disina tasiriyordu. PassThrough ile olcek yuvarlanmaz; QApplication
+    # kurulmadan once ayarlanmali, sonrasinda etkisizdir.
+    if QApplication.instance() is None:
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(config.app_name)

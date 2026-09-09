@@ -36,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -73,6 +74,39 @@ ARGV_PROMPT_SAFE_LIMIT = 26_500
 # 6000 karakter (~1500 token) AGY köprüsündeki bütçeyle aynı; orada da bağlam
 # bu değerle kırpılıyor.
 SYSTEM_PROMPT_CONTEXT_LIMIT = 6000
+
+# Windows CreateProcess komut satırını 32.767 karakterle sınırlar; aşıldığında
+# süreç hiç başlamaz ve Python `OSError: [WinError 206] The filename or
+# extension is too long` fırlatır. Kullanıcının gördüğü "The command line is too
+# long" hatası buydu: bilişsel bağlam + ajan manifesti `--append-system-prompt`
+# ile argv'ye giriyordu. Eşik bilinçli olarak sınırın epey altında: argv'ye
+# ayrıca --add-dir yolları, model ve oturum kimliği de ekleniyor.
+ARGV_TOTAL_SAFE_LIMIT = 28_000
+
+# Bu uzunluğu aşan sistem istemi argv'ye HİÇ yazılmaz, doğrudan dosyaya taşınır.
+# Tek başına sınırı aşmasa bile prompt'la toplandığında aşabilir; ayrıca dosya
+# yolu argv'yi sabit ~120 karakterde tutar.
+SYSTEM_PROMPT_ARGV_LIMIT = 4_000
+
+# `claude --help` çıktısı yalnızca `--append-system-prompt <prompt>` ve
+# `--system-prompt <prompt>` belgeliyor; ancak CLI ikilisi (bin/claude.exe)
+# `--append-system-prompt-file` / `--system-prompt-file` seçeneklerini de
+# tanıyor ("Cannot use both --append-system-prompt and
+# --append-system-prompt-file", "Append system prompt file not found" hata
+# metinleri ikilinin içinde). Dosya yolu tercih edilir; bayrağı tanımayan bir
+# sürümde bu sabit False yapılırsa köprü sistem istemini stdin'deki ilk
+# kullanıcı mesajının başına [SİSTEM BAĞLAMI] bloğu olarak koyar (aşağıdaki
+# yedek yol) ve argv yine kısa kalır.
+CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE = True
+
+# Sistem istemi dosyasının bayrağı ve stdin yedeğinin blok başlığı.
+SYSTEM_PROMPT_FILE_FLAG = "--append-system-prompt-file"
+SYSTEM_CONTEXT_BLOCK_HEADER = "[SİSTEM BAĞLAMI]"
+
+# `claude --effort <level>`: --help çıktısında "Effort level for the current
+# session (low, medium, high, xhigh, max)" olarak belgeli.
+CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+DEFAULT_CLAUDE_EFFORT = "high"
 
 # Entropy'nin iç kip adları -> Claude Code'un --permission-mode değerleri.
 # Claude yalnızca listedeki değerleri kabul eder; eşleşmeyen ad verilirse süreç
@@ -120,6 +154,37 @@ def build_stdin_prompt_payload(prompt: str) -> str:
 
 def prompt_via_stdin(prompt: str) -> bool:
     return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
+
+
+def argv_length(cmd: List[str]) -> int:
+    """
+    Komut satırının CreateProcess'e yazılacak toplam uzunluğu (yaklaşık).
+
+    Her argüman arasına bir boşluk, tırnaklanabilir argümanlar için de iki tırnak
+    eklenir; ölçüm bilinçli olarak KÖTÜMSER, çünkü eşiği azıcık aşan bir argv
+    süreç hiç başlamadan WinError 206 üretiyor.
+    """
+    total = 0
+    for part in cmd:
+        text = str(part)
+        total += len(text) + 3  # boşluk + iki olası tırnak
+    return total
+
+
+def argv_too_long(cmd: List[str]) -> bool:
+    return argv_length(cmd) > ARGV_TOTAL_SAFE_LIMIT
+
+
+def build_system_context_block(system_prompt: str, prompt: str) -> str:
+    """
+    Sistem istemini kullanıcı mesajının BAŞINA gömer (dosya bayrağı yoksa yedek).
+
+    Bayrak desteklenmediğinde tek güvenli yol budur: argv'de yalnızca kısa
+    bayraklar kalır, uzun metin stdin'den NDJSON olarak akar.
+    """
+    if not system_prompt:
+        return prompt
+    return f"{SYSTEM_CONTEXT_BLOCK_HEADER}\n{system_prompt}\n[/SİSTEM BAĞLAMI]\n\n{prompt}"
 
 
 def normalize_permission_mode(mode: Optional[str]) -> str:
@@ -171,6 +236,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         # taşınmaz: geçersiz --model değeri süreci başlatmadan hataya düşürür.
         self.selected_model: str = current if self._is_claude_model(current) else default_model
         self.current_model: str = self.selected_model
+        # Akıl yürütme eforu ayardan gelir; geçersiz/eksik değer güvenli
+        # varsayılana düşer, çünkü `--effort saçma` süreci hiç başlatmaz.
+        effort = (getattr(config, "provider_effort", {}) or {}).get("claude", "")
+        self.selected_effort: str = (
+            effort if effort in CLAUDE_EFFORT_LEVELS else DEFAULT_CLAUDE_EFFORT
+        )
         self.current_session_id: Optional[str] = None
         self.last_total_cost_usd: float = 0.0
 
@@ -342,6 +413,41 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         config.save_settings()
         bus.model_detected.emit(model_name)
 
+    @staticmethod
+    def describe_launch_error(exc: BaseException) -> str:
+        """
+        Süreç başlatma hatasını kullanıcının okuyabileceği Türkçe metne çevirir.
+
+        WinError 206 özel olarak açıklanır: kullanıcı "The command line is too
+        long" satırından sorunun bağlam boyutu olduğunu anlayamıyordu.
+        """
+        winerror = getattr(exc, "winerror", None)
+        if winerror == 206 or "too long" in str(exc).lower():
+            return (
+                "Komut satırı Windows sınırını aştı, bu tur başlatılamadı. "
+                "Sistem bağlamı dosyaya/stdin'e taşınacak şekilde ayarlandı; "
+                "mesajı tekrar gönderebilirsiniz."
+            )
+        return f"Claude köprüsü bu turu çalıştıramadı: {exc}"
+
+    def effort_levels(self) -> List[str]:
+        """`claude --effort` seviyeleri (--help ile doğrulandı)."""
+        return list(CLAUDE_EFFORT_LEVELS)
+
+    def set_effort(self, level: str) -> None:
+        """Kalıcı efor seviyesini ayarlar; geçersiz seviye reddedilir."""
+        low = (level or "").strip().lower()
+        if low not in CLAUDE_EFFORT_LEVELS:
+            raise ValueError(
+                f"Geçersiz efor '{level}'. Geçerli: {', '.join(CLAUDE_EFFORT_LEVELS)}."
+            )
+        self.selected_effort = low
+        try:
+            config.provider_effort["claude"] = low
+            config.save_settings()
+        except Exception:
+            pass
+
     def set_project_directory(self, project_path: Path | str) -> None:
         self.active_project_dir = Path(project_path).resolve()
         config.default_project_path = self.active_project_dir
@@ -416,7 +522,20 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         if agent:
             cmd.extend(["--agent", agent])
         if append_system_prompt:
-            cmd.extend(["--append-system-prompt", append_system_prompt])
+            # Uzun sistem istemi argv'ye HİÇ girmez: bilişsel bağlam + ajan
+            # manifesti buradan geçtiği için "command line is too long" hatası
+            # tam olarak bu satırda doğuyordu.
+            if (
+                CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE
+                and len(append_system_prompt) > SYSTEM_PROMPT_ARGV_LIMIT
+            ):
+                path = self.write_system_prompt_file(append_system_prompt)
+                if path:
+                    cmd.extend([SYSTEM_PROMPT_FILE_FLAG, str(path)])
+                else:
+                    cmd.extend(["--append-system-prompt", append_system_prompt])
+            else:
+                cmd.extend(["--append-system-prompt", append_system_prompt])
         if mcp_config:
             cmd.extend(["--mcp-config", mcp_config])
         if skip_permissions:
@@ -430,18 +549,131 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         elif resume and self.current_session_id:
             cmd.extend(["--resume", self.current_session_id])
 
-        effort_m = re.search(r"(?:^|\s)/effort\s+(low|medium|high|xhigh|max)\b", prompt, re.IGNORECASE)
-        if effort_m:
-            cmd.extend(["--effort", effort_m.group(1).lower()])
+        # Efor: prompt içindeki tek seferlik `/effort <seviye>` yazımı, kalıcı
+        # ayarı (self.selected_effort) o tur için geçersiz kılar.
+        effort_m = re.search(
+            r"(?:^|\s)/effort\s+(low|medium|high|xhigh|max)\b", prompt, re.IGNORECASE
+        )
+        effort = effort_m.group(1).lower() if effort_m else self.selected_effort
+        if effort in CLAUDE_EFFORT_LEVELS:
+            cmd.extend(["--effort", effort])
         return cmd
 
+    # ------------------------------------------------------------------
+    # Argv sınırı: sistem istemi dosyası ve stdin'e düşme
+    # ------------------------------------------------------------------
+
+    def system_prompt_dir(self) -> Path:
+        """Sistem istemi dosyalarının yazıldığı geçici dizin."""
+        base = Path(tempfile.gettempdir()) / "entropy_claude_prompts"
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def write_system_prompt_file(self, text: str) -> Optional[Path]:
+        """
+        Sistem istemini dosyaya yazar; başarısızsa None (çağıran argv'ye düşer).
+
+        Dosya adı iş parçacığına ve zamana bağlı: aynı anda koşan sohbet ve arka
+        plan turu birbirinin istemini ezmesin.
+        """
+        try:
+            name = f"sysprompt_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}.txt"
+            path = self.system_prompt_dir() / name
+            path.write_text(text, encoding="utf-8")
+            return path
+        except Exception:
+            return None
+
+    @staticmethod
+    def system_prompt_file_in(cmd: List[str]) -> Optional[str]:
+        """argv'de sistem istemi dosyası varsa yolunu verir (temizlik için)."""
+        try:
+            return cmd[cmd.index(SYSTEM_PROMPT_FILE_FLAG) + 1]
+        except (ValueError, IndexError):
+            return None
+
+    @classmethod
+    def system_prompt_text_in(cls, cmd: List[str]) -> str:
+        """
+        argv'nin taşıdığı sistem istemi metni (satır içi ya da dosyadan).
+
+        Sistem istemi artık üç yoldan biriyle gidebiliyor; onu argv'de sabit bir
+        konumda arayan her çağıran (testler, tanılama) tek bir yerden okusun
+        diye burada çözülür.
+        """
+        try:
+            return cmd[cmd.index("--append-system-prompt") + 1]
+        except (ValueError, IndexError):
+            pass
+        path = cls.system_prompt_file_in(cmd)
+        if path:
+            try:
+                return Path(path).read_text(encoding="utf-8")
+            except Exception:
+                return ""
+        # Yedek yol: metin kullanıcı mesajının başındaki bloğa gömülmüş olabilir.
+        try:
+            prompt = cmd[cmd.index("-p") + 1]
+        except (ValueError, IndexError):
+            return ""
+        if prompt.startswith(SYSTEM_CONTEXT_BLOCK_HEADER):
+            return prompt
+        return ""
+
+    @staticmethod
+    def cleanup_system_prompt_file(path: Optional[str]) -> None:
+        try:
+            if path:
+                Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def enforce_argv_limit(self, cmd: List[str]) -> None:
+        """
+        Argv toplamı sınırı aşıyorsa uzun parçaları argv'den çıkarır.
+
+        Sıra: önce sistem istemi (dosyaya ya da — dosya bayrağı yoksa — prompt'un
+        başına), sonra prompt'un kendisi (stdin NDJSON'a; bunu
+        `_apply_stdin_prompt` yapar). Bu metot cmd'yi YERİNDE değiştirir.
+        """
+        if not argv_too_long(cmd):
+            return
+        try:
+            sp_idx = cmd.index("--append-system-prompt")
+        except ValueError:
+            return
+        system_prompt = cmd[sp_idx + 1]
+        if CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE:
+            path = self.write_system_prompt_file(system_prompt)
+            if path:
+                cmd[sp_idx] = SYSTEM_PROMPT_FILE_FLAG
+                cmd[sp_idx + 1] = str(path)
+                return
+        # Yedek yol: bayrak yok (ya da dosya yazılamadı) -> sistem istemi
+        # kullanıcı mesajının başına gömülür, argv'de hiç metin kalmaz.
+        del cmd[sp_idx : sp_idx + 2]
+        try:
+            p_idx = cmd.index("-p")
+        except ValueError:
+            return
+        cmd[p_idx + 1] = build_system_context_block(system_prompt, cmd[p_idx + 1])
+
     def _apply_stdin_prompt(self, cmd: List[str]) -> Optional[str]:
-        """Uzun prompt'u argv'den stdin NDJSON yoluna taşır (AGY ile aynı desen)."""
+        """
+        Uzun prompt'u argv'den stdin NDJSON yoluna taşır (AGY ile aynı desen).
+
+        Önce `enforce_argv_limit` çağrılır: sistem istemi argv'de kaldıysa oradan
+        çıkarılır. Sonra prompt ya kendi başına uzun olduğu için ya da argv
+        toplamı hâlâ sınırın üstünde kaldığı için stdin'e taşınır.
+        """
+        self.enforce_argv_limit(cmd)
         try:
             idx = cmd.index("-p")
         except ValueError:
             return None
-        if idx + 1 >= len(cmd) or not prompt_via_stdin(cmd[idx + 1]):
+        if idx + 1 >= len(cmd):
+            return None
+        if not prompt_via_stdin(cmd[idx + 1]) and not argv_too_long(cmd):
             return None
         payload = build_stdin_prompt_payload(cmd[idx + 1])
         cmd[idx + 1] = ""
@@ -828,40 +1060,44 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         bus.agent_turn_started.emit(prompt)
         bus.core_state_changed.emit("thinking")
 
-        # Yetenek çözümü ve bilişsel bağlam ortak mixin'den gelir; AGY köprüsüyle
-        # aynı kararı verir, böylece sağlayıcı değiştirmek yönlendirmeyi değiştirmez.
-        target_skill, skill_banner = self.resolve_target_skill(prompt, active_skill=active_skill)
-        if target_skill is not None:
-            self.last_active_skill = target_skill.name
-            bus.terminal_output_received.emit(
-                f"[🎯 Yetenek Devrede]: '{target_skill.name}' yeteneği aktif olarak kullanılıyor.\n"
-            )
-
-        attachment_directive, extra_dirs = self.build_attachment_directive(
-            image_attachments, pdf_attachments
-        )
-        resuming = bool(self.current_session_id)
-        append_system_prompt = self.build_chat_system_prompt(
-            prompt,
-            target_skill=target_skill,
-            skill_banner=skill_banner,
-            attachment_directive=attachment_directive,
-            resuming=resuming,
-        )
-
-        cmd = self.build_command(
-            prompt,
-            mode=mode,
-            project_dir=project_dir,
-            agent=agent,
-            resume=True,
-            extra_dirs=extra_dirs,
-            append_system_prompt=append_system_prompt,
-        )
         result: Dict[str, object] = {}
         ret_code = -1
         proc = None
+        error_text = ""
+        cmd: List[str] = []
         try:
+            # Yetenek çözümü ve bilişsel bağlam ortak mixin'den gelir; AGY
+            # köprüsüyle aynı kararı verir, böylece sağlayıcı değiştirmek
+            # yönlendirmeyi değiştirmez. HAZIRLIK DA try içinde: burada doğan bir
+            # hata (ör. bağlam üretimi) eskiden sohbeti kilitli bırakıyordu.
+            target_skill, skill_banner = self.resolve_target_skill(prompt, active_skill=active_skill)
+            if target_skill is not None:
+                self.last_active_skill = target_skill.name
+                bus.terminal_output_received.emit(
+                    f"[🎯 Yetenek Devrede]: '{target_skill.name}' yeteneği aktif olarak kullanılıyor.\n"
+                )
+
+            attachment_directive, extra_dirs = self.build_attachment_directive(
+                image_attachments, pdf_attachments
+            )
+            resuming = bool(self.current_session_id)
+            append_system_prompt = self.build_chat_system_prompt(
+                prompt,
+                target_skill=target_skill,
+                skill_banner=skill_banner,
+                attachment_directive=attachment_directive,
+                resuming=resuming,
+            )
+
+            cmd = self.build_command(
+                prompt,
+                mode=mode,
+                project_dir=project_dir,
+                agent=agent,
+                resume=True,
+                extra_dirs=extra_dirs,
+                append_system_prompt=append_system_prompt,
+            )
             stdin_payload = self._apply_stdin_prompt(cmd)
             proc = subprocess.Popen(
                 cmd,
@@ -890,11 +1126,17 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 pass
             ret_code = proc.wait()
         except Exception as e:
+            # Hata metni sohbete DÖNDÜRÜLÜR. Eskiden yalnızca terminale basılıp
+            # "error" durumuna geçiliyordu; agent_turn_completed hiç yayılmadığı
+            # için giriş kutusu açılmıyor ve çekirdek kırmızıda kilitli kalıyordu
+            # (WinError 206 = "The command line is too long" tam olarak bu yola
+            # düşüyordu).
+            error_text = self.describe_launch_error(e)
             bus.terminal_output_received.emit(f"\n[Claude Köprü Hatası]: {e}\n")
-            bus.core_state_changed.emit("error")
         finally:
             with self._lock:
                 self._current_process = None
+            self.cleanup_system_prompt_file(self.system_prompt_file_in(cmd))
             # Kilit her yolda bırakılır: bırakılmayan bir yazma kilidi projeyi
             # oturum sonuna kadar tüm arka plan görevlerine kapatırdı.
             try:
@@ -917,7 +1159,16 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 bus.agent_turn_completed.emit(full_text)
             except Exception:
                 pass
-        bus.core_state_changed.emit("idle" if ret_code == 0 else "error")
+        elif error_text:
+            # Yanıt yok ama hata var: turu hata metniyle KAPAT ki arayüz kilidi
+            # açılsın ve kullanıcı ikinci mesajı gönderebilsin.
+            try:
+                bus.agent_turn_completed.emit(error_text)
+            except Exception:
+                pass
+        # Hatadan sonra bile "idle": kırmızı/kilitli durumda kalan çekirdek yeni
+        # istem kabul etmiyordu. Hata kullanıcıya metin olarak bildirildi.
+        bus.core_state_changed.emit("idle" if (ret_code == 0 or error_text) else "error")
 
         # Bağlam doluluğu her turdan SONRA ölçülür: girdi token'ı ancak `result`
         # olayıyla belli olur, öncesinde ölçüm bir önceki turu yansıtırdı.
@@ -1100,6 +1351,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             finally:
                 with self._lock:
                     self._background_processes.pop(task_id, None)
+                self.cleanup_system_prompt_file(self.system_prompt_file_in(cmd))
                 try:
                     if proc and proc.poll() is None:
                         self._kill_tree(proc, wait_budget=2.0)

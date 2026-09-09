@@ -73,25 +73,36 @@ def clean_active_registry():
 
 @pytest.fixture
 def offices(vault):
+    """
+    İki ofis + kendi kadroları.
+
+    Faz 6: üyeler ofis ön bilgisinden değil, ofisin `agents/` klasöründen
+    türetiliyor; bu yüzden ajanlar da ofisin kendi defterine yazılır.
+    """
     reg = OfficeRegistry(vault_path=vault)
     reg.create(OfficeSpec(
         name="arastirma-ofisi",
         purpose="Araştırır.",
-        orchestrator="orkestrator",
-        evaluator="degerlendirici",
-        members=["arastirmaci", "yazar"],
         default_provider="agy",
         charter="Kabul: kaynaklı.",
     ))
+    _staff(reg, "arastirma-ofisi", ["arastirmaci", "yazar"], "degerlendirici")
     reg.create(OfficeSpec(
         name="ikinci-ofis",
         purpose="Başka iş.",
-        orchestrator="orkestrator2",
-        evaluator="degerlendirici2",
-        members=["yabanci"],
         default_provider="agy",
     ))
+    _staff(reg, "ikinci-ofis", ["yabanci"], "degerlendirici2")
     return reg
+
+
+def _staff(reg, office, members, evaluator):
+    agents = reg.agents(office)
+    for name in members:
+        agents.update(AgentSpec(name=name, description=f"{name} ajanı", provider="agy"))
+    if evaluator:
+        agents.update(AgentSpec(name=evaluator, role="evaluator",
+                                description="notlar", provider="agy"))
 
 
 @pytest.fixture
@@ -400,7 +411,7 @@ def test_office_status_reports_running_spend_inbox_and_terminals(vault, offices,
     info = office_status("arastirma-ofisi", vault_path=vault)
     assert info["exists"] is True
     assert info["orchestrator"] == "orkestrator"
-    assert info["members"] == ["arastirmaci", "yazar"]
+    assert sorted(info["members"]) == ["arastirmaci", "yazar"]
     assert info["inbox_unread"] == 1
     assert info["spent_tokens"] == 1234
     assert [r["id"] for r in info["running"]] == [card.id]

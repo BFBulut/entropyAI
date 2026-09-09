@@ -39,7 +39,7 @@ from entropy.agents.mailbox import (
     pending_instructions,
     report_to_entropy,
 )
-from entropy.agents.offices import OfficeRegistry, OfficeSpec
+from entropy.agents.desk_registry import DeskOffice, DeskRegistry
 from entropy.agents.registry import AgentRegistry
 from entropy.agents.tasks import (
     TaskBoard,
@@ -137,14 +137,17 @@ class OfficeHarness:
         office_name: str,
         board: Optional[TaskBoard] = None,
         registry: Optional[AgentRegistry] = None,
-        offices: Optional[OfficeRegistry] = None,
+        offices: Optional[DeskRegistry] = None,
         bridge_factory: Optional[Callable] = None,
     ):
         self.office_name = office_name
-        self.offices = offices or OfficeRegistry()
+        self.offices = offices or DeskRegistry()
         vault = self.offices.vault_path
         self.board = board or TaskBoard(vault_path=vault)
-        self.registry = registry or AgentRegistry(vault_path=self.board.vault_path)
+        # Ajan defteri ofisin KENDİSİNİN: Desk, Entropy'nin `Entropy/Agents`
+        # kadrosunu görmez (kural 1). Enjekte edilen bir defter varsa (testler,
+        # paneller) ona saygı duyulur.
+        self.registry = registry or self.offices.agents(office_name)
         self.bridge_factory = bridge_factory
         self._lock = threading.RLock()
         self._starting: set = set()
@@ -152,8 +155,15 @@ class OfficeHarness:
     # -- yardımcılar ----------------------------------------------------
 
     @property
-    def office(self) -> Optional[OfficeSpec]:
+    def office(self) -> Optional[DeskOffice]:
         return self.offices.get(self.office_name)
+
+    def _workdir(self) -> Path:
+        """Ofisin çalışma dizini (OFFICE.md `workdir`, yoksa ofis klasörü)."""
+        try:
+            return self.offices.workdir(self.office_name)
+        except Exception:
+            return self.offices.office_dir(self.office_name)
 
     def _state_path(self) -> Path:
         return self.offices.office_dir(self.office_name) / STATE_FILENAME
@@ -360,7 +370,7 @@ class OfficeHarness:
             self._fail(card_id, "Planlama başlatılamadı (orkestratör ajanı ya da köprü yok).")
         return ok
 
-    def build_plan_prompt(self, office: OfficeSpec, card: TaskCard) -> str:
+    def build_plan_prompt(self, office: DeskOffice, card: TaskCard) -> str:
         members = []
         for name in office.members or []:
             spec = self.registry.get(name)
@@ -380,17 +390,88 @@ class OfficeHarness:
         except Exception:
             inbox = ""
         inbox_block = f"{inbox}\n\n" if inbox else ""
+        # Proje bağlamı: kart bir ofis projesine bağlıysa projenin hedefi ve
+        # tüzüğü plana girer; aksi hâlde orkestratör her kartı bağlamsız,
+        # sıfırdan bir iş sanıyordu.
+        project_block = ""
+        if card.project:
+            try:
+                project = self.offices.get_project(self.office_name, card.project)
+            except Exception:
+                project = None
+            if project is not None:
+                project_block = (
+                    f"[PROJE — {project.name}]\n{project.goal}\n"
+                    f"{(project.charter or '').strip()}\n\n"
+                )
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
+            f"{project_block}"
             f"{inbox_block}"
             f"[ÜST KART]\nBaşlık: {card.title}\nHedef: {card.goal or card.title}\n"
             f"Kabul ölçütleri:\n{criteria}\n\n"
-            f"[ATANABİLİR AJANLAR]\n" + ("\n".join(members) or "- (yok)") + "\n\n"
-            f"[İSTENEN ÇIKTI]\nEn çok {MAX_SUBTASKS} alt görev. Yalnızca TEK bir "
-            "```json kod bloğu yaz, başka hiçbir şey yazma:\n"
+            f"[KADRON]\n" + ("\n".join(members) or "- (henüz alt ajan yok)") + "\n\n"
+            f"[İSTENEN ÇIKTI]\nEn çok {MAX_SUBTASKS} alt görev. Kadronda uygun ajan "
+            "yoksa `new_agents` ile yeni alt ajan tanımla ve görevi ona ata. "
+            "Yalnızca TEK bir ```json kod bloğu yaz, başka hiçbir şey yazma:\n"
             '{"subtasks": [{"title": "...", "goal": "...", "criteria": ["..."], '
-            '"agent": "<yukarıdaki ajanlardan biri>", "provider": "agy", "model": ""}]}'
+            '"agent": "<kadrondaki ya da new_agents ile tanımladığın ad>", '
+            '"provider": "agy", "model": ""}],\n'
+            ' "new_agents": [{"name": "...", "role": "worker", "description": "...", '
+            '"provider": "agy", "model": "", "tools_policy": "read-write", '
+            '"prompt": "..."}]}'
         )
+
+    def _apply_new_agents(self, data: Optional[dict]) -> List[str]:
+        """
+        Plandaki `new_agents` bölümünü ofisin ajan defterine yazar.
+
+        Var olan bir adı EZMEZ: orkestratör her turda aynı ajanı yeniden
+        tanımlamaya eğilimli ve üzerine yazmak kullanıcının elle düzelttiği
+        istemi sessizce siliyordu. Orkestratör rolü de kabul edilmez; ofisin tek
+        orkestratörü vardır ve o kendini çoğaltamaz.
+        """
+        raw_list = (data or {}).get("new_agents") if isinstance(data, dict) else None
+        if not isinstance(raw_list, list) or not raw_list:
+            return []
+        from entropy.agents.registry import AgentSpec
+
+        agents = self.offices.agents(self.office_name)
+        created: List[str] = []
+        for raw in raw_list:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            if not name or agents.get(name) is not None:
+                continue
+            role = str(raw.get("role") or "worker").strip().lower()
+            if role == "orchestrator":
+                role = "worker"
+            provider = str(raw.get("provider") or "").strip().lower()
+            office = self.office
+            if provider not in ("agy", "claude"):
+                provider = (office.default_provider if office else "agy") or "agy"
+            policy = str(raw.get("tools_policy") or "read-write").strip().lower()
+            spec = AgentSpec(
+                name=name,
+                role=role,
+                description=str(raw.get("description") or ""),
+                provider=provider,
+                model=str(raw.get("model") or "") or (office.default_model if office else ""),
+                tools_policy=policy,
+                memory_path=f"memory/{name}.md",
+                prompt=str(raw.get("prompt") or "").strip(),
+                office=self.office_name,
+            )
+            try:
+                agents.update(spec)
+            except Exception:
+                logger.warning("Yeni alt ajan yazılamadı: %s", name)
+                continue
+            created.append(name)
+        if created:
+            logger.info("Ofis kadrosuna eklendi (%s): %s", self.office_name, ", ".join(created))
+        return created
 
     def _on_plan(self, card_id: str, text: str, ok: bool) -> None:
         if not self._spend(card_id, _estimate_tokens(text), ledger_task_id=f"office-plan-{card_id}"):
@@ -408,6 +489,14 @@ class OfficeHarness:
         office = self.office
         if card is None or office is None:
             return
+
+        # Orkestratör kendi kadrosunu kurar: plandaki `new_agents` bölümü ofisin
+        # `agents/<ad>/AGENT.md` dosyalarına yazılır ve derlenir. Bu adım alt
+        # kartlardan ÖNCE koşmalı; aksi hâlde yeni ajana atanan görev "ofis üyesi
+        # değil" diye ilk üyeye düşürülüyordu.
+        created_agents = self._apply_new_agents(data)
+        if created_agents:
+            office = self.office or office
 
         children: List[str] = []
         for raw in subtasks[:MAX_SUBTASKS]:
@@ -439,6 +528,7 @@ class OfficeHarness:
                 goal=str(raw.get("goal") or title),
                 criteria=[str(c) for c in criteria],
                 office=self.office_name,
+                project=card.project,
                 parent=card_id,
             )
             try:
@@ -500,6 +590,10 @@ class OfficeHarness:
                 child.id,
                 bridge_factory=self.bridge_factory,
                 on_done=lambda cid, ok, _p=card_id: self._on_child_done(_p, cid, ok),
+                # Alt ajan ofisin defterinden çözülür ve ofisin çalışma
+                # dizininde koşar; derlenmiş tanım orada duruyor.
+                agent_registry=self.registry,
+                project_path=str(self._workdir()),
             )
 
     def _on_child_done(self, card_id: str, child_id: str, ok: bool) -> None:
@@ -562,7 +656,7 @@ class OfficeHarness:
         if not ok:
             self._finalize(card_id)
 
-    def build_eval_prompt(self, office: OfficeSpec, card: TaskCard, children: List[TaskCard]) -> str:
+    def build_eval_prompt(self, office: DeskOffice, card: TaskCard, children: List[TaskCard]) -> str:
         blocks = []
         for child in children:
             criteria = "\n".join(f"  - {c}" for c in (child.criteria or [])) or "  - (belirtilmedi)"
@@ -659,6 +753,11 @@ class OfficeHarness:
             outputs.extend(child.output_paths or [])
         report = "\n".join(lines).strip()
 
+        # Ofisin KENDİ rapor klasörü (Desk verisi); wiki sayfası ayrıca yazılır
+        # ama bellek katmanı kurulu değilse rapor hiçbir yerde kalmıyordu.
+        local = self._write_local_report(card, report)
+        if local:
+            outputs.append(str(local))
         page = self._write_office_report(card, report)
         if page:
             outputs.append(str(page))
@@ -699,6 +798,27 @@ class OfficeHarness:
             f"{len(children)} alt görev tamamlandı; ortalama not {avg if avg is not None else '-'}.",
             vault_path=self.board.vault_path,
         )
+
+    def _write_local_report(self, card: TaskCard, body: str):
+        """Raporu ofisin `reports/` klasörüne yazar; ayrıca belleğe aktarır."""
+        try:
+            path = self.offices.reports_dir(self.office_name) / f"{card.id}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        except OSError:
+            return None
+        # Ofis çıktısının Entropy'nin bilgi grafına aktarımı bellek ajanının
+        # işi; modül yoksa rapor yine de diskte ve gelen kutusunda kalır.
+        try:
+            from entropy.memory.office_graph import ingest_office_into_entropy  # type: ignore
+        except Exception:
+            ingest_office_into_entropy = None  # type: ignore
+        if ingest_office_into_entropy is not None:
+            try:
+                ingest_office_into_entropy(self.office_name, str(path))
+            except Exception:
+                logger.warning("Ofis raporu belleğe aktarılamadı: %s", card.id)
+        return path
 
     def _write_office_report(self, card: TaskCard, body: str):
         try:
@@ -794,7 +914,7 @@ class OfficeHarness:
     def resume_all(
         cls,
         board: Optional[TaskBoard] = None,
-        offices: Optional[OfficeRegistry] = None,
+        offices: Optional[DeskRegistry] = None,
         bridge_factory: Optional[Callable] = None,
     ) -> List[str]:
         """
@@ -805,7 +925,7 @@ class OfficeHarness:
         çekilir (öksüz koşu diye devam ettirilemez), sonra pompa yeniden döner.
         Planlaması bitmemiş kart (children yok) baştan planlanır.
         """
-        offices = offices or OfficeRegistry()
+        offices = offices or DeskRegistry()
         board = board or TaskBoard(vault_path=offices.vault_path)
         resumed: List[str] = []
         try:
@@ -840,7 +960,7 @@ class OfficeHarness:
     def _call_agent(
         self,
         agent_name: str,
-        office: OfficeSpec,
+        office: DeskOffice,
         task_id: str,
         task_name: str,
         prompt: str,
@@ -874,11 +994,16 @@ class OfficeHarness:
             # Planlama ve değerlendirme yalnızca metin üretir: paylaşımlı okuma
             # kilidi yeter, yazma kilidi alt kartları gereksiz yere bekletirdi.
             needs_write=False,
+            # Ofis ajanı ofisin çalışma dizininde koşar: derlenmiş `--agent`
+            # tanımı orada duruyor ve başka bir kökten koşulunca sessizce
+            # yok sayılıyordu.
+            project_path=str(self._workdir()),
         )
         from entropy.agents.tasks import _accepts_kwarg
 
-        if not _accepts_kwarg(bridge.send_background_task_async, "needs_write"):
-            kwargs.pop("needs_write", None)
+        for optional in ("needs_write", "project_path"):
+            if not _accepts_kwarg(bridge.send_background_task_async, optional):
+                kwargs.pop(optional, None)
         try:
             bridge.send_background_task_async(**kwargs)
         except Exception:

@@ -21,11 +21,11 @@ from entropy.agents.harness import (
     OfficeHarness,
     extract_json_block,
 )
-from entropy.agents.offices import (
+from entropy.agents.desk_registry import (
     OFFICE_FILENAME,
-    OfficeRegistry,
-    OfficeSpec,
-    offices_manifest,
+    DeskOffice as OfficeSpec,
+    DeskRegistry as OfficeRegistry,
+    desk_manifest as offices_manifest,
 )
 from entropy.agents.registry import AgentRegistry, AgentSpec
 from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
@@ -73,12 +73,45 @@ def board(vault):
     return TaskBoard(vault_path=vault)
 
 
+# Faz 6: tohum ofis/ajan YOK. Testlerin ofisi kullanıcı gibi açması gerekiyor;
+# ofis açılınca orkestratörü otomatik doğar, üye ajanlar ofisin kendi defterine
+# yazılır (Entropy'nin `Entropy/Agents` kadrosuna değil).
+OFFICE_CHARTER = (
+    "Bu ofis bir soruyu uçtan uca araştırır ve tek bir rapora bağlar.\n\n"
+    "Kabul standartları:\n- Her iddianın kaynağı gösterilir."
+)
+
+
+def make_office(offices, name="arastirma-ofisi", members=("arastirmaci", "analist", "yazar"),
+                evaluator="degerlendirici", **kw):
+    """Ofisi + kadrosunu kurar ve okunmuş ofis tanımını döndürür."""
+    spec = offices.create(OfficeSpec(
+        name=name,
+        purpose="Bir soruyu kaynaklarıyla araştırır, çözümler ve rapora çevirir.",
+        default_model="gemini-3.8-flash-high",
+        charter=OFFICE_CHARTER,
+        **kw,
+    ))
+    agents = offices.agents(name)
+    for member in members:
+        agents.update(AgentSpec(
+            name=member, role="worker", description=f"{member} rolü",
+            provider="agy", tools_policy="read-write",
+        ))
+    if evaluator:
+        agents.update(AgentSpec(
+            name=evaluator, role="evaluator",
+            description="Alt görev çıktılarını kabul ölçütlerine karşı notlar.",
+            provider="agy", tools_policy="read-only",
+            prompt='Notla. Yanıtın TEK bir ```json bloğu olsun: {"grades": [...]}',
+        ))
+    return offices.get(name)
+
+
 @pytest.fixture
 def seeded(registry, offices):
-    """Tohum ajanlar + tohum ofis (gerçek `ensure_defaults` yolu)."""
-    registry.ensure_defaults()
-    offices.ensure_defaults()
-    return offices.get("arastirma-ofisi")
+    """Kullanıcının açtığı gibi bir ofis (tohum değil)."""
+    return make_office(offices)
 
 
 class _ScriptedBridge:
@@ -189,20 +222,17 @@ def _office_card(board, office="arastirma-ofisi", title="Pazar araştırması"):
 # ---------------------------------------------------------------------------
 
 
-def test_office_roundtrip_and_defaults(offices, vault):
-    created = offices.ensure_defaults()
-    assert created == ["arastirma-ofisi"]
-    assert (vault / "Entropy" / "Offices" / "arastirma-ofisi" / OFFICE_FILENAME).is_file()
-
-    spec = offices.get("arastirma-ofisi")
+def test_office_roundtrip_and_no_seeds(offices, vault):
+    # Tohum yok: hiçbir şey yapmadan ofis listesi boş.
+    assert offices.list() == []
+    spec = make_office(offices)
+    assert (vault / "Entropy" / "Desk" / "Offices" / "arastirma-ofisi" / OFFICE_FILENAME).is_file()
     assert spec.orchestrator == "orkestrator"
     assert spec.evaluator == "degerlendirici"
-    assert spec.members == ["arastirmaci", "analist", "yazar"]
+    assert sorted(spec.members) == ["analist", "arastirmaci", "yazar"]
     assert spec.max_parallel == 2
     assert spec.budget_tokens > 0
     assert "Kabul standartları" in spec.charter
-    # İkinci çağrı yeniden yazmaz; silinen ofis diriltilmez.
-    assert offices.ensure_defaults() == []
     offices.delete("arastirma-ofisi")
     assert offices.get("arastirma-ofisi") is None
 
@@ -213,8 +243,8 @@ def test_office_crud_and_signal(offices, qapp):
     seen = []
     bus.offices_updated.connect(seen.append)
     try:
-        offices.create(OfficeSpec(name="deney", purpose="Deney", orchestrator="orkestrator",
-                                  members=["analist"], max_parallel=3, budget_tokens=999))
+        offices.create(OfficeSpec(name="deney", purpose="Deney",
+                                  max_parallel=3, budget_tokens=999))
         assert offices.get("deney").max_parallel == 3
         offices.update(replace(offices.get("deney"), purpose="Yeni amaç"))
         assert offices.get("deney").purpose == "Yeni amaç"
@@ -225,11 +255,12 @@ def test_office_crud_and_signal(offices, qapp):
 
 
 def test_offices_manifest_lists_and_states_rule(offices):
-    offices.ensure_defaults()
+    make_office(offices)
     text = offices_manifest(offices)
     assert "arastirma-ofisi" in text
     assert "/desk task" in text
-    # Bütçe: ~120 token.
+    assert "/ask" in text
+    # Bütçe: ~130 token.
     assert len(text) < 700
 
 
@@ -828,7 +859,7 @@ def test_desk_commands_are_registered_as_local():
 # ---------------------------------------------------------------------------
 
 
-def test_bootstrap_seeds_offices_after_agents(vault, tmp_path, monkeypatch):
+def test_bootstrap_prepares_existing_offices(vault, tmp_path, monkeypatch):
     import sys
 
     monkeypatch.setattr(sys.modules["entropy.core.config"], "APP_ROOT",
@@ -836,12 +867,13 @@ def test_bootstrap_seeds_offices_after_agents(vault, tmp_path, monkeypatch):
     (tmp_path / "app").mkdir()
     from entropy.agents.bootstrap import bootstrap_agents
 
+    # Faz 6: önyükleme ofis TOHUMLAMAZ; var olan ofisin orkestratörünü ve
+    # derlemesini garanti eder.
+    OfficeRegistry(vault_path=vault).create(OfficeSpec(name="deney", purpose="Deney"))
     result = bootstrap_agents(project_dir=tmp_path / "app", vault_path=vault)
     assert result.ok
-    assert "arastirma-ofisi" in result.offices_created
-    assert {"orkestrator", "degerlendirici"} <= set(result.created)
-    # Ofisin orkestratörü gerçekten kasada olmalı.
-    assert AgentRegistry(vault_path=vault).get("orkestrator") is not None
+    assert "deney" in result.offices_ready
+    assert OfficeRegistry(vault_path=vault).agents("deney").get("orkestrator") is not None
     assert "ofisler" in result.summary()
 
 

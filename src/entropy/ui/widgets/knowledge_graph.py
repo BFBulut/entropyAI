@@ -866,15 +866,147 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         initGraphControls();
 
-        // Rapor kümesi açma/kapama düğümü YOKTUR. Tüm yapraklar her zaman
-        // görünür; tıklama yalnızca seçim yapar, yerleşimi yeniden kurmaz.
-        // (Faz 5.6: topluluk düğümleri bunun istisnasıdır — kademeli açılır.)
+        // ---- Faz 6: seçim ve dal izolasyonu ----
+        //
+        // 👁️ düğmesi eskiden yalnızca "Odak" kapsamıyla çalışıyordu; kapsam
+        // "Tüm Hafıza" iken hiçbir şey yapmıyordu (kullanıcının gördüğü hata).
+        // Artık izolasyon SEÇİLİ DÜĞÜMÜN DALINA uygulanır: atalar + alt ağaç +
+        // doğrudan komşular. Seçim yoksa eski kapsam davranışına düşülür.
+        const treeChildren = new Map();   // ebeveyn id -> [çocuk id]
+        const treeParent = new Map();     // çocuk id -> ebeveyn id
+        const neighborIds = new Map();    // id -> Set(komşu id)
+
+        function addNeighbor(a, b) {
+            let s = neighborIds.get(a);
+            if (!s) { s = new Set(); neighborIds.set(a, s); }
+            s.add(b);
+        }
+
+        links.forEach(l => {
+            const s = l.sourceNode, t = l.targetNode;
+            if (!s || !t) return;
+            if (l.is_catalog_link) return;
+            addNeighbor(s.id, t.id);
+            addNeighbor(t.id, s.id);
+            if (l.is_tree_link) {
+                let kids = treeChildren.get(s.id);
+                if (!kids) { kids = []; treeChildren.set(s.id, kids); }
+                kids.push(t.id);
+                if (!treeParent.has(t.id)) treeParent.set(t.id, s.id);
+            }
+        });
+
+        // parent_hub alanı ağaç kenarı üretilmemiş düğümlerde de ebeveyni verir.
+        nodes.forEach(n => {
+            if (!treeParent.has(n.id) && n.parent_hub && nodeMap.has(String(n.parent_hub))) {
+                treeParent.set(n.id, String(n.parent_hub));
+                let kids = treeChildren.get(String(n.parent_hub));
+                if (!kids) { kids = []; treeChildren.set(String(n.parent_hub), kids); }
+                if (kids.indexOf(n.id) === -1) kids.push(n.id);
+            }
+        });
+
+        function computeBranchSet(rootId) {
+            const out = new Set();
+            if (!rootId || !nodeMap.has(rootId)) return out;
+            // 1. Alt ağaç (genişlik öncelikli; döngüye karşı ziyaret kümesi).
+            const queue = [rootId];
+            while (queue.length) {
+                const cur = queue.shift();
+                if (out.has(cur)) continue;
+                out.add(cur);
+                const kids = treeChildren.get(cur);
+                if (kids) for (let i = 0; i < kids.length; i++) queue.push(kids[i]);
+            }
+            // 2. Atalar (kökten seçili düğüme giden yol görünür kalsın).
+            let p = treeParent.get(rootId);
+            let guard = 0;
+            while (p && guard++ < 64) {
+                out.add(p);
+                p = treeParent.get(p);
+            }
+            // 3. Seçili düğümün doğrudan komşuları (benzerlik/wikilink bağları).
+            const nb = neighborIds.get(rootId);
+            if (nb) nb.forEach(id => out.add(id));
+            return out;
+        }
+
+        let selectedNodeId = null;
+        let isolatedIds = null;
+
+        function recomputeIsolation() {
+            isolatedIds = (isIsolated && selectedNodeId) ? computeBranchSet(selectedNodeId) : null;
+        }
+
+        // ---- Faz 6: kademeli detay (yaprak raporlar açılışta gizli) ----
+        //
+        // 1100 düğümlük bir arşivde her yaprağı birden çizmek grafiği kırmızı
+        // yıldız bulutuna çeviriyordu: sığdırma zoom'u 0,06'ya düşüyor, hiçbir
+        // etiket okunmuyordu. Artık açılışta yalnızca YAPISAL iskelet (çekirdek,
+        // ana hub'lar, projeler, yetenekler, alt dallar, ofis/ajan, topluluk
+        // özetleri) çizilir. Yapraklar iki doğal yolla açılır:
+        //   * yakınlaştırma DETAIL_ZOOM eşiğini geçince (tekerlek / + düğmesi)
+        //   * bir dala tıklayınca (yalnızca o dalın yaprakları)
+        // Ayrı bir "raporları göster" düğmesi bilerek eklenmemiştir.
+        const STRUCTURAL_GROUPS = {
+            'ego': 1, 'hub': 1, 'hub-offices': 1, 'project': 1, 'skill': 1,
+            'subbranch': 1, 'mcp': 1, 'office': 1, 'agent': 1, 'community': 1,
+            'cognitive': 1
+        };
+        const DETAIL_ZOOM = 0.9;
+        const structuralCount = nodes.filter(n => STRUCTURAL_GROUPS[n.group]).length;
+        // İskeleti olmayan (küçük ya da düz) kasalarda kademelendirme grafiği
+        // boşaltırdı; böyle durumda her şey açılıştan görünür kalır.
+        const detailsAlwaysOn = structuralCount < 8;
+        const expandedBranches = new Set();
+
+        function isDetailNode(n) {
+            return !STRUCTURAL_GROUPS[n.group];
+        }
+
+        function detailsGloballyVisible() {
+            return detailsAlwaysOn || zoom >= DETAIL_ZOOM;
+        }
+
+        function isDetailShown(n) {
+            if (detailsGloballyVisible()) return true;
+            if (isolatedIds && isolatedIds.has(n.id)) return true;
+            if (expandedBranches.size === 0) return false;
+            if (expandedBranches.has(n.id)) return true;
+            if (n.parent_hub && expandedBranches.has(String(n.parent_hub))) return true;
+            if (n.skill_hub && expandedBranches.has(String(n.skill_hub))) return true;
+            return false;
+        }
+
+        // Yakınlık eşiği aşıldığında görünür küme değişir; benzetim buna göre
+        // yeniden kurulmalıdır. Eşik geçişi tekerlek/düğme dışında (örneğin
+        // sığdırma zoom'u düşürdüğünde) de olabildiği için tek yerden izlenir.
+        let lastDetailState = null;
+        function syncDetailState() {
+            const cur = detailsGloballyVisible();
+            if (lastDetailState === null) { lastDetailState = cur; return false; }
+            if (cur !== lastDetailState) {
+                lastDetailState = cur;
+                simDirty = true;
+                return true;
+            }
+            return false;
+        }
+
+        function toggleBranchExpansion(id) {
+            const key = String(id);
+            if (expandedBranches.has(key)) expandedBranches.delete(key);
+            else expandedBranches.add(key);
+        }
+
         function isNodeVisible(n) {
             if (!n) return false;
+            if (isolatedIds && !isolatedIds.has(n.id)) return false;
             if (!isCategoryActive(n.group)) return false;
             if (typeFilter && n._type && n._type !== typeFilter) return false;
             if (minImportance > 0 && n._imp !== null && n._imp < minImportance) return false;
             if (isCollapsedMember(n)) return false;
+            if (isDetailNode(n) && !isDetailShown(n)) return false;
             return true;
         }
 
@@ -957,8 +1089,24 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         let isIsolated = false;
         function setIsolationMode(val) {
             isIsolated = !!val;
+            recomputeIsolation();
             userAdjustedView = false;
             relayoutAndFit(1.0, true);
+            fitToView();
+        }
+
+        // Python tarafı (Odak listesi / rapor seçimi) ya da kanvas tıklaması
+        // seçili düğümü buradan bildirir. Seçim aynı zamanda o dalın
+        // yapraklarını açar; izolasyon açıksa küme yeniden hesaplanır.
+        function setSelectedNode(id) {
+            selectedNodeId = id ? String(id) : null;
+            if (selectedNodeId && !expandedBranches.has(selectedNodeId)) {
+                expandedBranches.add(selectedNodeId);
+            }
+            recomputeIsolation();
+            userAdjustedView = false;
+            relayoutAndFit(0.7, true);
+            fitToView();
         }
 
         function setScope(newScope) {
@@ -1063,10 +1211,35 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             return 'hsla(' + hue.toFixed(1) + ', 72%, 62%, ' + a + ')';
         }
 
-        // ⟲ düğmesi: kullanıcı görünümü elle değiştirmiş olsa da sıfırlar.
+        // ⟲ düğmesi: kullanıcı görünümü elle değiştirmiş olsa da sıfırlar ve
+        // O AN GÖRÜNÜR olan bütün düğümleri kanvasa sığdırır.
         function resetView() {
             userAdjustedView = false;
+            updateDimensions();
             fitToView();
+        }
+
+        // Yakınlaştırma tek kapıdan geçer: DETAIL_ZOOM eşiği aşıldığında yaprak
+        // düğümler görünürlüğe girip çıktığı için benzetim yeniden ısıtılmalıdır,
+        // yoksa yeni düğümler eski tohum konumlarında donuk kalır.
+        function applyZoom(newZoom, ax, ay) {
+            newZoom = Math.max(0.05, Math.min(4.5, newZoom));
+            if (newZoom === zoom) return;
+            const wasDetail = detailsGloballyVisible();
+            panX = ax - (ax - panX) * (newZoom / zoom);
+            panY = ay - (ay - panY) * (newZoom / zoom);
+            zoom = newZoom;
+            userAdjustedView = true;
+            if (isPanning) {
+                panStartX = ax - panX;
+                panStartY = ay - panY;
+            }
+            if (detailsGloballyVisible() !== wasDetail) {
+                // Görünür küme değişti: yerleşim yeniden kurulur ama görünüm
+                // (zoom/pan) kullanıcının bıraktığı yerde kalır.
+                relayoutAndFit(0.5, false);
+            }
+            requestRender();
         }
 
         // ---- Organik kuvvet yerleşimi (çevrimdışı d3-force eşleniği) ----
@@ -1435,18 +1608,8 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
 
-            userAdjustedView = true;
             const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-            const newZoom = Math.max(0.05, Math.min(4.5, zoom * zoomFactor));
-
-            panX = mx - (mx - panX) * (newZoom / zoom);
-            panY = my - (my - panY) * (newZoom / zoom);
-            zoom = newZoom;
-            if (isPanning) {
-                panStartX = e.clientX - panX;
-                panStartY = e.clientY - panY;
-            }
-            requestRender();
+            applyZoom(zoom * zoomFactor, mx, my);
         }, { passive: false });
 
         canvas.addEventListener('contextmenu', (e) => {
@@ -1565,6 +1728,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     requestRender();
                     return;
                 }
+                // Faz 6: yapısal bir düğüme (dal) tıklamak o dalın yapraklarını
+                // açar/kapatır — ayrı bir "raporları göster" düğmesi yoktur.
+                selectedNodeId = draggedNode.id;
+                if (!isDetailNode(draggedNode)) {
+                    toggleBranchExpansion(draggedNode.id);
+                    recomputeIsolation();
+                    relayoutAndFit(0.6, false);
+                } else {
+                    recomputeIsolation();
+                }
                 const url = 'entropy-node://select?id=' + encodeURIComponent(draggedNode.id);
                 window.location.href = url;
             }
@@ -1586,33 +1759,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         });
 
         function zoomIn() {
-            const cx = width / 2;
-            const cy = height / 2;
-            const newZoom = Math.min(4.5, zoom * 1.25);
-            userAdjustedView = true;
-            panX = cx - (cx - panX) * (newZoom / zoom);
-            panY = cy - (cy - panY) * (newZoom / zoom);
-            zoom = newZoom;
-            if (isPanning) {
-                panStartX = cx - panX;
-                panStartY = cy - panY;
-            }
-            requestRender();
+            applyZoom(zoom * 1.25, width / 2, height / 2);
         }
 
         function zoomOut() {
-            const cx = width / 2;
-            const cy = height / 2;
-            const newZoom = Math.max(0.05, zoom / 1.25);
-            userAdjustedView = true;
-            panX = cx - (cx - panX) * (newZoom / zoom);
-            panY = cy - (cy - panY) * (newZoom / zoom);
-            zoom = newZoom;
-            if (isPanning) {
-                panStartX = cx - panX;
-                panStartY = cy - panY;
-            }
-            requestRender();
+            applyZoom(zoom / 1.25, width / 2, height / 2);
         }
 
         function fitToView() {
@@ -1651,6 +1802,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 
         function render() {
             isRendering = false;
+            // Detay eşiği geçildiyse benzetim kümesi tazelenir ve yerleşim
+            // yeniden ısıtılır: yeni giren yapraklar tohum konumlarında donmasın.
+            if (syncDetailState()) {
+                alpha = Math.max(alpha, 0.5);
+                settledFitDone = false;
+            }
             tickPhysics();
             placedLabels = [];
 
@@ -1971,6 +2128,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         initNodePositions();
         relayoutGraph();
         fitToView();
+        // Sığdırma zoom'u değiştirdiği için detay eşiği burada belli olur;
+        // benzetim kümesi son duruma göre yeniden kurulur (yoksa gizli yapraklar
+        // fizikte kalıp yapısal düğümleri birbirinden uzağa iterdi).
+        lastDetailState = detailsGloballyVisible();
+        relayoutGraph();
+        fitToView();
         alpha = 1.0;
         settledFitDone = false;
         requestRender();
@@ -2204,12 +2367,61 @@ class KnowledgeGraphWidget(QFrame):
             self.apply_scope(data)
 
     def _on_isolate_toggled(self, checked: bool):
-        if hasattr(self.web_view, "page") and self.web_view.page():
-            try:
-                js_val = "true" if checked else "false"
-                self.web_view.page().runJavaScript(f"setIsolationMode({js_val});")
-            except Exception:
-                pass
+        self._run_js("setIsolationMode(%s);" % ("true" if checked else "false"))
+
+    def _run_js(self, script: str) -> bool:
+        """Kanvas JS'ini çalıştırır; offscreen/başsız kipte sessizce yok sayılır."""
+        page = self.web_view.page() if hasattr(self.web_view, "page") else None
+        if page is None:
+            return False
+        try:
+            page.runJavaScript(script)
+            return True
+        except Exception:
+            return False
+
+    def select_node(self, node_id: str):
+        """Dışarıdan (odak listesi, rapor tıklaması) seçili düğümü bildirir."""
+        if not node_id:
+            return
+        safe = json.dumps(str(node_id))
+        self._run_js(
+            "if (typeof setSelectedNode === 'function') { setSelectedNode(%s); }" % safe
+        )
+
+    # --- Faz 6: kanvas ölçüsü panelle birlikte güncellensin ---
+    #
+    # Zen kipinde grafik paneli açılışta gizli olabiliyor; sayfa 0x0 bir alanda
+    # yüklenince sığdırma yanlış ölçüye göre yapılıp grafik köşede minik kalıyordu.
+    # Panel gösterildiğinde ve yeniden boyutlandığında kanvas ölçüsü + sığdırma
+    # tazelenir (arka arkaya gelen olaylar tek çağrıda toplanır).
+    def _ensure_fit_timer(self) -> QTimer:
+        timer = getattr(self, "_fit_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(180)
+            timer.timeout.connect(self._apply_view_fit)
+            self._fit_timer = timer
+        return timer
+
+    @Slot()
+    def schedule_view_fit(self):
+        self._ensure_fit_timer().start()
+
+    @Slot()
+    def _apply_view_fit(self):
+        self._run_js(
+            "if (typeof updateDimensions === 'function') { updateDimensions(); fitToView(); }"
+        )
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.schedule_view_fit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.schedule_view_fit()
 
     def apply_scope(self, scope_key: str):
         """Programmatically switch scope and update canvas."""

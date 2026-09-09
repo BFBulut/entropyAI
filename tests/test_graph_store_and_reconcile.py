@@ -322,7 +322,9 @@ def test_scope_filter_prevents_cross_office_leak(store, tmp_path):
     root = _write_desk_vault(tmp_path)
     store.ingest_desk_memory(vault_path=root)
 
-    scopes = store.default_scopes(active_office="medya")
+    # vault_path zorunlu: verilmezse desk_scopes() KULLANICININ gerçek kasasını
+    # okur ve test ortama bağımlı hâle gelir (desk:* sızıntısı).
+    scopes = store.default_scopes(active_office="medya", vault_path=root)
     assert scopes == ["general", "office:medya"]
     results = store.graph_recall("gizli anahtar", top_k=10, scopes=scopes, valid_only=False)
     bodies = " ".join(n.body for n, _ in results)

@@ -130,7 +130,10 @@ def render_claude_agent(spec: AgentSpec) -> str:
         front["model"] = model
     if spec.effort:
         front["effort"] = spec.effort
-    tools = _TOOLS_BY_POLICY.get((spec.tools_policy or "").lower())
+    # Orkestratörde politika alanı ne yazarsa yazsın araç listesi salt-okunur:
+    # yazma/komut aracı ofis sözleşmesinde alt ajanlara ait.
+    policy = "read-only" if is_orchestrator(spec) else (spec.tools_policy or "").lower()
+    tools = _TOOLS_BY_POLICY.get(policy)
     if tools:
         front["tools"] = tools
     body = (spec.prompt or "").strip()
@@ -141,11 +144,37 @@ def render_claude_agent(spec: AgentSpec) -> str:
     return f"{render_frontmatter(front)}\n\n{body.strip()}\n"
 
 
+# Orkestratör derlemesine düşen sert yasaklar. agy'nin ön bilgi şemasında araç
+# listesi alanı yok (`tools` yalnızca Claude tarafında); bu yüzden yasak agy
+# tarafında `rules` satırları, Claude tarafında hem `tools` listesi hem de
+# gövdedeki kural bloğu olarak iki kez ifade edilir. Tek yerde kalsaydı
+# sağlayıcılardan birinde orkestratör dosya yazabiliyordu.
+# Satırlarda VİRGÜL ve ": " yok: `render_frontmatter` listeyi YAML akış dizisi
+# (`[a, b]`) olarak yazıyor ve virgül içeren bir kural üç ayrı kurala bölünüyor,
+# iki nokta içeren kural ise eşleme sanılıyordu — yani yasak sessizce bozuluyordu.
+ORCHESTRATOR_RULES = (
+    "Kod yazmak ve dosya oluşturmak/değiştirmek yasak; yalnızca oku ve araştır.",
+    "Kabuk komutu ya da betik çalıştırmak yasak.",
+    "İşi kendin yapma; alt görevlere böl ve alt ajanlara ata.",
+)
+
+
+def is_orchestrator(spec: AgentSpec) -> bool:
+    """Ajan bir ofisin orkestratörü mü (rol alanına göre)."""
+    return spec.office_role == "orchestrator"
+
+
 def _rules_lines(spec: AgentSpec) -> List[str]:
     """Ön bilgi alanlarından türeyen, gövdede tekrarlanmayan kısa kurallar."""
     rules: List[str] = []
     if spec.skills:
         rules.append("Şu yetenekleri kullan: " + ", ".join(spec.skills))
+    if is_orchestrator(spec):
+        rules.extend(ORCHESTRATOR_RULES)
+        if spec.memory_path:
+            # "->" kasıtlı: iki nokta akış dizisinde eşleme başlatıyor.
+            rules.append(f"Kalıcı notların -> {spec.memory_path}")
+        return rules
     policy = (spec.tools_policy or "").lower()
     if policy == "read-only":
         rules.append("Dosya değiştirme; yalnızca oku ve rapor et.")
@@ -184,6 +213,27 @@ def compile_roots(project_dir: Optional[Path | str] = None) -> List[Path]:
     _add(project_dir)
     _add(getattr(config, "default_project_path", None))
     return roots
+
+
+def compile_agent_to(spec: AgentSpec, root: Path | str) -> Dict[str, Path]:
+    """
+    Bir ajanı TEK bir köke derler (Desk ofisleri için).
+
+    `compile_agent`ten ayrı: Entropy'nin kendi ajanları uygulama kökü + etkin
+    proje köküne yazılır, Desk ajanları ise yalnızca kendi ofislerinin çalışma
+    dizinine. Ofis ajanının uygulama köküne sızması, Entropy'nin kendi
+    çağrılarında "Entropy" bilmeyen bir ajanın seçilebilmesi demekti.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    return {
+        "agy": _write_if_changed(
+            root / ".agents" / "agents" / spec.name / "agent.md", render_agy_agent(spec)
+        ),
+        "claude": _write_if_changed(
+            root / ".claude" / "agents" / f"{spec.name}.md", render_claude_agent(spec)
+        ),
+    }
 
 
 def compile_agent(spec: AgentSpec, project_dir: Optional[Path | str] = None) -> Dict[str, Path]:

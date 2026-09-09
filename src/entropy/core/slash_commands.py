@@ -134,11 +134,11 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
     ),
     SlashCommand(
         name="/effort",
-        description="Model düşünme bütçesini ve akıl yürütme seviyesini ayarlar (low | medium | high).",
+        description="Akıl yürütme eforunu kalıcı olarak ayarlar (agy: low|medium|high, claude: + xhigh|max).",
         category="builtin",
-        badge="⚡ AGY",
+        badge="⚡ Yerel",
         color="#00F0FF",
-        usage="/effort <low|medium|high>",
+        usage="/effort [<seviye>]",
     ),
     SlashCommand(
         name="/usage",
@@ -325,6 +325,42 @@ def _handle_provider(cmd: dict, bridge) -> str:
         return f"<span style='color:#e06c75;'>Sağlayıcı '{name}' olarak değiştirilemedi.</span>"
     new_model = getattr(getattr(mgr, "bridge", None), "selected_model", "") or "-"
     return f"<b>Sağlayıcı</b> artık <b>{name}</b> (model: <code>{new_model}</code>)."
+
+
+def _handle_effort(cmd: dict, bridge) -> str:
+    """
+    `/effort` sonucunu yürütür: show -> mevcut/geçerli seviyeler; set -> köprüye
+    yazar ve ayara kalıcılaştırır. Model çağırmaz, tamamen yerel.
+    """
+    action = cmd.get("action")
+    levels = []
+    try:
+        levels = list(bridge.effort_levels())
+    except Exception:
+        levels = []
+
+    if action == "error":
+        return f"<span style='color:#e06c75;'>{_html_escape(cmd.get('message', 'Geçersiz /effort komutu.'))}</span>"
+
+    if action == "show":
+        current = getattr(bridge, "selected_effort", "") or "-"
+        return (
+            "<b>Akıl Yürütme Eforu</b><br>"
+            f"Aktif: <b>{_html_escape(current)}</b><br>"
+            f"Geçerli seviyeler: <code>{_html_escape(', '.join(levels) or '-')}</code><br>"
+            "<i>Değiştirmek için: /effort &lt;seviye&gt;</i>"
+        )
+
+    level = cmd.get("effort", "")
+    try:
+        bridge.set_effort(level)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Efor ayarlanamadı: {_html_escape(e)}</span>"
+    provider = getattr(bridge, "provider_name", "")
+    return (
+        f"<b>Akıl Yürütme Eforu</b> artık <b>{_html_escape(level)}</b>"
+        f"{f' ({_html_escape(provider)})' if provider else ''}."
+    )
 
 
 def _handle_handoff(note: str, bridge) -> str:
@@ -586,6 +622,130 @@ def _handle_offices(_args: str = "") -> str:
     )
 
 
+def _desk_usage() -> str:
+    """Tek yerde tutulan `/desk` kullanım metni (hata yollarının hepsi buraya döner)."""
+    return (
+        "<b>🏢 Agent Desk</b><br/>"
+        "<code>/desk</code> · <code>/desk office add &lt;ad&gt; :: &lt;amaç&gt;</code> · "
+        "<code>/desk office rm &lt;ad&gt;</code><br/>"
+        "<code>/desk agent add|edit|rm &lt;ofis&gt; &lt;ad&gt; :: &lt;açıklama&gt;</code><br/>"
+        "<code>/desk project add &lt;ofis&gt; &lt;ad&gt; :: &lt;hedef&gt;</code><br/>"
+        "<code>/desk task &lt;ofis&gt; [@proje] &lt;başlık&gt; :: &lt;hedef&gt;</code> · "
+        "<code>/desk stop &lt;kart&gt;</code>"
+    )
+
+
+def _handle_desk_admin(verb: str, rest: str, offices) -> str:
+    """
+    `/desk office|agent|project ...` — Desk'in kendi kadrosunun yönetimi.
+
+    Hepsi YEREL: dosya yazar, model çağırmaz, kota harcamaz. Ofis açıldığı anda
+    orkestratörü de doğar (kural 2); ajan ekleme/silme ofisin çalışma dizinine
+    yeniden derlenir, aksi hâlde sağlayıcı eski kadroyu görüyordu.
+    """
+    from entropy.agents.desk_registry import DeskOffice, DeskProject
+
+    action, _, tail = rest.partition(" ")
+    action = action.strip().lower()
+    body, sep, detail = tail.partition("::")
+    names = body.split()
+    detail = detail.strip() if sep else ""
+
+    if verb == "office":
+        if action == "add":
+            if not names:
+                return _desk_usage()
+            name = names[0]
+            try:
+                spec = offices.create(DeskOffice(name=name, purpose=detail, charter=detail))
+            except FileExistsError:
+                return f"<b>🏢 Ofis</b><br/>'{_html_escape(name)}' zaten var."
+            except Exception as exc:
+                return f"<b>🏢 Ofis</b><br/>Yazılamadı: {_html_escape(exc)}"
+            return (
+                f"<b>🏢 Ofis Açıldı</b><br/>{_html_escape(spec.name)}<br/>"
+                f"<span style='color:#8B949E;font-size:11px;'>Orkestratör "
+                f"<code>{_html_escape(spec.orchestrator)}</code> otomatik oluşturuldu "
+                f"(kod yazmaz; araştırır, planlar, raporlar). Klasör: "
+                f"<code>{_html_escape(str(offices.office_dir(spec.name)))}</code></span>"
+            )
+        if action in ("rm", "remove", "delete"):
+            if not names:
+                return _desk_usage()
+            ok = offices.delete(names[0])
+            return (f"<b>🏢 Ofis</b><br/>'{_html_escape(names[0])}' "
+                    + ("silindi." if ok else "bulunamadı."))
+        return _desk_usage()
+
+    if verb == "project":
+        if action != "add" or len(names) < 2:
+            return _desk_usage()
+        office_name, project_name = names[0], names[1]
+        if offices.get(office_name) is None:
+            return f"<b>🏢 Proje</b><br/>'{_html_escape(office_name)}' adında ofis yok."
+        try:
+            project = offices.create_project(
+                office_name, DeskProject(name=project_name, goal=detail, charter=detail)
+            )
+        except Exception as exc:
+            return f"<b>🏢 Proje</b><br/>Yazılamadı: {_html_escape(exc)}"
+        return (
+            f"<b>🏢 Proje</b><br/>{_html_escape(office_name)} / "
+            f"{_html_escape(project.name)} oluşturuldu.<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>Karta bağlamak için: "
+            f"<code>/desk task {_html_escape(office_name)} @{_html_escape(project.name)} "
+            f"&lt;başlık&gt; :: &lt;hedef&gt;</code></span>"
+        )
+
+    # verb == "agent"
+    if len(names) < 2:
+        return _desk_usage()
+    office_name, agent_name = names[0], names[1]
+    if offices.get(office_name) is None:
+        return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(office_name)}' adında ofis yok."
+    agents = offices.agents(office_name)
+    if action in ("rm", "remove", "delete"):
+        office = offices.get(office_name)
+        if agent_name == (office.orchestrator if office else ""):
+            return ("<b>🤖 Ofis Ajanı</b><br/>Orkestratör silinemez: ofisin planlayıcısı "
+                    "odur. Ofisi kapatmak için <code>/desk office rm</code>.")
+        ok = agents.delete(agent_name)
+        return (f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(agent_name)}' "
+                + ("silindi." if ok else "bulunamadı."))
+    if action not in ("add", "edit"):
+        return _desk_usage()
+    from dataclasses import replace as _replace
+
+    from entropy.agents.registry import AgentSpec
+
+    existing = agents.get(agent_name)
+    if action == "add" and existing is not None:
+        return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(agent_name)}' bu ofiste zaten var."
+    if action == "edit" and existing is None:
+        return f"<b>🤖 Ofis Ajanı</b><br/>'{_html_escape(agent_name)}' bu ofiste yok."
+    office = offices.get(office_name)
+    spec = existing or AgentSpec(
+        name=agent_name,
+        role="worker",
+        provider=(office.default_provider if office else "agy"),
+        model=(office.default_model if office else ""),
+        tools_policy="read-write",
+        memory_path=f"memory/{agent_name}.md",
+    )
+    if detail:
+        spec = _replace(spec, description=detail, prompt=(spec.prompt or detail))
+    try:
+        agents.update(spec)
+    except Exception as exc:
+        return f"<b>🤖 Ofis Ajanı</b><br/>Yazılamadı: {_html_escape(exc)}"
+    return (
+        f"<b>🤖 Ofis Ajanı</b><br/>{_html_escape(office_name)} / "
+        f"{_html_escape(agent_name)} kaydedildi ve derlendi.<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Tanım: "
+        f"<code>{_html_escape(str(agents.agent_file(agent_name)))}</code></span>"
+    )
+
+
 def _handle_desk(args: str) -> str:
     """
     `/desk` — ofisler + süren ofis kartları.
@@ -657,6 +817,9 @@ def _handle_desk(args: str) -> str:
     verb = verb.strip().lower()
     rest = rest.strip()
 
+    if verb in ("office", "agent", "project"):
+        return _handle_desk_admin(verb, rest, offices)
+
     if verb == "stop":
         if not rest:
             return "<b>🏢 Agent Desk</b><br/>Kullanım: <code>/desk stop &lt;kart&gt;</code>"
@@ -672,12 +835,17 @@ def _handle_desk(args: str) -> str:
                 f"({_html_escape(card.office)}) zinciri kesildi.")
 
     if verb != "task":
-        return ("<b>🏢 Agent Desk</b><br/>Kullanım: <code>/desk</code>, "
-                "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> ya da "
-                "<code>/desk stop &lt;kart&gt;</code>")
+        return _desk_usage()
 
     head, sep, goal = rest.partition("::")
     parts = head.split()
+    # `@proje` işareti kartı bir ofis projesine bağlar; proje kartın bağlamıdır
+    # ve orkestratörün plan prompt'una projenin tüzüğü girer.
+    project = ""
+    for token in list(parts):
+        if token.startswith("@") and len(token) > 1:
+            project = token[1:]
+            parts.remove(token)
     if len(parts) < 2:
         return ("<b>🏢 Agent Desk</b><br/>Ofis ve başlık gerekli: "
                 "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code>")
@@ -700,6 +868,7 @@ def _handle_desk(args: str) -> str:
         model=spec.default_model,
         goal=goal or title,
         office=spec.name,
+        project=project,
     )
     try:
         card = board.create(card)
@@ -927,6 +1096,7 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         /distill stop [<yetenek>|all]  zincirlenen damıtmayı durdurur
         /ask <ofis> <soru>       ofisin posta kutusuna soru bırakır (asenkron)
         /chat <ofis|ajan> <msj>  agentic sohbetin bir turunu başlatır
+        /effort [<seviye>]       akıl yürütme eforunu gösterir/ayarlar (kalıcı)
         /login [agy|claude]      sağlayıcı giriş durumu ve giriş yönlendirmesi
         /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
         /wiki <yetenek>          playbook'tan kavram/varlık sayfaları üretir (model yok)
@@ -947,6 +1117,13 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     pcmd = provider_command(text)
     if pcmd is not None:
         return _handle_provider(pcmd, bridge)
+
+    # /effort: seviye kümesi köprüden okunur (agy ve claude farklı kümeler
+    # sunuyor); ayrıştırma provider.py'de, yürütme burada.
+    from entropy.core.provider import effort_command
+    ecmd = effort_command(text, bridge)
+    if ecmd is not None:
+        return _handle_effort(ecmd, bridge)
 
     if head_low == "/handoff":
         return _handle_handoff(args, bridge)

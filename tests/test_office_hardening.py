@@ -14,11 +14,12 @@ from dataclasses import replace
 import pytest
 
 from entropy.agents.harness import OfficeHarness
-from entropy.agents.offices import DEFAULT_OFFICES, OfficeRegistry
+from entropy.agents.desk_registry import DeskOffice as OfficeSpec, DeskRegistry as OfficeRegistry
 from entropy.agents.registry import (
     DEFAULT_AGENTS,
     SEED_MARKER_FILENAME,
     AgentRegistry,
+    AgentSpec,
 )
 from entropy.agents.tasks import (
     TaskBoard,
@@ -70,10 +71,23 @@ def offices(vault):
     return OfficeRegistry(vault_path=vault)
 
 
+# Faz 6: tohum ofis yok; ofisi ve kadrosunu test kurar. Ajanlar ofisin KENDİ
+# defterine yazılır (Entropy'nin `Entropy/Agents` kadrosuna değil).
 @pytest.fixture
 def seeded(registry, offices):
-    registry.ensure_defaults()
-    offices.ensure_defaults()
+    offices.create(OfficeSpec(
+        name="arastirma-ofisi",
+        purpose="Araştırır.",
+        default_model="gemini-3.8-flash-high",
+        charter="Kabul standartları: kaynaklı yaz.",
+    ))
+    agents = offices.agents("arastirma-ofisi")
+    for name in ("arastirmaci", "analist", "yazar"):
+        agents.update(AgentSpec(name=name, role="worker", description=f"{name} rolü",
+                                provider="agy", tools_policy="read-write"))
+    agents.update(AgentSpec(name="degerlendirici", role="evaluator",
+                            description="notlar", provider="agy",
+                            tools_policy="read-only"))
     return offices.get("arastirma-ofisi")
 
 
@@ -498,20 +512,26 @@ def test_seed_marker_prevents_resurrection_of_deleted_agent(vault, registry):
     assert all(s.name != SEED_MARKER_FILENAME for s in registry.list())
 
 
-def test_missing_seed_office_is_added_and_not_resurrected(vault, offices):
-    from entropy.agents.offices import OfficeSpec
+def test_no_seed_offices_and_orchestrator_is_born_with_office(vault, offices):
+    """
+    Faz 6 sözleşmesi: tohum ofis YOK, ama açılan ofisin orkestratörü VAR.
 
+    Eskiden `ensure_defaults` bir "arastirma-ofisi" tohumluyordu; kullanıcı
+    kuralı bunu kaldırdı (ofisi kullanıcı açar) ve yerine "ofis açıldığı anda
+    orkestratörü doğar" kuralı geldi.
+    """
+    assert offices.list() == []
     offices.create(OfficeSpec(name="baska-ofis", purpose="elde var"))
-    created = offices.ensure_defaults()
-    assert created == ["arastirma-ofisi"]
+    assert [o.name for o in offices.list()] == ["baska-ofis"]
 
-    marker = vault / "Entropy" / "Offices" / SEED_MARKER_FILENAME
-    assert set(json.loads(marker.read_text(encoding="utf-8"))["seeded"]) == {
-        o.name for o in DEFAULT_OFFICES
-    }
-    offices.delete("arastirma-ofisi")
-    assert offices.ensure_defaults() == []
-    assert offices.get("arastirma-ofisi") is None
+    orchestrator = offices.agents("baska-ofis").get("orkestrator")
+    assert orchestrator is not None
+    assert orchestrator.office_role == "orchestrator"
+    assert orchestrator.tools_policy == "read-only"
+    # Orkestratör ofisin üyesi (alt ajanı) sayılmaz: o planlar, üretmez.
+    assert offices.get("baska-ofis").members == []
+    offices.delete("baska-ofis")
+    assert offices.get("baska-ofis") is None
 
 
 # ---------------------------------------------------------------------------

@@ -232,6 +232,10 @@ def _run_chat(bridge, monkeypatch, prompt="Bu projeyi özetle", **kwargs):
     def fake_popen(cmd, **kw):
         captured["cmd"] = list(cmd)
         captured["kwargs"] = kw
+        # Sistem istemi argv'de de olabilir, dosyada da (uzun bağlam Windows
+        # komut satırı sınırını aştığı için dosyaya taşınıyor); metin süreç
+        # başlarken çözülür, çünkü dosya tur bitince siliniyor.
+        captured["system_prompt"] = ClaudeCodeBridge.system_prompt_text_in(cmd)
         return _FakeProc(_claude_lines("Özet hazır."))
 
     monkeypatch.setattr("entropy.core.claude_bridge.subprocess.Popen", fake_popen)
@@ -247,8 +251,9 @@ def test_claude_chat_injects_context_via_append_system_prompt(tmp_path, monkeypa
     captured = _run_chat(b, monkeypatch)
     cmd = captured["cmd"]
 
-    assert "--append-system-prompt" in cmd
-    system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    # Uzun bağlam argv'ye yazılmaz: --append-system-prompt-file ile dosyadan gider.
+    assert "--append-system-prompt" in cmd or "--append-system-prompt-file" in cmd
+    system_prompt = captured["system_prompt"]
     assert "Entropy AI" in system_prompt
     assert "[AJANLAR]" in system_prompt          # ajan farkındalığı sohbete de girer
     assert "arastirmaci" in system_prompt
@@ -270,7 +275,7 @@ def test_claude_chat_second_turn_resumes_session(tmp_path, monkeypatch, registry
 
     assert cmd[cmd.index("--resume") + 1] == "sess-42"
     # Süren oturumda ağır bağlam tekrar gönderilmez; sistem istemi kısalır.
-    system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    system_prompt = captured["system_prompt"]
     assert "Önceki Sohbet Özeti" not in system_prompt
 
 
@@ -318,7 +323,7 @@ def test_claude_chat_attachments_become_paths_and_add_dirs(tmp_path, monkeypatch
         image_attachments=[str(img)], pdf_attachments=[str(pdf)],
     )
     cmd = captured["cmd"]
-    system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
+    system_prompt = captured["system_prompt"]
 
     # Bulgu: CLI'da gömülü görsel için bayrak yok; Read aracı yerel yolu okuyor.
     assert str(img.resolve()) in system_prompt

@@ -292,7 +292,7 @@ _NON_REPORT_STEMS = {
 # turun kırpılmış kopyası yordam gibi damıtılırdı.
 _NON_REPORT_DIRS = {
     "dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian",
-    "sessions", "tasks", "agents", "wiki", "queries", "offices",
+    "sessions", "tasks", "agents", "wiki", "queries", "offices", "desk",
 }
 _DAILY_NOTE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 

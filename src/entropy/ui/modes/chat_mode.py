@@ -32,8 +32,10 @@ from entropy.ui.widgets.timeline_panel import TimelinePanel
 from entropy.ui.widgets.report_inbox import (
     InboxBadge, ReportInboxStrip, collect_recent_entries,
 )
+from entropy.ui.widgets.effort_selector import install_effort_selector
 from entropy.ui.widgets.ui_polish import apply_model_placeholder
 from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html, render_markdown_to_html
+from entropy.ui.window_sizing import fit_window_to_screen
 from entropy.core.slash_commands import SlashCommandRegistry, invalidate_command_cache
 from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.widgets.notification_pill import NotificationPillWidget
@@ -205,6 +207,12 @@ class ChatInputField(QLineEdit):
         super().closeEvent(event)
 
 
+# Faz 6: sohbet penceresi 1366x768 ekranda rahatca yer alsin.
+CHAT_MIN_SIZE = (460, 520)
+CHAT_PREFERRED_SIZE = (620, 820)
+CHAT_SCREEN_RATIO = 0.92
+
+
 class ChatModeWindow(QMainWindow):
     """Floating Chat Mode with real-time streaming, terminal drawer, and Ctrl+V images."""
 
@@ -217,7 +225,12 @@ class ChatModeWindow(QMainWindow):
 
         self.setStyleSheet(STYLESHEET)
         self.setWindowTitle("Entropy AI Chat")
-        self.resize(540, 700)
+        # Faz 6: sabit 540x700 yerine kullanilabilir alana gore boyut; kucuk
+        # ekranlarda pencere gorev cubugunun altina tasmasin.
+        self.setMinimumSize(*CHAT_MIN_SIZE)
+        self.resize(*CHAT_PREFERRED_SIZE)
+        fit_window_to_screen(self, ratio=CHAT_SCREEN_RATIO,
+                             min_size=CHAT_MIN_SIZE, keep_preferred=True)
         self.setAcceptDrops(True)
 
         self._init_ui()
@@ -306,6 +319,9 @@ class ChatModeWindow(QMainWindow):
         apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
         h_layout.addWidget(self.model_combo)
+
+        # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
+        self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
 
         # Dynamic Skill Selector Combo
         self.skill_combo = QComboBox()
@@ -403,7 +419,20 @@ class ChatModeWindow(QMainWindow):
         btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
         h_layout.addWidget(btn_zen)
 
-        self.layout.addWidget(header)
+        # Faz 6: ust cubugun ortuk asgari genisligi ~2470 px'ti; dar sohbet
+        # penceresinde sagdaki dugmeler kirpiliyordu. Cubuk yatay kaydirilabilir
+        # bir alana konur (icerik daralmaz, gerekince kayar).
+        self.header_scroll = QScrollArea()
+        self.header_scroll.setObjectName("headerScroll")
+        self.header_scroll.setWidget(header)
+        self.header_scroll.setWidgetResizable(True)
+        self.header_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.header_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.header_scroll.setMinimumWidth(160)
+        self.header_scroll.setStyleSheet("QScrollArea#headerScroll { background: transparent; border: none; }")
+        self.header_scroll.setFixedHeight(max(header.sizeHint().height(), 40) + 14)
+        self.layout.addWidget(self.header_scroll)
 
         # Report quick notification bar (shown when a report is created)
         self.report_bar = QFrame()

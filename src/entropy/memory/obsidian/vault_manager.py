@@ -671,7 +671,12 @@ class ObsidianVaultManager:
                 stem_to_id[name] = node_id
             file_ids[file] = node_id
             if category == "agent":
-                agent_ids[agent_of_page.strip().lower()] = node_id
+                # Kategori "agent" olsa da sayfa adi ajan sablonundan gelmemis
+                # olabilir (ornegin klasor adindan turemis); o durumda dosya
+                # adini kullan, aksi halde None.strip() cokerdi.
+                agent_key = (agent_of_page or name or "").strip().lower()
+                if agent_key:
+                    agent_ids[agent_key] = node_id
 
             if node_id not in node_ids:
                 node_ids.add(node_id)

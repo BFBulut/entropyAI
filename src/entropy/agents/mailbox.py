@@ -17,7 +17,7 @@ A2A sunucusuna geçilirse taşıyıcı değişir, mesaj gövdesi aynı kalır.
     }
 
 Dosya düzeni:
-    <kasa>/Entropy/Offices/<ofis>/inbox/<ts>-<id>.json
+    <kasa>/Entropy/Desk/Offices/<ofis>/inbox/<ts>-<id>.json
     <kasa>/Entropy/Agents/<ad>/inbox/<ts>-<id>.json
     <kasa>/Entropy/Inbox/<ts>-<id>.json          (Entropy'nin kendi kutusu)
 
@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 INBOX_DIRNAME = "inbox"
 ENTROPY_INBOX_SUBDIR = "Entropy/Inbox"
-OFFICES_SUBDIR = "Entropy/Offices"
+# Desk ofis kökü (Faz 6): posta kutuları da Entropy/Desk/Offices altına taşındı.
+OFFICES_SUBDIR = "Entropy/Desk/Offices"
 AGENTS_SUBDIR = "Entropy/Agents"
 
 OWNER_KINDS = ("office", "agent", "entropy")
@@ -657,11 +658,14 @@ class MailboxWatcher:
             return ("entropy", ENTROPY_OWNER)
         if rel == ENTROPY_INBOX_SUBDIR:
             return ("entropy", ENTROPY_OWNER)
-        parts = rel.split("/")
-        if len(parts) >= 3 and parts[1] == "Offices":
-            return ("office", parts[2])
-        if len(parts) >= 3 and parts[1] == "Agents":
-            return ("agent", parts[2])
+        # Kök adı sabit değil (ofisler Faz 6'da bir seviye derine indi); sahip
+        # türü, kutunun hangi tabanın altında olduğuna bakılarak bulunur.
+        for base, kind in ((OFFICES_SUBDIR, "office"), (AGENTS_SUBDIR, "agent")):
+            prefix = base + "/"
+            if rel.startswith(prefix):
+                owner = rel[len(prefix):].split("/")[0]
+                if owner:
+                    return (kind, owner)
         return ("entropy", ENTROPY_OWNER)
 
     def scan(self) -> List[tuple]:

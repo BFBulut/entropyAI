@@ -31,7 +31,9 @@ class BootstrapResult:
     """Önyükleme özeti; çağıran (UI/terminal) bunu kullanıcıya basar."""
 
     created: List[str] = field(default_factory=list)
-    offices_created: List[str] = field(default_factory=list)
+    # Faz 6: tohum ofis yok; hazırlanan (orkestratörü + derlemesi
+    # doğrulanan) ofislerin adları.
+    offices_ready: List[str] = field(default_factory=list)
     compiled: Dict[str, Dict[str, Path]] = field(default_factory=dict)
     roots: List[Path] = field(default_factory=list)
     error: Optional[str] = None
@@ -46,8 +48,8 @@ class BootstrapResult:
         parts = []
         if self.created:
             parts.append(f"varsayılan ajanlar oluşturuldu: {', '.join(self.created)}")
-        if self.offices_created:
-            parts.append(f"varsayılan ofisler oluşturuldu: {', '.join(self.offices_created)}")
+        if self.offices_ready:
+            parts.append(f"ofisler hazır: {', '.join(self.offices_ready)}")
         if self.compiled:
             parts.append(
                 f"{len(self.compiled)} ajan derlendi ({', '.join(sorted(self.compiled))}) "
@@ -68,7 +70,7 @@ def bootstrap_agents(
     atlanmaz.
     """
     from entropy.agents.compile import compile_roots
-    from entropy.agents.offices import OfficeRegistry
+    from entropy.agents.desk_registry import DeskRegistry
     from entropy.agents.registry import AgentRegistry
 
     result = BootstrapResult()
@@ -77,12 +79,32 @@ def bootstrap_agents(
         result.created = registry.ensure_defaults()
         if result.created:
             logger.info("Varsayılan ajanlar oluşturuldu: %s", ", ".join(result.created))
-        # Ofisler ajanlardan SONRA tohumlanır: tohum ofis, tohum ajanlara
-        # (orkestrator/degerlendirici) atıfta bulunuyor; ters sırada ofis var
-        # ama orkestratörü olmayan bir kurulum çıkardı.
-        result.offices_created = OfficeRegistry(vault_path=vault_path).ensure_defaults()
-        if result.offices_created:
-            logger.info("Varsayılan ofisler oluşturuldu: %s", ", ".join(result.offices_created))
+        # Desk ofisleri TOHUMLANMAZ (Faz 6, kural 2): ofisi kullanıcı açar.
+        # Yapılan tek şey, var olan her ofisin orkestratörünü ve derlemesini
+        # garanti etmek — kasadan elle silinmiş bir orkestratör ofisi sessizce
+        # işlevsiz bırakıyordu.
+        desk = DeskRegistry(vault_path=vault_path)
+        # Eski `Entropy/Offices` kurulumunun taşınması bellek ajanının işi;
+        # modül yoksa (ya da taşınacak bir şey yoksa) sessizce atlanır. Açılışta
+        # bir kez koşar: taşıma işlevi kendi içinde tekrarlanabilir olmalı.
+        try:
+            from entropy.memory.office_graph import migrate_legacy_offices  # type: ignore
+        except Exception:
+            migrate_legacy_offices = None  # type: ignore
+        if migrate_legacy_offices is not None:
+            try:
+                moved = migrate_legacy_offices(vault_path=vault_path)
+                if moved:
+                    logger.info("Eski ofisler taşındı: %s", moved)
+            except Exception:
+                logger.warning("Eski ofis taşıması başarısız", exc_info=True)
+        for office in desk.list():
+            try:
+                desk.ensure_orchestrator(office.name)
+                desk.compile_office(office.name)
+                result.offices_ready.append(office.name)
+            except Exception:
+                logger.warning("Ofis hazırlanamadı: %s", office.name)
         result.roots = compile_roots(project_dir)
         result.compiled = registry.compile_all(project_dir)
         logger.info(

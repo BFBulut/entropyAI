@@ -83,6 +83,8 @@ class ProviderBridge(Protocol):
     #: "agy" | "claude"
     provider_name: str
     selected_model: str
+    #: Akıl yürütme eforu (`--effort`); geçerli kümesi effort_levels() verir.
+    selected_effort: str
     active_project_dir: Path
 
     # --- Yürütme ---
@@ -109,6 +111,14 @@ class ProviderBridge(Protocol):
     def auth_status(self) -> Dict[str, object]: ...
 
     def set_model(self, model_name: str) -> None: ...
+
+    # --- Efor ---
+    # Seviye kümesi sağlayıcıya göre değişir (agy: low|medium|high; claude:
+    # + xhigh|max). Arayüz combo'sunu bu listeden doldurur, seçileni
+    # set_effort ile yazar ve mevcut seçimi selected_effort'tan okur.
+    def effort_levels(self) -> List[str]: ...
+
+    def set_effort(self, level: str) -> None: ...
 
     def set_project_directory(self, project_path) -> None: ...
 
@@ -437,11 +447,17 @@ class ProviderCommonMixin:
         return "\n\n".join(parts)
 
     def offices_manifest_section(self) -> str:
-        """Manifest'in "Ofisler" bölümü: ad, amaç, orkestratör + devretme kuralı."""
-        try:
-            from entropy.agents.offices import offices_manifest
+        """
+        Manifest'in "Ofisler" bölümü: ad, amaç, orkestratör + devretme kuralı.
 
-            return offices_manifest()
+        Entropy TÜM orkestratörleri bilir (kural 6); liste bellek ajanının
+        `desk_roster()` işlevinden gelir, o yoksa kayıt defterinden. Ters yön
+        yoktur: ofis ajanları Entropy'yi bilmez.
+        """
+        try:
+            from entropy.agents.desk_registry import desk_manifest
+
+            return desk_manifest()
         except Exception:
             return ""
 
@@ -710,8 +726,21 @@ def switch_provider(current_bridge, provider: str, cfg=None):
         raise ValueError(f"Bilinmeyen sağlayıcı: {provider!r} (geçerli: {', '.join(PROVIDERS)})")
 
     if current_bridge is not None:
+        # Süren istek ÖNCE iptal edilir: shutdown arka plan görevlerini toplar
+        # ama etkileşimli sohbet turu ayrı bir süreçtir; iptal edilmezse eski
+        # sağlayıcının yanıtı yeni köprünün turuymuş gibi ekrana düşerdi.
+        try:
+            current_bridge.terminate_current_process()
+        except Exception:
+            pass
         try:
             current_bridge.shutdown(timeout=3.0)
+        except Exception:
+            pass
+        # Kilidi serbest bırak: eski köprü "çalışıyor" durumundayken
+        # değiştirilirse giriş kutusu kapalı kalıyordu.
+        try:
+            current_bridge._is_running = False
         except Exception:
             pass
 
@@ -724,7 +753,56 @@ def switch_provider(current_bridge, provider: str, cfg=None):
     except Exception:
         pass
 
-    return create_bridge(cfg, provider=name)
+    new_bridge = create_bridge(cfg, provider=name)
+
+    # Rozetler: model/durum göstergeleri yeni sağlayıcıyı yansıtsın ve çekirdek
+    # "thinking"/"error" durumunda takılı kalmasın.
+    try:
+        from entropy.core.event_bus import bus
+
+        bus.model_detected.emit(getattr(new_bridge, "selected_model", "") or name)
+        bus.core_state_changed.emit("idle")
+    except Exception:
+        pass
+
+    return new_bridge
+
+
+_EFFORT_CMD_RE = re.compile(r"^\s*/effort\b\s*(?P<arg>[A-Za-z]*)\s*$", re.IGNORECASE)
+
+
+def effort_command(text: str, bridge=None) -> Optional[Dict[str, str]]:
+    """
+    `/effort [<seviye>]` yerel komutunu ayrıştırır.
+
+    Geçerli seviye kümesi köprüden (`bridge.effort_levels()`) okunur; sağlayıcı
+    kümesi farklı olduğu için burada sabit liste tutulmaz. Dönüş: komut değilse
+    None; argümansızsa {"action": "show"}; geçerli seviyeyle
+    {"action": "set", "effort": <seviye>}; geçersizle {"action": "error", ...}.
+
+    NOT: `/effort <seviye>` bir prompt İÇİNDE geçtiğinde (ör. "kodu incele
+    /effort max") köprüler onu o turluk geçersiz kılma olarak zaten okur; bu
+    ayrıştırıcı yalnızca TEK BAŞINA yazılan kalıcı ayar komutunu yakalar.
+    """
+    if not text:
+        return None
+    m = _EFFORT_CMD_RE.match(text)
+    if not m:
+        return None
+    levels = []
+    try:
+        levels = list(bridge.effort_levels()) if bridge is not None else []
+    except Exception:
+        levels = []
+    arg = (m.group("arg") or "").strip().lower()
+    if not arg:
+        return {"action": "show"}
+    if levels and arg not in levels:
+        return {
+            "action": "error",
+            "message": f"Bilinmeyen efor '{arg}'. Geçerli: {', '.join(levels)}.",
+        }
+    return {"action": "set", "effort": arg}
 
 
 _PROVIDER_CMD_RE = re.compile(r"^\s*/provider\b\s*(?P<arg>[A-Za-z_\-]*)\s*$", re.IGNORECASE)

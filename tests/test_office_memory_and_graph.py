@@ -54,7 +54,7 @@ def _entry(title, vault, **extra):
 def test_append_office_memory_writes_expected_path_and_fields(tmp_path):
     path = am.append_office_memory("Medya Ofisi", _entry("kampanya kartı", tmp_path, learning="Kabul ölçütü kartta yazılmalı."))
 
-    assert path == tmp_path / "Entropy" / "Offices" / "Medya Ofisi" / "MEMORY.md"
+    assert path == tmp_path / "Entropy" / "Desk" / "Offices" / "Medya Ofisi" / "MEMORY.md"
     text = path.read_text(encoding="utf-8")
     assert "office: Medya Ofisi" in text
     assert "Ofis Belleği" in text
@@ -193,7 +193,7 @@ def test_office_report_written_to_wiki_and_office_folder_with_log(tmp_path):
     assert page.is_file()
 
     # 2) Ofis klasöründe wikilink'li KISA özet (kopya değil)
-    reports = sorted((tmp_path / "Entropy" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
+    reports = sorted((tmp_path / "Entropy" / "Desk" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
     assert len(reports) == 1
     summary = reports[0].read_text(encoding="utf-8")
     assert "type: office_report" in summary
@@ -204,7 +204,7 @@ def test_office_report_written_to_wiki_and_office_folder_with_log(tmp_path):
     assert len(summary) < len(page.read_text(encoding="utf-8")) + 400
 
     # 3) Ofis günlüğü
-    log = tmp_path / "Entropy" / "Offices" / "Medya Ofisi" / "log.md"
+    log = tmp_path / "Entropy" / "Desk" / "Offices" / "Medya Ofisi" / "log.md"
     assert "report: Kampanya kartı sonucu (orkestrator)" in log.read_text(encoding="utf-8")
 
     # 4) Geri çağırma düğümü yalnızca bir kez yazılır (özet ayrı düğüm değil)
@@ -213,14 +213,14 @@ def test_office_report_written_to_wiki_and_office_folder_with_log(tmp_path):
 
 def test_office_report_summary_is_capped(tmp_path):
     page, _ = _write_office_report(tmp_path, body="ü" * 3000)
-    reports = sorted((tmp_path / "Entropy" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
+    reports = sorted((tmp_path / "Entropy" / "Desk" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
     body = reports[0].read_text(encoding="utf-8").split("## Özet", 1)[1]
     assert len(body.strip()) <= wiki.OFFICE_SUMMARY_MAX_CHARS + 2
 
 
 def test_plain_query_page_does_not_create_office_folder(tmp_path):
     wiki.write_query_page("medya", "sıradan soru", "cevap", {"vault_path": tmp_path, "memory": FakeMemory()})
-    assert not (tmp_path / "Entropy" / "Offices").exists()
+    assert not (tmp_path / "Entropy" / "Desk" / "Offices").exists()
 
 
 def test_office_report_is_not_a_distillation_source_but_enters_recall_pool(tmp_path):
@@ -234,7 +234,7 @@ def test_office_report_is_not_a_distillation_source_but_enters_recall_pool(tmp_p
     found = {p.name for p in discover_reports(tmp_path)}
     assert "Gercek Rapor.md" in found
     assert page.name not in found  # wiki/queries dışlaması
-    office_report = next((tmp_path / "Entropy" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
+    office_report = next((tmp_path / "Entropy" / "Desk" / "Offices" / "Medya Ofisi" / "reports").glob("*.md"))
     assert office_report.name not in found  # Offices/ dışlaması
 
     # Geri çağırma havuzu: rapor bölümü sorgu sayfasını görür.

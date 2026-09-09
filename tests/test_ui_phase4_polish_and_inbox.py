@@ -236,9 +236,10 @@ def test_scene_elides_labels_and_offers_tooltip(qapp):
         scene.resize(600, 400)
         scene.relayout()
         slot = scene.slots[0]
-        # Masa merkezinden hit-test: `slot_at` mantıksal koordinata çevirir.
-        center = QPoint(slot.x + slot.width // 2, slot.y + slot.height // 2)
-        found = scene.slot_at(center)
+        # Yeni sahnede çarpışma dikdörtgeni `DeskSlot.rect` üzerinden gelir;
+        # merkezinden hit-test edilir (`slot_at` mantıksal koordinata çevirir).
+        center = scene.to_widget(slot.rect.center())
+        found = scene.slot_at(QPoint(center.x(), center.y()))
         assert found is not None and found.agent == long_name
         # Şerit dışında ipucu boşalır.
         assert scene.slot_at(QPoint(-500, -500)) is None

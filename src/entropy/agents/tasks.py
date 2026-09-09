@@ -106,6 +106,10 @@ class TaskCard:
     attempt: int = 0
     # Kart düzeyi token tavanı; 0 ise ofisin `budget_tokens` değeri geçerli.
     budget_tokens: int = 0
+    # Ofis projesi (`projects/<proje>/PROJECT.md`). Boşsa kart projesizdir;
+    # ofis kartları bir projeye bağlanınca rapor ve bellek o proje altında
+    # toplanır ve orkestratör planlarken projenin kapsamını görür.
+    project: str = ""
     # Kilit niyeti: "write" (proje dosyalarını değiştirir) | "read" | "" (çıkarım).
     # Ofis alt kartları varsayılan olarak OKUMA: paylaşımlı kilitle aynı proje
     # dizininde birbirlerini beklemeden koşabilsinler.
@@ -125,6 +129,7 @@ class TaskCard:
             "finished_at": self.finished_at,
             "output_paths": list(self.output_paths or []),
             "office": self.office,
+            "project": self.project,
             "parent": self.parent,
             "children": list(self.children or []),
             "grade": "" if self.grade is None else round(float(self.grade), 3),
@@ -376,6 +381,7 @@ class TaskBoard:
             notes=sections.get(SECTION_NOTES, "").strip(),
             path=path,
             office=str(front.get("office") or ""),
+            project=str(front.get("project") or ""),
             parent=str(front.get("parent") or ""),
             children=[str(c) for c in children],
             grade=grade,
@@ -502,6 +508,8 @@ class TaskBoard:
         card_id: str,
         bridge_factory: Optional[Callable] = None,
         on_done: Optional[Callable[[str, bool], None]] = None,
+        agent_registry=None,
+        project_path: Optional[str] = None,
     ) -> Optional[str]:
         """
         Kartı arka planda çalıştırır; ledger görev kimliğini döndürür.
@@ -521,7 +529,9 @@ class TaskBoard:
         if card.status == "running":
             return None
 
-        registry = AgentRegistry(vault_path=self.vault_path)
+        # Ajan defteri dışarıdan verilebilir: ofis kartlarının ajanı Entropy'nin
+        # kadrosunda değil, ofisin kendi `agents/` klasöründedir (Faz 6).
+        registry = agent_registry or AgentRegistry(vault_path=self.vault_path)
         agent_spec = registry.get(card.agent) if card.agent else None
         provider = (card.provider or (agent_spec.provider if agent_spec else "agy") or "agy").lower()
         bridge = self.bridge_for(provider, bridge_factory=bridge_factory)
@@ -556,12 +566,18 @@ class TaskBoard:
             # proje dizinindeki ikinci alt kart 60 sn bekleyip ölüyordu.
             needs_write=needs_write,
         )
+        # Ofis kartı kendi çalışma dizininde koşar; derlenmiş ajan tanımı orada.
+        if project_path:
+            kwargs["project_path"] = str(project_path)
         # `needs_write` bilmeyen dar köprü sözleşmeleri (ve sahte köprüler) için
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
-        if not _accepts_kwarg(bridge.send_background_task_async, "needs_write"):
-            kwargs.pop("needs_write", None)
+        for optional in ("needs_write", "project_path"):
+            if optional in kwargs and not _accepts_kwarg(
+                bridge.send_background_task_async, optional
+            ):
+                kwargs.pop(optional, None)
         try:
             bridge.send_background_task_async(**kwargs)
         except Exception as exc:

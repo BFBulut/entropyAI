@@ -1050,11 +1050,28 @@ class GraphStore:
             return None
 
     @staticmethod
-    def default_scopes(active_office: Optional[str] = None) -> List[str]:
-        """Sorgu için varsayılan kapsamlar: genel + aktif ofis."""
+    def default_scopes(
+        active_office: Optional[str] = None,
+        vault_path: Optional[Path] = None,
+        include_desk: bool = True,
+    ) -> List[str]:
+        """
+        Sorgu için varsayılan kapsamlar: genel + aktif ofis + tüm Desk ofisleri.
+
+        Desk kapsamları (`desk:<ofis>`) Entropy'nin geri çağırmasında **salt
+        okunur** görünür: ofis projeleri Entropy'nin belleğine akar, ters yön
+        yoktur (bkz. entropy.memory.office_graph).
+        """
         scopes = [SCOPE_GENERAL]
         if active_office:
             scopes.append(f"office:{active_office}")
+        if include_desk:
+            try:
+                from entropy.memory.office_graph import desk_scopes
+
+                scopes.extend(s for s in desk_scopes(vault_path) if s not in scopes)
+            except Exception:  # pragma: no cover - kasa yoksa sessiz geç
+                pass
         return scopes
 
     # -- 5.2: konsolidasyon (topluluk + yansıma) ---------------------------

@@ -244,8 +244,11 @@ def test_geometry_saved_and_restored(qapp, window, monkeypatch):
     from PySide6.QtGui import QGuiApplication
 
     available = QGuiApplication.primaryScreen().availableGeometry()
-    assert other.width() == min(1000, available.width())
-    assert other.height() == min(700, available.height())
+    # Faz 6: kayitli boyut da ekran kuralina uyar (kullanilabilir alanin %88'i).
+    from entropy.desk.window import DESK_SCREEN_RATIO
+
+    assert other.width() == min(1000, int(available.width() * DESK_SCREEN_RATIO))
+    assert other.height() == min(700, int(available.height() * DESK_SCREEN_RATIO))
     other.close()
     other.deleteLater()
 
@@ -388,15 +391,16 @@ def test_scene_layout_roles(qapp, offices):
     assert roles["lider"] == "orchestrator"
     assert roles["denetci"] == "evaluator"
     assert roles["arastirmaci"] == "worker"
-    # Yerleşim mantıksal ızgarada: orkestratör tam merkezde, değerlendirici
-    # sağ alt köşede, hiçbir masa bir diğeriyle çakışmıyor.
-    logical_w, logical_h = scene._logical_size
+    # Faz 6: yerleşim artık tile düzeninden gelir. Orkestratör bir MASAYA
+    # (DESK+PC hücresi) oturur ve ofis merkezine en yakın masayı alır;
+    # herkesin hücresi ayrıdır, karakterler üst üste binmez.
     orch = scene.slot_for("lider")
-    evaluator = scene.slot_for("denetci")
-    assert abs(orch.rect.center().x() - logical_w // 2) < 20
-    assert abs(orch.rect.center().y() - logical_h // 2) < 20
-    assert evaluator.x > logical_w // 2
-    assert evaluator.y > logical_h // 2
+    assert orch.seat is not None and orch.seat.source == "desk"
+    center = scene.layout.center_cell()
+    desks = [s for s in scene.layout.seats() if s.source == "desk"]
+    nearest = min(desks, key=lambda s: abs(s.col - center[0]) + abs(s.row - center[1]))
+    assert (orch.seat.col, orch.seat.row) == (nearest.col, nearest.row)
+    assert len({s.seat.cell for s in scene.slots if s.seat}) == len(scene.slots)
     rects = [s.rect for s in scene.slots]
     for i, first in enumerate(rects):
         for second in rects[i + 1:]:

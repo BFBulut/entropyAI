@@ -48,6 +48,10 @@ let clearTimeout = () => {};
 """
 
 MEASURE_TAIL = """
+// Faz 6: yaprak raporlar acilista gizlidir (kademeli detay). Fizik olcumu
+// TUM dugumler uzerinde yapilmali; bu yuzden detay esigi asilir.
+applyZoom(Math.max(zoom, DETAIL_ZOOM + 0.2), width / 2, height / 2);
+
 function settle(limit) {
   let frames = 0;
   while (frames < (limit || 3000)) { render(); frames++; if (alpha < alphaMin && !draggedNode) break; }
@@ -81,7 +85,10 @@ function meanDistances() {
     simSum += Math.hypot(l.targetNode.x - l.sourceNode.x, l.targetNode.y - l.sourceNode.y);
     simN++;
   });
-  const v = nodes.filter(n => isNodeVisible(n) && n.group === 'Reports');
+  // Faz 6: karsilastirma tabani gorunurlukten bagimsiz olmali; sigdirma
+  // zoom'u detay esiginin altina indiginde yapraklar gizlenir ama konumlari
+  // benzetimde hesaplanmistir.
+  const v = nodes.filter(n => n.group === 'Reports');
   let rndSum = 0, rndN = 0;
   for (let i = 0; i < v.length; i += 3) {
     for (let j = i + 1; j < v.length; j += 5) {

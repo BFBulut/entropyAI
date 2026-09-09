@@ -119,12 +119,22 @@ DEFAULT_PROVIDER_MODELS = {
     "claude": "claude-opus-5",
 }
 
+# Sağlayıcı başına akıl yürütme eforu (`--effort`). Seviye kümesi CLI'a göre
+# değişir (agy: low|medium|high; claude: low|medium|high|xhigh|max), bu yüzden
+# tek bir "selected_effort" yerine sağlayıcı başına tutulur: claude'da "max"
+# seçip agy'ye dönmek geçersiz bir bayrak üretirdi.
+DEFAULT_PROVIDER_EFFORT = {
+    "agy": "high",
+    "claude": "high",
+}
+
 
 class EntropyConfig(BaseModel):
     app_name: str = "Entropy AI"
     # Aktif CLI sağlayıcısı: "agy" (Antigravity) veya "claude" (Claude Code).
     provider: str = "agy"
     provider_models: dict = Field(default_factory=lambda: dict(DEFAULT_PROVIDER_MODELS))
+    provider_effort: dict = Field(default_factory=lambda: dict(DEFAULT_PROVIDER_EFFORT))
     # Doğrudan Anthropic API köprüsü (ClaudeApiBridge) için yer tutucu izin
     # bayrağı. Uygulama YOK; açık olsa bile bugün hiçbir kod yolu API çağırmaz.
     allow_claude_api: bool = False
@@ -188,6 +198,7 @@ class EntropyConfig(BaseModel):
                 "last_cumulative_usage": self.last_cumulative_usage,
                 "provider": self.provider,
                 "provider_models": self.provider_models,
+                "provider_effort": self.provider_effort,
                 "allow_claude_api": self.allow_claude_api,
                 "desk_geometry": self.desk_geometry,
                 "desk_auto_resume": self.desk_auto_resume,
@@ -223,6 +234,12 @@ class EntropyConfig(BaseModel):
                 # habersizce Claude'a çevirmez.
                 if data.get("provider") in ("agy", "claude"):
                     self.provider = data["provider"]
+                if isinstance(data.get("provider_effort"), dict):
+                    merged_effort = dict(DEFAULT_PROVIDER_EFFORT)
+                    merged_effort.update(
+                        {k: v for k, v in data["provider_effort"].items() if v}
+                    )
+                    self.provider_effort = merged_effort
                 if isinstance(data.get("provider_models"), dict):
                     merged = dict(DEFAULT_PROVIDER_MODELS)
                     merged.update({k: v for k, v in data["provider_models"].items() if v})

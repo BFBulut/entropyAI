@@ -1,41 +1,62 @@
 """
-Ofis sahnesi: bir ofisin ajanlarını piksel masalar olarak çizer.
+Piksel ofis sahnesi: ajanlar gerçek piksel karakterler olarak bir tile ofiste.
 
-Kaynak: Faz 1 `PixelCanvas`. O dosya artık var olmayan veri sınıflarına
-bağlıydı; gereken çizim yardımcıları buraya taşınıp uyarlandı, ölü importlar
-atıldı ve eski `desk/legacy/` paketi Faz 4'te tamamen kaldırıldı.
+Faz 6'da yordamsal QPainter masaları bırakıldı; sahne artık `desk/engine/`
+motorunu kullanıyor: `default-layout-1.json` düzeni, 16 px ızgara, duvar
+bitmask otomatik döşemesi, mobilya manifestleri ve 16x32 karakter sayfaları
+(pixel-agents / JIK-A-4 varlıkları; bkz. THIRD_PARTY.md).
 
-Uyarlamada değişenler:
-- Veri kaynağı `AgentPersona` değil, ofis sözleşmesi: ajan adı + rol
-  (orchestrator|evaluator|worker) + durum.
-- Yerleşim ofis odaklı: orkestratör masası merkezde, üyeler çevresinde halka,
-  değerlendirici sağ alt köşede. Pencere boyutlanınca yerleşim yeniden hesaplanır.
-- Animasyon tamamen istemci tarafı (LLM çağrısı yok): etkinlik varken 30 fps,
-  boştayken 10 fps, pencere gizliyken zamanlayıcı durur. Referans uygulamalarda
-  (agent-office) boştaki ajanlar bile LLM çağırıyordu; kota için sürdürülemez.
-- Etiketler piksel sabit: masa ölçeklense de yazı boyu sabit kalır, okunur.
+Korunan sözleşme (window.py ve mevcut testler buna bağlı):
+- `OfficeScene` sınıf adı, `set_office`, `set_agents`, `agent_clicked` sinyali.
+- `slots` / `slot_for` / `states` / `set_state` / `agent_cards` / `relayout` /
+  `_view_transform` / `_logical_size` ve bus sinyal alıcıları.
+
+Değişen: `DeskSlot.x/y` artık mantıksal PİKSEL (hücre * 16) — masa dikdörtgeni
+değil, karakterin durduğu hücre. Rect'ler hücre başına ayrı olduğu için hâlâ
+çakışmaz.
+
+Kare hızı: etkin 30 fps, boşta 10 fps, gizliyken zamanlayıcı durur.
+LLM çağrısı yoktur; tüm animasyon istemci tarafıdır.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QRect, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from entropy.core.event_bus import bus
+from entropy.desk.engine.assets import TILE_SIZE, library
+from entropy.desk.engine.furniture import FurnitureLibrary
+from entropy.desk.engine.layout import TILE_EMPTY, Layout, Seat, load_layout
+from entropy.desk.engine.pathing import find_path, walkable_grid
+from entropy.desk.engine.sprites import (
+    ANIM_IDLE,
+    ANIM_READ,
+    ANIM_TYPE,
+    ANIM_WALK,
+    DIR_DOWN,
+    DIR_LEFT,
+    DIR_RIGHT,
+    DIR_UP,
+    CharacterLibrary,
+)
+from entropy.desk.engine.tilemap import TileMap, carpet_case, wall_bitmask
 
 # --------------------------------------------------------------------- durumlar
-# Tasarım raporu §2.3: boşta / düşünüyor / çalışıyor / hata / bekliyor.
 STATE_IDLE = "idle"
 STATE_THINKING = "thinking"
 STATE_WORKING = "working"
 STATE_ERROR = "error"
 STATE_WAITING = "waiting"
+STATE_READING = "reading"
 
-STATES = (STATE_IDLE, STATE_THINKING, STATE_WORKING, STATE_ERROR, STATE_WAITING)
+STATES = (
+    STATE_IDLE, STATE_THINKING, STATE_WORKING, STATE_ERROR, STATE_WAITING, STATE_READING,
+)
 
 STATE_LABELS = {
     STATE_IDLE: "boşta",
@@ -43,6 +64,7 @@ STATE_LABELS = {
     STATE_WORKING: "çalışıyor",
     STATE_ERROR: "hata",
     STATE_WAITING: "bekliyor",
+    STATE_READING: "okuyor",
 }
 
 STATE_COLORS = {
@@ -51,11 +73,26 @@ STATE_COLORS = {
     STATE_WORKING: QColor(61, 232, 168),
     STATE_ERROR: QColor(239, 68, 68),
     STATE_WAITING: QColor(56, 217, 255),
+    STATE_READING: QColor(147, 197, 253),
 }
 
-# Harness aşama adı -> sahne durumu. `bus.office_progress(office, card, stage)`
-# sözleşmesi aşama adını serbest metin bırakıyor; bilinmeyen aşama "çalışıyor"
-# sayılır (sessizce yutmak, sahneyi olduğundan sakin gösterirdi).
+# Durum -> karakter animasyonu. Düşünme/bekleme/hata statik duruş + balon.
+STATE_ANIMATION = {
+    STATE_IDLE: ANIM_IDLE,
+    STATE_THINKING: ANIM_IDLE,
+    STATE_WORKING: ANIM_TYPE,
+    STATE_READING: ANIM_READ,
+    STATE_WAITING: ANIM_IDLE,
+    STATE_ERROR: ANIM_IDLE,
+}
+
+# Durum -> baş üstü balon metni ("" = balon yok).
+STATE_BUBBLE = {
+    STATE_THINKING: "…",
+    STATE_WAITING: "⏳",
+    STATE_ERROR: "!",
+}
+
 STAGE_TO_STATE = {
     "planning": STATE_THINKING,
     "plan": STATE_THINKING,
@@ -63,6 +100,9 @@ STAGE_TO_STATE = {
     "running": STATE_WORKING,
     "executing": STATE_WORKING,
     "yurutme": STATE_WORKING,
+    "reading": STATE_READING,
+    "read": STATE_READING,
+    "okuma": STATE_READING,
     "evaluating": STATE_THINKING,
     "evaluation": STATE_THINKING,
     "degerlendirme": STATE_THINKING,
@@ -77,42 +117,60 @@ STAGE_TO_STATE = {
     "hata": STATE_ERROR,
 }
 
+# Araç adı bu köklerden birini içeriyorsa ajan "okuyor" sayılır.
+READ_TOOL_HINTS = ("read", "oku", "grep", "search", "ara", "glob", "fetch")
+
 ROLE_ORCHESTRATOR = "orchestrator"
 ROLE_EVALUATOR = "evaluator"
 ROLE_WORKER = "worker"
 
-# Kare hızları: etkin 30 fps (rapor sınırı), boşta 10 fps.
 ACTIVE_INTERVAL_MS = 33
 IDLE_INTERVAL_MS = 100
 
-DESK_W = 160
-DESK_H = 148
-# Izgara hücreleri arası boşluk (mantıksal piksel).
-GAP = 16
+# Animasyon hızları (pixel-agents sabitleriyle aynı his).
+WALK_SPEED_PX_PER_SEC = 48.0
+WALK_FRAME_MS = 150
+WORK_FRAME_MS = 300
+
+MIN_ZOOM = 1
+MAX_ZOOM = 3
+
+# Karakter tıklama kutusu (mantıksal piksel).
+HIT_HALF_W = 8
+HIT_H = 24
 
 
 @dataclass
 class DeskSlot:
-    """Sahnedeki tek masa: bir ajan, bir rol, bir durum."""
+    """Sahnedeki tek ajan: karakter, masa yeri, durum, konum."""
 
     agent: str
     role: str = ROLE_WORKER
     state: str = STATE_IDLE
     note: str = ""
+    seat: Optional[Seat] = None
+    char_index: int = 0
+    # Mantıksal piksel konum (hücre * TILE_SIZE), karakterin sol-üst ayağı.
     x: int = 0
     y: int = 0
-    width: int = DESK_W
-    height: int = DESK_H
+    facing: str = DIR_DOWN
+    path: List[Tuple[int, int]] = field(default_factory=list)
+    path_step: int = 0
+    walking: bool = False
+    idle_ms: int = 0
 
     @property
     def rect(self) -> QRect:
-        return QRect(self.x, self.y, self.width, self.height)
+        """Mantıksal çarpışma/tıklama dikdörtgeni."""
+        return QRect(self.x, self.y - HIT_H + TILE_SIZE, TILE_SIZE, HIT_H)
+
+    @property
+    def cell(self) -> Tuple[int, int]:
+        return (self.x // TILE_SIZE, self.y // TILE_SIZE)
 
 
 @dataclass
 class SceneOffice:
-    """Sahnenin ihtiyacı olan ofis özeti (OfficeSpec'ten okunur, kopyası değil)."""
-
     name: str = ""
     orchestrator: str = ""
     evaluator: str = ""
@@ -130,10 +188,16 @@ def _office_field(office, name, default=""):
     return default if value is None else value
 
 
-class OfficeScene(QWidget):
-    """Ofis kat planı: orkestratör merkezde, üyeler çevrede, değerlendirici köşede."""
+def state_for_tool(tool_name: str) -> str:
+    """Araç adından durum: okuma araçları READ, diğerleri WORKING."""
+    low = (tool_name or "").lower()
+    return STATE_READING if any(h in low for h in READ_TOOL_HINTS) else STATE_WORKING
 
-    agent_clicked = Signal(str)   # sprite tıklandı: ajan adı
+
+class OfficeScene(QWidget):
+    """Piksel ofis: tile zemin/duvar, mobilya ve masalarında ajan karakterleri."""
+
+    agent_clicked = Signal(str)   # karaktere tıklandı: ajan adı
 
     def __init__(self, parent: Optional[QWidget] = None, office=None):
         super().__init__(parent)
@@ -144,15 +208,31 @@ class OfficeScene(QWidget):
         self.office = SceneOffice()
         self.slots: List[DeskSlot] = []
         self.selected_agent: str = ""
-        self._pulse_frame: int = 0
-        self._logical_size = (DESK_W + 2 * GAP, DESK_H + 2 * GAP)
-        # Ajan adı -> son kart kimliği; tıklamada akış paneline bağlam verir.
         self.agent_cards: Dict[str, str] = {}
+
+        self._pulse_frame = 0
+        self._elapsed_ms = 0
+        self._zoom = MIN_ZOOM
+        self.fit_mode = True
+
+        # Motor parçaları
+        self.assets = library()
+        self.tilemap = TileMap(self.assets)
+        self.furniture = FurnitureLibrary(self.assets)
+        self.characters = CharacterLibrary(self.assets)
+        self.layout: Layout = Layout()
+        self._walkable: List[List[bool]] = []
+        self._logical_size = (TILE_SIZE, TILE_SIZE)
+        # Görünüm penceresinin mantıksal sol-üst köşesi (boş kenarlar kırpılır).
+        self._origin = (0, 0)
+        self._floor_cache: Optional[QPixmap] = None
+        self._lounge_cells: List[Tuple[int, int]] = []
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
 
         self._connect_bus()
+        self._load_layout("")
         if office is not None:
             self.set_office(office)
         else:
@@ -162,10 +242,9 @@ class OfficeScene(QWidget):
 
     def _connect_bus(self) -> None:
         """
-        Sözleşme sinyalleri agy ajanı tarafından ekleniyor; yoksa atlanır.
-
-        Alıcılar QObject slotu (lambda değil): işçi iş parçacığından yayılan
-        sinyal kuyruklanır ve çizim ana iş parçacığında kalır.
+        Bus sinyalleri: alıcı QObject slotu (lambda değil), böylece işçi iş
+        parçacığından yayılan sinyal kuyruklanır ve çizim ana iş parçacığında
+        kalır.
         """
         for signal_name, handler in (
             ("office_progress", self._on_office_progress),
@@ -190,10 +269,47 @@ class OfficeScene(QWidget):
             evaluator=str(_office_field(office, "evaluator", "")),
             members=[str(m) for m in (_office_field(office, "members", []) or [])],
         )
+        self._load_layout(self.office.name)
         self._rebuild_slots()
 
+    def set_agents(self, agents, orchestrator: str = "", evaluator: str = "") -> None:
+        """Ofis nesnesi olmadan doğrudan ajan listesi verir (panel/test yolu)."""
+        self.office = SceneOffice(
+            name=self.office.name,
+            orchestrator=orchestrator or self.office.orchestrator,
+            evaluator=evaluator or self.office.evaluator,
+            members=[str(a) for a in (agents or [])],
+        )
+        self._rebuild_slots()
+
+    # ------------------------------------------------------------ düzen
+
+    def _load_layout(self, office: str) -> None:
+        """Ofis düzenini yükler; hata halinde boş düzenle devam edilir."""
+        try:
+            self.layout = load_layout(office, self.furniture, self.assets)
+        except Exception:
+            self.layout = Layout()
+        self._floor_cache = None
+        occupied = self.layout.occupied_cells() if self.layout.cols else set()
+        self._walkable = (
+            walkable_grid(self.layout.tiles, occupied) if self.layout.cols else []
+        )
+        # Görünüm yalnızca dolu alanı kapsar: düzenin boş (255) kenarları
+        # sahnede kocaman siyah bant bırakıyordu, ofis de gereksiz küçülüyordu.
+        if self.layout.cols:
+            min_c, min_r, max_c, max_r = self.layout.bounds()
+            self._origin = (min_c * TILE_SIZE, (min_r - 1) * TILE_SIZE)
+            self._logical_size = (
+                (max_c - min_c + 1) * TILE_SIZE,
+                (max_r - min_r + 2) * TILE_SIZE,
+            )
+        else:
+            self._origin = (0, 0)
+            self._logical_size = (TILE_SIZE, TILE_SIZE)
+
     def _rebuild_slots(self) -> None:
-        """Ajan listesini masalara dağıtır; mevcut durumlar korunur."""
+        """Ajanları masalara dağıtır; mevcut durum ve konumlar korunur."""
         previous = {s.agent: s for s in self.slots}
         slots: List[DeskSlot] = []
         seen = set()
@@ -203,11 +319,15 @@ class OfficeScene(QWidget):
                 return
             seen.add(agent)
             old = previous.get(agent)
+            sheet_count = max(1, self.characters.count())
+            from entropy.desk.engine.sprites import character_index_for
+
             slots.append(DeskSlot(
                 agent=agent,
                 role=role,
                 state=old.state if old else STATE_IDLE,
                 note=old.note if old else "",
+                char_index=character_index_for(agent, sheet_count),
             ))
 
         add(self.office.orchestrator, ROLE_ORCHESTRATOR)
@@ -222,6 +342,37 @@ class OfficeScene(QWidget):
         self._sync_timer()
         self.update()
 
+    def relayout(self) -> None:
+        """
+        Masa yerlerini dağıtır: ilk yer (ofis merkezine en yakın) orkestratöre,
+        sonra üyeler, en sona değerlendirici.
+
+        Motor `seats_for` çağrısı masa/sandalye mobilyalarından yer üretir;
+        yetmezse boş zeminden tamamlar, böylece kalabalık ofiste kimse
+        görünmez kalmaz.
+        """
+        if not self.slots:
+            return
+        seats = self.layout.seats_for(len(self.slots)) if self.layout.cols else []
+        order = (
+            [s for s in self.slots if s.role == ROLE_ORCHESTRATOR]
+            + [s for s in self.slots if s.role == ROLE_WORKER]
+            + [s for s in self.slots if s.role == ROLE_EVALUATOR]
+        )
+        for index, slot in enumerate(order):
+            seat = seats[index] if index < len(seats) else None
+            slot.seat = seat
+            if seat is not None and not slot.walking:
+                slot.x = seat.col * TILE_SIZE
+                slot.y = seat.row * TILE_SIZE
+                slot.facing = seat.facing
+        self._lounge_cells = [
+            s.cell for s in (self.layout.seats() if self.layout.cols else [])
+            if s.source == "chair" and s.cell not in {
+                (sl.seat.col, sl.seat.row) for sl in self.slots if sl.seat
+            }
+        ]
+
     def slot_for(self, agent: str) -> Optional[DeskSlot]:
         for slot in self.slots:
             if slot.agent == agent:
@@ -232,75 +383,63 @@ class OfficeScene(QWidget):
         """Test ve panel için: ajan adı -> durum."""
         return {s.agent: s.state for s in self.slots}
 
-    # ------------------------------------------------------------ yerleşim
+    def seat_assignments(self) -> Dict[str, Tuple[int, int]]:
+        """Ajan -> masa hücresi (test ve ipucu için)."""
+        return {
+            s.agent: (s.seat.col, s.seat.row)
+            for s in self.slots if s.seat is not None
+        }
 
-    def relayout(self) -> None:
-        """
-        Masaları mantıksal ızgaraya yerleştirir: orkestratör tam merkezde, üyeler
-        çevresindeki hücrelerde, değerlendirici sağ alt köşede.
+    # ------------------------------------------------------------ görüntü
 
-        Neden ızgara, halka değil: elips halka dar panellerde (sahne yüksekliği
-        ~430 px) merkezdeki masayla üst üste biniyordu. Izgarada hücreler
-        tanımı gereği çakışmaz; sahne küçüldüğünde çizim ölçeklenir
-        (bkz. `_view_transform`), üst üste binme oluşmaz.
-        """
-        orchestrators = [s for s in self.slots if s.role == ROLE_ORCHESTRATOR]
-        evaluators = [s for s in self.slots if s.role == ROLE_EVALUATOR]
-        workers = [s for s in self.slots if s.role == ROLE_WORKER]
+    def set_zoom(self, zoom: int) -> None:
+        """Tamsayı zoom (1x/2x/3x); `fit_mode` kapanır."""
+        self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, int(zoom)))
+        self.fit_mode = False
+        self.tilemap.clear_scaled()
+        self.update()
 
-        # Izgara boyutu: merkez + çevresi. 8 üyeye kadar 3x3 yeter; sonra 5x5.
-        side = 3
-        while side * side - 1 < max(len(workers) + (1 if evaluators else 0), 1):
-            side += 2
-        center = side // 2
+    def fit_to_view(self) -> None:
+        """`fitInView` benzeri: düzeni pencereye sığdır."""
+        self.fit_mode = True
+        self.update()
 
-        def cell_rect(col: int, row: int) -> tuple:
-            return (GAP + col * (DESK_W + GAP), GAP + row * (DESK_H + GAP))
+    @property
+    def zoom(self) -> int:
+        return self._zoom
 
-        for slot in orchestrators:
-            slot.x, slot.y = cell_rect(center, center)
-
-        used = {(center, center)}
-        for slot in evaluators:
-            slot.x, slot.y = cell_rect(side - 1, side - 1)
-            used.add((side - 1, side - 1))
-
-        # Çevre hücreleri merkeze yakınlıktan uzağa doğru sıralanır: az üyeli
-        # ofiste masalar orkestratörün etrafına toplanır, kenarlara dağılmaz.
-        candidates = sorted(
-            ((c, r) for r in range(side) for c in range(side) if (c, r) not in used),
-            key=lambda cr: (max(abs(cr[0] - center), abs(cr[1] - center)), cr[1], cr[0]),
-        )
-        for slot, (col, row) in zip(workers, candidates):
-            slot.x, slot.y = cell_rect(col, row)
-
-        self._logical_size = (
-            GAP + side * (DESK_W + GAP),
-            GAP + side * (DESK_H + GAP),
-        )
-
-    def _view_transform(self) -> tuple:
-        """
-        Mantıksal koordinatları pencereye sığdıran (ölçek, dx, dy) üçlüsü.
-
-        Ölçek yalnızca küçültür (1.0 üstüne çıkılmaz): boş bir ofiste masalar
-        dev gibi büyümesin, piksel çizim keskin kalsın.
-        """
+    def _view_transform(self) -> Tuple[float, float, float]:
+        """Mantıksal -> pencere dönüşümü (ölçek, dx, dy)."""
         logical_w, logical_h = self._logical_size
         if logical_w <= 0 or logical_h <= 0:
             return 1.0, 0.0, 0.0
-        scale = min(1.0, self.width() / logical_w, self.height() / logical_h)
-        dx = (self.width() - logical_w * scale) / 2
-        dy = (self.height() - logical_h * scale) / 2
+        if self.fit_mode:
+            fit = min(self.width() / logical_w, self.height() / logical_h)
+            # 1x üstünde tamsayıya yuvarla: piksel ızgarası bozulmasın.
+            scale = float(min(MAX_ZOOM, int(fit))) if fit >= 1.0 else fit
+            self._zoom = max(MIN_ZOOM, min(MAX_ZOOM, int(scale) if scale >= 1 else 1))
+        else:
+            scale = float(self._zoom)
+        dx = (self.width() - logical_w * scale) / 2 - self._origin[0] * scale
+        dy = (self.height() - logical_h * scale) / 2 - self._origin[1] * scale
         return scale, dx, dy
 
-    def _to_logical(self, point) -> "QPointF":
-        from PySide6.QtCore import QPointF
-
+    def _to_logical(self, point) -> QPoint:
         scale, dx, dy = self._view_transform()
         if scale <= 0:
-            return QPointF(point)
-        return QPointF((point.x() - dx) / scale, (point.y() - dy) / scale)
+            return QPoint(point)
+        return QPoint(int((point.x() - dx) / scale), int((point.y() - dy) / scale))
+
+    def to_widget(self, point) -> QPoint:
+        """`_to_logical`'in tersi: mantıksal noktayı pencere koordinatına taşır.
+
+        Hit-test'i (slot.rect -> slot_at) dışarıdan sürebilmek için gerekli;
+        testler ve ekran görüntüsü otomasyonu bunu kullanır.
+        """
+        scale, dx, dy = self._view_transform()
+        if scale <= 0:
+            return QPoint(point)
+        return QPoint(int(point.x() * scale + dx), int(point.y() * scale + dy))
 
     def resizeEvent(self, event):  # noqa: N802 (Qt)
         self.relayout()
@@ -316,11 +455,76 @@ class OfficeScene(QWidget):
         if slot is None:
             return False
         slot.state = state
+        slot.idle_ms = 0
         if note:
             slot.note = note
+        if state in (STATE_WORKING, STATE_READING, STATE_THINKING):
+            # Gelen görev: karakter masasına yürür (boşta kanepeye gitmiş olabilir).
+            self.walk_to_seat(agent)
         self._sync_timer()
         self.update()
         return True
+
+    # ------------------------------------------------------------ yürüme
+
+    def walk_to_seat(self, agent: str) -> bool:
+        """Ajanı masasına yürütür. Zaten masadaysa/yol yoksa False."""
+        slot = self.slot_for(agent)
+        if slot is None or slot.seat is None:
+            return False
+        return self._walk_to(slot, (slot.seat.col, slot.seat.row), slot.seat.facing)
+
+    def _walk_to(self, slot: DeskSlot, target: Tuple[int, int],
+                 facing: Optional[str] = None) -> bool:
+        if not self._walkable or slot.cell == target:
+            slot.walking = False
+            slot.path = []
+            if facing:
+                slot.facing = facing
+            return False
+        path = find_path(self._walkable, slot.cell, target)
+        if len(path) < 2:
+            return False
+        slot.path = path
+        slot.path_step = 0
+        slot.walking = True
+        return True
+
+    def _advance_walk(self, slot: DeskSlot, dt_ms: int) -> None:
+        """Yolu adım adım ilerletir; hedefe varınca oturuş yönüne döner."""
+        if not slot.walking or len(slot.path) < 2:
+            return
+        step_px = WALK_SPEED_PX_PER_SEC * dt_ms / 1000.0
+        remaining = step_px
+        while remaining > 0 and slot.path_step < len(slot.path) - 1:
+            nxt = slot.path[slot.path_step + 1]
+            tx, ty = nxt[0] * TILE_SIZE, nxt[1] * TILE_SIZE
+            dx, dy = tx - slot.x, ty - slot.y
+            dist = abs(dx) + abs(dy)
+            if dist <= remaining:
+                slot.x, slot.y = tx, ty
+                slot.path_step += 1
+                remaining -= dist
+            else:
+                ratio = remaining / dist if dist else 0
+                slot.x += int(round(dx * ratio))
+                slot.y += int(round(dy * ratio))
+                remaining = 0
+            if dx > 0:
+                slot.facing = DIR_RIGHT
+            elif dx < 0:
+                slot.facing = DIR_LEFT
+            elif dy > 0:
+                slot.facing = DIR_DOWN
+            elif dy < 0:
+                slot.facing = DIR_UP
+        if slot.path_step >= len(slot.path) - 1:
+            slot.walking = False
+            slot.path = []
+            if slot.seat is not None and slot.cell == (slot.seat.col, slot.seat.row):
+                slot.facing = slot.seat.facing
+
+    # ------------------------------------------------------------ bus
 
     def _agent_for_card(self, card_id: str) -> str:
         """Kart kimliğinden ajan adı; kart panosu yoksa boş."""
@@ -339,16 +543,18 @@ class OfficeScene(QWidget):
 
     @Slot(str, str, str)
     def _on_office_progress(self, office: str, card: str, stage: str) -> None:
-        """`bus.office_progress`: aşama adını sahne durumuna çevirir."""
         if self.office.name and office and office != self.office.name:
             return
-        state = STAGE_TO_STATE.get(str(stage).strip().lower(), STATE_WORKING)
+        key = str(stage).strip().lower()
+        state = STAGE_TO_STATE.get(key)
+        if state is None:
+            # Bilinmeyen aşama bir araç adı olabilir: okuma aracıysa READ.
+            state = state_for_tool(key)
         agent = self._agent_for_card(card)
         if not agent:
-            # Kartın sahibi bilinmiyorsa aşama orkestratöre/değerlendiriciye aittir.
             agent = (
                 self.office.evaluator
-                if "eval" in str(stage).lower() or "deger" in str(stage).lower()
+                if "eval" in key or "deger" in key
                 else self.office.orchestrator
             )
         if agent:
@@ -370,7 +576,6 @@ class OfficeScene(QWidget):
 
     @Slot(str)
     def _on_turn_started(self, _prompt: str) -> None:
-        """Köprü bir tur başlattı: seçili (yoksa orkestratör) masa düşünmeye geçer."""
         agent = self.selected_agent or self.office.orchestrator
         if agent:
             self.set_state(agent, STATE_THINKING)
@@ -385,7 +590,7 @@ class OfficeScene(QWidget):
     def _on_offices_updated(self, office_name: str) -> None:
         if not self.office.name or office_name in ("", self.office.name):
             try:
-                from entropy.agents.offices import OfficeRegistry  # type: ignore
+                from entropy.agents.desk_registry import DeskRegistry as OfficeRegistry  # type: ignore
 
                 fresh = OfficeRegistry().get(self.office.name)
                 if fresh is not None:
@@ -396,10 +601,13 @@ class OfficeScene(QWidget):
     # ------------------------------------------------------------ animasyon
 
     def is_busy(self) -> bool:
-        return any(s.state in (STATE_THINKING, STATE_WORKING) for s in self.slots)
+        return any(
+            s.walking or s.state in (STATE_THINKING, STATE_WORKING, STATE_READING)
+            for s in self.slots
+        )
 
     def _sync_timer(self) -> None:
-        """Kare hızını duruma göre ayarlar; gizli pencerede tamamen durdurur."""
+        """Kare hızı: etkin 30 fps, boşta 10 fps, gizliyken durur."""
         if not self.isVisible():
             self._timer.stop()
             return
@@ -413,46 +621,52 @@ class OfficeScene(QWidget):
         self._sync_timer()
 
     def hideEvent(self, event):  # noqa: N802
-        # Pencere gizliyken çizim yapmak boşuna CPU; zamanlayıcı durur.
         self._timer.stop()
         super().hideEvent(event)
 
     @Slot()
     def _on_tick(self) -> None:
+        dt = self._timer.interval() or IDLE_INTERVAL_MS
+        self._elapsed_ms += dt
         self._pulse_frame = (self._pulse_frame + 1) % 60
+        for slot in self.slots:
+            self._advance_walk(slot, dt)
+        self._sync_timer()
         self.update()
 
     @property
     def pulse_frame(self) -> int:
         return self._pulse_frame
 
+    def _anim_step(self, slot: DeskSlot) -> Tuple[str, int]:
+        """Bir ajan için (animasyon, kare indeksi)."""
+        if slot.walking:
+            return ANIM_WALK, self._elapsed_ms // WALK_FRAME_MS
+        anim = STATE_ANIMATION.get(slot.state, ANIM_IDLE)
+        if anim == ANIM_IDLE:
+            return ANIM_IDLE, 0
+        return anim, self._elapsed_ms // WORK_FRAME_MS
+
     # ------------------------------------------------------------ etkileşim
 
-    def mousePressEvent(self, event):  # noqa: N802
-        raw = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        # Çizim ölçeklenmiş olabilir; tıklama mantıksal koordinata çevrilmeden
-        # test edilirse küçük sahnede yanlış masa seçilirdi.
-        pos = self._to_logical(raw).toPoint()
-        for slot in self.slots:
-            if slot.rect.contains(pos):
-                self.select_agent(slot.agent)
-                break
-        super().mousePressEvent(event)
-
     def slot_at(self, raw_pos) -> Optional[DeskSlot]:
-        """Pencere koordinatındaki noktanın altındaki masa (yoksa None)."""
-        pos = self._to_logical(raw_pos).toPoint()
-        for slot in self.slots:
+        """Pencere koordinatındaki noktanın altındaki karakter (yoksa None)."""
+        pos = self._to_logical(raw_pos)
+        # Önde duran (satırca aşağıdaki) karakter önce test edilir.
+        for slot in sorted(self.slots, key=lambda s: -s.y):
             if slot.rect.contains(pos):
                 return slot
         return None
 
-    def mouseMoveEvent(self, event):  # noqa: N802
-        """
-        Masa üzerinde ipucu: etiket kırpıldıysa tam ad/rol/durum burada okunur.
+    def mousePressEvent(self, event):  # noqa: N802
+        raw = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        slot = self.slot_at(raw)
+        if slot is not None:
+            self.select_agent(slot.agent)
+        super().mousePressEvent(event)
 
-        Kırpma bilgi gizlemesin diye ipucu ham metni taşır.
-        """
+    def mouseMoveEvent(self, event):  # noqa: N802
+        """Karakter üzerinde ipucu: ad, rol, durum ve son not."""
         raw = event.position().toPoint() if hasattr(event, "position") else event.pos()
         slot = self.slot_at(raw)
         if slot is None:
@@ -464,7 +678,8 @@ class OfficeScene(QWidget):
             }.get(slot.role, "üye")
             note = f"\n{slot.note}" if slot.note else ""
             self.setToolTip(
-                f"{slot.agent}\n{role_label} · {STATE_LABELS.get(slot.state, slot.state)}{note}"
+                f"{slot.agent}\n{role_label} · "
+                f"{STATE_LABELS.get(slot.state, slot.state)}{note}"
             )
         super().mouseMoveEvent(event)
 
@@ -479,182 +694,177 @@ class OfficeScene(QWidget):
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        w, h = self.width(), self.height()
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        painter.fillRect(self.rect(), QColor(12, 15, 22))
 
-        # 1. Zemin ve ızgara (Faz 1 piksel kanvasından uyarlandı)
-        painter.fillRect(0, 0, w, h, QColor(15, 18, 26))
-        painter.setPen(QPen(QColor(26, 32, 44, 80), 1))
-        for x in range(0, w, 24):
-            painter.drawLine(x, 0, x, h)
-        for y in range(0, h, 24):
-            painter.drawLine(0, y, w, y)
-
-        # 2. Ofis halısı
-        painter.fillRect(16, 12, max(w - 32, 10), max(h - 24, 10), QBrush(QColor(22, 27, 39)))
-        painter.setPen(QPen(QColor(45, 55, 72), 2))
-        painter.drawRect(16, 12, max(w - 32, 10), max(h - 24, 10))
-
-        if not self.slots:
-            painter.setPen(QColor(147, 163, 184))
-            painter.setFont(QFont("Segoe UI", 10))
-            painter.drawText(
-                self.rect(), Qt.AlignmentFlag.AlignCenter,
-                "Bu ofiste ajan yok.\nSağdaki listeden ajan ekleyin.",
-            )
+        if not self.layout.cols:
+            self._draw_center_text(painter, "Ofis düzeni yüklenemedi.")
             return
 
-        # Masalar mantıksal koordinatta çizilir; sahne dar olduğunda tüm kat planı
-        # küçültülür (masalar üst üste binmesin diye). Etiketler bu ölçekten
-        # etkilenmez: aşağıda dönüşüm sıfırlanıp piksel boyutlu çizilir.
         scale, dx, dy = self._view_transform()
         painter.save()
         painter.translate(dx, dy)
         painter.scale(scale, scale)
-        for slot in self.slots:
-            self._draw_desk(painter, slot, slot.agent == self.selected_agent)
+        self._draw_floor(painter)
+        self._draw_carpets(painter)
+        self._draw_depth_layer(painter)
         painter.restore()
+
+        if not self.slots:
+            self._draw_center_text(painter, "Bu ofiste ajan yok.\nSağdaki listeden ajan ekleyin.")
+            return
 
         for slot in self.slots:
             self._draw_label(painter, slot, scale, dx, dy)
 
-    def _draw_desk(self, painter: QPainter, slot: DeskSlot, selected: bool) -> None:
-        x, y, w = slot.x, slot.y, slot.width
-        is_orch = slot.role == ROLE_ORCHESTRATOR
-        is_eval = slot.role == ROLE_EVALUATOR
-        state = slot.state
-        accent = STATE_COLORS.get(state, STATE_COLORS[STATE_IDLE])
+    def _draw_center_text(self, painter: QPainter, text: str) -> None:
+        painter.setPen(QColor(147, 163, 184))
+        font = QFont("Segoe UI")
+        font.setPixelSize(13)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
 
-        if selected:
-            painter.setPen(QPen(QColor(56, 217, 255), 2))
-            painter.setBrush(QBrush(QColor(30, 38, 56, 180)))
-            painter.drawRoundedRect(x - 4, y - 4, w + 8, slot.height + 8, 4, 4)
+    def _draw_floor(self, painter: QPainter) -> None:
+        """Zemin karoları tek bir önbellek pixmap'ine çizilir (her karede değil)."""
+        if self._floor_cache is None:
+            # Önbellek TÜM ızgara boyutunda: karolar mutlak hücre koordinatına
+            # çizilir, kırpılmış görünüm boyutuna sığmaz.
+            w = max(self.layout.cols, 1) * TILE_SIZE
+            h = max(self.layout.rows, 1) * TILE_SIZE
+            cache = QPixmap(w, h)
+            cache.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(cache)
+            for r in range(self.layout.rows):
+                for c in range(self.layout.cols):
+                    value = self.layout.tile(c, r)
+                    if value == TILE_EMPTY:
+                        continue
+                    tile = self.tilemap.floor_tile(value)
+                    if tile is not None and not tile.isNull():
+                        cache_painter.drawPixmap(c * TILE_SIZE, r * TILE_SIZE, tile)
+            cache_painter.end()
+            self._floor_cache = cache
+        painter.drawPixmap(0, 0, self._floor_cache)
 
-        # Masa gövdesi: rol rengi ayırt edici (orkestratör mor, değerlendirici yeşil)
-        table_color = QColor(42, 51, 68)
-        if is_orch:
-            table_color = QColor(56, 44, 76)
-        elif is_eval:
-            table_color = QColor(34, 60, 52)
-        painter.setPen(QPen(QColor(60, 72, 94), 1))
-        painter.setBrush(QBrush(table_color))
-        painter.drawRect(x + 10, y + 40, w - 20, 50)
-        painter.fillRect(x + 11, y + 41, w - 22, 1, QColor(80, 95, 122, 160))
+    def _draw_carpets(self, painter: QPainter) -> None:
+        """
+        Halı: marching squares. Düzende `carpetTiles` yoksa hiç çizilmez.
 
-        # Masa ayakları
-        painter.fillRect(x + 16, y + 90, 8, 22, QColor(25, 30, 42))
-        painter.fillRect(x + w - 24, y + 90, 8, 22, QColor(25, 30, 42))
+        Kavşak ızgarası (cols+1) x (rows+1); vaka 0 atlanır.
+        """
+        cells = getattr(self.layout, "carpet_cells", None)
+        if not cells:
+            return
+        grid = [[False] * self.layout.cols for _ in range(self.layout.rows)]
+        for c, r in cells:
+            if 0 <= r < self.layout.rows and 0 <= c < self.layout.cols:
+                grid[r][c] = True
+        for jy in range(self.layout.rows + 1):
+            for jx in range(self.layout.cols + 1):
+                case = carpet_case(jx, jy, grid)
+                tile = self.tilemap.carpet_tile(case)
+                if tile is not None and not tile.isNull():
+                    painter.drawPixmap(
+                        jx * TILE_SIZE - TILE_SIZE // 2,
+                        jy * TILE_SIZE - TILE_SIZE // 2,
+                        tile,
+                    )
 
-        # Monitör (orkestratörde çift)
-        mx, my = x + 35, y + 10
-        painter.fillRect(mx, my, 45, 30, QColor(10, 12, 18))
-        painter.setPen(QPen(QColor(80, 90, 110), 1))
-        painter.drawRect(mx, my, 45, 30)
-        painter.fillRect(mx + 18, my + 30, 9, 10, QColor(35, 40, 55))
-        if is_orch:
-            painter.fillRect(mx + 50, my + 4, 40, 26, QColor(10, 12, 18))
-            painter.drawRect(mx + 50, my + 4, 40, 26)
-        self._draw_screen(painter, mx, my, state)
+    def _draw_depth_layer(self, painter: QPainter) -> None:
+        """Duvar + mobilya + karakterler tek listede, satır sıralı derinlikle."""
+        items: List[Tuple[Tuple[int, int], object]] = []
 
-        # Sandalye + karakter
-        chair_x = x + (w // 2) - 16
-        chair_y = y + 58
-        chair_col = QColor(50, 25, 70) if is_orch else (QColor(25, 52, 44) if is_eval else QColor(25, 28, 38))
-        painter.fillRect(chair_x, chair_y, 32, 36, chair_col)
+        for r in range(self.layout.rows):
+            for c in range(self.layout.cols):
+                if not self.layout.is_wall(c, r):
+                    continue
+                mask = wall_bitmask(c, r, self.layout.tiles)
+                tile = self.tilemap.wall_tile(mask)
+                if tile is None or tile.isNull():
+                    continue
+                offset_y = TILE_SIZE - tile.height()
+                items.append(((r + 1, c), ("pix", c * TILE_SIZE, r * TILE_SIZE + offset_y, tile)))
 
-        head_bob = 0
-        if state == STATE_WORKING:
-            head_bob = (0, 1, 2, 1)[(self._pulse_frame // 3) % 4]
-        elif state == STATE_THINKING:
-            head_bob = -1
-        head_color = QColor(168, 85, 247) if is_orch else (QColor(61, 232, 168) if is_eval else QColor(245, 158, 11))
-        head_x, head_y = chair_x + 6, chair_y - 14 + head_bob
-        painter.fillRect(head_x, head_y, 20, 18, head_color)
-        painter.fillRect(head_x + 1, head_y, 18, 2, head_color.lighter(130))
-        painter.fillRect(chair_x + 10, chair_y - 8 + head_bob, 12, 4, QColor(15, 23, 42))
-        painter.fillRect(chair_x + 12, chair_y - 7 + head_bob, 8, 2, accent)
+        frame = self._elapsed_ms // WORK_FRAME_MS
+        for placed in self.layout.furniture:
+            variant = placed.variant
+            pix = self.furniture.pixmap(variant, frame if variant.animated else 0, placed.mirrored)
+            if pix is None or pix.isNull():
+                continue
+            depth_row = placed.row + variant.footprint_h
+            y = (placed.row + variant.footprint_h) * TILE_SIZE - pix.height()
+            items.append(((depth_row, placed.col), ("pix", placed.col * TILE_SIZE, y, pix)))
 
-        # Klavye ve yazan eller
-        kb_x, kb_y = mx + 6, y + 48
-        painter.fillRect(kb_x, kb_y, 34, 8, QColor(30, 36, 50))
-        if state == STATE_WORKING:
-            offset = (0, 2, 0, -1)[(self._pulse_frame // 4) % 4]
-            painter.fillRect(kb_x + 4, kb_y - 3 + offset, 5, 4, head_color)
-            painter.fillRect(kb_x + 24, kb_y - 3 - offset, 5, 4, head_color)
+        for slot in self.slots:
+            items.append((((slot.y // TILE_SIZE) + 1, slot.x // TILE_SIZE), ("agent", slot)))
 
-        # Durum balonu: renkli nokta + rol rozeti
-        self._draw_state_bubble(painter, slot, accent)
+        items.sort(key=lambda it: it[0])
+        for _, payload in items:
+            if payload[0] == "pix":
+                painter.drawPixmap(int(payload[1]), int(payload[2]), payload[3])
+            else:
+                self._draw_agent(painter, payload[1])
 
-    def _draw_screen(self, painter: QPainter, mx: int, my: int, state: str) -> None:
-        """Monitör içi: duruma göre canlanan piksel içerik."""
-        sx, sy, sw, sh = mx + 3, my + 3, 39, 24
-        painter.fillRect(sx, sy, sw, sh, QColor(8, 14, 22))
-        color = STATE_COLORS.get(state, STATE_COLORS[STATE_IDLE])
-        if state == STATE_WORKING:
-            rows = 4
-            for r in range(rows):
-                width = 6 + ((self._pulse_frame // 4 + r * 5) % (sw - 10))
-                painter.fillRect(sx + 3, sy + 3 + r * 5, width, 2, color)
-        elif state == STATE_THINKING:
-            phase = (self._pulse_frame // 5) % 3
-            for i in range(3):
-                dot = color if i <= phase else QColor(40, 52, 70)
-                painter.fillRect(sx + 8 + i * 8, sy + 11, 4, 4, dot)
-        elif state == STATE_ERROR:
-            painter.setPen(QPen(color, 2))
-            painter.drawLine(sx + 12, sy + 7, sx + 27, sy + 18)
-            painter.drawLine(sx + 27, sy + 7, sx + 12, sy + 18)
-        elif state == STATE_WAITING:
-            painter.fillRect(sx + 6, sy + 11, sw - 12, 3, QColor(40, 52, 70))
-            head = (self._pulse_frame // 3) % (sw - 16)
-            painter.fillRect(sx + 6 + head, sy + 10, 6, 5, color)
+    def _draw_agent(self, painter: QPainter, slot: DeskSlot) -> None:
+        sheet = self.characters.sheet(slot.char_index)
+        anim, step = self._anim_step(slot)
+        pix = sheet.animation_frame(slot.facing, anim, int(step)) if sheet else None
+
+        # Karakter 16x32: ayakları hücrenin altına hizalanır, gövde yukarı taşar.
+        top = slot.y + TILE_SIZE - (pix.height() if pix else 32)
+        if slot.agent == self.selected_agent:
+            painter.setPen(QPen(QColor(56, 217, 255), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(slot.x - 1, top - 1, TILE_SIZE + 1, (pix.height() if pix else 32) + 1)
+        if pix is not None and not pix.isNull():
+            painter.drawPixmap(slot.x, top, pix)
         else:
-            painter.fillRect(sx + 4, sy + 20, sw - 8, 1, QColor(40, 52, 70))
+            # Varlık yüklenemediyse yine de bir gövde çizilir (sahne boş kalmasın).
+            painter.fillRect(slot.x + 4, top + 12, 8, 20, STATE_COLORS[slot.state])
 
-    def _draw_state_bubble(self, painter: QPainter, slot: DeskSlot, accent: QColor) -> None:
-        x, y, w = slot.x, slot.y, slot.width
-        pulse = 1 if slot.state in (STATE_THINKING, STATE_WORKING) and (self._pulse_frame // 8) % 2 else 0
-        painter.setBrush(QBrush(accent))
-        painter.setPen(QPen(QColor(10, 14, 22), 1))
-        painter.drawEllipse(x + w - 26, y + 2 - pulse, 10, 10)
+        bubble = STATE_BUBBLE.get(slot.state, "")
+        if bubble:
+            self._draw_bubble(painter, slot, top, bubble)
 
-    def _draw_label(self, painter: QPainter, slot: DeskSlot, scale: float, dx: float, dy: float) -> None:
+    def _draw_bubble(self, painter: QPainter, slot: DeskSlot, top: int, text: str) -> None:
+        """Baş üstü balon: düşünüyor '…', bekliyor '⏳', hata kırmızı '!'."""
+        bob = 1 if (self._pulse_frame // 15) % 2 else 0
+        bx, by = slot.x + 4, top - 12 - bob
+        color = QColor(238, 244, 252) if slot.state != STATE_ERROR else QColor(239, 68, 68)
+        painter.setPen(QPen(QColor(18, 22, 30), 1))
+        painter.setBrush(color)
+        painter.drawRect(bx, by, 12, 10)
+        painter.setPen(QColor(18, 22, 30) if slot.state != STATE_ERROR else QColor(255, 255, 255))
+        font = QFont("Segoe UI")
+        font.setPixelSize(8)
+        painter.setFont(font)
+        painter.drawText(QRect(bx, by, 12, 10), Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_label(self, painter: QPainter, slot: DeskSlot,
+                    scale: float, dx: float, dy: float) -> None:
         """
-        Ad + rol + durum. Yazı tipi piksel cinsinden sabit (setPixelSize) ve
-        çizim dönüşümün dışında yapılır: sahne küçülünce masalar küçülür ama
-        etiketler aynı boyutta ve okunur kalır (grafik widget'ındaki piksel
-        sabit etiket ilkesinin aynısı).
+        Ad etiketi piksel sabit: dönüşüm dışında, `setPixelSize` ile çizilir.
+        Sahne küçülünce karakter küçülür, yazı okunur kalır.
+        Orkestratör etiketi ayrı renkte ve "◆" ile işaretli.
         """
-        # Mantıksal kutuyu pencere (piksel) koordinatına taşı.
-        x = int(slot.x * scale + dx)
-        y = int(slot.y * scale + dy)
-        w = int(slot.width * scale)
-        label_y = int((slot.y + 112) * scale + dy)
-        meta_y = int((slot.y + 128) * scale + dy)
-        # Etiket kutusu masa genişliğiyle sınırlı: yazı tipi piksel sabit olduğu
-        # için sahne küçüldükçe metin kutudan taşıp komşu masanın üstüne
-        # biniyordu (Faz 2-3 notu: "sahnede etiket taşması"). Hem ad hem de
-        # rol/durum satırı bu genişliğe göre kırpılır.
-        box = max(24, w - 6)
-        name_font = QFont("Segoe UI")
-        name_font.setPixelSize(13)
-        name_font.setBold(True)
-        painter.setFont(name_font)
-        name = QFontMetrics(name_font).elidedText(
-            slot.agent, Qt.TextElideMode.ElideRight, box
+        cx = int((slot.x + TILE_SIZE / 2) * scale + dx)
+        base_y = int((slot.y + TILE_SIZE) * scale + dy) + 12
+        font = QFont("Segoe UI")
+        font.setPixelSize(11)
+        font.setBold(slot.role == ROLE_ORCHESTRATOR)
+        painter.setFont(font)
+        text = slot.agent
+        if slot.role == ROLE_ORCHESTRATOR:
+            text = f"◆ {text}"
+        metrics = QFontMetrics(font)
+        text = metrics.elidedText(text, Qt.TextElideMode.ElideRight, 110)
+        width = metrics.horizontalAdvance(text) + 8
+        box = QRect(cx - width // 2, base_y - 11, width, 14)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(10, 14, 22, 190))
+        painter.drawRect(box)
+        painter.setPen(
+            QColor(255, 214, 120) if slot.role == ROLE_ORCHESTRATOR
+            else STATE_COLORS.get(slot.state, STATE_COLORS[STATE_IDLE])
         )
-        painter.setPen(QColor(232, 239, 247))
-        painter.drawText(x, label_y, w, 16, Qt.AlignmentFlag.AlignCenter, name)
-
-        meta_font = QFont("Segoe UI")
-        meta_font.setPixelSize(11)
-        painter.setFont(meta_font)
-        role_label = {
-            ROLE_ORCHESTRATOR: "orkestratör",
-            ROLE_EVALUATOR: "değerlendirici",
-        }.get(slot.role, "üye")
-        meta_text = f"{role_label} · {STATE_LABELS.get(slot.state, slot.state)}"
-        meta_text = QFontMetrics(meta_font).elidedText(
-            meta_text, Qt.TextElideMode.ElideRight, box
-        )
-        painter.setPen(STATE_COLORS.get(slot.state, STATE_COLORS[STATE_IDLE]))
-        painter.drawText(x, meta_y, w, 14, Qt.AlignmentFlag.AlignCenter, meta_text)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)

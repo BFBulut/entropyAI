@@ -29,14 +29,21 @@ from PySide6.QtWidgets import (
 from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.desk.board_panel import BoardPanel
-from entropy.desk.offices_panel import OfficesPanel, load_office_registry
+from entropy.desk.offices_panel import (
+    OfficesPanel,
+    load_agent_registry,
+    load_office_registry,
+)
 from entropy.desk.roster_panel import RosterPanel
 from entropy.desk.scene import OfficeScene
 from entropy.desk.stream_panel import StreamPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.window_sizing import fit_window_to_screen
 
 WINDOW_TITLE = "Entropy Agent Desk"
 DEFAULT_SIZE = (1400, 880)
+DESK_SCREEN_RATIO = 0.88
+DESK_MIN_SIZE = (900, 560)
 
 # Kadro sütununun en küçük okunur genişliği: ajan kartındaki 3x2 ikon
 # düğme ızgarası artı kimlik metni bu genişlik altında kırpılıyordu.
@@ -68,7 +75,8 @@ def load_office_memory(office_name: str) -> str:
         from pathlib import Path
 
         vault = Path(config.obsidian_vault_path)
-        path = vault / "Entropy" / "Offices" / office_name / "MEMORY.md"
+        # Faz 6: Desk verisi Entropy/Desk/Offices altında.
+        path = vault / "Entropy" / "Desk" / "Offices" / office_name / "MEMORY.md"
         if path.exists():
             return path.read_text(encoding="utf-8")
     except Exception:
@@ -92,10 +100,19 @@ class AgentDeskWindow(QMainWindow):
         # Ana pencerenin çocuğu olarak kurulsa bile ayrı bir üst pencere olarak
         # yönetilsin: kendi görev çubuğu girdisi, kendi konumu, kendi ekranı.
         self.setWindowFlag(Qt.WindowType.Window, True)
+        # Faz 6: sabit 1400x880 kucuk ekranlarda tasiyordu. Pencere kullanilabilir
+        # alanin en cok %88'ini kaplar ve ortalanir; kayitli geometri varsa
+        # _restore_geometry() bunun uzerine yazar (o da alana kirpilir).
         self.resize(*DEFAULT_SIZE)
+        fit_window_to_screen(self, ratio=DESK_SCREEN_RATIO,
+                             min_size=DESK_MIN_SIZE, keep_preferred=True)
 
         self.office_registry = office_registry if office_registry is not None else load_office_registry()
-        self.agent_registry = agent_registry
+        # Kadro paneli Desk'in KENDİ ajanlarını gösterir; Entropy'nin
+        # `Entropy/Agents` kadrosu Desk'e girmez (Faz 6, kural 1).
+        self.agent_registry = (
+            agent_registry if agent_registry is not None else load_agent_registry()
+        )
         self.board = board
         self.bridge = bridge
         self.current_office: str = ""
@@ -176,6 +193,14 @@ class AgentDeskWindow(QMainWindow):
         # (üçüncü düğme yarım kalıyordu). Panelin alt sınırı ızgaraya göre
         # verilir ve başlangıç payı ona göre dağıtılır.
         self.roster_panel.setMinimumWidth(ROSTER_MIN_WIDTH)
+        # Faz 6: panellerin ortuk asgari genisligi toplamda ~2200 px istiyordu;
+        # 1366 px'lik ekranda sag sutun kirpiliyordu. Acik ve kucuk minimumlarla
+        # splitter oranlari serbest kalir, panel icerikleri kendi kaydirma
+        # alanlarinda daralir.
+        self.offices_panel.setMinimumWidth(180)
+        center.setMinimumWidth(320)
+        center_splitter.setChildrenCollapsible(True)
+        self.tabs.setMinimumWidth(240)
         self.splitter.setSizes([250, 770, ROSTER_MIN_WIDTH])
         root.addWidget(self.splitter, 1)
 
@@ -290,8 +315,11 @@ class AgentDeskWindow(QMainWindow):
             return True
 
         available: QRect = target.availableGeometry()
-        width = max(640, min(width, available.width()))
-        height = max(480, min(height, available.height()))
+        # Kayitli boyut da ekran kuralina uyar: en cok kullanilabilir alanin %88'i.
+        max_w = int(available.width() * DESK_SCREEN_RATIO)
+        max_h = int(available.height() * DESK_SCREEN_RATIO)
+        width = max(640, min(width, max_w))
+        height = max(480, min(height, max_h))
         if str(data.get("screen", "")) != target.name() or not available.contains(x, y):
             # Kayıtlı ekran yok ya da konum bu ekranın dışında: ortala.
             x = available.x() + (available.width() - width) // 2

@@ -1,6 +1,6 @@
 """
 Ajan başına kalıcı bellek: `<kasa>/Entropy/Agents/<ajan>/MEMORY.md`.
-Ofis başına kalıcı bellek: `<kasa>/Entropy/Offices/<ofis>/MEMORY.md` (aynı motor,
+Ofis başına kalıcı bellek: `<kasa>/Entropy/Desk/Offices/<ofis>/MEMORY.md` (aynı motor,
 `append_office_memory` / `load_office_memory`).
 
 Neyi çözüyor
@@ -83,7 +83,9 @@ def memory_path(agent: str, vault_path: Optional[Path] = None) -> Path:
 # (owner kind) ile parametreleştiriyoruz: iki kopya bakım borcu olurdu.
 _OWNER_KINDS = {
     "agent": {"base": "Agents", "label": "Ajan Belleği", "fm_key": "agent", "fallback": "agent"},
-    "office": {"base": "Offices", "label": "Ofis Belleği", "fm_key": "office", "fallback": "office"},
+    # Faz 6: Desk ayrıldı; ofis belleği de Desk'in veri kökünde yaşar
+    # (bkz. office_graph.desk_offices_dir, desk/window.py, memory/wiki.py).
+    "office": {"base": "Desk/Offices", "label": "Ofis Belleği", "fm_key": "office", "fallback": "office"},
 }
 
 

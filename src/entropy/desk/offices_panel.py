@@ -30,20 +30,27 @@ PROVIDERS = ("agy", "claude")
 
 
 def load_office_registry() -> Optional[Any]:
-    """OfficeRegistry örneği; sözleşme modülü yoksa None."""
+    """DeskRegistry örneği (Faz 6 kayıt defteri); sözleşme modülü yoksa None."""
     try:
-        from entropy.agents.offices import OfficeRegistry  # type: ignore
+        from entropy.agents.desk_registry import DeskRegistry  # type: ignore
 
-        return OfficeRegistry()
+        return DeskRegistry()
     except Exception:
         return None
 
 
 def load_agent_registry() -> Optional[Any]:
-    try:
-        from entropy.agents.registry import AgentRegistry  # type: ignore
+    """
+    Desk'in ajan görünümü — Entropy'nin `Entropy/Agents` kadrosu DEĞİL.
 
-        return AgentRegistry()
+    Desk kendi ofislerinin ajanlarını kullanır (Faz 6, kural 1); panelde
+    Entropy'nin ajanlarını listelemek kullanıcıya seçilemeyecek adlar
+    gösteriyordu.
+    """
+    try:
+        from entropy.agents.desk_registry import DeskAgentsView  # type: ignore
+
+        return DeskAgentsView()
     except Exception:
         return None
 
@@ -416,7 +423,7 @@ class OfficesPanel(QFrame):
         """Diyalogsuz kayıt yolu (test edilebilir): create ya da update çağırır."""
         if self.registry is None:
             return False
-        office_obj = build_dataclass("entropy.agents.offices", "OfficeSpec", data)
+        office_obj = build_dataclass("entropy.agents.desk_registry", "DeskOffice", data)
         try:
             if original_name:
                 call_contract(self.registry.update, data, office_obj, original_name)
