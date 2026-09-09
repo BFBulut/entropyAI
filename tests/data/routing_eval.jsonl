@@ -2,11 +2,11 @@
 {"id": "chat-02", "prompt": "Bu projemiz, orkestrator ajanlar ve ajanlarin projeleri yonettigi, ofis ofis ayrilan bir sistem olacak. Ofislerde bir adet orkestrator ajan ve altinda 3-4 normal ajan bulunacak.", "expected": "autonomous-agent", "source": "chat"}
 {"id": "chat-03", "prompt": "Herhangi bir gorev calistirildiginda uygulama kapaniyor. Uygulamayi gelistirmeye devam et.", "expected": "autonomous-agent", "source": "chat", "last_skill": "autonomous-agent"}
 {"id": "chat-04", "prompt": "ne oldu", "expected": null, "source": "chat", "last_skill": "autonomous-agent", "note": "tek basina anlamsiz, gonderme isareti yok"}
-{"id": "chat-05", "prompt": "internete git muratify.com dan agentdesk agentspace uygulamasini kontrol et uygulamamizi o hale getirmeye calis", "expected": "autonomous-agent", "source": "chat"}
+{"id": "chat-05", "prompt": "internete git [marka].com dan agentdesk [marka] uygulamasini kontrol et uygulamamizi o hale getirmeye calis", "expected": "autonomous-agent", "source": "chat"}
 {"id": "chat-06", "prompt": "Ayni sekilde gelistirmeye devam et", "expected": "autonomous-agent", "source": "chat", "last_skill": "autonomous-agent"}
 {"id": "chat-07", "prompt": "devam et gelistirmeye", "expected": "autonomous-agent", "source": "chat", "last_skill": "autonomous-agent"}
 {"id": "chat-08", "prompt": "Gelistirmeye devma et", "expected": "autonomous-agent", "source": "chat", "last_skill": "autonomous-agent", "note": "yazim hatasi bilerek korundu"}
-{"id": "chat-09", "prompt": "Uygulamamizi muratify.com daki AgentSpace uygulamasini ornek alarak gelistirmeye devam et. Alt ajanlarinla ve hafizanla bu uygulamayi gelistir.", "expected": "autonomous-agent", "source": "chat", "note": "slash komutlari ayiklandi"}
+{"id": "chat-09", "prompt": "Uygulamamizi [marka].com daki [marka] uygulamasini ornek alarak gelistirmeye devam et. Alt ajanlarinla ve hafizanla bu uygulamayi gelistir.", "expected": "autonomous-agent", "source": "chat", "note": "slash komutlari ayiklandi"}
 {"id": "chat-10", "prompt": "Sesli sohbet kismini yapmana gerek yok. Sadece surukle birak ile PDF dosyalari terminallere aktarilabilsin. Sadece SpaceDesk ajan ortamina odaklan, AntiGravity CLI ile entegre et.", "expected": "autonomous-agent", "source": "chat"}
 {"id": "chat-11", "prompt": "Simdi senden yeni bir yetenek olusturmani istiyorum. Verdigim linki bir medya ajansi gibi arastiracak, SEO ve rakip analizi yapacak bir yetenek olsun.", "expected": "skill-creator", "source": "chat", "ambiguous": true, "note": "hem yetenek uretimi hem medya ajansi alani"}
 {"id": "chat-12", "prompt": "canivopets.com sitesini incele ve buyume onerileri cikar", "expected": "media-agency-soldier", "source": "chat"}

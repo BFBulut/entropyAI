@@ -2,7 +2,7 @@
 Faz 4 arayüz testleri: adlandırma/temizlik, cila ve Rapor Merkezi "Gelen" şeridi.
 
 Kapsam:
-  1. `desk/legacy` kaldırıldı, "muratify" hiçbir kaynakta geçmiyor, başlıklar
+  1. `desk/legacy` kaldırıldı, marka adı hiçbir kaynakta geçmiyor, başlıklar
      ve düğme metni "Entropy Agent Desk" / "Entropy AI".
   2. Metin kırpma (ElideRight) + tam metin ipucu, yatay kaydırma politikası,
      bilgi grafiği efsanesindeki yeni girdiler.
@@ -40,8 +40,9 @@ def test_legacy_desk_package_removed():
         __import__("entropy.desk.legacy")
 
 
-def test_no_muratify_reference_in_sources():
-    """Uygulama kaynaklarında "muratify" geçmez (büyük/küçük harf duyarsız)."""
+def test_no_vendor_brand_reference_in_sources():
+    """Uygulama kaynaklarında üretici marka adı geçmez (büyük/küçük harf duyarsız)."""
+    brand = "".join(("mur", "atify"))
     hits = []
     for path in SRC_ROOT.rglob("*"):
         if path.suffix.lower() not in {".py", ".md", ".json", ".html", ".spec", ".txt"}:
@@ -50,9 +51,9 @@ def test_no_muratify_reference_in_sources():
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        if "muratify" in text.lower():
+        if brand in text.lower():
             hits.append(str(path))
-    assert hits == [], f"muratify kalıntısı: {hits}"
+    assert hits == [], f"marka kalıntısı: {hits}"
 
 
 def test_spec_hiddenimports_drops_legacy():

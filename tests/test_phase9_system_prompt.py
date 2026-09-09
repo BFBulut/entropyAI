@@ -115,7 +115,7 @@ def test_deterministic_for_same_input():
 
 def test_no_forbidden_brand():
     text = _build(kind="card", query="x", agent_spec={"name": "a", "role": "b"})
-    assert "muratify" not in text.lower()
+    assert "".join(("mur", "atify")) not in text.lower()
 
 
 def test_unknown_kind_falls_back_to_chat():

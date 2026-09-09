@@ -5,7 +5,7 @@
 **Girdi:** `docs/reports/2026-09-11_Faz9_Arastirma_B_Agent_Desk_Yol_Haritasi.md` §6 (P1) ve §7 "FAZ 10" tablosu (10.1–10.11).
 **Amaç:** Her maddeyi doğrudan koda geçilebilecek bir tasarıma indirmek; kullanıcı onayından sonra uygulama başlar.
 
-**Marka kuralı:** ticari referans ürün bu belgede yalnızca "**AgentSpace (ticari referans)**" olarak anılır; üretici adı ve alan adı geçmez.
+**Marka kuralı:** ticari referans ürün bu belgede yalnızca "**ticari referans ürün**" olarak anılır; üretici adı ve alan adı geçmez.
 
 **Satır numaraları uyarısı:** Faz 9 raporundaki bazı satır numaraları çalışma ağacındaki değişikliklerle kaymıştır
 (ör. `tasks.py:481 project_file_section` → bugün `tasks.py:765`). Bu notta verilen tüm `dosya:satır` referansları
@@ -289,7 +289,7 @@ zaten eski sinyali doğruluyor — bunlar **değiştirilmeden** geçmeli, bu ken
 
 ### 2.2 — 10.2 Ajan başına adlandırılmış terminal
 
-Bu, AgentSpace (ticari referans) ürününün 1 numaralı farklılaştırıcısı ve kullanıcının açıkça karar istediği madde.
+Bu, ticari referans ürün ürününün 1 numaralı farklılaştırıcısı ve kullanıcının açıkça karar istediği madde.
 İki seçenek somut ölçümle karşılaştırıldı.
 
 #### Seçenek (a) — "Akış terminali" (mevcut `-p stream-json` çıktısını ajan başına bölme)
@@ -316,9 +316,9 @@ Bu, AgentSpace (ticari referans) ürününün 1 numaralı farklılaştırıcıs�
 | PyInstaller riski | `pywinpty` yerel uzantı + `conpty.dll`; `EntropyAI.spec`'e hidden import ve binary ekleme gerekir |
 | İş yükü | VT ekran emülatörü + boyut senkronu + kapanış yönetimi; **kendi başına bir faz** |
 
-#### AgentSpace (ticari referans) ve pixel-agents ne yapıyor?
+#### ticari referans ürün ve pixel-agents ne yapıyor?
 
-- **AgentSpace (ticari referans):** ajan başına **adlandırılmış** terminal + sürüklenebilir bölme ağacı;
+- **ticari referans ürün:** ajan başına **adlandırılmış** terminal + sürüklenebilir bölme ağacı;
   sprite tıklaması ilgili bölmeyi öne getiriyor (Faz 9 raporu §1.2, §1.9).
 - **pixel-agents (MIT, https://github.com/pixel-agents-hq/pixel-agents):** piksel ofis sahnesi + ajan durumu;
   gerçek PTY değil, süreç çıktısı görselleştirmesi. Görsel dil buradan alınıyor (kullanıcının kalıcı kuralı).
@@ -732,7 +732,7 @@ slot seçili kartın `worktree` alanını okur, boşsa panel "Bu kart bir depoya
 | Yetim ağaç | 10.4 `state.json["orphan_worktrees"]` | Yalnızca > 0 iken görünür |
 
 **Yüzdelik kota çubuğu YOK.** Karar korunuyor: `identity.py:167-171` motorların kalan kotayı yayımlamadığını
-belgeliyor; AgentSpace (ticari referans) de aynı kararı vermiş (Faz 9 §1.4). Uydurma bir yüzde yanlış güven verir.
+belgeliyor; ticari referans ürün de aynı kararı vermiş (Faz 9 §1.4). Uydurma bir yüzde yanlış güven verir.
 
 **Tek üretici kuralı.** Şerit **kendi hesabını yapmaz**; `office_status()` genişletilir
 (`spent_tokens` yanına `cost_weighted`, `provider`, `orphan_worktrees` eklenir) ve `/desk` metni de
@@ -1211,7 +1211,7 @@ zenginleşsin, panel onu okusun. Gerekçe: Faz 9'un P0-2 dersi (iki kaynaklı ge
 
 ### 5.3 Dış kaynaklar
 
-- **AgentSpace (ticari referans)** — ajan başına adlandırılmış terminal, bölme ağacı, sprite tıklaması, bellek grafı,
+- **ticari referans ürün** — ajan başına adlandırılmış terminal, bölme ağacı, sprite tıklaması, bellek grafı,
   maliyet paneli. (Üretici adı ve alan adı bilinçli olarak yazılmamıştır; ayrıntı: Faz 9 raporu §1.)
 - pixel-agents (MIT, piksel ofis görsel dili) — https://github.com/pixel-agents-hq/pixel-agents
 - Google Antigravity — Artifacts (görev listeleri, planlar, diff'ler, walkthrough'lar) ve Docs tarzı yorumlar:

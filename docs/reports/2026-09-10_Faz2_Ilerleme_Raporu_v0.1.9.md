@@ -44,4 +44,4 @@ Proje kilidi, yetenek çözümü, `--append-system-prompt` ile bilişsel bağlam
 - Grafikte `query` ve sentetik `skill/<ad>` düğümleri henüz renksiz.
 
 ## Faz 3 önerisi (onay bekliyor)
-Önce araştırma turu (GitHub'daki çoklu ajan ofis projeleri, agentspace benzeri uygulamalar, harness örnekleri, video anlatımları) ve ayrı bir Faz 3 tasarım raporu; onayından sonra uygulama: `src/entropy/desk/` ayrı pencere, ofisler (oluştur/düzenle/sil), ofis orkestratörü ve ofis ajanları (oluştur/düzenle/sil), piksel sahne (legacy çizim kodu), kart panosu, ortak bellek, ikinci monitör konumu; sonunda `v0.2.0`.
+Önce araştırma turu (GitHub'daki çoklu ajan ofis projeleri, ticari referans ürün benzeri uygulamalar, harness örnekleri, video anlatımları) ve ayrı bir Faz 3 tasarım raporu; onayından sonra uygulama: `src/entropy/desk/` ayrı pencere, ofisler (oluştur/düzenle/sil), ofis orkestratörü ve ofis ajanları (oluştur/düzenle/sil), piksel sahne (legacy çizim kodu), kart panosu, ortak bellek, ikinci monitör konumu; sonunda `v0.2.0`.

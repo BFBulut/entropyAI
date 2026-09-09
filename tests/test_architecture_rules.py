@@ -25,7 +25,7 @@ from entropy.agents.compile import (
 from entropy.agents.desk_registry import DeskOffice, DeskRegistry
 
 
-FORBIDDEN_BRAND = "muratify"
+FORBIDDEN_BRAND = "".join(("mur", "atify"))  # marka adı kaynakta hiç geçmesin diye parçalı
 
 # Orkestratorun asla erisemeyecegi araclar: yazma ve kabuk.
 WRITE_TOOLS = {"edit", "write", "bash", "notebookedit", "multiedit"}

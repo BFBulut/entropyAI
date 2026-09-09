@@ -5,7 +5,7 @@
 **Kapsam:** Salt okunur inceleme. Hiçbir kaynak dosya değiştirilmedi, hiçbir model çağrısı yapılmadı (kota harcanmadı).
 **Yöntem:** (a) ticari referans ürünün ürün sayfası ve üreticinin geliştirme videolarından çıkarılan özellik listesi, (b) 2026 benzerlerinin taraması, (c) öğrenen ajan literatürü ve kayıt defteri ekosistemi, (d) depo üzerinde dosya:satır kanıtlı durum tespiti.
 
-**Marka notu:** Ticari referans ürün bu raporda yalnızca **"AgentSpace (ticari referans)"** olarak anılır. Üretici adı ve alan adı bilinçli olarak yazılmamıştır; kaynakçada "üretici sitesi" ve "üreticinin geliştirme videoları" biçiminde geçer.
+**Marka notu:** Ticari referans ürün bu raporda yalnızca **"ticari referans ürün"** olarak anılır. Üretici adı ve alan adı bilinçli olarak yazılmamıştır; kaynakçada "üretici sitesi" ve "üreticinin geliştirme videoları" biçiminde geçer.
 
 ---
 
@@ -21,7 +21,7 @@ En kritik tek bulgu (P0): `src/entropy/ui/modes/zen_mode.py:315` satırında `Ta
 
 ---
 
-## 1. Ticari Referans: AgentSpace
+## 1. Ticari Referans: ticari referans ürün
 
 Aşağıdaki liste, ürün sayfasından ve üreticinin geliştirme videolarının başlık/açıklama içeriğinden çıkarılmıştır.
 
@@ -296,7 +296,7 @@ Kullanıcının "Desk Entropy'ye görev yolluyor, saçma" tespitinin teknik kayn
 
 Gösterim: ✅ var · ⚠️ yarım · ❌ yok · — ilgisiz
 
-| # | Özellik | Biz (v0.6.0) | AgentSpace (ticari referans) | Diğerleri (kim) |
+| # | Özellik | Biz (v0.6.0) | ticari referans ürün | Diğerleri (kim) |
 |---|---|:--:|:--:|---|
 | 1 | Ofis / ekip modeli | ✅ | ✅ | ✅ Paperclip, CrewAI Studio |
 | 2 | Kanban görev panosu | ✅ | ✅ | ✅ Vibe Kanban, Conductor |
@@ -451,7 +451,7 @@ Ajan kısaltmaları: `agy` = agy-integration-engineer · `ui` = ui-engineer · `
 ## 8. Kaynaklar
 
 ### Ticari referans
-- **Üretici sitesi** — AgentSpace (ticari referans) ürün sayfası ve ürün ekosistemi tanıtımı. (URL bilinçli olarak yazılmamıştır.)
+- **Üretici sitesi** — ticari referans ürün ürün sayfası ve ürün ekosistemi tanıtımı. (URL bilinçli olarak yazılmamıştır.)
 - **Üreticinin geliştirme videoları** — ürünün canlı yayın/geliştirme video serisinden derlenen özellik açıklamaları (ajan başına adlandırılmış terminal, bölme ağacı, sprite tıklaması, worktree orkestratörlerinden farkı).
 
 ### Piksel ofis / görselleştirme
