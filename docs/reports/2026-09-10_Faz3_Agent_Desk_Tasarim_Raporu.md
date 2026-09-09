@@ -4,7 +4,7 @@ Tarih: 2026-09-10 · Branch `ai/v0.1.7` (v0.1.9 üzerine) · Hedef sürüm `v0.2
 
 ## 1. Araştırmanın söyledikleri (kaynaklar sonda)
 
-- **AgentSpace (agentspace üreticisi.com/products/agentspace):** hedeflediğimiz şeyin ticari karşılığı. Piksel ofis + kanban + ajan başına adlandırılmış terminal + bellek grafiği; "lead" ajan görevi böler, ekip paralel çalışır, sonuç raporla kapanır. Kapalı kaynak, 15–49 $/ay, kendi anahtarını getir. Alınacak en güçlü fikir: **sprite'a tıkla → o ajanın oturumu/terminali açılsın**; ayırt edici olacağımız yer: açık bellek grafiği, yerel RAG, iki sağlayıcı (agy + Claude).
+- **AgentSpace (üretici sitesi):** hedeflediğimiz şeyin ticari karşılığı. Piksel ofis + kanban + ajan başına adlandırılmış terminal + bellek grafiği; "lead" ajan görevi böler, ekip paralel çalışır, sonuç raporla kapanır. Kapalı kaynak, 15–49 $/ay, kendi anahtarını getir. Alınacak en güçlü fikir: **sprite'a tıkla → o ajanın oturumu/terminali açılsın**; ayırt edici olacağımız yer: açık bellek grafiği, yerel RAG, iki sağlayıcı (agy + Claude).
 - **pixel-agents (MIT):** PixiJS/Phaser yok, **düz Canvas 2D**; veri kaynağı **hook/olay akışı birincil, JSONL log taraması yedek**; karakterler CC0 değil, kredili paket. Bizim `bus` sinyallerimiz doğrudan kanvasa beslenebilir.
 - **agent-office (MIT):** Phaser + Colyseus + SQLite + Ollama; ajanlar boşta bile ~15 sn'de bir LLM çağırıyor — kota için sürdürülemez. Ders: **hareket tamamen istemci tarafı animasyon**, LLM yalnızca kartlar için.
 - **AI Town (MIT):** spritesheet + vektör bellek ("en benzer 3 anı" enjeksiyonu). Bizde zaten var (hibrit geri çağırma).
