@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bilgi Edinme Dengesi ve Piyasa Fiyat Keşfi</title>
+    <!-- KaTeX CSS & JS for Mathematical Formulas -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" crossorigin="anonymous">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111927;
+            --bg-card: rgba(22, 33, 51, 0.75);
+            --border-glow: rgba(56, 189, 248, 0.25);
+            --border-card: #1e293b;
+            --cyan-accent: #38bdf8;
+            --emerald-accent: #34d399;
+            --amber-accent: #fbbf24;
+            --rose-accent: #fb7185;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: radial-gradient(circle at 50% 20%, #152238 0%, var(--bg-primary) 70%);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* Header / Meta Bar */
+        .deck-header {
+            height: 52px;
+            padding: 0 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-card);
+            background: rgba(10, 14, 23, 0.85);
+            backdrop-filter: blur(12px);
+            z-index: 100;
+        }
+
+        .deck-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--cyan-accent);
+            letter-spacing: 0.5px;
+        }
+
+        .deck-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .btn-ctrl {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-card);
+            color: var(--text-main);
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-ctrl:hover {
+            background: var(--cyan-accent);
+            color: #000;
+            box-shadow: 0 0 12px var(--cyan-accent);
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            height: 4px;
+            width: 100%;
+            background: var(--border-card);
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--cyan-accent), var(--emerald-accent));
+            transition: width 0.3s ease;
+            box-shadow: 0 0 8px var(--cyan-accent);
+        }
+
+        /* Main Viewport */
+        .viewport {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 60px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .slide-container {
+            width: 100%;
+            max-width: 1200px;
+            height: 100%;
+            max-height: 720px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-glow);
+            border-radius: 16px;
+            padding: 44px 56px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(16px);
+            opacity: 1;
+            transform: scale(1);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Slide Typography */
+        .slide-tag {
+            display: inline-block;
+            align-self: flex-start;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            font-weight: 700;
+            color: var(--cyan-accent);
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid var(--border-glow);
+            padding: 4px 12px;
+            border-radius: 20px;
+            margin-bottom: 12px;
+        }
+
+        .slide-title {
+            font-size: 2.2rem;
+            font-weight: 800;
+            line-height: 1.25;
+            color: #ffffff;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .slide-subtitle {
+            font-size: 1.15rem;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .slide-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        /* Bullet List */
+        .bullet-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .bullet-item {
+            font-size: 1.15rem;
+            line-height: 1.6;
+            color: #e2e8f0;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .bullet-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--cyan-accent);
+            box-shadow: 0 0 8px var(--cyan-accent);
+            margin-top: 9px;
+            flex-shrink: 0;
+        }
+
+        /* LaTeX Equation Box */
+        .equation-box {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-left: 4px solid var(--cyan-accent);
+            border-radius: 10px;
+            padding: 20px 24px;
+            margin: 10px 0;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            font-size: 1.35rem;
+            color: #ffffff;
+            overflow-x: auto;
+        }
+
+        /* Two Column Layout */
+        .two-cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 28px;
+            flex: 1;
+        }
+
+        .col-card {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border-card);
+            border-radius: 12px;
+            padding: 22px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .col-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--cyan-accent);
+            border-bottom: 1px solid var(--border-card);
+            padding-bottom: 8px;
+        }
+
+        /* Callout Box */
+        .callout-box {
+            background: rgba(52, 211, 153, 0.1);
+            border: 1px solid rgba(52, 211, 153, 0.35);
+            border-radius: 8px;
+            padding: 14px 18px;
+            font-size: 1.05rem;
+            color: #a7f3d0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* Slide Footer */
+        .slide-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid var(--border-card);
+            padding-top: 16px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        /* Navigation Arrows */
+        .nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(17, 25, 39, 0.8);
+            border: 1px solid var(--border-card);
+            color: var(--text-main);
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 50;
+        }
+
+        .nav-btn:hover {
+            background: var(--cyan-accent);
+            color: #000;
+            box-shadow: 0 0 16px var(--cyan-accent);
+        }
+
+        .nav-prev { left: 16px; }
+        .nav-next { right: 16px; }
+
+        /* Title Slide Archetype */
+        .slide-title-archetype {
+            text-align: center;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .slide-title-archetype .slide-title {
+            font-size: 3.2rem;
+            background: linear-gradient(135deg, #ffffff 30%, var(--cyan-accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .slide-title-archetype .slide-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 1.15rem;
+            color: var(--text-muted);
+            margin-top: 20px;
+        }
+
+        /* Speaker Notes Panel */
+        .notes-drawer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(10, 14, 23, 0.95);
+            border-top: 2px solid var(--cyan-accent);
+            padding: 16px 32px;
+            font-size: 0.95rem;
+            color: #cbd5e1;
+            display: none;
+            z-index: 200;
+            backdrop-filter: blur(16px);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="deck-header">
+        <div class="deck-brand">
+            <span>⚡</span>
+            <span>Bilgi Edinme Dengesi ve Piyasa Fiyat Keşfi</span>
+        </div>
+        <div class="deck-controls">
+            <span id="slide-indicator" style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted);">1 / 9</span>
+            <button class="btn-ctrl" onclick="toggleNotes()">📝 Notlar [N]</button>
+            <button class="btn-ctrl" onclick="toggleFullscreen()">⛶ Tam Ekran [F]</button>
+        </div>
+    </header>
+
+    <!-- Progress Bar -->
+    <div class="progress-container">
+        <div id="progress-bar" class="progress-bar"></div>
+    </div>
+
+    <!-- Viewport -->
+    <main class="viewport">
+        <button class="nav-btn nav-prev" onclick="prevSlide()">‹</button>
+        
+        <div id="slide-card" class="slide-container">
+            <!-- Dynamic Slide Injection -->
+        </div>
+
+        <button class="nav-btn nav-next" onclick="nextSlide()">›</button>
+    </main>
+
+    <!-- Speaker Notes -->
+    <div id="notes-drawer" class="notes-drawer">
+        <div style="font-weight: 700; color: var(--cyan-accent); margin-bottom: 6px;">🎙️ Konuşmacı Notları:</div>
+        <div id="notes-content">Not bulunmuyor.</div>
+    </div>
+
+    <script>
+        const deckData = {"title": "Bilgi Edinme Dengesi ve Piyasa Fiyat Keşfi", "subtitle": "Grossman-Stiglitz (1980) Paradoksu ve Hasbrouck (1991, 1995) Bilgi Paylaşımı (IS / GIS)", "author": "Entropy AI", "institution": "Kantitatif Finans ve Piyasa Mikroyapısı Araştırma Grubu", "date": "2026-09-06", "theme": "cyber-slate", "slides": [{"id": 1, "title": "Bilgi Edinme Dengesi ve Piyasa Fiyat Keşfi", "subtitle": "Grossman-Stiglitz (1980) Paradoksu ve Hasbrouck (1991, 1995) Bilgi Paylaşımı (IS / GIS)", "slide_type": "title", "bullets": [], "equations": [], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": null, "speaker_notes": "Bu seminerde modern finansal mikroyapının iki temel köşe taşını inceliyoruz: Bilgi edinmenin içsel dengesi ve parçalanmış piyasalarda fiyat keşfinin ekonometrik ayrıştırması.", "footer": null}, {"id": 2, "title": "1. Grossman-Stiglitz (1980) Paradoksu: Giriş", "subtitle": "Etkin Piyasalar Hipotezinin (EMH) İçsel Çelişkisi", "slide_type": "theory_core", "bullets": ["**Temel Teorem:** Bilgi edinme maliyeti sıfırdan büyük ($c > 0$) olduğunda, tam bilgi etkinliğine sahip bir piyasanın var olması imkansızdır.", "**Mantıksal Kısır Döngü:** Eğer piyasa fiyatı $P$ tüm özel bilgiyi ($\\theta$) kusursuzca yansıtıyorsa, hiçbir rasyonel aktör pozitif kaynak ($c > 0$) harcayarak bilgi toplamaz.", "**Piyasanın Çöküşü:** Ancak kimse bilgi toplamazsa, fiyat $P$ hiçbir özel bilgiyi yansıtamaz ve piyasa tamamen bilgisiz kalır.", "**Çözüm Yolu:** Fiyattaki gürültü (Noise Traders / Likidite Şoku) sayesinde bilgi kısmen gizlenir ve dengede pozitif oranda bilgili tüccar ($\\lambda^*$) hayatta kalır."], "equations": [], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": "Eğer piyasalar Fama anlamında güçlü formda etkin olsaydı, bilgiye yatırım yapan tüm analistler ve fonlar iflas ederdi.", "speaker_notes": "Sanford Grossman ve Joseph Stiglitz 1980 AER makalelerinde EMH'nin kalbine matematiksel bir hançer saplamıştır: Bilgi bedava değilse piyasa asla tam etkin olamaz.", "footer": null}, {"id": 3, "title": "2. Grossman-Stiglitz Denge Denklemi", "subtitle": null, "slide_type": "equation_breakdown", "bullets": ["**$a$:** Negatif üstel CARA fayda fonksiyonundaki mutlak riskten kaçınma katsayısı ($U(W) = -e^{-aW}$).", "**$c > 0$:** Özel bilgi sinyali $y = \\theta + \\epsilon$ toplamanın katlanılan parasal maliyeti.", "**$\\text{Var}(\\theta \\mid \\text{informed})$:** Bilgili tüccarın sinyal sonrası nihai değer $\\theta$ üzerindeki koşullu varyansı.", "**$\\text{Var}(\\theta \\mid \\text{uninformed})$:** Bilgisiz tüccarın yalnızca piyasa fiyatını gözlemleyerek ulaştığı koşullu varyans.", "**İçsel Denge Oranı ($\\lambda^*$):** Bilgili tüccar oranı $\\lambda \\in (0, 1)$ endojen olarak belirlenir.", "**Eksik Fiyat Bilgilendiriciliği:** Fiyat bilgilendiriciliği $\\rho^2 = \\text{Corr}(P, \\theta)^2 < 1$ olmak zorundadır. Piyasada her zaman gürültü tüccarı arzı $x \\sim \\mathcal{N}(0, \\sigma_x^2)$ bulunmalıdır."], "equations": ["\\frac{\\text{Var}(\\theta \\mid \\text{uninformed})}{\\text{Var}(\\theta \\mid \\text{informed})} = e^{2ac}"], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": "Varyans oranı tam olarak e^(2ac) katına ulaştığında, bilgili ve bilgisiz tüccarların beklenen faydaları eşitlenir.", "speaker_notes": "Formülde görüldüğü üzere maliyet c arttıkça veya riskten kaçınma a yükseldikçe, bilgisizlerin katlandığı belirsizlik katlanarak artar.", "footer": null}, {"id": 4, "title": "3. Grossman-Stiglitz Denge Mekaniği", "subtitle": null, "slide_type": "two_column", "bullets": [], "equations": [], "left_column": ["Özel sinyali $y = \\theta + \\epsilon$ gözlemler.", "Kişi başı sabit $c > 0$ araştırma maliyetine katlanır.", "Talep fonksiyonu: $X_I(P, y) = \\frac{E[\\theta \\mid y] - P}{a \\cdot \\text{Var}(\\theta \\mid y)}$.", "Fiyat üzerindeki bilgi baskısını oluşturur."], "right_column": ["Yalnızca piyasa denge fiyatı $P$'yi gözlemler.", "Sıfır araştırma maliyetiyle piyasada işlem yapar.", "Talebi fiyattan sinyal türetir: $E[\\theta \\mid P]$.", "Gürültü tüccarı arzı $x$'i tam ayırt edemez (Sinyal/Gürültü Ayrımı)."], "left_title": "Bilgili Tüccarlar (Informed, λ*)", "right_title": "Bilgisiz Tüccarlar (Uninformed, 1 - λ*)", "callout": "Denge ancak $\\lambda^* \\in (0, 1)$ aralığında var olabilir. $\\lambda=0$ da $\\lambda=1$ de kararsızdır.", "speaker_notes": "Bilgisiz tüccarlar fiyatı gözlemleyerek bedavacılık (free-riding) yapmaya çalışır. Ancak gürültü tüccarları piyasada olmasaydı fiyat bilgiyi %100 açığa vurur ve bedavacılık sistemi yok ederdi.", "footer": null}, {"id": 5, "title": "4. Joel Hasbrouck (1991, 1995): Fiyat Keşfi & Cointegrated VAR", "subtitle": "Parçalanmış Elektronik Piyasalarda Fiyat Liderliğinin Ölçülmesi", "slide_type": "theory_core", "bullets": ["**Problem:** Aynı finansal varlık (hisse senedi, tahvil, Bitcoin) birden fazla borsada (NYSE vs NASDAQ, Binance vs Coinbase) eşzamanlı işlem görmektedir.", "**Tek Fiyat Kanunu & Eşbütünleşme:** Arbitraj sayesinde fiyatlar uzun vadede birlikte hareket eder: Fiyat serileri $p_t = [p_{1,t}, p_{2,t}, \\dots, p_{n,t}]'$ **$I(1)$ eşbütünleşiktir**.", "**Beveridge-Nelson Ayrıştırması:** Fiyat vektörü iki bileşene ayrılır: Kalıcı ortak rassal yürüyüş (Martingale / İçsel Değer $m_t$) ve geçici mikroyapı gürültüsü ($s_t$).", "**Soru:** Ortak içsel değer yeniliği $\\epsilon_t$'ye hangi borsa yön vermektedir?"], "equations": [], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": "Hasbrouck Bilgi Paylaşımı (Information Share - IS), fiyat keşfinin tam coğrafi konumunu milisaniye seviyesinde tespit eder.", "speaker_notes": "Hasbrouck 1995 JOF makalesiyle finansal ekonometriye muazzam bir araç kazandırdı: Vektör Hata Düzeltme Modeli (VECM) üzerinden bilgi payı hesaplama.", "footer": null}, {"id": 6, "title": "5. Hasbrouck Beveridge-Nelson & VECM Ayrıştırması", "subtitle": null, "slide_type": "equation_breakdown", "bullets": ["**$p_t$:** $n$ adet farklı borsadaki kotasyon fiyat vektörü.", "**$m_t$:** Ortak kalıcı martingale içsel değer bileşeni ($m_t = m_{t-1} + \\psi \\epsilon_t$).", "**$s_t$:** Sıfır ortalamalı durağan mikroyapı gürültüsü (Bid-Ask bounce, likidite şokları).", "**$\\psi$:** VECM hareketli ortalama (Wold MA) uzun dönem etki vektörü ($[\\psi_1, \\psi_2, \\dots, \\psi_n]$).", "**$\\epsilon_t$:** Yenilik vektörü, kovaryans matrisi $\\Omega = E[\\epsilon_t \\epsilon_t']$.", "Eşbütünleşme vektörü gereği $\\psi$ vektörünün satırları birbirine özdeştir: $\\psi = \\iota \\beta'$.", "Kalıcı varyans: $\\sigma_m^2 = \\psi \\Omega \\psi'$ formülüyle hesaplanır."], "equations": ["p_t = \\iota m_t + s_t, \\quad m_t = m_{t-1} + \\psi \\epsilon_t"], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": "Tüm piyasalar aynı uzun vadeli içsel değere bağlıdır; ancak bu değere ilk tepki veren borsa liderdir.", "speaker_notes": "Burada psi vektörü hangi piyasanın yeniliklerinin kalıcı fiyata geçtiğini gösterir. Eğer psi_1 büyükse 1. borsa fiyatı yönlendiriyor demektir.", "footer": null}, {"id": 7, "title": "6. Cholesky Ayrışımı & Hasbrouck Information Share (IS)", "subtitle": "Yenilik Korelasyonu ve Sıralama Bağımlılığı Çözümü", "slide_type": "two_column", "bullets": [], "equations": [], "left_column": ["Kovaryans matrisi alt üçgensel faktörlere ayrılır:", "$$\\Omega = F F'$$", "$j$. piyasanın Bilgi Paylaşımı (Information Share):", "$$IS_j = \\frac{([\\psi F]_j)^2}{\\psi \\Omega \\psi'}$$", "Payların toplamı bire eşittir: $\\sum_{j=1}^n IS_j = 1$."], "right_column": ["**Sıralama Bağımlılığı:** $\\Omega$ köşegen değilse (borsalar arası korelasyon $\\rho \\neq 0$), Cholesky sıralaması üst ve alt sınırlar ($IS_j^{\\max}, IS_j^{\\min}$) üretir.", "İlk sıradaki borsa en yüksek korelasyon payını alır.", "**Çözüm (Midpoint / GIS):**", "$$IS_j^{\\text{mid}} = \\frac{IS_j^{\\max} + IS_j^{\\min}}{2}$$", "Lien-Shrestha (2009) Generalized IS (GIS) ile özdeğer tabanlı sıralamadan bağımsız metrik elde edilir."], "left_title": "Cholesky Faktörizasyonu & IS Formülü", "right_title": "Ekonometrik Sınırlar & Ortak Bilgi Payı (GIS)", "callout": "Kripto para piyasalarında Binance ve Coinbase arasındaki fiyat keşfi liderliği bu metodolojiyle ölçülmektedir.", "speaker_notes": "Cholesky matrisinde birinci sıraya koyduğunuz borsa korelasyondan aslan payını alır. Bu yüzden akademik standart alt ve üst sınırları hesaplayıp ortalamasını almaktır.", "footer": null}, {"id": 8, "title": "7. İki Teorinin Birleşik Piyasa Mimarisi", "subtitle": "Grossman-Stiglitz Paradoksu ➔ Hasbrouck Fiyat Keşfi Köprüsü", "slide_type": "two_column", "bullets": [], "equations": [], "left_column": ["**Neden Bilgi Toplanır?** Bilgili tüccarlar beklenen kâr elde etmek için araştırma yapar ($c > 0$).", "**Fiyatın Rolü:** Bilgiyi agregasyonla piyasaya taşır ancak asla tam etkin olamaz ($\\rho^2 < 1$).", "**Gürültü Şartı:** Likidite tüccarları olmasa piyasa likiditesi tamamen kurur (No-Trade Theorem)."], "right_column": ["**Bilgi Nerede Fiyata Dönüşür?** Bilgili tüccarların girdiği limit ve piyasa emirlerinde (Order Flow Informativeness).", "**Fiyat Keşfi Konumu:** En derin likiditeye ve en düşük gecikmeye (latency) sahip borsa en yüksek $IS_j$ payını alır.", "**Kalıcı Etki:** Bilgili emir akışı kalıcı fiyat şokuna ($\\psi \\epsilon_t$) dönüşür."], "left_title": "Bilgi Edinme Düzeyi (Grossman-Stiglitz)", "right_title": "Emir Akışı & Uygulama (Hasbrouck)", "callout": "Grossman-Stiglitz bilginin piyasaya NEDEN girdiğini, Hasbrouck ise bu bilginin NEREDE fiyata dönüştüğünü kanıtlar.", "speaker_notes": "Bu iki teori bir madalyonun iki yüzüdür. Biri bilginin ekonomik varoluş koşulunu açıklar, diğeri ise bu bilginin parçalanmış emir defterlerindeki ekonometrik izini sürer.", "footer": null}, {"id": 9, "title": "8. Sonuç & Temel Çıkarımlar", "subtitle": null, "slide_type": "summary", "bullets": ["**Tam Etkinlik İmkansızdır:** Grossman & Stiglitz (1980), bilgi maliyetli ($c > 0$) olduğu sürece piyasa fiyatlarının özel bilgiyi %100 yansıtamayacağını ispatlamıştır. Piyasada alfa ve aktif yönetim her zaman var olmak zorundadır.", "**Gürültü Piyasayı Yaşatır:** Gürültü tüccarları ($x \\sim \\mathcal{N}(0, \\sigma_x^2)$) olmadan bilgi ticareti yapılamaz; bilgisizler bedavacılıkla tüm bilgiyi çekip sistemi kilitler.", "**Fiyat Keşfi Ölçülebilirdir:** Joel Hasbrouck (1991, 1995), eşbütünleşik VAR ve Beveridge-Nelson ayrıştırmasıyla kalıcı içsel değer yeniliklerinin hangi borsadan kaynaklandığını ($IS_j$) kesin matematiksel sınırlarla ortaya koymuştur.", "**Modern Uygulama:** HFT algoritmaları, arbitraj botları ve kripto türev borsaları (Binance Perp vs Coinbase Spot) arasındaki liderlik rekabeti Hasbrouck Information Share ile modellenmektedir."], "equations": [], "left_column": null, "right_column": null, "left_title": null, "right_title": null, "callout": "Teşekkürler! Sorularınız ve Kantitatif Tartışma İçin Söz Sizde.", "speaker_notes": "Sunumumuz burada sona erdi. Grossman-Stiglitz ve Hasbrouck ekolü, günümüz algoritmik piyasa yapıcılığının ve yüksek frekanslı ticaretin temel referans noktası olmaya devam etmektedir.", "footer": null}]};
+        let currentSlideIndex = 0;
+        let notesVisible = false;
+
+        function updateSlide() {
+            const slide = deckData.slides[currentSlideIndex];
+            const card = document.getElementById('slide-card');
+            const indicator = document.getElementById('slide-indicator');
+            const progressBar = document.getElementById('progress-bar');
+            const notesContent = document.getElementById('notes-content');
+
+            // Progress
+            const pct = ((currentSlideIndex + 1) / deckData.slides.length) * 100;
+            progressBar.style.width = pct + '%';
+            indicator.textContent = `${currentSlideIndex + 1} / ${deckData.slides.length}`;
+
+            // Notes
+            notesContent.textContent = slide.speaker_notes || "Bu slayt için ek konuşmacı notu bulunmuyor.";
+
+            // Render Content based on SlideType
+            let html = '';
+
+            if (slide.slide_type === 'title') {
+                card.className = "slide-container slide-title-archetype";
+                html = `
+                    <div class="slide-tag">AKADEMİK & KANTİTATİF SEMİNER</div>
+                    <h1 class="slide-title">${slide.title}</h1>
+                    ${slide.subtitle ? `<div class="slide-subtitle">${slide.subtitle}</div>` : ''}
+                    <div class="slide-meta">
+                        <div><strong>Sunum:</strong> ${deckData.author || 'Entropy AI'}</div>
+                        <div><strong>Kurum / Uzmanlık:</strong> ${deckData.institution || 'Finansal Mühendislik'}</div>
+                        ${deckData.date ? `<div><strong>Tarih:</strong> ${deckData.date}</div>` : ''}
+                    </div>
+                `;
+            } else if (slide.slide_type === 'two_column') {
+                card.className = "slide-container";
+                html = `
+                    <div>
+                        <div class="slide-tag">MİKROYAPI ANALİTİĞİ</div>
+                        <h2 class="slide-title">${slide.title}</h2>
+                        ${slide.subtitle ? `<div class="slide-subtitle">${slide.subtitle}</div>` : ''}
+                    </div>
+                    <div class="slide-body">
+                        ${slide.equations && slide.equations.length ? slide.equations.map(eq => `<div class="equation-box">$$${eq}$$</div>`).join('') : ''}
+                        <div class="two-cols">
+                            <div class="col-card">
+                                <div class="col-title">${slide.left_title || 'Teorik Çerçeve'}</div>
+                                <ul class="bullet-list">
+                                    ${(slide.left_column || []).map(b => `<li class="bullet-item"><span class="bullet-dot"></span><span>${b}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                            <div class="col-card">
+                                <div class="col-title">${slide.right_title || 'Piyasa Yorumu'}</div>
+                                <ul class="bullet-list">
+                                    ${(slide.right_column || []).map(b => `<li class="bullet-item"><span class="bullet-dot"></span><span>${b}</span></li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                        ${slide.callout ? `<div class="callout-box"><span>💡</span><span>${slide.callout}</span></div>` : ''}
+                    </div>
+                    <div class="slide-footer">
+                        <span>${deckData.title}</span>
+                        <span>Slayt ${currentSlideIndex + 1}</span>
+                    </div>
+                `;
+            } else {
+                card.className = "slide-container";
+                html = `
+                    <div>
+                        <div class="slide-tag">KANTİTATİF FORMÜLASYON</div>
+                        <h2 class="slide-title">${slide.title}</h2>
+                        ${slide.subtitle ? `<div class="slide-subtitle">${slide.subtitle}</div>` : ''}
+                    </div>
+                    <div class="slide-body">
+                        ${slide.equations && slide.equations.length ? slide.equations.map(eq => `<div class="equation-box">$$${eq}$$</div>`).join('') : ''}
+                        <ul class="bullet-list">
+                            ${(slide.bullets || []).map(b => `<li class="bullet-item"><span class="bullet-dot"></span><span>${b}</span></li>`).join('')}
+                        </ul>
+                        ${slide.callout ? `<div class="callout-box"><span>📌</span><span>${slide.callout}</span></div>` : ''}
+                    </div>
+                    <div class="slide-footer">
+                        <span>${deckData.title}</span>
+                        <span>Slayt ${currentSlideIndex + 1}</span>
+                    </div>
+                `;
+            }
+
+            card.innerHTML = html;
+
+            // Trigger KaTeX render
+            if (window.renderMathInElement) {
+                renderMathInElement(card, {
+                    delimiters: [
+                        {left: '$$', right: '$$', display: true},
+                        {left: '$', right: '$', display: false}
+                    ],
+                    throwOnError: false
+                });
+            }
+        }
+
+        function nextSlide() {
+            if (currentSlideIndex < deckData.slides.length - 1) {
+                currentSlideIndex++;
+                updateSlide();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlideIndex > 0) {
+                currentSlideIndex--;
+                updateSlide();
+            }
+        }
+
+        function toggleNotes() {
+            notesVisible = !notesVisible;
+            document.getElementById('notes-drawer').style.display = notesVisible ? 'block' : 'none';
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            } else {
+                document.exitFullscreen().catch(() => {});
+            }
+        }
+
+        // Keyboard navigation
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                prevSlide();
+            } else if (e.key === 'Home') {
+                currentSlideIndex = 0;
+                updateSlide();
+            } else if (e.key === 'End') {
+                currentSlideIndex = deckData.slides.length - 1;
+                updateSlide();
+            } else if (e.key === 'f' || e.key === 'F') {
+                toggleFullscreen();
+            } else if (e.key === 'n' || e.key === 'N') {
+                toggleNotes();
+            }
+        });
+
+        // Touch swipe navigation
+        let touchStartX = 0;
+        window.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+        });
+        window.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].screenX;
+            if (touchStartX - touchEndX > 50) nextSlide();
+            if (touchEndX - touchStartX > 50) prevSlide();
+        });
+
+        // Initial setup
+        window.addEventListener('load', () => {
+            updateSlide();
+        });
+    </script>
+</body>
+</html>

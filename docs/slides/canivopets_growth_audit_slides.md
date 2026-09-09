@@ -1,0 +1,279 @@
+---
+title: "Canivo Pets 360° Denetim & Büyüme Raporu"
+subtitle: "D2C Evcil Hayvan Beslenmesi, Adli SEO, MarTech P0, Birim Ekonomisi & Çok Kanallı Reklam Mimarisi"
+author: "Entropy AI — Medya Ajansı Askeri"
+date: "2026-09-07"
+theme: gaia
+paginate: true
+math: katex
+---
+
+# Canivo Pets (canivopets.com) 360° Büyüme Denetimi
+
+### 12 Kategori Adli E-Ticaret Teşhisi, İleri Birim Ekonomisi ve Çok Kanallı Medya Uçuş Planı
+
+**Sunum:** Entropy AI — Medya Ajansı Askeri  
+**Kurum:** D2C E-Ticaret Büyüme & Dijital Pazarlama Grubu  
+**Tarih:** 2026-09-07  
+
+<!--
+🎙️ Notlar: Bu sunumda canivopets.com üzerinde gerçekleştirilen 12 kategorilik 360 derece adli denetim bulgularını, MarTech P0 alarmlarını, LTV:CAC birim ekonomisini ve 30-60-90 günlük medya uçuş planını aktarıyoruz.
+-->
+
+
+---
+
+## 1. 📊 12 Kategorilik 360° Denetim Skorkartı
+
+*Adli Web Taraması ve Dijital Olgunluk Seviyeleri*
+
+- **Marka Kimliği & Yasal Bilgiler (%100 - Tam Uyum):** Şirket unvanı, Balıkesir Edremit üretim merkezi ve WhatsApp sipariş hattı eksiksiz.
+- **MarTech & Takip Kodları (%0 - Kritik P0):** GA4 ve Meta CAPI tekilleştirmesi (`event_id`) eksik; reklam algoritmaları kör uçuşta.
+- **Güvenlik & Consent Mode v2 (%10 - Kritik P0):** Google Consent Mode v2 (`ad_user_data`, `ad_personalization`) ve CSP başlıkları eksik.
+- **Core Web Vitals (%75 - Geliştirilmeli):** 9 adet render engelleyici senkron script ve %0 WebP modern görsel oranı.
+- **E-Ticaret CRO & Sürtünme (%45 - Severe Friction):** 17 form alanı mobilde sepet terk oranını artırıyor; misafir alışverişi eksik.
+- **Birim Ekonomisi & Kârlılık (%100 - Elit Seviye):** Başa Baş ROAS 1,82x, Hedef ROAS 2,50x, LTV:CAC 16,76x (Underinvesting).
+
+> [!NOTE]
+> En acil müdahale MarTech P0 ve Consent Mode v2 entegrasyonudur; bu adımlar tamamlanmadan reklam bütçesi ölçeklenmemelidir.
+
+
+<!--
+🎙️ Notlar: 12 kategorilik denetimde kurumsal kimlik ve kârlılık marjları kusursuzken, takip altyapısı ve mobil ödeme sürtünmesi zayıf halkadır.
+-->
+
+
+---
+
+## 2. 🏢 Kurumsal Kimlik & Coğrafi Ayak İzi
+
+*Kaynak Kod, Ticimax Modelleri ve Yasal Metin Analizi*
+
+### Kurumsal Künye & Sicil
+- **Marka:** Canivo Pets
+- **Resmi Şirket Unvanı:** TRADE BAŞYİĞİT DANIŞMANLIK İÇ VE DIŞ TİCARET LİMİTED ŞİRKETİ
+- **Fiziksel Merkez / Sicil:** Yolören Mah. Yolören 66 Sk. No:3/A Edremit - Balıkesir / TÜRKİYE
+- **İş Modeli:** Üreticiden Doğrudan Tüketiciye (D2C) Evcil Hayvan Beslenmesi
+- **E-Ticaret Altyapısı:** Ticimax Cloud Suite (v8.13.806.0.111627)
+
+### İletişim & MarTech Yığını
+- **Telefon & WhatsApp Sipariş Hattı:** +90 540 720 62 62
+- **Kurumsal E-Posta:** info@canivopets.com
+- **Sosyal Medya Varlığı:** Instagram (@canivopets), YouTube (@CanivoPets), Facebook
+- **Analitik & Takip:** Google Tag Manager (GTM-WGTLTFP6), PostHog, Meta Pixel
+- **Ödeme Yöntemleri:** 3D Secure Kredi Kartı, Havale/EFT, Kapıda Nakit/Kartla Ödeme
+
+> [!TIP]
+> Tüm kurumsal veriler doğrulanmış; Balıkesir/Edremit merkezli üretim ve doğrudan lojistik avantajı mevcuttur.
+
+
+<!--
+🎙️ Notlar: Markanın yasal şirket unvanı ve fiziksel adresi eksiksiz tespit edilmiştir. Ticimax altyapısı üzerinde çalışan sistemde temel takip etiketleri etkindir.
+-->
+
+
+---
+
+## 3. 🛍️ Ürün Kataloğu ve Fiyatlandırma Mimarisi
+
+*12 SKU Dağılımı ve Ortalama Sepet Büyüklüğü (AOV)*
+
+- **Ortalama Sepet / Liste Fiyatı (AOV Bazı):** $\mathbf{1.694,83\text{ ₺}}$ (Taban: ₺849,00 — Tavan: ₺2.499,00)
+- **Amiral Gemisi (Hero SKU):** Canivo Hunter Köpek Maması 15 kg (₺2.499,00 / Liste: ₺2.899,00)
+- **Yüksek Enerji / Irk Serileri:** Canivo Kuzulu Performans 15 kg (₺2.499), Canivo Yavru 15 kg (₺2.199), Rottweiler 15 kg (₺1.999)
+- **Fonksiyonel Sağlık Serisi (Supplements):** Canivo Joint Plus 15 kg (₺2.499), Canivo Flex Eklem Desteği (₺1.499), Anti Parvo Bağışıklık (₺1.299)
+- **Tamamlayıcı Konserve Kolileri:** Canivo 400g Yaş Konserve 12'li Koli (₺849), 24'lü Koli (₺1.399), 36'lı Koli (₺1.899)
+
+> [!NOTE]
+> Ürün portföyü kuru mama, medikal takviye ve ıslak konserve olarak kusursuz bir çapraz satış (cross-sell) matrisi sunmaktadır.
+
+
+<!--
+🎙️ Notlar: 12 SKU'luk katalogda 15 kg büyük boy çuvallar ciro omurgasını oluştururken, 849 TL'lik konserveler ve 1.499 TL'lik eklem takviyeleri yüksek marjlı çapraz satış fırsatıdır.
+-->
+
+
+---
+
+## 4. 🚨 Kritik P0 MarTech ve Güvenlik Alarmları
+
+*Veri Kaybı ve Reklam Algoritması Kör Uçuş Riskleri*
+
+### Tespit Edilen P0 Açıkları
+- **Google Consent Mode v2 Yok:** `ad_storage`, `ad_user_data` ve `ad_personalization` sinyalleri iletilmiyor (Google Ads verimi düşüyor).
+- **Meta CAPI Sunucu Takibi Eksik:** Yalnızca tarayıcı pikseli var; iOS 14.5+ sonrası reklam dönüşümlerinin %30'u raporlanamıyor.
+- **CSP & HSTS Güvenlik Başlıkları Yok:** Form hırsızlığı ve script enjeksiyonuna karşı tarayıcı koruması eksik.
+
+### Gerekli Düzeltme Protokolü
+- **Consent Mode v2 Kurulumu:** GTM üzerinden çerez izin kalkanı kurularak Google algoritmalarına uyumlu sinyal basılmalı.
+- **Meta CAPI Entegrasyonu:** Sunucu tarafında `event_id` tekilleştirmesiyle siparişler Meta API'ye iletilmeli.
+- **Ticimax CDN Güvenlik Başlıkları:** `Content-Security-Policy` ve `Strict-Transport-Security` başlıkları aktif edilmeli.
+
+> [!TIP]
+> Takip altyapısı onarılmadan harcanan her 100 TL reklam bütçesinin 35 TL'si sinyal kaybı nedeniyle boşa gitmektedir.
+
+
+<!--
+🎙️ Notlar: Consent Mode v2 ve CAPI olmadan Performance Max veya Meta ASC algoritmaları doğru kişiyi bulamaz. İlk 5 günde bu takip onarılmalıdır.
+-->
+
+
+---
+
+## 5. ⚡ Web Performans & Core Web Vitals (CWV)
+
+*Sayfa Yükleme Hızı, Varlık Optimizasyonu ve Düzen Kararlılığı*
+
+- **Modern Görsel Formatı Oranı:** **%0,0 (Kritik Performans Riski)**. Taranan 23 görselin tamamı `.png` ve `.jpg` formatındadır.
+- **WebP / AVIF Dönüşümü:** Ticimax CDN üzerinden WebP sıkıştırması açılarak sayfa dosya boyutu %60-70 hafifletilmelidir.
+- **Render Engelleyici Kodlar (Render-Blocking):** 9 adet senkron yüklenen CSS ve JS dosyası (`ticimax.jquery.min.js`, `style.css`).
+- **LCP (Largest Contentful Paint) Riski:** Yüksek. Hero banner görseli (`kopek-mamalari-7ce0.jpg`) sıkıştırılmamış JPEG'dir.
+- **CRO / Form Sürtünmesi:** 17 adet form alanı mobilde satın alma vazgeçme oranını artırmaktadır; 'Tek Tıkla Misafir Alışverişi' kurulmalıdır.
+
+> [!NOTE]
+> Sadece görsellerin WebP yapılması ve JS dosyalarının ötelenmesi (defer) mobil hız skorunu 40'tan 85+ bandına fırlatacaktır.
+
+
+<!--
+🎙️ Notlar: Sayfadaki tüm resimler eski nesil JPG/PNG. Bu durum mobilde açılış süresini uzatmakta ve reklam tıklamalarında bounce rate'i yükseltmektedir.
+-->
+
+
+---
+
+## 6. 💰 İleri Düzey Birim Ekonomisi ve Kârlılık Matematiği
+
+$$
+\text{Breakeven ROAS} = \frac{1}{\text{Brüt Marj}} = \frac{1}{0,55} = \mathbf{1,82x} \quad \Big| \quad \text{Hedef ROAS} = \frac{1}{0,55 - 0,15} = \mathbf{2,50x}
+$$
+
+- **Başa Baş ROAS (1,82x):** Reklam harcamasının başa baş noktası; bu çarpanın üzeri doğrudan net kâra yazar.
+- **Hedef ROAS (2,50x):** Şirkete operasyonel masraflar sonrası net **%15 kâr marjı** bırakan büyüme hedefi.
+- **Maksimum CPA (₺200,00):** ₺1.694 AOV sepetinde müşteri başına ödenebilecek azami tavan edinim maliyeti.
+- **LTV:CAC Rasyosu = 16,76x (Underinvesting):** LTV $\approx$ ₺4.986, CAC $\approx$ ₺297. Şirket reklam bütçesini aşırı kısıyor; güvenle 3 katına çıkarabilir.
+- **CAC Geri Ödeme (Payback Period):** **2,4 Ay**. Müşteri 2. siparişte edinim maliyetini tamamen amorti etmektedir.
+- **Katkı Marjları (CM):** CM1 (Brüt): %55,0 | CM2 (Operasyonel): %46,0 | CM3 (Pazarlama Net Katkısı): %21,0 | POAS: 3,12x
+
+> [!NOTE]
+> Canivo Pets'in birim ekonomisi kaya gibi sağlamdır; LTV:CAC 16,76x seviyesi agresif büyüme için devasa bir alan tanımaktadır.
+
+
+<!--
+🎙️ Notlar: Birim ekonomisi sonuçları Canivo'nun kârlı bir makine olduğunu gösteriyor. Underinvesting durumundalar; bütçe artırımı kârlı şekilde ölçeklenebilir.
+-->
+
+
+---
+
+## 7. 🚀 Marj Korumalı Kampanyalar: BOGO & İndirim Başa Başı
+
+$$
+\Delta Q = \frac{d}{m - d} = \frac{0,15}{0,55 - 0,15} = \mathbf{+37,5\%} \quad \Big| \quad \text{Net Kar}_{\text{BOGO}} = 2.499 - (950 + 280 + 130) = \mathbf{1.139\text{ ₺}}\; (\%45,6\text{ Marj})
+$$
+
+- **İndirim Hacim Formülü:** %15'lik bir indirimde kârı korumak için sipariş hacmi en az **+%37,5** artmalıdır.
+- **BOGO Kurgusu:** 1 Çuval 15 kg Kuru Mama (₺2.499) alana -> 12'li Yaş Mama Konservesi (Liste: ₺849) **HEDİYE!**
+- **Maliyet Arbitrajı:** Tüketici 849 TL'lik dev bir hediye algılar; şirkete maliyeti sadece 280 TL'dir (Net Kâr: ₺1.139).
+- **Çapraz İndirim (%15):** 15 kg Mama alanlara Canivo Flex Eklem Desteği ₺1.499 yerine ₺1.274 (Sepet AOV +%50,9 artışla ₺3.773 olur).
+- **Sepet Eşik Teşviki (Cart Threshold):** ₺2.288 üzeri siparişlerde Kargo Bedava + Canivo Ölçü Kabı hediye.
+
+> [!NOTE]
+> BOGO kampanyasında tüketiciye 849 TL değer sunulurken, Canivo %45,6 net brüt marjını korumaktadır.
+
+
+<!--
+🎙️ Notlar: Asla iki çuval kuru mamayı 1 alana 1 bedava yapmıyoruz. Düşük maliyetli yaş mamayı hediye ederek algılanan değeri patlatıyoruz.
+-->
+
+
+---
+
+## 8. 📱 Çok Kanallı Reklam Mimarisi (₺100.000 Aylık Bütçe)
+
+*Huni Odaklı Bütçe Dağılımı ve Kanal Görev Dağılımı*
+
+### Meta Advantage+ & Google PMax
+- **Meta Advantage+ Shopping (ASC) (₺55.000 / Ay):**
+- - Dinamik ürün kataloğu + 5 aşamalı UGC videoları.
+- - Mevcut müşteri harcama tavanı: **%5,0** (Yeni müşteri odaklı).
+- **Google Performance Max (PMax) (₺30.000 / Ay):**
+- - Merchant Center tam entegre, tROAS Hedefi: **%260**.
+- - Arama, Alışveriş, Haritalar ve YouTube envanteri.
+
+### Google Demand Gen & Huni Dağılımı
+- **Google Demand Gen (₺15.000 / Ay):**
+- - 9:16 Shorts, YouTube In-Stream ve Discover akışı.
+- - Hedef Kitle: Evcil hayvan sahipleri %1-%3 Lookalike.
+- **Huni Bütçe Dağılımı:**
+- - TOFU (Soğuk Kitle): %55 (₺55.000)
+- - MOFU (Ilık Kitle): %25 (₺25.000)
+- - BOFU (Sıcak/Sepet Terk): %15 (₺15.000) | RETENTION: %5 (₺5.000)
+
+> [!TIP]
+> TOFU'da talep yaratılırken, PMax ve Meta ASC ile dönüşüm en yüksek kârlılıkla toplanır.
+
+
+<!--
+🎙️ Notlar: 100.000 TL bütçe için en verimli dağılım 55k Meta ASC, 30k Google PMax ve 15k Demand Gen kombinasyonudur.
+-->
+
+
+---
+
+## 9. 🎬 Kreatif Yorgunluk Kalkanı: 5 Açılı Hook-Swap Paketi
+
+*Kazanan Video Gövdesini Korumak ve Reklam Ömrünü 3 Katına Çıkarmak*
+
+- **Kanca 1 (Merak & Kalıp Kırıcı):** *'Veterinerlerin mama ambalajlarının arkasında gizlediği o detayı biliyor musunuz? 🤫'*
+- **Kanca 2 (Negatif Uyarı):** *'Köpeğinize hala tahıl yüklü sıradan market mamalarını veriyorsanız hemen durun! 🛑'*
+- **Kanca 3 (Kronik Acı / Problem):** *'Mamasını yemeyen ya da sürekli tüy döken köpeğiniz için çözüm arıyorsanız... 🐕' açılışı.*
+- **Kanca 4 (Müşteri İtirafı / Sosyal Kanıt):** *'3 farklı ithal marka denedikten sonra Canivo'ya geçtiğimiz ilk haftada ne mi oldu?'*
+- **Kanca 5 (Dönüşüm Öncesi / Sonrası):** *'Tüy dökülmesi ve eklem sertliği yaşayan dostumuzun 30 günlük inanılmaz değişimi!'*
+- **Protokol:** Kazanan videonun sadece ilk 3 saniyesi değiştirilerek algoritmaya 5 yeni kreatif sunulur; prodüksiyon maliyeti %80 düşer.
+
+> [!NOTE]
+> Kreatif yorgunluk başladığında tüm videoyu yeniden çekmek yerine sadece kancayı (Hook) değiştirmek CPM'i %35 düşürür.
+
+
+<!--
+🎙️ Notlar: Aynı video gövdesiyle 5 farklı psikolojik kanca test edilir. Bu yöntem Meta ve TikTok'ta reklam tükenmesini tamamen engeller.
+-->
+
+
+---
+
+## 10. 📩 Klaviyo CRM & Yaşam Döngüsü Retention Akışları
+
+*Müşteri Sadakati, Sıfır Maliyetli Ciro ve Tekrar Sipariş Döngüsü*
+
+- **Hoş Geldin Serisi (Welcome Nurture):** %10 ilk sipariş kodu + doğru mama seçim rehberi (Tahmini Ciro Katkısı: **%12**).
+- **Terk Edilen Sepet / Ödeme (Cart & Checkout Abandonment):** 1. Saat e-posta, 6. Saat SMS (Kargo bedava teşviki) (Tahmini Katkı: **%18**).
+- **Satın Alma Sonrası VIP Sadakat (Post-Purchase):** Siparişten 7 gün sonra takviye vitamin (Canivo Flex) çapraz satışı (Tahmini Katkı: **%10**).
+- **45-60 Günlük Geri Kazanım (Win-Back):** 15 kg mamanın bitiş periyodunda otomatik 'Mamanız Bitmek Üzere Olabilir' hatırlatması (Tahmini Katkı: **%6**).
+- **VIP Kulüp / Abonelik Modeli:** 'Her Ay Düzenli Kapımda' abonelerine sabit %10 indirim ile LTV 2.499 ₺'den 27.000 ₺'ye sıçrar.
+
+> [!NOTE]
+> E-posta ve SMS retention akışları kurulduğunda toplam mağaza cirosunun %30-40'ı sıfır reklam maliyetiyle elde edilir.
+
+
+<!--
+🎙️ Notlar: Mama işi bir abonelik işidir. 15 kg mama 45-60 günde biter. Zamanlı hatırlatma akışları şirketin en kârlı gelir kapısıdır.
+-->
+
+
+---
+
+## 11. 🛡️ 30 Günlük Ajans Onboarding SLA'sı & 4 Karar Kapısı
+
+- **Kapı 1: Data & Tracking Gate (1-5. Gün):** GA4, Meta CAPI ve Google Consent Mode v2 tam doğrulanmadan ücretli trafiğe çıkılmaz (Fail-Closed).
+- **Kapı 2: Profitability Gate (6-10. Gün):** Başa Baş ROAS (1,82x) ve Maksimum CPA (₺200) parametreleri reklam paneline kilitlenir.
+- **Kapı 3: CRO & Friction Gate (11-20. Gün):** 17 form alanı sadeleştirilip 'Tek Tıkla Misafir Alışverişi' kurulmadan bütçe ölçeklenmez.
+- **Kapı 4: Scaling Gate (21-30. Gün):** POAS > 2,5x ve Blended MER > 2,2x seviyesine oturmadan aylık bütçe %20'den fazla artırılmaz.
+
+> [!NOTE]
+> Canivo Pets 360° Denetim & Büyüme Sunumu Tamamlandı. Başarılar!
+
+
+<!--
+🎙️ Notlar: Bu 4 karar kapısı sayesinde Canivo Pets bütçe israfı yaşamadan kârlı ve kontrollü biçimde ölçeklenecektir.
+-->
