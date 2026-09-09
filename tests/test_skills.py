@@ -152,10 +152,11 @@ def test_zen_mode_skills_tab_and_pdf(qapp, tmp_path, monkeypatch):
     zen = ZenModeWindow(bridge=bridge)
     zen.show()
 
-    # Verify 4 tabs in left dock
-    assert zen.left_tabs.count() == 4
+    # Sol dock sekmeleri: Raporlar, Yetenekler, Görevler, MCP, Ajanlar
     tab_names = [zen.left_tabs.tabText(i) for i in range(zen.left_tabs.count())]
-    assert any("Yetenekler" in t for t in tab_names)
+    for expected in ("Raporlar", "Yetenekler", "Görevler", "MCP", "Ajanlar"):
+        assert any(expected in t for t in tab_names), f"{expected} sekmesi yok: {tab_names}"
+    assert zen.left_tabs.count() == 5
     assert hasattr(zen, "skills_widget")
     assert hasattr(zen, "chat_pdf_btn")
 

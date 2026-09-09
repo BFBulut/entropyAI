@@ -65,6 +65,14 @@ class EntropyEventBus(QObject):
     reports_updated = Signal(str)        # skill_name veya ""
     distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor
 
+    # Ajanlar ve görev kartları: kaynak dosyalar kasada (Entropy/Agents,
+    # Entropy/Tasks) ve onları Entropy, kullanıcı (Obsidian) ve harici CLI'lar
+    # birlikte yazıyor. Panellerin diski yoklamak yerine haber alması için
+    # değişimde bu sinyaller yayılır; argüman etkilenen ajan adı / kart kimliği
+    # ("" = birden çok ya da bilinmiyor).
+    agents_updated = Signal(str)         # ajan tanımı eklendi/değişti/silindi
+    task_cards_updated = Signal(str)     # görev kartı eklendi/değişti/silindi
+
     # İşçi iş parçacıklarından ana iş parçacığına iş taşır. Alıcı bir QObject slotu
     # olduğu için bağlantı kuyruklu olur; lambda alıcı olsaydı doğrudan işçide
     # koşar ve Qt nesnelerine oradan dokunulurdu.

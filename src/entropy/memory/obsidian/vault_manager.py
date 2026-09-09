@@ -21,6 +21,24 @@ _GRAPH_CACHE_MAX_VAULTS = 3
 _GRAPH_MEMORY_CACHE: Dict[str, Tuple[str, Dict[str, List[Dict[str, str]]]]] = {}
 
 
+def _query_page_skill(file: Path) -> Optional[str]:
+    """
+    Dosya bir wiki sorgu sayfasiysa ait oldugu yetenegi dondurur.
+
+    Yetenek disi (kasa geneli) sorgular icin bos dize, sorgu sayfasi degilse
+    None doner. Yol kurali: Skills/<yetenek>/wiki/queries/*.md ya da
+    Wiki/queries/*.md (bkz. entropy.memory.wiki).
+    """
+    parents = file.parents
+    if len(parents) < 2 or parents[0].name.lower() != "queries":
+        return None
+    if parents[1].name.lower() != "wiki":
+        return None
+    if len(parents) >= 3 and parents[2].name.lower() not in ("entropy", "skills"):
+        return parents[2].name
+    return ""
+
+
 def _graph_disk_cache_enabled() -> bool:
     raw = (os.environ.get("ENTROPY_GRAPH_CACHE") or "").strip().lower()
     return raw not in ("0", "false", "no", "off")
@@ -453,9 +471,16 @@ class ObsidianVaultManager:
         node_ids: Set[str] = set()
         stem_to_id: Dict[str, str] = {}
 
+        query_skill_links: List[Tuple[str, str]] = []
+
         for file in files:
             name = file.stem
             category = file.parent.name
+            skill_of_query = _query_page_skill(file)
+            if skill_of_query is not None:
+                # Wiki sorgu sayfalari kendi grubunda gosterilir; boylece UI
+                # onlari rapor/yetenek dugumlerinden ayirt edebilir.
+                category = "query"
             node_id = f"{category}/{name}"
             stem_to_id[name] = node_id
 
@@ -467,6 +492,18 @@ class ObsidianVaultManager:
                     "group": category,
                     "path": str(file)
                 })
+
+            if skill_of_query:
+                skill_id = f"skill/{skill_of_query}"
+                if skill_id not in node_ids:
+                    node_ids.add(skill_id)
+                    nodes.append({
+                        "id": skill_id,
+                        "name": skill_of_query,
+                        "group": "skill",
+                        "path": str(file.parents[2]),
+                    })
+                query_skill_links.append((node_id, skill_id))
 
         for file in files:
             source_id = stem_to_id.get(file.stem, f"{file.parent.name}/{file.stem}")
@@ -487,6 +524,16 @@ class ObsidianVaultManager:
                     })
             except Exception:
                 continue
+
+        # Sorgu sayfasi -> yetenek dugumu baglantilari. Wikilink taramasindan
+        # bagimsizdir: sayfa yetenege dosya yolundan aittir, metinden degil.
+        for source_id, skill_id in query_skill_links:
+            links.append({
+                "source": source_id,
+                "target": skill_id,
+                "alias": "skill",
+                "is_catalog_link": False,
+            })
 
         data = {"nodes": nodes, "links": links}
         _GRAPH_MEMORY_CACHE[vault_key] = (signature, data)

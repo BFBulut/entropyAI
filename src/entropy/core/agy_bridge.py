@@ -370,174 +370,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             pass
         return config.available_models
 
-    def recent_user_turns(self, n: int = 2) -> List[str]:
-        """Son n kullanıcı mesajı; sınıflandırıcının anlamsal sorgusunu zenginleştirir."""
-        try:
-            turns = [m.get("content", "") for m in self.conversation_history if m.get("role") == "user"]
-            return [t for t in turns[-n:] if isinstance(t, str) and t.strip()]
-        except Exception:
-            return []
-
-    def detect_skill_for_prompt(self, prompt: str, sm=None):
-        """
-        Mesaj için yetenek seçer; konuşma bağlamını sınıflandırıcıya taşır.
-
-        Tüm çağrı noktaları (bağlam kurulumu, işçi, arayüz rozeti) buradan geçer;
-        böylece son yetenek önceliği ve geçmiş her yerde aynı biçimde uygulanır.
-        """
-        return self.score_skill_for_prompt(prompt, sm=sm)[0]
-
-    def score_skill_for_prompt(self, prompt: str, sm=None):
-        """
-        Yetenek kararı ve güven puanı (0–1); `bus.skill_detected` ile de yayınlanır.
-
-        Karar eşiğin altındaysa yetenek None döner ve güven 0,5'in altındadır;
-        arayüz tek sayıya bakarak "yetenek yok" ile "zayıf eşleşme"yi ayırt edebilir.
-        Eski yetenek yöneticileriyle (score_skill_for_prompt'u olmayan) çağrıldığında
-        yalnızca karar döner, güven 0,0 verilir.
-        """
-        if sm is None:
-            from entropy.skills.manager import SkillManager
-            sm = SkillManager(project_dir=getattr(self, "active_project_dir", None))
-        kwargs = dict(last_skill=self.last_active_skill, history=self.recent_user_turns(2))
-        scorer = getattr(sm, "score_skill_for_prompt", None)
-        if callable(scorer):
-            skill, confidence = scorer(prompt, **kwargs)
-        else:
-            skill, confidence = sm.auto_detect_skill_for_prompt(prompt, **kwargs), 0.0
-        self.last_skill_confidence = float(confidence)
-        try:
-            bus.skill_detected.emit(skill.name if skill else "", float(confidence))
-        except Exception:
-            pass
-        return skill, float(confidence)
-
-    # Bu eşiğin altında seçilen yetenek "zayıf karar" sayılır. 0,6 keyfi değil:
-    # score_skill_for_prompt seçilen kararları 0,5–1,0 aralığına yerleştirir, yani
-    # 0,6 seçilmiş ama eşiğin hemen üstünde kalmış ilk beşte birlik dilimdir.
-    LOW_CONFIDENCE_THRESHOLD = 0.6
-
-    def low_confidence_manifest_note(self, target_skill) -> str:
-        """
-        Zayıf yönlendirme kararında kataloğa eklenecek tek satırlık uyarı.
-
-        Neden: yönlendirici yanılıp yeteneği yine de zorladığında model, sanki
-        kullanıcı o yeteneği açıkça istemiş gibi davranıyor ve alakasız bir
-        yordamı uyguluyordu. Kararın zayıf olduğunu söylemek modele yeteneği
-        yok sayma iznini açıkça verir. Karar güçlüyse (veya yetenek yoksa) hiç
-        satır eklenmez: her turda enjekte edilen bir metin, gereksizken token
-        yakar ve güçlü kararları da sulandırır.
-        """
-        if target_skill is None:
-            return ""
-        if float(self.last_skill_confidence) >= self.LOW_CONFIDENCE_THRESHOLD:
-            return ""
-        return (
-            f"> Not: yetenek seçimi düşük güvenli "
-            f"({float(self.last_skill_confidence):.2f}); gerekiyorsa yeteneksiz yanıtla."
-        )
-
-    def last_decision_summary(self) -> Dict[str, object]:
-        """
-        Son yönlendirme kararının tek noktadan özeti (arayüz tüketimi için).
-
-        `/skills` gibi yerel komutlar ile rozet aynı sayıyı göstersin diye karar,
-        güven ve "zayıf mı" yargısı burada birleştirilir; eşik kopyalanırsa
-        arayüz ile prompt'a düşen not zamanla ayrışır.
-        """
-        conf = float(self.last_skill_confidence)
-        skill = self.last_active_skill
-        if not skill:
-            label = "yetenek yok"
-        elif conf < self.LOW_CONFIDENCE_THRESHOLD:
-            label = "zayıf eşleşme"
-        else:
-            label = "güçlü eşleşme"
-        return {
-            "skill": skill,
-            "confidence": round(conf, 4),
-            "low_confidence": bool(skill) and conf < self.LOW_CONFIDENCE_THRESHOLD,
-            "label": label,
-            "text": (f"Son karar: {skill} (güven {conf:.2f}, {label})"
-                     if skill else f"Son karar: yetenek yok (güven {conf:.2f})"),
-        }
-
-    def get_cognitive_context(self, prompt: str, target_skill=None, token_budget: int = None) -> str:
-        """
-        Ajana enjekte edilecek bilişsel bağlamı üretir.
-
-        Toplama işi CognitiveContextBuilder'a devredilmiştir. Önceki sürüm sabit
-        dilimler kullanıyordu (MEMORY.md'nin ilk 750 karakteri, ilk 2 raporun ilk
-        satırının ilk 180 karakteri, 4 anı). Bu seçim alakaya değil sıraya dayandığı
-        için kasadaki içeriğin yaklaşık %0,17'si ve çoğu ilgisiz kısmı gidiyordu.
-        Yeni yol, sabit bir token bütçesini öncelik sırasına göre doldurur:
-        yetenek yordamı (playbook) > ilgili anılar > rapor alıntıları > proje > kod.
-        """
-        # Kısa selamlaşmalar ağır bağlam enjeksiyonu gerektirmez.
-        is_greeting = prompt.strip().lower() in [
-            "selam", "selamlar", "merhaba", "merhabalar", "hey", "nasılsın",
-            "günaydın", "iyi akşamlar", "iyi geceler", "naber"
-        ]
-        if is_greeting and not target_skill:
-            return ""
-
-        if target_skill is None:
-            try:
-                from entropy.skills.manager import SkillManager
-                sm = SkillManager(project_dir=getattr(self, "active_project_dir", None))
-                target_skill = self.detect_skill_for_prompt(prompt, sm=sm)
-            except Exception:
-                pass
-
-        parts = []
-        try:
-            from entropy.memory.context_builder import CognitiveContextBuilder, DEFAULT_TOKEN_BUDGET
-
-            builder = CognitiveContextBuilder()
-            ctx = builder.build(
-                prompt,
-                skill_name=target_skill.name if target_skill else None,
-                token_budget=token_budget or DEFAULT_TOKEN_BUDGET,
-                project_dir=getattr(self, "active_project_dir", None),
-            )
-            self.last_context_summary = ctx.summary()
-            rendered = ctx.render()
-            if rendered.strip():
-                parts.append(rendered)
-        except Exception as e:
-            bus.terminal_output_received.emit(f"[Bağlam Kurulum Hatası]: {e}\n")
-
-        # Aktif yetenek kataloğu ayrı tutulur: bütçeye tabi değildir, çünkü ajanın
-        # hangi araçlara sahip olduğunu her turda eksiksiz bilmesi gerekir.
-        try:
-            from entropy.skills.manager import SkillManager
-            sm = SkillManager(project_dir=self.active_project_dir)
-            manifest = sm.get_skills_manifest(active_skill=target_skill.name if target_skill else None)
-            if manifest:
-                note = self.low_confidence_manifest_note(target_skill)
-                if note:
-                    manifest = f"{manifest}\n{note}"
-                parts.append(manifest)
-        except Exception:
-            pass
-
-        return "\n\n".join(parts)
-
-    def get_mini_cognitive_context(self, prompt: str, target_skill=None) -> str:
-        """Lightweight memory retrieval for follow-up turns."""
-        try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
-            cog = CognitiveMemorySystem()
-            q = f"{target_skill.name} {prompt}" if target_skill else prompt
-            recalled = cog.recall(q, limit=2)
-            if recalled:
-                items = [f"• {r.get('content', '')}" for r in recalled if r.get('content')]
-                if items:
-                    tag = f"Bağlamsal Hafıza ({target_skill.name})" if target_skill else "Bağlamsal Hafıza"
-                    return f"[{tag}]:\n" + "\n".join(items)
-        except Exception:
-            pass
-        return ""
+    # Yetenek çözümü, bilişsel bağlam ve karar özeti artık
+    # entropy.core.provider.ProviderCommonMixin'de: iki köprü de aynı mantığı
+    # paylaşsın diye taşındı (davranış birebir aynı).
 
     def find_agy_executable(self) -> str:
         """Locate agy CLI binary in system PATH or default Windows installation folders."""
@@ -626,78 +461,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     return extracted
         return None
 
-    def is_code_modifying_intent(self, prompt: str, mode: str = "accept-edits") -> bool:
-        """Determine whether a prompt intends to modify codebase files vs pure reading/conversation."""
-        if mode in ["code", "write", "mutate", "edit"]:
-            return True
-        if mode in ["plan", "read", "read-only"]:
-            return False
-
-        tr_map = str.maketrans("\u00e7\u011f\u0131\u00f6\u015f\u00fc\u00c7\u011e\u0130\u00d6\u015e\u00dc", "cgiosuCGIOSU")
-        prompt_norm = prompt.translate(tr_map).strip().lower()
-
-        # Check explicit commands
-        if any(prompt_norm.startswith(cmd) for cmd in ["/edit", "/write", "/create", "/fix", "/patch"]):
-            return True
-
-        # Check for informational or conversational questions
-        q_pattern = (
-            r"\b(?:selam|merhaba|hey|nasilsin|gunaydin|iyi aksamlar|kimsin|"
-            r"nedir|nasil|ne demek|acikla|ozetle|oku|goster|listele|"
-            r"what is|how does|how to|explain|summarize|read|show|list|who are)\b"
-        )
-        is_conversational = bool(re.search(q_pattern, prompt_norm))
-        if is_conversational:
-            has_modifying_directive = any(re.search(rf"\b{w}", prompt_norm) for w in [
-                "uygula", "kodunu yaz", "kodu yaz", "degisikligi yap", "degisiklikleri yap",
-                "dosyayi guncelle", "dosyalari guncelle", "apply", "commit", "save", "fix this", "duzelt"
-            ])
-            if not has_modifying_directive:
-                return False
-
-        modifying_patterns = [
-            # Turkish verbs with conjugated suffixes (e.g. guncelleyelim, yapalim, ekleyelim, duzeltelim...)
-            r"\bguncel(?:le|leme)",
-            r"\bdegis(?:tir|iklik)",
-            r"\bolustur",
-            r"\bduzelt",
-            r"\bduzenle",
-            r"\bekle",
-            r"\bsil(?:me|elim|iniz|dir)?\b",
-            r"\bkodla(?:ma|mak|yalim|yiniz|r misin|rmisin|\b)",
-            r"\buygula",
-            r"\brefakt?or",
-            r"\byaz(?:alim|iniz|dir|ar misin|armisin|alim mi|\b)",
-            r"(?:guncelleme|degisiklik|duzeltme|ekleme|refactor).*\byap(?:alim|iniz|ar misin|armisin|\b)",
-            r"\byap(?:alim|iniz|ar misin|armisin)?\b.*(?:guncelleme|degisiklik|duzeltme|ekleme|refactor)",
-            # English verbs
-            r"\b(?:write|writing|rewrite)\b",
-            r"\b(?:edit|editing)\b",
-            r"\b(?:modify|modifying|modification)\b",
-            r"\b(?:update|updating)\b",
-            r"\b(?:create|creating)\b",
-            r"\b(?:delete|deleting|remove|removing)\b",
-            r"\b(?:fix|fixing)\b",
-            r"\b(?:implement|implementing)\b",
-            r"\b(?:patch|patching)\b",
-            r"\b(?:refactor|refactoring)\b",
-            r"\b(?:add|adding)\b",
-            r"\b(?:overwrite|overwriting)\b",
-        ]
-
-        for pat in modifying_patterns:
-            if re.search(pat, prompt_norm):
-                return True
-
-        compound_patterns = [
-            r"(?:dosya|class|fonksiyon|script|test|kodu|modul)\s+(?:yaz|olustur|degistir|ekle|sil|duzelt|guncelle)",
-            r"(?:write|create|edit|modify|add|delete|update)\s+(?:file|class|function|script|code)",
-        ]
-        for cp in compound_patterns:
-            if re.search(cp, prompt_norm):
-                return True
-
-        return False
+    # is_code_modifying_intent artık ProviderCommonMixin'de: proje kilidinin
+    # okuma mı yazma mı alınacağını iki köprü de aynı kurala göre kararlaştırır.
 
     def _truncate_and_summarize_context(self) -> List[Dict[str, str]]:
         """Apply sliding window context truncation (RULE: agent-ui-routing)."""
@@ -1459,7 +1224,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 system_directive += "\n" + "\n".join(slash_directives) + "\n"
 
             if cognitive_context:
-                system_directive += f"\n{cognitive_context[:6000]}\n"
+                # Kırpma bağlamın SONUNU keser; ajan kataloğu orada duruyor ve
+                # sessizce düşüyordu. Kırpılmışsa geri eklenir: ajanları bilmeyen
+                # bir tur işi devretmeyi hiç öneremez.
+                if len(cognitive_context) > 6000:
+                    agents_section = self.agents_manifest_section()
+                    cognitive_context = cognitive_context[:6000]
+                    if agents_section and agents_section not in cognitive_context:
+                        cognitive_context = f"{cognitive_context}\n\n{agents_section}"
+                system_directive += f"\n{cognitive_context}\n"
 
             # Inject recent chat history summary if starting a fresh session
             if self.conversation_history:

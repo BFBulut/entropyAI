@@ -35,6 +35,8 @@ from entropy.ui.widgets.skills_widget import SkillsWidget
 from entropy.ui.widgets.notification_pill import NotificationPillWidget
 from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
+from entropy.ui.widgets.agents_widget import AgentsWidget
+from entropy.ui.widgets.task_board_widget import TaskBoardWidget
 
 class ZenModeWindow(QMainWindow):
     """Zen Mode: Borderless fullscreen immersive AI engineering environment."""
@@ -98,6 +100,22 @@ class ZenModeWindow(QMainWindow):
 
         h_layout.addStretch()
 
+        # Sağlayıcı seçici — Chat kipiyle birebir aynı davranış (mod paritesi).
+        provider_tag = QLabel("<span style='color:#8B949E; font-size:11px; font-weight:bold;'>Sağlayıcı:</span>")
+        provider_tag.setStyleSheet("background: transparent; border: none;")
+        h_layout.addWidget(provider_tag)
+
+        self.provider_combo = QComboBox()
+        self.provider_combo.setToolTip("Sağlayıcı (CLI): agy = Antigravity, claude = Claude Code")
+        from entropy.core.provider import PROVIDERS as _PROVIDERS
+        for _p in _PROVIDERS:
+            self.provider_combo.addItem(_p)
+        self.provider_combo.setCurrentText(getattr(self.bridge, "provider_name", "agy"))
+        self.provider_combo.currentTextChanged.connect(self._on_provider_selected)
+        h_layout.addWidget(self.provider_combo)
+
+        h_layout.addSpacing(6)
+
         # Dynamic Model Selector Combo (RULE: agent-ui-models)
         model_tag = QLabel("<span style='color:#8B949E; font-size:11px; font-weight:bold;'>Model:</span>")
         model_tag.setStyleSheet("background: transparent; border: none;")
@@ -130,6 +148,11 @@ class ZenModeWindow(QMainWindow):
             }}
         """)
         h_layout.addWidget(self.tokens_badge)
+
+        # Bağlam doluluk rozeti: %60 üstünde turuncu + /handoff ipucu.
+        self.context_badge = QLabel("Bağlam: %0")
+        h_layout.addWidget(self.context_badge)
+        self._apply_context_badge()
 
         h_layout.addSpacing(8)
 
@@ -182,10 +205,27 @@ class ZenModeWindow(QMainWindow):
         self.mcp_drawer = MCPDrawerWidget()
         self.tasks_widget = TasksWidget(parent=self, bridge=self.bridge)
         self.skills_widget = SkillsWidget(bridge=self.bridge)
+        self.agents_widget = AgentsWidget(bridge=self.bridge)
+
+        # Görevler sekmesi iki bölüm: üstte ajan görev panosu (kanban),
+        # altta mevcut zamanlanmış görev listesi. İkisi de aynı yerde kalır.
+        self.task_board_widget = TaskBoardWidget()
+        tasks_tab = QWidget()
+        tasks_tab_layout = QVBoxLayout(tasks_tab)
+        tasks_tab_layout.setContentsMargins(0, 0, 0, 0)
+        tasks_tab_layout.setSpacing(6)
+        tasks_split = QSplitter(Qt.Orientation.Vertical)
+        tasks_split.addWidget(self.task_board_widget)
+        tasks_split.addWidget(self.tasks_widget)
+        tasks_split.setSizes([420, 260])
+        tasks_tab_layout.addWidget(tasks_split)
+        self.tasks_tab = tasks_tab
+
         self.left_tabs.addTab(self.reports_viewer, "📚 Raporlar & Notlar")
         self.left_tabs.addTab(self.skills_widget, "🎯 Yetenekler")
-        self.left_tabs.addTab(self.tasks_widget, "⏰ Görevler")
+        self.left_tabs.addTab(tasks_tab, "⏰ Görevler")
         self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
+        self.left_tabs.addTab(self.agents_widget, "🤖 Ajanlar")
         top_h_splitter.addWidget(self.left_tabs)
 
         # Center Column: Organic Visual Core & Cyber Telemetry Workstation
@@ -416,6 +456,7 @@ class ZenModeWindow(QMainWindow):
         # Sohbet gecmisi tek kaynak: Chat modu ile ayni dosyayi dinler.
         bus.chat_history_updated.connect(self._on_chat_history_updated)
         bus.chat_history_cleared.connect(self._on_chat_history_cleared)
+        bus.context_pressure.connect(self._on_context_pressure)
         self._update_telemetry_badges()
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
@@ -606,10 +647,15 @@ class ZenModeWindow(QMainWindow):
         """
         Sağlayıcı değiştiğinde model listesini tazeler.
 
-        Zen kipinde ayrı bir sağlayıcı seçicisi YOK (üst çubuk kasıtlı olarak
-        minimal); seçim sohbet kipinden yapılır, burada yalnızca yeni köprünün
-        model listesi yansıtılır.
+        Üst çubukta Chat kipiyle aynı sağlayıcı seçicisi bulunur; burada hem
+        seçim hem de yeni köprünün model listesi yansıtılır.
         """
+        if hasattr(self, "provider_combo"):
+            try:
+                self.provider_combo.blockSignals(True)
+                self.provider_combo.setCurrentText(getattr(self.bridge, "provider_name", "agy"))
+            finally:
+                self.provider_combo.blockSignals(False)
         if not hasattr(self, "model_combo"):
             return
         try:
@@ -631,6 +677,41 @@ class ZenModeWindow(QMainWindow):
         text, tip = format_token_badge(self.bridge)
         self.tokens_badge.setText(text)
         self.tokens_badge.setToolTip(tip)
+        self._apply_context_badge()
+
+    @Slot(float)
+    def _on_context_pressure(self, ratio: float):
+        """Baskı sinyali: rozeti son bilinen oranla tazeler."""
+        self._last_context_pressure = float(ratio or 0.0)
+        self._apply_context_badge()
+
+    def _apply_context_badge(self):
+        """Bağlam doluluk rozetinin metni, ipucu ve rengi (tek yerden)."""
+        from entropy.ui.widgets.token_badge import format_context_badge
+
+        if not hasattr(self, "context_badge"):
+            return
+        text, tip, color = format_context_badge(
+            self.bridge, getattr(self, "_last_context_pressure", 0.0)
+        )
+        self.context_badge.setText(text)
+        self.context_badge.setToolTip(tip)
+        self.context_badge.setStyleSheet(
+            f"QLabel {{ background-color:#05070A; color:{color}; border:1px solid #1F2B42;"
+            f" border-radius:5px; padding:4px 10px; font-family:'Consolas'; font-size:11px;"
+            f" font-weight:bold; }}"
+        )
+
+    def _on_provider_selected(self, provider: str):
+        """Sağlayıcı seçimi: Chat kipiyle aynı yönetici yolunu kullanır."""
+        if not provider or provider == getattr(self.bridge, "provider_name", "agy"):
+            return
+        from entropy.ui.manager import EntropyUIManager
+
+        manager = EntropyUIManager.instance
+        if manager is None:
+            return
+        manager.switch_provider(provider)
 
     @Slot(str)
     def _update_status(self, state: str):
@@ -760,7 +841,11 @@ class ZenModeWindow(QMainWindow):
             from entropy.core.slash_commands import try_handle_local_command
             local_html = try_handle_local_command(prompt, self.bridge)
             if local_html is not None:
-                self._append_chat_message("Entropy AI", local_html)
+                # Yerel komut çıktısı (ör. /handoff) okunur kart olarak basılır.
+                from entropy.ui.widgets.markdown_renderer import build_command_card_html
+
+                self.chat_browser.append(build_command_card_html(local_html))
+                self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
                 self.chat_input.clear()
                 return
 

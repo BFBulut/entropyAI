@@ -73,6 +73,29 @@ def main():
     except Exception as e:
         print(f"[{config.app_name}] Rapor izleyici başlatılamadı: {e}")
 
+    # Ajan kayıt defteri: kasadaki AGENT.md dosyaları iki sağlayıcının biçimine
+    # derlenir. Açılışta ve proje değiştiğinde koşar; agy/claude ajan tanımlarını
+    # SÜRECİN ÇALIŞMA DİZİNİNE göre keşfettiği için proje değişince yeni kökte de
+    # bulunmaları gerekiyor. Derleme, kaynak değişmemişse dosyaya dokunmaz.
+    from entropy.agents.bootstrap import bootstrap_agents
+    from entropy.agents.watchers import start_agent_watchers, stop_agent_watchers
+
+    def _compile_agents(project_dir=None):
+        result = bootstrap_agents(project_dir or bridge.active_project_dir)
+        print(f"[{config.app_name}] {result.summary()}")
+
+    _compile_agents()
+    from entropy.core.event_bus import bus as _bus
+    _bus.project_changed.connect(_compile_agents)
+
+    # Ajan tanımları ve görev kartları kasada canlı izlenir: kullanıcı Obsidian'da
+    # bir kart yazdığında ya da bir ajan gövdesini düzenlediğinde panel yeniden
+    # başlatmadan güncellenir (bus.agents_updated / bus.task_cards_updated).
+    try:
+        start_agent_watchers()
+    except Exception as e:
+        print(f"[{config.app_name}] Ajan izleyicileri başlatılamadı: {e}")
+
     scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):
@@ -146,6 +169,10 @@ def main():
             print(f"[{config.app_name}] Kapanış temizliği hatası: {e}")
         try:
             stop_report_watcher()
+        except Exception:
+            pass
+        try:
+            stop_agent_watchers()
         except Exception:
             pass
         try:

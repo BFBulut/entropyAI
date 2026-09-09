@@ -295,6 +295,11 @@ class ChatModeWindow(QMainWindow):
         self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
         h_layout.addWidget(self.tokens_badge)
 
+        # Bağlam doluluk rozeti (Zen ile aynı biçimlendirici).
+        self.context_badge = QLabel("Bağlam: %0")
+        h_layout.addWidget(self.context_badge)
+        self._apply_context_badge()
+
         # Durum rozeti: Zen'deki çekirdek durum etiketiyle aynı bus sinyaline bağlı.
         # Arka plan görevi / damıtma haberleri de buraya düşer, böylece Chat modunda
         # da "arkada ne çalışıyor?" sorusu yanıtsız kalmaz.
@@ -514,6 +519,7 @@ class ChatModeWindow(QMainWindow):
         # Sohbet gecmisi tek kaynak: her iki mod ayni dosyayi dinler.
         bus.chat_history_updated.connect(self._on_chat_history_updated)
         bus.chat_history_cleared.connect(self._on_chat_history_cleared)
+        bus.context_pressure.connect(self._on_context_pressure)
 
     # --------------------------------------------------- durum rozeti (Zen eşdeğeri)
 
@@ -556,12 +562,19 @@ class ChatModeWindow(QMainWindow):
             from entropy.ui.widgets.skills_widget import SkillsWidget
             from entropy.ui.widgets.tasks_widget import TasksWidget
 
+            from entropy.ui.widgets.agents_widget import AgentsWidget
+            from entropy.ui.widgets.task_board_widget import CompactTaskListWidget
+
             self.side_panel = QTabWidget()
             self.side_panel.setMaximumHeight(280)
             self.tasks_widget = TasksWidget(parent=self, bridge=self.bridge)
             self.skills_widget = SkillsWidget(bridge=self.bridge)
+            self.agents_widget = AgentsWidget(bridge=self.bridge, compact=True)
+            self.agent_tasks_widget = CompactTaskListWidget()
             self.side_panel.addTab(self.tasks_widget, "⏰ Görevler")
             self.side_panel.addTab(self.skills_widget, "🎯 Yetenekler")
+            self.side_panel.addTab(self.agents_widget, "🤖 Ajanlar")
+            self.side_panel.addTab(self.agent_tasks_widget, "🗂 Ajan Görevleri")
             self.side_panel_layout.addWidget(self.side_panel)
         return self.side_panel
 
@@ -920,6 +933,28 @@ class ChatModeWindow(QMainWindow):
         text, tip = format_token_badge(self.bridge)
         self.tokens_badge.setText(text)
         self.tokens_badge.setToolTip(tip)
+        self._apply_context_badge()
+
+    @Slot(float)
+    def _on_context_pressure(self, ratio: float):
+        """Baskı sinyali: son bilinen oranı saklar ve rozeti tazeler."""
+        self._last_context_pressure = float(ratio or 0.0)
+        self._apply_context_badge()
+
+    def _apply_context_badge(self):
+        """Bağlam doluluk rozeti — Zen ile ortak biçimlendirici, ortak eşik."""
+        from entropy.ui.widgets.token_badge import format_context_badge
+
+        if not hasattr(self, "context_badge"):
+            return
+        text, tip, color = format_context_badge(
+            self.bridge, getattr(self, "_last_context_pressure", 0.0)
+        )
+        self.context_badge.setText(text)
+        self.context_badge.setToolTip(tip)
+        self.context_badge.setStyleSheet(
+            f"color:{color}; font-family:'Consolas'; font-size:11px; font-weight:bold;"
+        )
 
     def _on_send(self):
         import html
@@ -949,7 +984,10 @@ class ChatModeWindow(QMainWindow):
             from entropy.core.slash_commands import try_handle_local_command
             local_html = try_handle_local_command(prompt, self.bridge)
             if local_html is not None:
-                self._append_message("Entropy AI", local_html, is_system=True)
+                # Yerel komut çıktısı (ör. /handoff) okunur kart olarak basılır.
+                from entropy.ui.widgets.markdown_renderer import build_command_card_html
+
+                self.chat_browser.append(build_command_card_html(local_html))
                 self.input_field.clear()
                 return
 

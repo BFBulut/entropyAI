@@ -49,6 +49,9 @@ BUDGET_GLOBAL_MEMORY = 300
 # (sayfa "tüketildi" diye işaretlenir), her turda değil: 300 token her turda
 # yeniden ödenirse aktarımın kazandırdığı bağlam maliyetiyle eşitlenir.
 BUDGET_HANDOFF = 300
+# Aktif alt ajanın kalıcı belleği (Agents/<ajan>/MEMORY.md). Küçük tutulur:
+# ajan belleği olay kaydıdır, yordam değil; kararı playbook verir.
+BUDGET_AGENT_MEMORY = 300
 
 
 @dataclass
@@ -444,7 +447,10 @@ class CognitiveContextBuilder:
         """Yetenek raporlarından sorguya en yakın gövde parçalarını çıkarır."""
         if not skill_name:
             return None
-        sources = self.playbooks.source_reports(skill_name)
+        sources = list(self.playbooks.source_reports(skill_name))
+        # Sorgu sayfaları da havuza girer: damıtma onları kaynak saymaz ama bir
+        # sonraki tur "bunu daha önce sormuştuk" bilgisini görmelidir.
+        sources.extend(self._query_pages(skill_name))
         if not sources:
             return None
 
@@ -502,6 +508,42 @@ class CognitiveContextBuilder:
             body="\n\n".join(blocks),
             kind="reports",
             tokens=used,
+        )
+
+    def _query_pages(self, skill_name: Optional[str]) -> List[Path]:
+        """Yeteneğin ve kasa genelinin wiki sorgu sayfaları (en yeniler önce)."""
+        try:
+            from entropy.memory.wiki import queries_dir
+        except Exception:
+            return []
+        out: List[Path] = []
+        for skill in (skill_name, None):
+            d = queries_dir(skill, self.playbooks.vault_path)
+            if d.is_dir():
+                out.extend(sorted(d.glob("*.md"), key=lambda p: p.name, reverse=True))
+        return out
+
+    def _agent_memory_section(self, agent: Optional[str], budget: int) -> Optional[ContextSection]:
+        """Aktif alt ajanın öğrendikleri ve son görevleri."""
+        if not agent or not str(agent).strip():
+            return None
+        try:
+            from entropy.memory.agent_memory import load_agent_memory
+
+            body = load_agent_memory(
+                str(agent), budget_tokens=budget, vault_path=self.playbooks.vault_path
+            )
+        except Exception as e:
+            logger.warning("Ajan belleği okunamadı (%s): %s", agent, e)
+            return None
+        if not body.strip():
+            return None
+        body = _truncate_to_tokens(body, budget)
+        return ContextSection(
+            title=f"🤖 Ajan Belleği ({agent})",
+            body=body,
+            kind="agent_memory",
+            tokens=estimate_tokens(body),
         )
 
     def _project_section(self, project_dir: Optional[Path], budget: int) -> Optional[ContextSection]:
@@ -665,6 +707,7 @@ class CognitiveContextBuilder:
         token_budget: int = DEFAULT_TOKEN_BUDGET,
         project_dir: Optional[Path] = None,
         include_handoff: bool = True,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> AssembledContext:
         """
         Bağlamı öncelik sırasına göre kurar ve bütçeyi aşmadan döndürür.
@@ -674,6 +717,7 @@ class CognitiveContextBuilder:
         """
         ctx = AssembledContext(budget=token_budget)
         remaining = token_budget
+        agent = (meta or {}).get("agent")
 
         # Sıra = öncelik. Yordam ve proje hafızası önce gelir: ikisi de küçük,
         # spesifik ve o işe doğrudan ait. Genel recall daha geniş ve daha gürültülü
@@ -686,6 +730,10 @@ class CognitiveContextBuilder:
              lambda b: self._handoff_section(b) if include_handoff else None),
             ("playbook", min(BUDGET_PLAYBOOK, remaining),
              lambda b: self._playbook_section(skill_name, b, query) if skill_name else None),
+            # Ajan belleği playbook'tan hemen sonra: "bu ajan bunu daha önce
+            # denedi" bilgisi, proje ve geri çağırmadan daha spesifiktir.
+            ("agent_memory", min(BUDGET_AGENT_MEMORY, remaining),
+             lambda b: self._agent_memory_section(agent, b)),
             ("project", min(BUDGET_PROJECT, remaining),
              lambda b: self._project_section(project_dir, b)),
             ("recall", min(BUDGET_RECALL, remaining),

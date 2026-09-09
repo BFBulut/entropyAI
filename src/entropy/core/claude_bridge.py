@@ -65,6 +65,12 @@ from entropy.core.task_ledger import TaskStatus, task_ledger
 # geçerli; eşik bilinçli olarak ortak tutuldu (bkz. agy_bridge.ARGV_PROMPT_SAFE_LIMIT).
 ARGV_PROMPT_SAFE_LIMIT = 26_500
 
+# `--append-system-prompt` argv'de taşındığı için bilişsel bağlam sınırsız
+# olamaz: prompt + sistem istemi birlikte Windows komut satırı sınırına yazılır.
+# 6000 karakter (~1500 token) AGY köprüsündeki bütçeyle aynı; orada da bağlam
+# bu değerle kırpılıyor.
+SYSTEM_PROMPT_CONTEXT_LIMIT = 6000
+
 # Entropy'nin iç kip adları -> Claude Code'un --permission-mode değerleri.
 # Claude yalnızca listedeki değerleri kabul eder; eşleşmeyen ad verilirse süreç
 # hiç başlamaz, bu yüzden bilinmeyen kip güvenli varsayılana düşürülür.
@@ -172,6 +178,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         self.latest_output_tokens: int = 0
         self.latest_thinking_tokens: int = 0
         self.latest_cache_read_tokens: int = 0
+        self.latest_cache_creation_tokens: int = 0
         self.session_total_tokens: int = 0
         self.session_cache_tokens: int = 0
         self.session_turn_count: int = 0
@@ -564,6 +571,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             self.latest_output_tokens = usage.get("output_tokens", 0)
             self.latest_thinking_tokens = usage.get("thinking_tokens", 0)
             self.latest_cache_read_tokens = usage.get("cache_read_tokens", 0)
+            # Önbelleğe YAZMA ayrı kalem: okuma neredeyse bedava, yazma normal
+            # girdiden pahalı. Tek "cache" kaleminde toplandığında rozet pahalı
+            # bir turu ucuz gösteriyordu (bkz. usage_breakdown).
+            self.latest_cache_creation_tokens = usage.get("cache_creation_tokens", 0)
             turn_total = usage.get("total_tokens", 0)
             self.session_total_tokens += turn_total
             self.session_cache_tokens += usage.get("cache_read_tokens", 0)
@@ -574,6 +585,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 "output_tokens": usage.get("output_tokens", 0),
                 "thinking_tokens": usage.get("thinking_tokens", 0),
                 "cache_read_tokens": usage.get("cache_read_tokens", 0),
+                "cache_creation_tokens": usage.get("cache_creation_tokens", 0),
                 "total_tokens": turn_total,
             }
             self.last_total_cost_usd = cost
@@ -613,6 +625,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         task_id: Optional[str] = None,
         task_name: Optional[str] = None,
         project_path: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> None:
         """Kullanıcı istemini başsız Claude Code oturumunda çalıştırır; meşgulse sıraya alır."""
         if is_background:
@@ -622,14 +635,16 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 prompt=prompt,
                 mode=mode,
                 project_path=project_path,
+                agent=agent,
             )
             return
 
+        args = (prompt, image_attachments, pdf_attachments, active_skill, mode, project_path, agent)
         with self._lock:
             if self._shutting_down:
                 return
             if self._is_running:
-                self._prompt_queue.append((prompt, active_skill, mode, project_path))
+                self._prompt_queue.append(args)
                 bus.terminal_output_received.emit(
                     f"\n[Entropy Core] Başka bir işlem yürütülüyor. Mesajınız sıraya alındı "
                     f"({len(self._prompt_queue)}. sırada)...\n"
@@ -637,24 +652,175 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 return
             self._is_running = True
 
-        threading.Thread(
-            target=self._execute_prompt_worker,
-            args=(prompt, active_skill, mode, project_path),
-            daemon=True,
-        ).start()
+        threading.Thread(target=self._execute_prompt_worker, args=args, daemon=True).start()
+
+    def build_attachment_directive(
+        self,
+        image_attachments: Optional[List[str]] = None,
+        pdf_attachments: Optional[List[str]] = None,
+    ) -> Tuple[str, List[str]]:
+        """
+        Ek dosyaları prompt yönergesine + `--add-dir` listesine çevirir.
+
+        NEDEN base64 değil: `claude --help` çıktısında görsel/PDF için hiçbir
+        bayrak yok (`--file` yalnızca sunucudan indirilen `file_id:yol` çiftleri
+        içindir) ve `--input-format stream-json` yalnızca "--print ve
+        --output-format stream-json ile birlikte" koşullarını doğruluyor;
+        gövdesindeki kullanıcı mesajı şemasının içerik BLOKLARINI (image/base64)
+        kabul edip etmediği kota harcamadan doğrulanamıyor. Buna karşılık paketin
+        `sdk-tools.d.ts` şeması Read aracının hem görseli (`type: "image"`,
+        base64 + mediaType) hem PDF'i (`type: "pdf"`, sayfa aralığı, sayfa
+        görselleri) yerel dosya yolundan okuduğunu açıkça gösteriyor.
+        Dolayısıyla güvenilir yol: dosyanın MUTLAK YOLUNU prompt'ta vermek ve
+        klasörünü `--add-dir` ile erişilebilir kılmak; okumayı modelin kendi
+        Read aracı yapar (PDF'te sayfa aralığı seçebilme avantajıyla).
+        """
+        lines: List[str] = []
+        dirs: List[str] = []
+        for label, files in (("GÖRSEL", image_attachments or []), ("PDF", pdf_attachments or [])):
+            for f in files:
+                try:
+                    p = Path(f).resolve()
+                except Exception:
+                    continue
+                lines.append(f"- [{label}] {p}")
+                parent = str(p.parent)
+                if parent not in dirs:
+                    dirs.append(parent)
+        if not lines:
+            return "", []
+        directive = (
+            "[EKLİ DOSYALAR] Aşağıdaki dosyalar bu mesajın ekidir; içeriklerini "
+            "Read aracıyla oku (PDF'te gerekiyorsa sayfa aralığı vererek) ve "
+            "yanıtını onlara dayandır:\n" + "\n".join(lines)
+        )
+        return directive, dirs
+
+    def build_chat_system_prompt(
+        self,
+        prompt: str,
+        target_skill=None,
+        skill_banner: str = "",
+        attachment_directive: str = "",
+        resuming: bool = False,
+    ) -> str:
+        """
+        `--append-system-prompt` ile enjekte edilecek metni kurar.
+
+        Neden argv'deki prompt'a değil sistem istemine: Claude Code varsayılan
+        sistem istemini korur ve buna EKLER; bağlam oraya konduğunda kullanıcının
+        mesajı temiz kalır, `--resume` ile süren oturumda da her turda yeniden
+        gönderilmek yerine yalnızca o turun bağlamı eklenir. Sürerken (resume)
+        tam bilişsel bağlam yerine mini bağlam kullanılır: ağır bağlam zaten ilk
+        turda enjekte edildi, her turda tekrarı pencereyi boş yere doldururdu.
+        """
+        parts = [
+            "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
+            "Kullanıcıya daima Türkçe, net ve profesyonel bir üslupla yanıt ver. "
+            "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından haberdarsın."
+        ]
+        if skill_banner:
+            parts.append(skill_banner)
+        if attachment_directive:
+            parts.append(attachment_directive)
+        if resuming:
+            mini = self.get_mini_cognitive_context(prompt, target_skill=target_skill)
+            if mini:
+                parts.append(mini)
+        else:
+            ctx = self.get_cognitive_context(prompt, target_skill=target_skill)
+            if ctx:
+                if len(ctx) > SYSTEM_PROMPT_CONTEXT_LIMIT:
+                    # Kırpma sonu keser; ajan kataloğu bağlamın SONUNDA duruyor ve
+                    # sessizce düşüyordu. Kırpılmış bağlamdan sonra geri eklenir:
+                    # ajan farkındalığı olmadan devretme önerisi hiç doğmaz.
+                    agents_section = self.agents_manifest_section()
+                    ctx = ctx[:SYSTEM_PROMPT_CONTEXT_LIMIT]
+                    if agents_section and agents_section not in ctx:
+                        ctx = f"{ctx}\n\n{agents_section}"
+                parts.append(ctx)
+            if self.conversation_history:
+                recent = self.conversation_history[-6:]
+                parts.append(
+                    "Önceki Sohbet Özeti:\n"
+                    + "\n".join(
+                        f"- {'Kullanıcı' if m.get('role') == 'user' else 'Entropy'}: "
+                        f"{str(m.get('content', ''))[:100]}"
+                        for m in recent
+                    )
+                )
+        return "\n\n".join(p for p in parts if p)
 
     def _execute_prompt_worker(
         self,
         prompt: str,
+        image_attachments: Optional[List[str]] = None,
+        pdf_attachments: Optional[List[str]] = None,
         active_skill: Optional[str] = None,
         mode: str = "accept-edits",
         project_path: Optional[str] = None,
+        agent: Optional[str] = None,
     ) -> None:
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
+        if not project_dir.exists():
+            try:
+                project_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+
+        # Proje kilidi: arka plan görevi projede yazarken sohbet turu aynı
+        # dosyalara dokunursa iki CLI birbirinin düzenlemesini eziyor. Yazma
+        # niyeti taşıyan tur yazma kilidi, okuma turu paylaşımlı okuma kilidi alır.
+        is_write = self.is_code_modifying_intent(prompt, mode=mode)
+        if project_lock_manager.is_write_locked(project_dir):
+            bus.terminal_output_received.emit(
+                "\n[Proje Kilidi: Arka plan görevi çalışıyor, işlem bekleniyor...]\n"
+            )
+        if is_write:
+            lock_acquired = project_lock_manager.acquire_write(project_dir, timeout=30.0)
+        else:
+            lock_acquired = project_lock_manager.acquire_read(project_dir, timeout=30.0)
+        if not lock_acquired:
+            bus.terminal_output_received.emit(
+                "\n[Proje Kilidi: Zaman aşımı! Arka plan görevi projeyi kullanıyor.]\n"
+            )
+            bus.core_state_changed.emit("idle")
+            self._drain_queue()
+            return
+
         bus.agent_turn_started.emit(prompt)
         bus.core_state_changed.emit("thinking")
 
-        cmd = self.build_command(prompt, mode=mode, project_dir=project_dir, resume=True)
+        # Yetenek çözümü ve bilişsel bağlam ortak mixin'den gelir; AGY köprüsüyle
+        # aynı kararı verir, böylece sağlayıcı değiştirmek yönlendirmeyi değiştirmez.
+        target_skill, skill_banner = self.resolve_target_skill(prompt, active_skill=active_skill)
+        if target_skill is not None:
+            self.last_active_skill = target_skill.name
+            bus.terminal_output_received.emit(
+                f"[🎯 Yetenek Devrede]: '{target_skill.name}' yeteneği aktif olarak kullanılıyor.\n"
+            )
+
+        attachment_directive, extra_dirs = self.build_attachment_directive(
+            image_attachments, pdf_attachments
+        )
+        resuming = bool(self.current_session_id)
+        append_system_prompt = self.build_chat_system_prompt(
+            prompt,
+            target_skill=target_skill,
+            skill_banner=skill_banner,
+            attachment_directive=attachment_directive,
+            resuming=resuming,
+        )
+
+        cmd = self.build_command(
+            prompt,
+            mode=mode,
+            project_dir=project_dir,
+            agent=agent,
+            resume=True,
+            extra_dirs=extra_dirs,
+            append_system_prompt=append_system_prompt,
+        )
         result: Dict[str, object] = {}
         ret_code = -1
         proc = None
@@ -691,6 +857,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         finally:
             with self._lock:
                 self._current_process = None
+            # Kilit her yolda bırakılır: bırakılmayan bir yazma kilidi projeyi
+            # oturum sonuna kadar tüm arka plan görevlerine kapatırdı.
+            try:
+                if is_write:
+                    project_lock_manager.release_write(project_dir)
+                else:
+                    project_lock_manager.release_read(project_dir)
+            except Exception:
+                pass
 
         full_text = str(result.get("text", "") or "")
         session_id = result.get("session_id")
@@ -713,6 +888,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         except Exception:
             pass
 
+        self._drain_queue()
+
+    def _drain_queue(self) -> None:
+        """Sıradaki mesajı başlatır; yoksa köprüyü boşa alır (tek yerde, tek kural)."""
         with self._lock:
             self._is_running = False
             next_task = self._prompt_queue.pop(0) if self._prompt_queue else None
@@ -902,11 +1081,20 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     f"- **Durum**: {'Başarılı' if success else 'Hata / Uyarı'}\n\n"
                     f"## Görev Çıktısı ve Bulgular\n\n{full_text}\n"
                 )
+                # Rapor, görevin hangi yeteneğin işi olduğuna atfedilir: atıfsız
+                # rapor hiçbir yetenek için damıtma kaynağı sayılmıyor (AGY
+                # köprüsündeki davranışla aynı).
+                try:
+                    detected = self.detect_skill_for_prompt(prompt)
+                    task_skill = detected.name if detected else None
+                except Exception:
+                    task_skill = None
                 rep_path = vm.save_research_report(
                     f"Gorev_{clean_name}_{time_tag}",
                     report,
                     tags=["otonom_gorev", task_id],
                     project_name=self.active_project_dir.name if self.active_project_dir else None,
+                    skill_name=task_skill,
                 )
                 bus.task_notification.emit(task_id, task_name, str(rep_path))
                 bus.knowledge_graph_updated.emit()

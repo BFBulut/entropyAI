@@ -69,6 +69,92 @@ def format_token_badge(bridge: Any) -> Tuple[str, str]:
             if last_bg_total
             else "• Henüz arka plan görevi çalışmadı\n"
         )
+        + usage_breakdown_text(bridge)
         + "\nGörev başına kalıcı kayıt: Görevler sekmesi / tasks_ledger.db"
     )
     return text, tooltip
+
+
+# Bağlam doluluğu bu oranı aşınca rozet turuncuya döner ve /handoff önerilir.
+CONTEXT_WARN_RATIO = 0.60
+
+CONTEXT_OK_COLOR = "#3DE8A8"
+CONTEXT_WARN_COLOR = "#FFC24D"
+
+
+def usage_breakdown_text(bridge: Any) -> str:
+    """
+    `bridge.usage_breakdown()` varsa kalem kalem döküm satırları üretir.
+
+    Claude tarafında önbellek YAZIMI ayrı ücretlendirilir ve önbellek okumasıyla
+    karıştırılırsa maliyet yanlış okunur; bu yüzden ayrı bir kalem olarak
+    gösterilir. Köprü bu metodu sunmuyorsa boş dize döner (geriye dönük uyum).
+    """
+    fn = getattr(bridge, "usage_breakdown", None)
+    if not callable(fn):
+        return ""
+    try:
+        data = dict(fn() or {})
+    except Exception:
+        return ""
+    if not data:
+        return ""
+    return (
+        "\nKALEM DÖKÜMÜ\n"
+        f"• Girdi: {int(data.get('input', 0) or 0):,}\n"
+        f"• Çıktı: {int(data.get('output', 0) or 0):,}\n"
+        f"• Önbellek okuma: {int(data.get('cache_read', 0) or 0):,}\n"
+        f"• Önbellek yazımı: {int(data.get('cache_write', 0) or 0):,}\n"
+        f"• Toplam: {int(data.get('total', 0) or 0):,}\n"
+    )
+
+
+def context_fill_ratio(bridge: Any, pressure: float = None) -> float:
+    """
+    Bağlam doluluk oranı: önce köprünün kendi ölçümü, yoksa son sinyal değeri.
+
+    `bus.context_pressure` yalnızca eşiğin üstüne ilk çıkışta yayıldığı için tek
+    kaynak olamaz; köprü `context_fill_ratio()` sunuyorsa o esas alınır.
+    """
+    fn = getattr(bridge, "context_fill_ratio", None)
+    if callable(fn):
+        try:
+            value = float(fn())
+            if value > 0:
+                return value
+        except Exception:
+            pass
+    try:
+        return max(0.0, float(pressure or 0.0))
+    except Exception:
+        return 0.0
+
+
+def format_context_badge(bridge: Any, pressure: float = None):
+    """
+    (metin, ipucu, renk) — bağlam doluluk rozeti.
+
+    %60 üstünde rozet turuncuya döner ve ipucu /handoff önerir; bu eşik
+    `provider.CONTEXT_PRESSURE_THRESHOLD` ile aynıdır.
+    """
+    ratio = context_fill_ratio(bridge, pressure)
+    percent = int(round(ratio * 100))
+    text = f"Bağlam: %{percent}"
+    warn = ratio >= CONTEXT_WARN_RATIO
+    color = CONTEXT_WARN_COLOR if warn else CONTEXT_OK_COLOR
+
+    used = 0
+    window = 0
+    try:
+        used = int(bridge.context_used_tokens())
+        window = int(bridge.context_window_size())
+    except Exception:
+        pass
+    lines = [f"Bağlam penceresi doluluğu: %{percent}"]
+    if window:
+        lines.append(f"Kullanılan: {used:,} / {window:,} token")
+    if warn:
+        lines.append("")
+        lines.append("Doluluk %60'ı aştı — /handoff önerilir.")
+        lines.append("Aktarım geçmişi özetleyip bağlamı boşaltır.")
+    return text, "\n".join(lines), color

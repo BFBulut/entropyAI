@@ -671,6 +671,27 @@ def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None)
 </html>"""
 
 
+def build_command_card_html(body_html: str) -> str:
+    """
+    Yerel slash komut çıktısını okunur bir kart olarak sarar.
+
+    Sistem balonu ortalanmış küçük bir hap; `/handoff` gibi çok satırlı, yol ve
+    madde içeren çıktılar orada okunmuyordu. Kart sol şeritli, sola hizalı ve
+    okuma belirteçleriyle biçimlenmiş bir yüzey verir.
+    """
+    return (
+        f"<div style='margin:0 0 14px 0; padding:10px 14px;"
+        f" background-color:{RT['surface_raised']};"
+        f" border-left:3px solid {RT['accent_warn']};"
+        f" border-radius:{RT['radius_small']};'>"
+        f"<div style='color:{RT['accent_warn']}; font-size:10px; font-weight:600;"
+        f" letter-spacing:1px; margin-bottom:4px;'>KOMUT ÇIKTISI</div>"
+        f"<div style='color:{RT['text_body']}; font-size:{RT['font_size_body']};"
+        f" line-height:{RT['line_height']};'>{body_html}</div>"
+        f"</div>"
+    )
+
+
 def build_chat_bubble_html(sender: str, text: str, is_system: bool = False) -> str:
     """
     Sohbet mesajı için tek kaynaklı HTML üretir (Chat modu + Zen sohbet paneli).

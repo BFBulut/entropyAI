@@ -283,7 +283,13 @@ _NON_REPORT_STEMS = {
 # kaydıdır ("şu oturumda şunu yaptık"). Damıtmaya girerlerse playbook, tekrar
 # edilebilir bir yöntem yerine geçmişin günlüğüne dönüşür. Bağlam kurucu ve geri
 # çağırma onları ayrıca görür (bkz. memory/handoff.py).
-_NON_REPORT_DIRS = {"dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian", "sessions"}
+# Tasks/, Agents/ ve wiki/ de aynı gerekçeyle dışarıda: görev kuyruğu, ajan
+# belleği ve sorgu sayfaları olay/durum kaydıdır, tekrar edilebilir yordam değil.
+# Bağlam kurucu ve geri çağırma onları ayrıca görür (wiki.py, agent_memory.py).
+_NON_REPORT_DIRS = {
+    "dailynotes", "agentdesk", "pendinginbox", "templates", ".obsidian",
+    "sessions", "tasks", "agents", "wiki", "queries",
+}
 _DAILY_NOTE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -527,6 +533,10 @@ class PlaybookStore:
         for p in self.index.paths_for(skill):
             # Eski indeksler PLAYBOOK.md'yi rapor sanmış olabilir; burada da elenir.
             if p.stem.strip().lower() in _NON_REPORT_STEMS:
+                continue
+            # Eski indeksler Sessions/, Tasks/, Agents/, wiki/ dosyalarını da
+            # kaynak saymış olabilir: dizin kuralı burada da uygulanır.
+            if {part.lower() for part in p.parts} & _NON_REPORT_DIRS:
                 continue
             resolved = _resolved(p)
             if resolved is None or vault_root not in resolved.parents:

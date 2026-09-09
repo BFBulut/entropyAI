@@ -117,14 +117,6 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
         usage="/help",
     ),
     SlashCommand(
-        name="/agents",
-        description="Sistemde tanımlı özel uzmanlık ajanlarını ve rollerini listeler.",
-        category="builtin",
-        badge="⚡ AGY",
-        color="#9D00FF",
-        usage="/agents",
-    ),
-    SlashCommand(
         name="/skills",
         description="Kullanılabilir tüm Antigravity ve yerel uzmanlık yeteneklerini listeler.",
         category="builtin",
@@ -195,7 +187,48 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         color="#9D00FF",
         usage="/provider [agy|claude]",
     ),
+    SlashCommand(
+        name="/agents",
+        description="Kasadaki ajanları listeler (ad, rol, sağlayıcı, yetenekler).",
+        category="builtin",
+        badge="🤖 AJAN",
+        color="#9D00FF",
+        usage="/agents",
+    ),
+    SlashCommand(
+        name="/agent",
+        description="Bir ajanın ayrıntısını gösterir (model, araç politikası, gövde özeti).",
+        category="builtin",
+        badge="🤖 AJAN",
+        color="#9D00FF",
+        usage="/agent <ad>",
+    ),
+    SlashCommand(
+        name="/task",
+        description="Bir işi ajana devreder: kart oluşturur ve arka planda çalıştırır.",
+        category="builtin",
+        badge="📋 GÖREV",
+        color="#FFB300",
+        usage="/task <ajan> <başlık> :: <hedef>  |  /task stop <id>",
+    ),
+    SlashCommand(
+        name="/tasks",
+        description="Görev kartlarını durumlarıyla birlikte listeler.",
+        category="builtin",
+        badge="📋 GÖREV",
+        color="#FFB300",
+        usage="/tasks [backlog|running|review|done|failed]",
+    ),
 ]
+
+# Kartın durumu için arayüzde ve komut çıktısında kullanılan simge/renk.
+_STATUS_STYLE = {
+    "backlog": ("⏳", "#8B949E"),
+    "running": ("▶", "#00F0FF"),
+    "review": ("🔍", "#FFB300"),
+    "done": ("✔", "#00FF9D"),
+    "failed": ("✖", "#e06c75"),
+}
 
 
 def _html_escape(text: str) -> str:
@@ -301,6 +334,173 @@ def _handle_handoff(note: str, bridge) -> str:
     )
 
 
+def _handle_agents(bridge) -> str:
+    """`/agents`: kasadaki ajanların listesi."""
+    from entropy.agents.registry import AGENTS_SUBDIR, AgentRegistry
+
+    registry = AgentRegistry()
+    specs = registry.list()
+    if not specs:
+        return (
+            "<b>🤖 Ajanlar</b><br/>Kasada tanımlı ajan yok.<br/>"
+            f"<span style='color:#8B949E;font-size:11px;'>Tanım yolu: "
+            f"<code>{_html_escape(AGENTS_SUBDIR)}/&lt;ad&gt;/AGENT.md</code></span>"
+        )
+    rows = "".join(
+        f"<tr><td style='padding:2px 10px 2px 0;color:#9D00FF;'>🤖 {_html_escape(s.name)}</td>"
+        f"<td style='padding:2px 10px 2px 0;'>{_html_escape(s.role or '-')}</td>"
+        f"<td style='padding:2px 10px 2px 0;color:#8B949E;'>{_html_escape(s.provider)}"
+        f"{'/' + _html_escape(s.model) if s.model else ''}</td>"
+        f"<td style='padding:2px 0;'>{_html_escape(', '.join(s.skills) or '-')}</td></tr>"
+        for s in specs
+    )
+    return (
+        f"<b>🤖 Ajanlar</b> ({len(specs)})"
+        f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>"
+        "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
+        "Ayrıntı: <code>/agent &lt;ad&gt;</code> · Devret: "
+        "<code>/task &lt;ajan&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code></div>"
+    )
+
+
+def _handle_agent_detail(name: str) -> str:
+    """`/agent <ad>`: tek ajanın ayrıntısı."""
+    from entropy.agents.registry import AgentRegistry
+
+    if not name:
+        return "<b>🤖 Ajan</b><br/>Kullanım: <code>/agent &lt;ad&gt;</code>"
+    registry = AgentRegistry()
+    spec = registry.get(name.split()[0])
+    if spec is None:
+        known = ", ".join(s.name for s in registry.list()) or "(yok)"
+        return (f"<b>🤖 Ajan</b><br/>'{_html_escape(name)}' adında ajan yok.<br/>"
+                f"Mevcut: {_html_escape(known)}")
+    body = " ".join((spec.prompt or "").split())
+    if len(body) > 400:
+        body = body[:400] + "…"
+    return (
+        f"<b>🤖 {_html_escape(spec.name)}</b> — {_html_escape(spec.role or 'genel')}<br/>"
+        f"{_html_escape(spec.description)}<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Sağlayıcı: {_html_escape(spec.provider)}"
+        f"{' · Model: ' + _html_escape(spec.model) if spec.model else ''}"
+        f"{' · Çaba: ' + _html_escape(spec.effort) if spec.effort else ''}"
+        f" · Araçlar: {_html_escape(spec.tools_policy or '-')}"
+        f" · Yetenekler: {_html_escape(', '.join(spec.skills) or '-')}</span>"
+        f"<div style='margin-top:4px;'>{_html_escape(body)}</div>"
+        f"<div style='color:#8B949E;font-size:11px;margin-top:4px;'>Kaynak: "
+        f"<code>{_html_escape(str(spec.path))}</code></div>"
+    )
+
+
+def _handle_tasks(args: str) -> str:
+    """`/tasks [durum]`: kartların listesi."""
+    from entropy.agents.tasks import STATUSES, TaskBoard
+
+    status = args.strip().lower() or None
+    if status and status not in STATUSES:
+        return (f"<b>📋 Görevler</b><br/>Bilinmeyen durum '{_html_escape(status)}'. "
+                f"Geçerli: {', '.join(STATUSES)}")
+    board = TaskBoard()
+    cards = board.list(status=status)
+    if not cards:
+        return "<b>📋 Görevler</b><br/>Kart yok."
+    rows = ""
+    for c in cards:
+        icon, color = _STATUS_STYLE.get(c.status, ("•", "#8B949E"))
+        rows += (
+            f"<tr><td style='padding:2px 10px 2px 0;color:{color};'>{icon} {_html_escape(c.status)}</td>"
+            f"<td style='padding:2px 10px 2px 0;'>{_html_escape(c.title)}</td>"
+            f"<td style='padding:2px 10px 2px 0;color:#9D00FF;'>{_html_escape(c.agent or '-')}</td>"
+            f"<td style='padding:2px 0;color:#8B949E;'><code>{_html_escape(c.id)}</code></td></tr>"
+        )
+    return (
+        f"<b>📋 Görev Kartları</b> ({len(cards)})"
+        f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>"
+        "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
+        "Durdur: <code>/task stop &lt;id&gt;</code></div>"
+    )
+
+
+def _handle_task(args: str) -> str:
+    """
+    `/task <ajan> <başlık> :: <hedef>` — kart oluşturur ve hemen çalıştırır.
+    `/task stop <id>` — süren kartı keser.
+
+    Ayırıcı `::` kasıtlı: başlık ve hedefin ikisi de boşluk içerir, tek boşlukla
+    ayırmak "hangi kelimeden sonrası hedef" sorusunu tahmine bırakırdı.
+    """
+    from dataclasses import replace as _replace
+
+    from entropy.agents.registry import AgentRegistry
+    from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
+
+    args = (args or "").strip()
+    if not args:
+        return ("<b>📋 Görev</b><br/>Kullanım: "
+                "<code>/task &lt;ajan&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> ya da "
+                "<code>/task stop &lt;id&gt;</code>")
+
+    board = TaskBoard()
+    if args.lower().startswith("stop"):
+        card_id = args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else ""
+        if not card_id:
+            return "<b>📋 Görev</b><br/>Kullanım: <code>/task stop &lt;id&gt;</code>"
+        card = board.get(card_id)
+        if card is None:
+            return f"<b>📋 Görev</b><br/>'{_html_escape(card_id)}' kimlikli kart yok."
+        if card.status != "running":
+            return (f"<b>📋 Görev</b><br/>'{_html_escape(card_id)}' çalışmıyor "
+                    f"(durum: {_html_escape(card.status)}).")
+        killed = board.stop(card_id)
+        return (f"<b>📋 Görev Durduruldu</b><br/>{_html_escape(card.title)} "
+                f"({'süreç sonlandırıldı' if killed else 'kart kapatıldı'}).")
+
+    head, sep, goal = args.partition("::")
+    parts = head.split()
+    if len(parts) < 2:
+        return ("<b>📋 Görev</b><br/>Ajan ve başlık gerekli: "
+                "<code>/task &lt;ajan&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code>")
+    agent_name = parts[0]
+    title = " ".join(parts[1:]).strip()
+    goal = goal.strip() if sep else ""
+
+    registry = AgentRegistry()
+    spec = registry.get(agent_name)
+    if spec is None:
+        known = ", ".join(s.name for s in registry.list()) or "(yok)"
+        return (f"<b>📋 Görev</b><br/>'{_html_escape(agent_name)}' adında ajan yok.<br/>"
+                f"Mevcut: {_html_escape(known)}")
+
+    card = TaskCard(
+        id=new_task_id(title),
+        title=title,
+        status="backlog",
+        agent=spec.name,
+        provider=spec.provider,
+        model=spec.model,
+        skill=(spec.skills or [""])[0],
+        goal=goal or title,
+    )
+    try:
+        card = board.create(card)
+    except Exception as exc:
+        return f"<b>📋 Görev</b><br/>Kart yazılamadı: {_html_escape(exc)}"
+
+    task_id = board.run(card.id)
+    if not task_id:
+        board.update(_replace(card, status="failed", summary="Köprü başlatılamadı."))
+        return (f"<b>📋 Görev</b><br/>Kart oluşturuldu ama başlatılamadı: "
+                f"<code>{_html_escape(card.id)}</code>")
+    return (
+        f"<b>📋 Görev Devredildi</b><br/>"
+        f"🤖 {_html_escape(spec.name)} → {_html_escape(card.title)}<br/>"
+        f"<span style='color:#8B949E;font-size:11px;'>Hedef: {_html_escape(card.goal)}<br/>"
+        f"Kart: <code>{_html_escape(str(card.path))}</code><br/>"
+        f"Arka planda çalışıyor; bitince kart <b>review</b> olur. "
+        f"Durdurmak için: <code>/task stop {_html_escape(card.id)}</code></span>"
+    )
+
+
 def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[str]:
     """
     AGY'ye gitmeden uygulama içinde yürütülen komutları işler.
@@ -336,6 +536,17 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
 
     if head_low == "/handoff":
         return _handle_handoff(args, bridge)
+
+    # Ajan ve görev kartı komutları: hepsi yerel: kart yazımı ve listeleme model
+    # çağırmaz, yalnızca /task <ajan> ... kartı çalıştırırken köprüyü kullanır.
+    if head_low == "/agents":
+        return _handle_agents(bridge)
+    if head_low == "/agent":
+        return _handle_agent_detail(args)
+    if head_low == "/tasks":
+        return _handle_tasks(args)
+    if head_low == "/task":
+        return _handle_task(args)
 
     if head_low != "/distill":
         return None
