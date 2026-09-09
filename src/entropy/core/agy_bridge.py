@@ -36,6 +36,7 @@ BACKGROUND_LOCK_TIMEOUT = 60.0
 DEFAULT_MAX_TOOL_STEPS = 20
 MAX_STEPS_MARKER = "[ADIM SINIRI]"
 from entropy.core.masking import mask_tool_output
+import entropy.core.provider as provider_mod
 from entropy.core.provider import (
     ProviderCommonMixin,
     agent_definitions_dir as _agent_definitions_dir,
@@ -169,9 +170,15 @@ def prompt_via_stdin(prompt: str) -> bool:
     return len(prompt or "") > ARGV_PROMPT_SAFE_LIMIT
 
 
-# `agy -p --help`: "--effort  Reasoning effort for the current CLI session
-# (low|medium|high)". Claude'un kümesinden dar; bu yüzden seviye listesi
-# sağlayıcı başına tutulur.
+# `agy -p --help` bir `--effort low|medium|high` bayrağı gösterir AMA agy'nin
+# modelleri eforu ADLARINA GÖMER (`gemini-3.8-flash-high`). İkisi birlikte
+# verilince CLI turu hiç başlatmaz:
+#   error: invalid model selection (--model "gemini-3.8-flash-high"
+#   --effort "medium"): --model gemini-3.8-flash-high conflicts with
+#   --effort=medium
+# Bu yüzden argv'ye `--effort` HİÇ yazılmaz; efor model adıyla ifade edilir.
+# Bu liste yalnızca eski ayarların onarımı için "bilinen seviye kümesi"dir;
+# bir modelin GERÇEK seçenekleri `effort_levels()` ile katalogdan gelir.
 AGY_EFFORT_LEVELS = ["low", "medium", "high"]
 DEFAULT_AGY_EFFORT = "high"
 
@@ -205,10 +212,21 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         _current = config.selected_model or ""
         self.selected_model: str = _current if self._is_agy_model(_current) else _default
         self.current_model: str = self.selected_model or config.model_fallback_name
-        # Akıl yürütme eforu ayardan gelir; geçersiz değer güvenli varsayılana
-        # düşer (geçersiz --effort değeri turu hiç başlatmaz).
+        # Efor MODELDEN türer: tek gerçek kaynak model adının son ekidir. Ayardaki
+        # değer yalnızca model son eksizse (ör. `claude-sonnet-4-6`) veya modelde
+        # o varyant yoksa devreye girer ve UYUMLU hâle onarılır — kullanıcının
+        # Claude'da seçtiği "xhigh"/"max" agy'ye geçince geçersiz bir ad üretirdi.
+        _model_effort = provider_mod.split_agy_model(self.selected_model)[1]
         _effort = (getattr(config, "provider_effort", {}) or {}).get("agy", "")
-        self.selected_effort: str = _effort if _effort in AGY_EFFORT_LEVELS else DEFAULT_AGY_EFFORT
+        self.selected_effort: str = (
+            _model_effort
+            or (_effort if _effort in AGY_EFFORT_LEVELS else DEFAULT_AGY_EFFORT)
+        )
+        if (getattr(config, "provider_effort", {}) or {}).get("agy") != self.selected_effort:
+            try:
+                config.provider_effort["agy"] = self.selected_effort
+            except Exception:
+                pass
         self.current_conversation_id: Optional[str] = config.last_conversation_id
         self.total_tokens_used: int = 0
         # Arka plan görevlerinin (damıtma, konsolidasyon, zamanlanmış araştırma)
@@ -398,6 +416,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             return False
         self.selected_model = name
         self.current_model = name
+        # Efor model adının son ekidir: model değişince efor rozeti de değişir,
+        # aksi hâlde kutu `pro-low` modelinde "high" göstermeye devam ederdi.
+        _eff = provider_mod.split_agy_model(name)[1]
+        if _eff:
+            self.selected_effort = _eff
+            try:
+                config.provider_effort["agy"] = _eff
+            except Exception:
+                pass
         config.selected_model = name
         try:
             config.provider_models["agy"] = name
@@ -414,23 +441,107 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             return name
         return self.selected_model
 
-    def effort_levels(self) -> List[str]:
-        """`agy --effort` seviyeleri (`agy -p --help` ile doğrulandı)."""
-        return list(AGY_EFFORT_LEVELS)
+    def known_agy_models(self) -> List[str]:
+        """Efor varyantlarını çözerken kullanılacak model kataloğu (canlı > yedek)."""
+        live = [str(m) for m in (getattr(config, "available_models", []) or [])]
+        return live or list(provider_mod.FALLBACK_AGY_MODELS)
 
-    def set_effort(self, level: str) -> None:
-        """Kalıcı efor seviyesini ayarlar; geçersiz seviye reddedilir."""
+    def effort_levels(self) -> List[str]:
+        """
+        Seçili modelin TABANI için gerçekten var olan efor varyantları.
+
+        agy'de efor model adının son ekidir; sabit bir üçlü liste yanlıştı:
+        `gemini-3.1-pro` yalnızca low/high sunuyor, `claude-sonnet-4-6` hiç efor
+        sunmuyor. Arayüz kutusu bu listeyle doldurulur; boşsa kutu gizlenmeli.
+        """
+        return provider_mod.effort_levels_for(
+            "agy", self.selected_model, available=self.known_agy_models()
+        )
+
+    def set_effort(self, level: str) -> bool:
+        """
+        Kalıcı efor seviyesini ayarlar — agy'de bu MODELİ DEĞİŞTİRMEK demektir.
+
+        Dönüş True: seçim uygulandı. Geçersiz seviye (o modelde böyle bir varyant
+        yok) ValueError yükseltir; arayüz kutusu zaten `effort_levels()` ile
+        doldurulduğu için buraya ancak eski/zehirli bir ayar düşer.
+        """
         low = (level or "").strip().lower()
-        if low not in AGY_EFFORT_LEVELS:
+        levels = self.effort_levels()
+        if not levels:
             raise ValueError(
-                f"Geçersiz efor '{level}'. Geçerli: {', '.join(AGY_EFFORT_LEVELS)}."
+                f"'{self.selected_model}' modelinde efor seçimi yok "
+                f"(efor model adının son ekidir)."
+            )
+        if low not in levels:
+            raise ValueError(
+                f"Geçersiz efor '{level}'. Geçerli: {', '.join(levels)}."
             )
         self.selected_effort = low
+        new_model = provider_mod.compose_agy_model(
+            self.selected_model, low, available=self.known_agy_models()
+        )
+        self.selected_model = new_model
+        self.current_model = new_model
         try:
+            config.selected_model = new_model
+            config.provider_models["agy"] = new_model
             config.provider_effort["agy"] = low
             config.save_settings()
         except Exception:
             pass
+        try:
+            bus.model_detected.emit(new_model)
+        except Exception:
+            pass
+        return True
+
+    def effort_for_prompt(
+        self, prompt: str, boost: bool = False, default_effort: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Bu tur icin istenen efor: istemdeki `/effort <seviye>` > boost >
+        `default_effort` (bu kosuya ACIKCA verilen modelin son eki) > kalici.
+
+        `default_effort` neden var: agy'de efor model adinin son ekidir. Kart
+        `gemini-3.8-flash-medium` sectiginde ust cubugun kalici eforu ("low")
+        bu son eki eziyordu; canli kosumda argv `--model gemini-3.8-flash-low`
+        cikiyordu (kartin modeli yurutmeye hic gecmiyordu). Acik secim kalici
+        ayardan gucludur; yalniz istemdeki `/effort` ve boost onu asar.
+
+        Donus None: modelin son ekine dokunma (efor varyanti olmayan modeller).
+        """
+        levels = self.effort_levels()
+        if not levels:
+            return None
+        m = re.search(r'(?:^|\s)/effort\s+([A-Za-z]+)\b', prompt or "", re.IGNORECASE)
+        if m and m.group(1).lower() in levels:
+            return m.group(1).lower()
+        if boost or re.search(r'(?:^|\s)/boost\b', prompt or "", re.IGNORECASE) or any(
+            k in (prompt or "").lower()
+            for k in ["otonom kodlama", "proje geliştir", "geliştir", "boost",
+                      "teamwork", "subagent", "alt ajan"]
+        ):
+            return "high" if "high" in levels else levels[-1]
+        if default_effort and default_effort in levels:
+            return default_effort
+        return self.selected_effort if self.selected_effort in levels else None
+
+    def _explicit_run_effort(self, model_name):
+        """Bu kosuya ACIKCA verilen modelin efor son eki (yoksa None)."""
+        name = (model_name or "").strip()
+        if not name or not self._is_agy_model(name):
+            return None
+        return provider_mod.split_agy_model(name)[1] or None
+
+    def apply_effort_to_model(self, model_name: str, effort: Optional[str]) -> str:
+        """Model adının efor son ekini bu turluk `effort` ile değiştirir."""
+        name = (model_name or "").strip()
+        if not name or not effort:
+            return name
+        return provider_mod.compose_agy_model(
+            name, effort, available=self.known_agy_models()
+        )
 
     def fetch_available_models(self) -> List[str]:
         """Dynamically fetch supported models from 'agy models' CLI."""
@@ -655,9 +766,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         max_steps: Optional[int] = None,
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
+        stream_meta: Optional[dict] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
+
+        stream_meta: `bus.agent_stream` yükünü etiketleyen bağlam
+        ({"agent", "office", "card_id"}). Çağıran (ofis harness'ı / görev
+        pompası) geçmezse alanlar boş kalır ve akış yine yayılır — sahne o
+        olayları etiketsiz "entropy" avatarına düşürür.
 
         max_steps: akıştaki araç çağrısı olaylarının tavanı. Aşılırsa süreç
         `terminate_background_task` ile öldürülür ve görev `failed` biter.
@@ -703,10 +820,34 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
-                  model, agent_spec),
+                  model, agent_spec, stream_meta),
             daemon=True
         )
         thread.start()
+
+    def send_followup(self, task_id: str, text: str) -> bool:
+        """
+        Koşan bir kart sürecine stdin üzerinden ek kullanıcı mesajı gönderir.
+
+        Sahnede bir sprite'a tıklayıp o ajanın terminaline yazmanın (10.2)
+        altyapısı. agy'nin NDJSON kullanıcı olayı, uzun prompt yolunda zaten
+        kullanılan `build_stdin_prompt_payload` ile birebir aynıdır — ikinci bir
+        şema icat edilmez. Süreç yoksa, stdin borusu yoksa ya da kapanmışsa
+        False döner (çağıran o zaman kullanıcıya "terminal kapalı" der).
+        """
+        if not text or not str(text).strip():
+            return False
+        with self._lock:
+            proc = self._background_processes.get(task_id)
+        stdin = getattr(proc, "stdin", None) if proc is not None else None
+        if stdin is None or getattr(stdin, "closed", False):
+            return False
+        try:
+            stdin.write(build_stdin_prompt_payload(str(text)))
+            stdin.flush()
+        except Exception:
+            return False
+        return True
 
     def _conversation_usage_delta(
         self, conversation_id: str, usage: Dict[str, int], store_only: bool = False
@@ -756,7 +897,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         max_steps: Optional[int] = None,
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
+        stream_meta: Optional[dict] = None,
     ):
+        emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -833,28 +976,22 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 "--add-dir", str(project_dir),
             ]
             # Kartın modeli bu koşuya uygulanır (Faz 9.5); yoksa oturum modeli.
+            # Efor önceliği: prompt'taki tek seferlik `/effort <seviye>` >
+            # boost/teamwork sezgisi > modelin kendi son eki. agy'de efor MODEL
+            # ADININ PARÇASI olduğu için ayrı bayrak değil, ad yeniden bestelenir.
             run_model = self.model_for_run(model)
+            run_model = self.apply_effort_to_model(
+                run_model,
+                self.effort_for_prompt(
+                    prompt, default_effort=self._explicit_run_effort(model)
+                ),
+            )
             if run_model and run_model != config.model_fallback_name:
                 cmd.extend(["--model", run_model])
             if agent:
                 cmd.extend(["--agent", agent])
             if conversation_id:
                 cmd.extend(["--conversation", str(conversation_id)])
-
-            # Efor önceliği: prompt'taki tek seferlik `/effort <seviye>` >
-            # boost/teamwork sezgisi > kalıcı ayar (self.selected_effort).
-            effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', prompt, re.IGNORECASE)
-            if effort_m:
-                effort = effort_m.group(1).lower()
-            elif (
-                re.search(r'(?:^|\s)/boost\b', prompt, re.IGNORECASE) or
-                any(k in prompt.lower() for k in ["otonom kodlama", "proje geliştir", "geliştir", "boost", "teamwork", "subagent", "alt ajan"])
-            ):
-                effort = "high"
-            else:
-                effort = self.selected_effort
-            if effort in AGY_EFFORT_LEVELS:
-                cmd.extend(["--effort", effort])
 
             # Detect any explicit Windows paths in prompt and grant access via --add-dir
             for p_obj in extract_windows_paths(prompt):
@@ -967,9 +1104,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                 params = step.get("tool_info", {}).get("parameters") or step.get("parameters", {})
                                 state = step.get("state", "ACTIVE")
                                 duration = step.get("duration_seconds", 0.0)
+                                tool_payload = self._tool_payload(tool_name, params)
                                 if state == "ACTIVE":
                                     param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
                                     bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                    emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
                                     bus.core_pulse_triggered.emit(0.7)
                                 elif state == "DONE":
                                     out = step.get("output") or step.get("result") or step.get("content")
@@ -977,7 +1116,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                         out_str = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
                                         bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n   Sonuç: {out_str[:300]}...\n")
                                     else:
+                                        out_str = ""
                                         bus.terminal_output_received.emit(f"[✔ ARAÇ TAMAMLANDI: {tool_name} ({duration:.2f}s)]\n")
+                                    emit_stream("tool_result", out_str, tool=tool_payload)
                                     bus.core_pulse_triggered.emit(0.5)
                                 elif state in ["ERROR", "FAILED"]:
                                     err = step.get("error") or step.get("message")
@@ -985,6 +1126,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                         bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n   Hata: {str(err)[:300]}...\n")
                                     else:
                                         bus.terminal_output_received.emit(f"[❌ ARAÇ HATASI: {tool_name}]\n")
+                                    emit_stream("error", str(err or f"{tool_name} aracı hata verdi"), tool=tool_payload)
                                     bus.core_pulse_triggered.emit(0.3)
                             else:
                                 call = step.get("tool_call")
@@ -996,6 +1138,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                         bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}]\n   Parametreler: {param_str}...\n")
                                     else:
                                         bus.terminal_output_received.emit(f"\n[🔧 Otonom Görev Aracı: {tool_name}...]\n")
+                                    tool_payload = self._tool_payload(tool_name, params)
+                                    emit_stream("tool_call", f"{tool_name}: {tool_payload['input_summary']}", tool=tool_payload)
                                     bus.core_pulse_triggered.emit(0.6)
 
                                 res = step.get("tool_result")
@@ -1006,6 +1150,11 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                         bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n   Sonuç: {str(res_content)[:300]}...\n")
                                     else:
                                         bus.terminal_output_received.emit(f"[✔ Otonom Araç Tamamlandı: {tool_name}]\n")
+                                    emit_stream(
+                                        "tool_result",
+                                        str(res_content or ""),
+                                        tool=self._tool_payload(tool_name, None),
+                                    )
                                     bus.core_pulse_triggered.emit(0.4)
 
                             # 2. Thinking telemetry
@@ -1022,14 +1171,21 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             step_idx = step.get("step_index", 1)
                             if thought and isinstance(thought, str) and thought.strip():
                                 bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
+                                emit_stream("thinking", thought.strip())
                                 bus.core_pulse_triggered.emit(0.5)
                             elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
                                 bus.terminal_output_received.emit(f"[🧠 Otonom Görev Düşünülüyor (Adım #{step_idx})...]\n")
+                                emit_stream("status", f"Düşünülüyor (adım #{step_idx})…")
                                 bus.core_pulse_triggered.emit(0.5)
 
                             # 3. Text delta
                             if text_delta:
                                 bus.terminal_output_received.emit(text_delta)
+                                # Kart yolunda `token_chunk_received` BUGÜNE DEK
+                                # hiç yayılmıyordu (yalnızca sohbet yolunda);
+                                # eski tüketiciler için geriye uyum.
+                                bus.token_chunk_received.emit(text_delta)
+                                emit_stream("text", text_delta)
                                 full_response_acc.append(text_delta)
                                 bus.core_pulse_triggered.emit(0.5)
 
@@ -1038,6 +1194,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             resp = result.get("response", "")
                             if not full_response_acc and resp:
                                 bus.terminal_output_received.emit(resp)
+                                bus.token_chunk_received.emit(resp)
+                                emit_stream("text", resp)
                                 full_response_acc.append(resp)
 
                             # Konuşma kimliği: ofis çağrıları (plan → değerlendirme
@@ -1064,6 +1222,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
                     except json.JSONDecodeError:
                         bus.terminal_output_received.emit(raw_line)
+                        bus.token_chunk_received.emit(raw_line)
+                        emit_stream("text", raw_line)
                         full_response_acc.append(raw_line)
 
                 # Yazıcı iş parçacigi normalde okuma bitmeden tamamlanir; yine de
@@ -1077,6 +1237,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 execution_error = str(e)
                 err_msg = f"[Otonom Görev Hata] {task_name} yürütülemedi: {execution_error}\n"
                 bus.terminal_output_received.emit(err_msg)
+                emit_stream("error", err_msg)
                 full_response_acc.append(err_msg)
                 ret_code = -1
             finally:
@@ -1142,6 +1303,12 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             # Kapanışta süreci biz öldürdük: işçi burada "başarısız" yazsaydı
             # shutdown()'ın koyduğu CANCELLED'ın üstüne biner ve kullanıcı her
             # normal kapatmadan sonra sahte bir arıza kaydı görürdü.
+
+            # Sahne için kart bitişi: başarı "idle" (volta), hata "error".
+            if success:
+                emit_stream("result", full_text)
+            else:
+                emit_stream("error", execution_error or full_text or "Görev başarısız.")
 
             # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
             notified["done"] = True
@@ -1226,6 +1393,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 self._notify_result(on_result, f"Otonom görev kritik hata: {outer_err}", False)
             bus.task_completed.emit(task_id, False)
             bus.terminal_output_received.emit(f"\n[Otonom Görev Kritik Hata]: {outer_err}\n")
+            emit_stream("error", f"Otonom görev kritik hata: {outer_err}")
         finally:
             if write_acquired:
                 try:
@@ -1247,6 +1415,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         mode: str = "accept-edits",
         project_path: Optional[str] = None
     ):
+        # Sohbet yolu da sahneye görünür: Entropy'nin kendi avatarı
+        # (agent="entropy", office="", card_id="") aynı sözleşmeden beslenir.
+        emit_stream = self._agent_stream_emitter("", None, None)
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -1529,19 +1700,17 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 "--add-dir", str(project_dir),
             ]
 
-        if self.selected_model and self.selected_model != config.model_fallback_name:
-            cmd.extend(["--model", self.selected_model])
-
-        # Regex-based /effort command detection or automatic boost/teamwork high effort
-        effort_m = re.search(r'(?:^|\s)/effort\s+(low|medium|high)\b', raw_user_prompt, re.IGNORECASE)
-        if effort_m:
-            effort = effort_m.group(1).lower()
-        elif is_boost_intent or is_teamwork_intent:
-            effort = "high"
-        else:
-            effort = self.selected_effort
-        if effort in AGY_EFFORT_LEVELS:
-            cmd.extend(["--effort", effort])
+        # Efor agy'de ayrı bayrak DEĞİL, model adının son ekidir; `--effort` ile
+        # son ekli model birlikte verilirse CLI turu hiç başlatmaz.
+        run_model = self.apply_effort_to_model(
+            self.selected_model,
+            self.effort_for_prompt(
+                raw_user_prompt,
+                boost=bool(is_boost_intent or is_teamwork_intent),
+            ),
+        )
+        if run_model and run_model != config.model_fallback_name:
+            cmd.extend(["--model", run_model])
 
         if image_attachments:
             for img in image_attachments:
@@ -1632,6 +1801,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             if state == "ACTIVE":
                                 param_str = json.dumps(params, ensure_ascii=False)[:300] if params else "{}"
                                 bus.terminal_output_received.emit(f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {tool_name}]\n   Parametreler: {param_str}...\n")
+                                _tp = self._tool_payload(tool_name, params)
+                                emit_stream("tool_call", f"{tool_name}: {_tp['input_summary']}", tool=_tp)
                                 bus.core_pulse_triggered.emit(0.7)
                             elif state == "DONE":
                                 out = step.get("output") or step.get("result") or step.get("content")
@@ -1684,6 +1855,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                         step_idx = step.get("step_index", 1)
                         if thought and isinstance(thought, str) and thought.strip():
                             bus.terminal_output_received.emit(f"[🧠 Düşünce (Adım #{step_idx})]: {thought.strip()}\n")
+                            emit_stream("thinking", thought.strip())
                             bus.core_pulse_triggered.emit(0.6)
                         elif (step_type in ["agent_thought", "thinking", "thought", "reasoning"] or (step_type == "agent_response" and not text_delta)):
                             bus.terminal_output_received.emit(f"[🧠 Düşünülüyor / Akıl Yürütülüyor (Adım #{step_idx})...]\n")
@@ -1694,6 +1866,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             full_response_acc.append(text_delta)
                             try:
                                 bus.token_chunk_received.emit(text_delta)
+                                emit_stream("text", text_delta)
                                 bus.core_pulse_triggered.emit(0.8)
                             except (RuntimeError, Exception):
                                 pass
@@ -1712,6 +1885,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                             bus.token_chunk_received.emit(resp)
                         resp_len = len(resp or "".join(full_response_acc))
                         bus.terminal_output_received.emit(f"\n[✔ Yanıt Akışı Tamamlandı ({resp_len} karakter)]\n")
+                        emit_stream("result", resp or "".join(full_response_acc))
 
                         usage = result.get("usage")
                         if usage:

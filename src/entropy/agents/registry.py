@@ -39,6 +39,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from entropy.core import paths as _paths
+
 # Kasa içindeki göreli konumlar. Tek yerde durur: hem izleyici hem görev kartları
 # hem de manifest'e yazılan "şuraya dosya koy" yönergesi buradan okur.
 AGENTS_SUBDIR = "Entropy/Agents"
@@ -47,7 +49,8 @@ AGENTS_SUBDIR = "Entropy/Agents"
 # `Entropy/Desk/**` altındaki hiçbir tanımı içeremez (Ek-1, Faz 9). Gerçek Desk
 # yolları `entropy.agents.desk_registry` içinde tanımlı; buraya import etmek
 # döngüsel bağımlılık olurdu.
-DESK_ROOT_SUBDIR = "Entropy/Desk"
+DESK_ROOT_SUBDIR = _paths.DESK_ROOT_SUBDIR
+LEGACY_DESK_ROOT_SUBDIRS = _paths.LEGACY_DESK_ROOT_SUBDIRS
 
 # Hangi tohum tanımların bir kez yazıldığını tutan işaret dosyası. Ajanlar ve
 # ofisler aynı deseni kullanır (her biri kendi klasöründe).
@@ -450,7 +453,8 @@ class AgentRegistry:
 
     def _is_desk_path(self, path: Path) -> bool:
         """
-        Yol Desk'in kasasının (`Entropy/Desk`) altında mı?
+        Yol Desk'in kasasının (`<kasa>/Desk`, eski kurulumda `Entropy/Desk`)
+        altında mı?
 
         Ek-1 (Faz 9): Entropy'nin kadrosu ofis ajanlarını ASLA içermez. Dizin
         ayrımı zaten bunu sağlıyor, ama bağlantı (junction/symlink) ya da elle
@@ -458,10 +462,16 @@ class AgentRegistry:
         """
         try:
             resolved = path.resolve()
-            desk_root = (self.vault_path / DESK_ROOT_SUBDIR).resolve()
+            roots = [(self.vault_path / DESK_ROOT_SUBDIR).resolve()]
+            # Eski kök de dışlanır: geçiş henüz koşmamış bir kasada (ya da
+            # kullanıcı elle geri koyduysa) ofis ajanı Entropy kadrosuna
+            # sızmasın.
+            roots += [
+                (self.vault_path / sub).resolve() for sub in LEGACY_DESK_ROOT_SUBDIRS
+            ]
         except OSError:
             return False
-        return desk_root == resolved or desk_root in resolved.parents
+        return any(r == resolved or r in resolved.parents for r in roots)
 
     def list(self) -> List[AgentSpec]:
         """Diskteki tüm ajanlar (ada göre sıralı); bozuk dosyalar atlanır."""

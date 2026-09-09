@@ -2,6 +2,7 @@
 
 import datetime
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from entropy.core import paths as _paths
 from entropy.core.config import STATE_DIR, config
 
 # Kasa grafigi onbellegi.
@@ -51,7 +53,9 @@ _VAULT_GROUP_TO_TYPE: Dict[str, str] = {
 # ofis raporları (`Desk/Offices/<ofis>/reports/`, KÜÇÜK harf) Rapor Merkezi'ne
 # hiç girmiyordu. Artık tür şu sırayla belirlenir:
 #   1) YAML ön bilgisindeki `type:` alanı (query | office_report | session | report)
-#   2) dizin kuralı (Reports/, reports/, wiki/queries/, Desk/Offices/*/reports/)
+#   2) dizin kuralı (Reports/, reports/, wiki/queries/, Desk/Offices/*/reports/).
+#      Kural "offices" klasör adına bakar, tam köke değil; Faz 10-B'de kök
+#      `Entropy/Desk` -> `Desk` olarak değişti ama kural aynen geçerli.
 REPORT_KINDS: Tuple[str, ...] = ("report", "query", "office_report", "session")
 
 # Ön bilgideki `type:` değeri -> rapor türü. Bilinmeyen değer normal rapordur.
@@ -366,6 +370,9 @@ class ObsidianVaultManager:
     def __init__(self, vault_path: Optional[Path] = None):
         self.vault_path = Path(vault_path or config.obsidian_vault_path)
         self.entropy_dir = self.vault_path / "Entropy"
+        # Desk'in veri kökü (Faz 10-B) kasa kökündedir; rapor taramasının
+        # İKİNCİ köküdür (ofis raporları `Desk/Offices/<ofis>/reports/`).
+        self.desk_dir = _paths.desk_root(self.vault_path)
         self.daily_notes_dir = self.entropy_dir / "DailyNotes"
         self.reports_dir = self.entropy_dir / "Reports"
         self.projects_dir = self.entropy_dir / "Projects"
@@ -558,7 +565,11 @@ class ObsidianVaultManager:
             # Veritabanı yolu doğrudan kurulur: `CognitiveMemorySystem()`
             # kurmak gömme modelini yüklüyor (yüzlerce ms) — rapor listesi için
             # tek bir salt-okunur SQL sorgusu yeter.
-            db_path = Path.home() / ".entropy" / "cognitive_memory.db"
+            from entropy.memory.supabase.cognitive_memory import (
+                default_cognitive_db_path,
+            )
+
+            db_path = default_cognitive_db_path()
             if not db_path.exists():
                 return {}
             with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
@@ -587,7 +598,11 @@ class ObsidianVaultManager:
         `mtime`'a değil `(mtime, size)` çiftine bakılır; OneDrive eşitlemesi
         mtime'ı koruyarak içerik değiştirebiliyor, boyut ise değişir.
         """
-        if not self.entropy_dir.exists():
+        # Faz 10-B: Desk'in veri kökü kasa köküne (`<kasa>/Desk`) çıktı; ofis
+        # raporları artık `Entropy/**` taramasına DÜŞMÜYOR. İkinci kök eklenmezse
+        # Rapor Merkezi ofis raporlarını sessizce kaybederdi.
+        roots = [d for d in (self.entropy_dir, self.desk_dir) if d.exists()]
+        if not roots:
             return []
 
         key = str(self.entropy_dir)
@@ -603,7 +618,9 @@ class ObsidianVaultManager:
         out: List[Tuple[Path, str, float]] = []
         sigs: Dict[str, Tuple[float, int]] = {}
         entries: Dict[str, Dict[str, Any]] = {}
-        for file, st in _walk_markdown(self.entropy_dir):
+        for file, st in itertools.chain.from_iterable(
+            _walk_markdown(root) for root in roots
+        ):
             path_kind = _report_kind_from_path(file)
             in_daily = "DailyNotes" in file.parts
             if not path_kind and not in_daily:
@@ -718,11 +735,38 @@ class ObsidianVaultManager:
         """
         return self.get_research_reports(kinds=kinds, cache=cache)
 
+    def _note_roots(self) -> List[Path]:
+        """
+        Not taramasının kökleri: uygulamanın kendi kasası + Desk veri kökü.
+
+        Faz 10-B'de Desk verisi `<kasa>/Desk` altına çıktı. Yalnız
+        `entropy_dir` taranırsa ofis/ajan düğümleri bilgi grafından düşer.
+        """
+        roots: List[Path] = []
+        for d in (self.entropy_dir, getattr(self, "desk_dir", None)):
+            if d is None or not d.exists():
+                continue
+            if any(str(d) == str(r) for r in roots):
+                continue
+            roots.append(d)
+        return roots
+
+    def _all_notes(self) -> List[Path]:
+        """Her iki kökteki markdown dosyaları (yinelenenler tekilleştirilir)."""
+        seen: set = set()
+        out: List[Path] = []
+        for root in self._note_roots():
+            for f in root.rglob("*.md"):
+                key = str(f)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(f)
+        return out
+
     def list_all_notes(self) -> List[Path]:
         """List all markdown notes across all subdirectories of the Obsidian exocortex."""
-        if not self.entropy_dir.exists():
-            return []
-        return list(self.entropy_dir.rglob("*.md"))
+        return self._all_notes()
 
     def extract_wikilinks(self, content: str) -> List[Dict[str, str]]:
         """
@@ -754,7 +798,7 @@ class ObsidianVaultManager:
         inbound: Dict[str, List[str]] = {}
         aliases_map: Dict[str, Set[str]] = {}
 
-        for file in self.entropy_dir.rglob("*.md"):
+        for file in self._all_notes():
             source_stem = file.stem
             outbound.setdefault(source_stem, [])
             inbound.setdefault(source_stem, [])
@@ -826,7 +870,7 @@ class ObsidianVaultManager:
 
         # Orphaned notes check
         orphans = [
-            f.stem for f in self.entropy_dir.rglob("*.md")
+            f.stem for f in self._all_notes()
             if f.stem != "MEMORY" and f.stem != "BELLEK_HARITASI" and len(inbound.get(f.stem, [])) == 0
         ]
         if orphans:
@@ -845,7 +889,7 @@ class ObsidianVaultManager:
         Tek bir rglob taramasiyla uretilir; hem imza hem de sonraki adimlarin
         dosya listesi buradan gelir (eskiden iki ayri tarama yapiliyordu).
         """
-        files = list(self.entropy_dir.rglob("*.md"))
+        files = self._all_notes()
         h = hashlib.sha1()
         for file in files:
             h.update(str(file).encode("utf-8", errors="ignore"))
@@ -1096,18 +1140,22 @@ class ObsidianVaultManager:
         # baglanir; degilse sentetik bir `agent` dugumu uretilir: ofis kartinda
         # adi gecen ama kasada dosyasi olmayan ajan da grafikte gorunmelidir.
         for office_id, member, role_label in office_member_links:
-            key = member.strip().lower()
+            # Faz 10-A: `member` on bilgiden gelir; bozuk/bos bir OFFICE.md
+            # None uretebilir ve `None.strip()` tum grafik yenilemesini
+            # cokertirdi (loglardaki 2 traceback bu yoldan geliyordu).
+            member = (member or "").strip()
+            key = member.lower()
             if not key:
                 continue
             agent_id = agent_ids.get(key)
             if agent_id is None:
-                agent_id = f"agent/{member.strip()}"
+                agent_id = f"agent/{member}"
                 agent_ids[key] = agent_id
                 if agent_id not in node_ids:
                     node_ids.add(agent_id)
                     nodes.append({
                         "id": agent_id,
-                        "name": member.strip(),
+                        "name": member,
                         "group": "agent",
                         "path": "",
                         **_graph_node_fields("agent", None),
@@ -1137,6 +1185,15 @@ class ObsidianVaultManager:
                 "alias": "office",
                 "is_catalog_link": False,
             })
+
+        # Faz 10-A: dugum alanlari asla None olmamali. Onbellekten (JSON) donen
+        # veri UI'da `name.strip()` gibi cagrilara giriyor; tek bir None alan
+        # tum grafigi cokertiyordu. Normalizasyon burada, tek noktada yapilir.
+        for node in nodes:
+            node["id"] = node.get("id") or ""
+            node["name"] = node.get("name") or (node["id"].split("/", 1)[-1] if node["id"] else "")
+            node["group"] = node.get("group") or "note"
+            node["path"] = node.get("path") or ""
 
         data = {"nodes": nodes, "links": links}
         _GRAPH_MEMORY_CACHE[vault_key] = (signature, data)

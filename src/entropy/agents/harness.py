@@ -25,6 +25,7 @@ süren agy süreçleri token yakmaya devam ediyordu.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -34,6 +35,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from entropy.agents.mailbox import (
+    card_comments,
+    comments_section,
     emit_terminal,
     instructions_section,
     pending_instructions,
@@ -44,6 +47,9 @@ from entropy.agents.compile import resolve_model
 from entropy.agents.registry import VALID_PROVIDERS, AgentRegistry, default_provider
 from entropy.agents.tasks import (
     ALL_CARDS,
+    CHECKPOINT_TAG,
+    PROOF_TAG,
+    RULE_TAG,
     TaskBoard,
     TaskCard,
     _now,
@@ -174,6 +180,10 @@ _CODE_TRACE_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Orkestratörün plan öncesi yapabileceği en fazla arama (Faz 10-A / 5). Sınırsız
+# araştırma tek planlama turunda kotanın büyük kısmını yakıyordu.
+MAX_RESEARCH_QUERIES = 3
+
 # Planlama bağlamına giren ofis raporu sayısı ve rapor başına karakter (B1).
 CONTEXT_REPORT_COUNT = 3
 CONTEXT_REPORT_CHARS = 1200
@@ -188,6 +198,119 @@ def orchestrator_produced_code(text: str) -> bool:
     "dosyaya yazdım" gibi açık yazma beyanları ihlaldir.
     """
     return bool(_CODE_TRACE_RE.search(text or ""))
+
+# ---------------------------------------------------------------------------
+# Faz 10-A — blok ayrıştırıcıları (kontrol noktası / kanıt / kural adayı)
+# ---------------------------------------------------------------------------
+
+# Bir sonraki köşeli etiket satırı bloğu bitirir. Etiket = satır başında, tümü
+# büyük harf (Türkçe dâhil) ve boşluk/tire içeren köşeli parantez.
+_TAG_LINE_RE = re.compile(r"^\s*\[[A-ZÇĞİIÖŞÜ][A-ZÇĞİIÖŞÜ0-9 ,.:/_—-]*\]")
+
+# Kanıt sonucu: kırmızı işaretleri yeşil işaretlerini EZER. Sıra önemli — ajan
+# "3 test kırmızıydı, düzeltince yeşil oldu" yazdığında blok yine incelenmeli;
+# kartın kendiliğinden kapanmaması, yanlışlıkla kapanmasından ucuzdur.
+_PROOF_RED_RE = re.compile(
+    r"\bk[ıi]rm[ıi]z[ıi]\b|\bred\b|\bfail(?:ed|ure|ing)?\b|\berror[s]?\b|"
+    r"\bhata\b|\bge[çc]medi\b|\d+\s+failed",
+    re.IGNORECASE,
+)
+_PROOF_GREEN_RE = re.compile(
+    r"\bye[şs]il\b|\bgreen\b|\bpass(?:ed|ing)?\b|\bba[şs]ar[ıi]l[ıi]\b|"
+    r"\bge[çc]ti\b|\bok\b|\d+\s+passed",
+    re.IGNORECASE,
+)
+# Salt araştırma kartında kanıt = üretilen dosya/rapor yolu.
+_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s,;]+|(?:\.{0,2}/)?[\w.\-]+/[\w.\-/]+\.\w{1,6}|[\w.\-]+\.(?:md|json|csv|txt|py|html)\b")
+
+
+def parse_tagged_block(text: str, tag: str) -> str:
+    """
+    `[ETİKET]` satırından bir sonraki etiket satırına kadar olan gövde.
+
+    SON eşleşme kazanır: ajan aynı bloğu birkaç kez yazdıysa geçerli olan
+    koşunun sonundaki hâlidir. Kod çiti (```) de blok sınırıdır.
+    """
+    raw = text or ""
+    idx = raw.rfind(tag)
+    if idx < 0:
+        return ""
+    lines = raw[idx + len(tag):].splitlines()
+    body: List[str] = []
+    for line in lines:
+        if line.strip().startswith("```"):
+            break
+        if body and _TAG_LINE_RE.match(line):
+            break
+        body.append(line)
+    return "\n".join(body).strip()
+
+
+def parse_checkpoint(text: str) -> str:
+    """Çıktıdaki `[KONTROL NOKTASI]` bloğunun gövdesi (yoksa boş)."""
+    return parse_tagged_block(text, CHECKPOINT_TAG)
+
+
+def parse_proof(text: str, needs_write: bool = True) -> Optional[dict]:
+    """
+    `[KANIT]` bloğu -> {"text": ..., "green": bool}; blok yoksa None.
+
+    Yazma niyeti olan kartta yeşil = test sonucu yeşil. Salt araştırma kartında
+    kanıt üretilen dosya/rapor yoludur: kırmızı işareti yoksa ve blokta bir yol
+    varsa yeşil sayılır.
+    """
+    body = parse_tagged_block(text, PROOF_TAG)
+    if not body:
+        return None
+    red = bool(_PROOF_RED_RE.search(body))
+    green = bool(_PROOF_GREEN_RE.search(body)) and not red
+    if not needs_write and not red and _PATH_RE.search(body):
+        green = True
+    return {"text": body, "green": green}
+
+
+def parse_rule_candidates(text: str) -> List[str]:
+    """Satır başındaki `[KURAL] …` satırları (aday kurallar)."""
+    out: List[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(RULE_TAG):
+            continue
+        rule = stripped[len(RULE_TAG):].strip(" :-—")
+        if rule and rule not in out:
+            out.append(rule)
+    return out
+
+
+def _flex_call(func: Callable, **kwargs):
+    """
+    Bellek katmanı fonksiyonunu İMZASINDA olan argümanlarla çağırır.
+
+    Bellek modülleri başka bir ajanda geliştiriliyor; imzaları tam olarak
+    kestirilemez. Fazla anahtar sözcük `TypeError` ile harness'ı düşürmesin
+    diye çağrı imzaya göre kırpılır.
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return func(**kwargs)
+    params = sig.parameters
+    if any(p.kind == p.VAR_KEYWORD for p in params.values()):
+        return func(**kwargs)
+    return func(**{k: v for k, v in kwargs.items() if k in params})
+
+
+# Ofis çalışma dosyaları (bellek katmanı yoksa harness kendisi yazar).
+BOARD_FILENAME = "BOARD.md"
+ARCHITECTURE_FILENAME = "ARCHITECTURE.md"
+RULES_FILENAME = "RULES.md"
+RULE_CANDIDATES_FILENAME = "RULE_CANDIDATES.md"
+CHECKPOINT_DIRNAME = "checkpoints"
+
+# Doğuş talimatının başlığı; hemen ardından okunacak dosyaların MUTLAK yolları
+# gelir. Başlık harness'ın: bellek katmanı metni üretse de istemin ilk satırı
+# her iki yolda da aynı olmalı ki ajan bölümü tanısın.
+SPAWN_HEADER = "[DOĞUŞ TALİMATI — önce oku]"
 
 # Aşama adları (bus.office_progress ikinci argümanı).
 PHASE_PLANNING = "planning"
@@ -658,18 +781,388 @@ class OfficeHarness:
             blocks.append(f"### {path.stem}\n{trim_to_sections(body, CONTEXT_REPORT_CHARS)}")
         return "\n\n".join(blocks)
 
+    # -- Faz 10-A: ofis çalışma dosyaları --------------------------------
+
+    def workspace_paths(self) -> Dict[str, Path]:
+        """
+        Ofisin pano/mimari/kural dosyalarının MUTLAK yolları.
+
+        Bellek katmanının `office_workspace.ensure_workspace` fonksiyonu varsa
+        önce o çağrılır (dosyaları o üretir); yoksa harness kendisi oluşturur.
+        Ajan katmanı bellek katmanına bağımlı olamaz: pano dosyası yoksa da
+        işçiler doğabilmeli.
+        """
+        base = self.offices.office_dir(self.office_name)
+        paths = {
+            "board": base / BOARD_FILENAME,
+            "architecture": base / ARCHITECTURE_FILENAME,
+            "rules": base / RULES_FILENAME,
+        }
+        try:
+            from entropy.memory import office_workspace  # type: ignore
+
+            result = _flex_call(
+                office_workspace.ensure_workspace,
+                office=self.office_name,
+                vault_path=self.board.vault_path,
+            )
+            if isinstance(result, dict):
+                for key in list(paths):
+                    value = result.get(key)
+                    if value:
+                        paths[key] = Path(str(value))
+                return paths
+        except Exception:
+            logger.debug("Ofis çalışma alanı bellek katmanından alınamadı: %s", self.office_name)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            for key, path in paths.items():
+                if not path.exists():
+                    path.write_text(f"# {path.stem}\n\n(henüz boş)\n", encoding="utf-8")
+        except OSError:
+            logger.warning("Ofis çalışma dosyaları yazılamadı: %s", base)
+        return paths
+
+    def spawn_section(self, card_id: Optional[str] = None, agent: str = "") -> str:
+        """
+        DOĞUŞ TALİMATI: ajan iş yapmadan ÖNCE okuyacağı dosyaların mutlak yolları.
+
+        Kullanıcının bağlayıcı tarifi: "ajan doğunca önce BOARD/ARCHITECTURE
+        dosyalarını okur". Bu yüzden bölüm hem plan hem alt kart isteminin EN
+        BAŞINDA durur. Bellek katmanının `spawn_instruction`ı varsa metni o
+        üretir (kontrol noktası özeti ve onaylı kuralları da katar); yoksa
+        harness aynı sözleşmenin yalın hâlini yazar.
+        """
+        try:
+            from entropy.memory import office_workspace  # type: ignore
+
+            self.workspace_paths()  # dosyalar yoksa önce kurulsun
+            text = _flex_call(
+                office_workspace.spawn_instruction,
+                office=self.office_name,
+                card_id=card_id,
+                agent=agent or None,
+                vault_path=self.board.vault_path,
+            )
+            if isinstance(text, str) and text.strip():
+                return f"{SPAWN_HEADER}\n{text.strip()}"
+        except Exception:
+            logger.debug("spawn_instruction bellek katmanından alınamadı: %s", self.office_name)
+        paths = self.workspace_paths()
+        lines = [
+            SPAWN_HEADER,
+            f"- PANO: {paths['board']}",
+            f"- MİMARİ: {paths['architecture']}",
+            f"- KURALLAR: {paths['rules']}",
+            "Bu üç dosyayı işe başlamadan önce oku; panodaki kendi kartından "
+            "başkasının işine girme.",
+        ]
+        card = self.board.get(card_id) if card_id else None
+        if card is not None and card.checkpoint:
+            lines.append(f"- KONTROL NOKTASI: {card.checkpoint}")
+        rules = self.approved_rules_section()
+        return "\n".join(lines) + (f"\n\n{rules}" if rules else "")
+
+    def approved_rules_section(self) -> str:
+        """Onaylı proje kuralları bölümü (bellek katmanı yoksa RULES.md gövdesi)."""
+        try:
+            from entropy.memory import promoted_rules  # type: ignore
+
+            text = _flex_call(
+                promoted_rules.rules_section,
+                office=self.office_name,
+                vault_path=self.board.vault_path,
+            )
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        except Exception:
+            logger.debug("Onaylı kurallar okunamadı: %s", self.office_name)
+        return ""
+
+    def render_board(self) -> Optional[Path]:
+        """
+        Panoyu (BOARD.md) kart durumlarından yeniden yazar.
+
+        Her kart değişiminden sonra çağrılır: pano dosyası ajanların ORTAK
+        gerçekliği; koşu sırasında güncellenmezse yeni doğan işçi bitmiş işi
+        yeniden yapmaya kalkıyordu.
+        """
+        try:
+            from entropy.memory import office_workspace  # type: ignore
+
+            result = _flex_call(
+                office_workspace.render_board,
+                office=self.office_name,
+                vault_path=self.board.vault_path,
+            )
+            if result:
+                return Path(str(result))
+        except Exception:
+            logger.debug("render_board bellek katmanında yok: %s", self.office_name)
+        path = self.workspace_paths()["board"]
+        try:
+            cards = self.board.list(office=self.office_name)
+        except Exception:
+            return None
+        lines = [f"# {self.office_name} — pano", "", f"Güncellendi: {_now()}", ""]
+        parents = [c for c in cards if not c.parent]
+        for parent in parents:
+            lines.append(f"## {parent.title} · {parent.status} · `{parent.id}`")
+            for child in self._children(parent):
+                mark = "x" if child.status == "done" else " "
+                extra = f" · kanıt: {'var' if child.proof else 'yok'}"
+                lines.append(
+                    f"- [{mark}] {child.title} · {child.agent or '-'} · "
+                    f"{child.status}{extra} · `{child.id}`"
+                )
+            lines.append("")
+        try:
+            path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        except OSError:
+            logger.warning("Pano yazılamadı: %s", path)
+            return None
+        return path
+
+    def update_architecture(self, notes) -> Optional[Path]:
+        """Plandaki `architecture_notes` alanını ARCHITECTURE.md'ye ekler."""
+        if isinstance(notes, str):
+            notes = [notes]
+        rows = [str(n).strip() for n in (notes or []) if str(n or "").strip()]
+        if not rows:
+            return None
+        try:
+            from entropy.memory import office_workspace  # type: ignore
+
+            result = _flex_call(
+                office_workspace.update_architecture,
+                office=self.office_name,
+                text="\n".join(rows),
+                author=(self.office.orchestrator if self.office else "") or "",
+                vault_path=self.board.vault_path,
+            )
+            if result:
+                return Path(str(result))
+        except Exception:
+            logger.debug("update_architecture bellek katmanında yok: %s", self.office_name)
+        path = self.workspace_paths()["architecture"]
+        try:
+            body = path.read_text(encoding="utf-8") if path.exists() else f"# {path.stem}\n"
+            body = body.rstrip() + "\n\n## " + _now() + "\n" + "\n".join(f"- {r}" for r in rows) + "\n"
+            path.write_text(body, encoding="utf-8")
+        except OSError:
+            logger.warning("Mimari notu yazılamadı: %s", path)
+            return None
+        return path
+
+    # -- Faz 10-A: kontrol noktası / kanıt / kural adayı ------------------
+
+    def record_checkpoint(self, card: TaskCard, text: str) -> Optional[str]:
+        """
+        Çıktıdaki `[KONTROL NOKTASI]` bloğunu dosyaya yazar; yol döner.
+
+        Blok yoksa hiçbir şey yazılmaz (yanlış bir "kaldığın yer" özeti,
+        hiç özet olmamasından kötüdür).
+        """
+        block = parse_checkpoint(text or "")
+        if not block:
+            return None
+        try:
+            from entropy.memory import checkpoints  # type: ignore
+
+            fields = checkpoints.parse_checkpoint_block(text or "") or {}
+            result = _flex_call(
+                checkpoints.write_checkpoint,
+                office=self.office_name,
+                card_id=card.id,
+                author=card.agent or "",
+                summary=str(fields.get("summary") or block[:400]),
+                done=str(fields.get("done") or ""),
+                next_steps=str(fields.get("next_steps") or ""),
+                files_touched=fields.get("files_touched") or [],
+                tests=str(fields.get("tests") or ""),
+                vault_path=self.board.vault_path,
+            )
+            if result:
+                return str(result)
+        except Exception:
+            logger.debug("write_checkpoint bellek katmanında yok: %s", self.office_name)
+        path = self.offices.office_dir(self.office_name) / CHECKPOINT_DIRNAME / f"{card.id}.md"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"# {card.title or card.id}\n\nGüncellendi: {_now()}\n\n{CHECKPOINT_TAG}\n{block}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("Kontrol noktası yazılamadı: %s", path)
+            return None
+        return str(path)
+
+    def read_proof(self, text: str, needs_write: bool = True) -> Optional[dict]:
+        """
+        `[KANIT]` bloğu -> {"text", "green"}; blok yoksa None.
+
+        Bellek katmanının `parse_proof_block`ı KESİN bir sonuç veriyorsa
+        (`ok` True/False) o kazanır: "Sonuç:" alanını alan bazlı okur. Alan
+        tanınmadığında (ok=None) harness'ın kendi sezgisel okuması konuşur;
+        böylece bellek katmanı olmadan da kural yürürlükte kalır.
+        """
+        local = parse_proof(text or "", needs_write=needs_write)
+        try:
+            from entropy.memory import checkpoints  # type: ignore
+
+            data = checkpoints.parse_proof_block(text or "")
+        except Exception:
+            data = None
+        if isinstance(data, dict) and data.get("ok") is not None:
+            body = local["text"] if local else " · ".join(
+                str(data.get(k) or "") for k in ("command", "raw_result", "summary")
+            ).strip(" ·")
+            return {"text": body, "green": bool(data["ok"])}
+        return local
+
+    def resume_section(self, card: TaskCard) -> str:
+        """
+        Yeniden koşan kartın "kaldığın yer" bölümü.
+
+        Sözleşme: yeniden koşuya ESKİ ÇIKTI ya da sohbet geçmişi girmez, yalnızca
+        kontrol noktası girer. Sebep: eski çıktının tamamı hem bağlamı hem kotayı
+        şişiriyor, hem de ajan bitmiş işi yeniden anlatmaya başlıyordu.
+        """
+        if not card.checkpoint:
+            return ""
+        try:
+            from entropy.memory import checkpoints  # type: ignore
+
+            text = _flex_call(
+                checkpoints.resume_section,
+                office=self.office_name,
+                card_id=card.id,
+                vault_path=self.board.vault_path,
+            )
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        except Exception:
+            logger.debug("resume_section bellek katmanında yok: %s", self.office_name)
+        try:
+            body = Path(card.checkpoint).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        return (
+            "[KALDIĞIN YER — kontrol noktası]\n"
+            f"Kaynak: {card.checkpoint}\n{body}\n"
+            "Bu noktadan SÜRDÜR; bitmiş adımları yeniden yapma. Önceki sohbet "
+            "sende yok, tek gerçek kaynak bu blok ve pano."
+        )
+
+    def collect_rule_candidates(self, agent: str, text: str, source: str = "") -> List[str]:
+        """
+        Çıktıdaki `[KURAL] …` satırlarını ADAY olarak kaydeder ve sinyal yayar.
+
+        Ajan keşfettiği kuralı belleğe kendisi yazamaz (kullanıcının kuralı):
+        aday kuyruğa düşer, onayı kullanıcı verir.
+        """
+        rules = parse_rule_candidates(text or "")
+        if not rules:
+            return []
+        stored: List[str] = []
+        for rule in rules:
+            try:
+                from entropy.memory import promoted_rules  # type: ignore
+
+                result = _flex_call(
+                    promoted_rules.propose_rule,
+                    office=self.office_name,
+                    agent=agent or "",
+                    text=rule,
+                    source=source or "",
+                    vault_path=self.board.vault_path,
+                )
+                # `propose_rule` kural olmayan metne None döner (log satırı,
+                # yol, çok kısa cümle): o zaman aday da açılmaz.
+                if result is not None:
+                    stored.append(rule)
+                continue
+            except Exception:
+                logger.debug("propose_rule bellek katmanında yok: %s", self.office_name)
+            path = self.offices.office_dir(self.office_name) / RULE_CANDIDATES_FILENAME
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(f"- [ ] {rule} · {agent or '-'} · kaynak: {source or '-'}\n")
+                stored.append(rule)
+            except OSError:
+                logger.warning("Kural adayı yazılamadı: %s", path)
+        if stored:
+            # UI sinyali: çekirdek olay yolunda henüz yoksa sessizce atlanır.
+            try:
+                from entropy.core.event_bus import bus
+
+                signal = getattr(bus, "rules_updated", None)
+                if signal is not None:
+                    signal.emit(self.office_name, len(stored))
+            except Exception:
+                logger.debug("rules_updated sinyali yayılamadı: %s", self.office_name)
+        return stored
+
+    def _child_lead_sections(self, child: TaskCard) -> List[str]:
+        """Alt kart isteminin baş bölümleri: doğuş talimatı, kaldığın yer, yorum."""
+        spawn = self.spawn_section(child.id, agent=child.agent or "")
+        sections = [spawn]
+        # Bellek katmanının doğuş talimatı kontrol noktasını zaten katmış
+        # olabilir; aynı blok ikinci kez isteme girmesin.
+        if "[KALDIĞIN YER" not in spawn:
+            resume = self.resume_section(child)
+            if resume:
+                sections.append(resume)
+        try:
+            comments = comments_section(card_comments(
+                self.office_name,
+                [child.id, child.parent],
+                vault_path=self.board.vault_path,
+            ))
+        except Exception:
+            comments = ""
+        if comments:
+            sections.append(comments)
+        return [s for s in sections if s]
+
     def _can_web_search(self) -> bool:
-        """Kadroda web araması yapabilen (read-only / full) bir ajan var mı?"""
+        """
+        Ofiste web araması yapabilen bir ajan var mı?
+
+        Orkestratör ÖNCE bakılır: `office.members` orkestratörü kasten dışarıda
+        bırakıyor (desk_registry `_read`), bu yüzden yalnızca üyelere bakan eski
+        kontrol her zaman False dönüyor ve araştırma adımı hiç istenmiyordu —
+        oysa araştırmayı asıl yapacak olan, `read-only` politikasıyla
+        `WebFetch, WebSearch` araçları verilmiş orkestratörün kendisi.
+        """
         office = self.office
         if office is None:
             return False
-        for name in office.members or []:
+        names = [office.orchestrator or ""] + list(office.members or [])
+        for name in names:
+            if not name:
+                continue
             spec = self.registry.get(name)
             if spec is None:
                 continue
-            if (spec.tools_policy or "").strip().lower() in ("read-only", "readonly", "full"):
+            if self._spec_has_web_tools(spec):
                 return True
         return False
+
+    @staticmethod
+    def _spec_has_web_tools(spec) -> bool:
+        """Ajanın derlenmiş araç listesinde WebSearch var mı?"""
+        try:
+            from entropy.agents.compile import _TOOLS_BY_POLICY, is_orchestrator
+
+            policy = "read-only" if is_orchestrator(spec) else (spec.tools_policy or "").lower()
+            return "WebSearch" in (_TOOLS_BY_POLICY.get(policy, "") or "")
+        except Exception:
+            return (getattr(spec, "tools_policy", "") or "").strip().lower() in (
+                "read-only", "readonly", "full",
+            )
 
     def _write_research_notes(self, card: TaskCard, data: Optional[dict]) -> List[str]:
         """
@@ -696,6 +1189,11 @@ class OfficeHarness:
             if isinstance(item, dict):
                 title = str(item.get("title") or item.get("note") or "").strip()
                 body = str(item.get("body") or item.get("detail") or "").strip()
+                # Kaynak bağlantısı notun gövdesine yazılır: bulgunun nereden
+                # geldiği sonradan denetlenebilmeli (Faz 10-A / 5).
+                link = str(item.get("source") or item.get("url") or "").strip()
+                if link:
+                    body = (body + f"\n\nKaynak: {link}").strip()
             else:
                 title = str(item or "").strip()
                 body = ""
@@ -763,19 +1261,27 @@ class OfficeHarness:
         research_schema = ""
         if self._can_web_search():
             research_block = (
-                "[ARAŞTIRMA NOTU]\nPlanlamadan önce bilgini tazele: kadronda "
-                "WebSearch yetkili ajan var. Bulgularını `research_notes` "
-                "alanına kısa maddeler hâlinde yaz; bunlar ofis belleğine "
-                "'bulgu' notu olarak kaydedilecek.\n\n"
+                "[ARAŞTIRMA NOTU]\nPlanlamadan önce bilgini tazele: WebSearch "
+                "yetkin var (araştırmayı sen yaparsın, kod yazmazsın).\n"
+                f"- En çok {MAX_RESEARCH_QUERIES} arama yap; sonra dur ve planla.\n"
+                "- Her bulgunun KAYNAK BAĞLANTISINI (`source`, http ile başlayan "
+                "URL) yaz; kaynaksız bulgu belleğe alınmaz.\n"
+                "- Bulguları `research_notes` alanına kısa maddeler hâlinde yaz; "
+                "bunlar ofis belleğine 'bulgu' notu olarak kaydedilecek.\n\n"
             )
             research_schema = (
-                ',\n "research_notes": [{"title": "...", "body": "..."}]'
+                ',\n "research_notes": [{"title": "...", "body": "...", '
+                '"source": "https://..."}]'
             )
         # Şemadaki `provider` örneği KADRODAN türer: sabit "agy" yazıldığında
         # model, kadroda yalnızca Claude ajanı olsa bile plana `agy` yazmaya
         # eğilimliydi ve claude-yalnız kurulum sessizce agy'ye düşüyordu.
         plan_provider = self._roster_provider(office)
+        # Doğuş talimatı EN BAŞTA: orkestratör de bir ajandır ve planlamadan
+        # önce panoyu/mimariyi/kuralları okumak zorundadır.
+        spawn = self.spawn_section(card.id)
         return (
+            f"{spawn}\n\n"
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
             f"{project_block}"
             f"{context_block}"
@@ -793,7 +1299,8 @@ class OfficeHarness:
             f'"provider": "{plan_provider}", "model": ""}}],\n'
             ' "new_agents": [{"name": "...", "role": "worker", "description": "...", '
             f'"provider": "{plan_provider}", "model": "", "tools_policy": "read-write", '
-            '"prompt": "..."}]'
+            '"prompt": "..."}],\n'
+            ' "architecture_notes": ["(isteğe bağlı) mimari kararın, ARCHITECTURE.md\'ye eklenecek"]'
             f"{research_schema}" + "}"
         )
 
@@ -918,6 +1425,11 @@ class OfficeHarness:
         # bir sonraki planlama bunları `orchestrator_context` üzerinden görür.
         self._write_research_notes(card, data)
 
+        # Faz 10-A: mimari kararları ARCHITECTURE.md'ye, keşfedilen kurallar
+        # ADAY kuyruğuna. Orkestratör kural dosyasını kendisi yazamaz.
+        self.update_architecture((data or {}).get("architecture_notes"))
+        self.collect_rule_candidates(office.orchestrator or "", text or "", source=card_id)
+
         children: List[str] = []
         for raw in subtasks[:MAX_SUBTASKS]:
             if not isinstance(raw, dict):
@@ -962,6 +1474,9 @@ class OfficeHarness:
             return
 
         self.board.update(replace(card, children=children, office=self.office_name, status="running"))
+        # Plan bittiği anda pano yazılır: yeni doğan işçi kendi kartını ve
+        # kardeşlerinin durumunu dosyadan görür.
+        self.render_board()
         self._save_card_state(card_id, phase=PHASE_RUNNING)
         self._emit(card_id, PHASE_RUNNING)
         self._pump(card_id)
@@ -1036,6 +1551,9 @@ class OfficeHarness:
                 # dizininde koşar; derlenmiş tanım orada duruyor.
                 agent_registry=self.registry,
                 project_path=str(self._workdir()),
+                # Faz 10-A: istemin başına doğuş talimatı + (varsa) kontrol
+                # noktasından sürdürme + koşan karta gelen yorumlar.
+                lead_sections=self._child_lead_sections(child),
             )
 
     def _on_child_done(self, card_id: str, child_id: str, ok: bool) -> None:
@@ -1060,7 +1578,60 @@ class OfficeHarness:
                         summary="", notes=(child.notes + "\n" if child.notes else "")
                         + "Proje kilidi alınamadı; sıraya geri konuldu.",
                     ))
+                    self.render_board()
+                    self._pump(card_id)
+                    return
+            # Faz 10-A: kontrol noktası + kanıtla kapatma + kural adayları.
+            child = self._close_child(child, ok)
+            self.collect_rule_candidates(child.agent, child.summary or "", source=child.id)
+        self.render_board()
         self._pump(card_id)
+
+    def _close_child(self, child: TaskCard, ok: bool) -> TaskCard:
+        """
+        Biten alt kartı kontrol noktası ve KANITA göre kapatır.
+
+        Kullanıcının bağlayıcı kuralı: işçi "bitti" diyemez; testi koşturup
+        yeşil sonucu rapora eklemek zorundadır. Bu yüzden `done` YALNIZCA yeşil
+        `[KANIT]` bloğu olan kartın hakkıdır; kanıtsız/kırmızı kart `review`de
+        insan kararını bekler. Salt araştırma kartında kanıt, üretilen
+        dosya/rapor yoludur (`card_needs_write` guard'ı).
+        """
+        text = child.summary or ""
+        fields: Dict[str, object] = {}
+        checkpoint = self.record_checkpoint(child, text)
+        if checkpoint:
+            fields["checkpoint"] = checkpoint
+        if not ok:
+            if fields:
+                child = replace(child, **fields)
+                self.board.update(child)
+            return child
+        spec = self.registry.get(child.agent) if child.agent else None
+        needs_write = card_needs_write(child, agent_spec=spec)
+        proof = self.read_proof(text, needs_write=needs_write)
+        if proof is not None and not proof["green"] and not needs_write and child.output_paths:
+            # Salt araştırma kartı: blok var ama yol yazmamış; ürettiği dosya
+            # kartın kendi `output_paths` alanında duruyorsa kanıt sayılır.
+            proof = {"text": proof["text"] + "\nÜretilen: " + ", ".join(child.output_paths),
+                     "green": True}
+        if proof is None:
+            fields["status"] = "review"
+            reason = "kanıt eksik: `[KANIT]` bloğu yok"
+        elif not proof["green"]:
+            fields["status"] = "review"
+            fields["proof"] = proof["text"]
+            reason = "kanıt kırmızı: test sonucu yeşil değil"
+        else:
+            fields["status"] = "done"
+            fields["proof"] = proof["text"]
+            reason = ""
+        if reason:
+            fields["notes"] = ((child.notes + "\n") if child.notes else "") + f"Kapanmadı — {reason}."
+            fields["verdict"] = (child.verdict + " · " if child.verdict else "") + reason
+        child = replace(child, **fields)
+        self.board.update(child)
+        return child
 
     # -- 3. değerlendirme -----------------------------------------------
 
@@ -1107,15 +1678,22 @@ class OfficeHarness:
             # metinle kolayca 100k token eder. Kart başına EVAL_SUMMARY_CHARS
             # karakter, ama cümlenin ortasından değil bölüm sınırından kesilir:
             # yarım kalan bölüm değerlendiriciye "eksik iş" gibi görünüyordu.
+            # Kanıt AYRI bölüm: değerlendirici uzun çıktının içinde kaybolan
+            # test sonucunu görmeden "yapılmış" notu veriyordu.
+            proof = (child.proof or "").strip() or "(kanıt yok)"
             blocks.append(
                 f"### id: {child.id}\nBaşlık: {child.title}\nDurum: {child.status}\n"
-                f"Kabul ölçütleri:\n{criteria}\nÇıktı özeti:\n"
+                f"Kabul ölçütleri:\n{criteria}\nKanıt:\n{proof}\nÇıktı özeti:\n"
                 f"{trim_to_sections(summary, EVAL_SUMMARY_CHARS)}"
             )
         return (
             f"[OFİS TÜZÜĞÜ — {office.name}]\n{office.charter or office.purpose}\n\n"
             f"[ÜST HEDEF]\n{card.goal or card.title}\n\n"
             f"[DEĞERLENDİRİLECEK ALT GÖREVLER]\n" + "\n\n".join(blocks) + "\n\n"
+            "[ÖLÇÜT — KANIT]\nKanıt bir ölçüttür: `[KANIT]` bloğu olmayan ya da "
+            "sonucu kırmızı olan alt görev, metni ne kadar iyi olursa olsun "
+            "0.6'nın ALTINDA not alır. Salt araştırma görevinde kanıt, üretilen "
+            "dosya/rapor yoludur.\n\n"
             "[İSTENEN ÇIKTI]\nHer alt görev için 0–1 arası not. Yalnızca TEK bir "
             "```json kod bloğu yaz:\n"
             '{"grades": [{"id": "<yukarıdaki id>", "grade": 0.0, "verdict": "...", '
@@ -1163,6 +1741,7 @@ class OfficeHarness:
                 ))
                 retried = True
         if retried:
+            self.render_board()
             self._save_card_state(card_id, phase=PHASE_RUNNING)
             self._emit(card_id, PHASE_RUNNING)
             self._pump(card_id)
@@ -1216,6 +1795,7 @@ class OfficeHarness:
             summary=report,
             output_paths=outputs,
         ))
+        self.render_board()
         self._save_card_state(card_id, phase=PHASE_DONE)
         self._release(card_id)
         self._emit(card_id, PHASE_DONE)
@@ -1502,8 +2082,15 @@ class OfficeHarness:
             if payload:
                 kwargs["agent_spec"] = payload
 
+        # Akış künyesi: orkestratör/değerlendirici çağrıları da sahnede kime
+        # ait olduğu belli olsun diye etiketlenir (kart yolu zaten geçiriyordu).
+        kwargs["stream_meta"] = {
+            "agent": agent_name or "",
+            "office": self.office_name,
+            "card_id": str(task_id or "").replace("card-", "", 1),
+        }
         for optional in ("needs_write", "project_path", "conversation_id",
-                         "model", "agent_spec"):
+                         "model", "agent_spec", "stream_meta"):
             if not _accepts_kwarg(bridge.send_background_task_async, optional):
                 kwargs.pop(optional, None)
         try:

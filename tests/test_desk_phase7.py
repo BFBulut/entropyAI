@@ -420,7 +420,8 @@ def test_window_tabs_title_and_spend_badge(qapp):
 
     window = AgentDeskWindow(office_registry=None, agent_registry=None)
     tabs = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert tabs == ["Kartlar", "Akış", "Projeler", "Bellek"]
+    # Faz 10-B: "Akış" sekmesi "Terminaller" oldu (ajan başına terminal bölmesi).
+    assert tabs == ["Kartlar", "Terminaller", "Projeler", "Bellek"]
     window.set_office("")
     assert "ENTROPY AGENT DESK" in window.header_label.text()
     assert window.windowTitle().startswith("Entropy Agent Desk ·")

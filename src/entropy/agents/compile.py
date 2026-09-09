@@ -234,7 +234,7 @@ def claude_agents_json(vault_path: Optional[Path | str] = None) -> str:
     turda yalnızca bu bayrakla taşınabilir.
 
     Desk ofis ajanları ASLA girmez: kadro yalnızca `AgentRegistry.list()`ten
-    gelir ve o da kasadaki `Entropy/Desk` altını (bağlantı/junction dâhil)
+    gelir ve o da kasadaki `Desk` kökünü (bağlantı/junction dâhil)
     ayıklar. Bir ofis ajanının Entropy'nin turunda seçilebilmesi, "Entropy'yi
     bilmeyen" bir ajanın Entropy adına konuşması demekti. Künyedeki `office`
     alanına BAKILMAZ: Entropy'nin kendi tohum ajanları da bir ofis adı taşıyor.
@@ -336,6 +336,15 @@ def compile_roots(project_dir: Optional[Path | str] = None) -> List[Path]:
     _add(APP_ROOT)
     _add(project_dir)
     _add(getattr(config, "default_project_path", None))
+    # Claude saf kipte NÖTR çalışma dizininde koşuyor (bkz. run_cwd); agy ise
+    # ajanları çalışma dizinine göre keşfediyor. Bu kök yazılmazsa oradan
+    # başlatılan bir tur hiçbir Entropy ajanını göremiyordu.
+    try:
+        from entropy.core.config import claude_workspace_path
+
+        _add(claude_workspace_path())
+    except Exception:
+        pass
     return roots
 
 

@@ -40,6 +40,58 @@ COLUMNS = [
 ]
 
 
+def card_proof(card: Any) -> Optional[Dict[str, Any]]:
+    """
+    Kartın kanıt kaydı (`proof`): komut, sonuç (`green`/`red`/`unknown`), özet.
+
+    Harness ekler; alan yoksa None döner. "Kanıt yok" ile "kanıt kırmızı"
+    ayrı şeylerdir — None ile `{"result": "red"}` karıştırılmamalıdır.
+    """
+    proof = spec_field(card, "proof", None)
+    if isinstance(proof, dict) and proof:
+        return dict(proof)
+    return None
+
+
+def card_checkpoint(card: Any, office: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Kartın kontrol noktası: önce kart alanı, yoksa kasadaki dosya.
+
+    Bellek katmanı (`entropy.memory.checkpoints`) paralel ajanda; modül ya da
+    dosya yoksa None (panel bölümü gizlenir, uydurma özet yazılmaz).
+    """
+    data = spec_field(card, "checkpoint", None)
+    if isinstance(data, dict) and data:
+        return dict(data)
+    card_id = str(spec_field(card, "id", ""))
+    office = office or str(spec_field(card, "office", ""))
+    if not card_id or not office:
+        return None
+    try:
+        from entropy.memory.checkpoints import read_checkpoint  # type: ignore
+
+        result = read_checkpoint(office, card_id)
+    except Exception:
+        return None
+    return dict(result) if isinstance(result, dict) and result else None
+
+
+def proof_is_missing(card: Any) -> bool:
+    """
+    Kart "kanıt eksik" mi? (İnceleme sütununda etiketlenir.)
+
+    İşçi testsiz "bitti" diyemez: kanıt hiç yoksa ya da kırmızıysa kart
+    incelemede işaretlenir. Bekleyen/koşan kartlar için etiket yok.
+    """
+    status = str(spec_field(card, "status", ""))
+    if column_for_status(status) != "review":
+        return False
+    proof = card_proof(card)
+    if not proof:
+        return True
+    return str(proof.get("result") or "").lower() != "green"
+
+
 def column_for_status(status: str) -> str:
     """Durumu sütun anahtarına eşler; bilinmeyen durumlar Bekliyor'a düşer."""
     status = (status or "").strip()
@@ -137,6 +189,20 @@ class TaskCardWidget(QFrame):
         meta_label.setWordWrap(True)
         layout.addWidget(meta_label)
 
+        # Faz 10-B: kanıtsız/kırmızı kanıtlı kart incelemede etiketlenir.
+        # İşçi testsiz "bitti" diyemez; etiket kartı gözden kaçırılmaz kılar.
+        self.proof_missing = proof_is_missing(card)
+        if self.proof_missing:
+            proof_label = QLabel(
+                f"<span style='background:#4A3A12; color:#FFC24D; "
+                f"font-size:{LABEL_PX}px; padding:1px 5px; border-radius:3px;'>"
+                f"kanıt eksik</span>"
+            )
+            proof_label.setToolTip(
+                "Kartta yeşil kanıt (komut + sonuç) yok; iş bitti sayılmaz."
+            )
+            layout.addWidget(proof_label)
+
         summary = str(spec_field(card, "summary", ""))
         if summary:
             short = summary if len(summary) <= 110 else summary[:107] + "…"
@@ -177,6 +243,31 @@ class TaskDetailPanel(QFrame):
         )
         layout.addWidget(self.body_label)
 
+        # Faz 10-B: "Kaldığı yer" (kontrol noktası) ve "Kanıt" bölümleri.
+        # Ajan koşusu yarıda kalınca kullanıcı nereden devam edileceğini,
+        # bittiğinde ise hangi komutun neyi doğruladığını burada görür.
+        self.checkpoint_label = QLabel("")
+        self.checkpoint_label.setWordWrap(True)
+        self.checkpoint_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.checkpoint_label.setStyleSheet(
+            f"color:{RT['text_body']}; font-size:11px; background:transparent; border:none;"
+        )
+        self.checkpoint_label.setVisible(False)
+        layout.addWidget(self.checkpoint_label)
+
+        self.proof_label = QLabel("")
+        self.proof_label.setWordWrap(True)
+        self.proof_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.proof_label.setStyleSheet(
+            f"color:{RT['text_body']}; font-size:11px; background:transparent; border:none;"
+        )
+        self.proof_label.setVisible(False)
+        layout.addWidget(self.proof_label)
+
         self.outputs_container = QWidget()
         self.outputs_layout = QVBoxLayout(self.outputs_container)
         self.outputs_layout.setContentsMargins(0, 0, 0, 0)
@@ -201,6 +292,9 @@ class TaskDetailPanel(QFrame):
         self.effort_combo = QComboBox()
         self.effort_combo.addItems(["", "low", "medium", "high"])
         self.effort_combo.setToolTip("Efor düzeyi")
+        # HOTFIX v0.7.1: efor seçenekleri sağlayıcı + modele bağlı (agy'de efor
+        # model adının son ekidir, ayrı bayrak değil).
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.budget_input = QLineEdit()
         self.budget_input.setPlaceholderText("bütçe")
         self.budget_input.setFixedWidth(72)
@@ -263,6 +357,10 @@ class TaskDetailPanel(QFrame):
             effort = str(spec_field(card, "effort", "") or "")
             if not effort and "effort:" in notes:
                 effort = notes.split("effort:", 1)[1].strip().split()[0] if notes.split("effort:", 1)[1].strip() else ""
+            # Kartta kayıtlı efor, yeni sağlayıcı/model kümesinde olmasa bile
+            # kaybolmaz: kutuya eklenip seçilir.
+            if effort and self.effort_combo.findText(effort) < 0:
+                self.effort_combo.addItem(effort)
             self.effort_combo.setCurrentText(effort)
             self.budget_input.setText(str(int(spec_field(card, "budget_tokens", 0) or 0)))
         while self.outputs_layout.count():
@@ -276,7 +374,11 @@ class TaskDetailPanel(QFrame):
                 f"<b style='color:{RT['accent']}; font-size:12px;'>GÖREV DETAYI</b>"
             )
             self.body_label.setText("Bir görev kartı seçin.")
+            self.checkpoint_label.setVisible(False)
+            self.proof_label.setVisible(False)
             return
+        self._render_checkpoint(card)
+        self._render_proof(card)
 
         status = str(spec_field(card, "status", "backlog"))
         color = STATUS_COLORS.get(status, RT["text_dim"])
@@ -306,6 +408,75 @@ class TaskDetailPanel(QFrame):
             btn.clicked.connect(self._on_open_output)
             self.outputs_layout.addWidget(btn)
 
+    # ------------------------------------------------ kontrol noktası / kanıt
+
+    def _render_checkpoint(self, card: Any) -> None:
+        """"Kaldığı yer": kontrol noktası özeti + sonraki adımlar."""
+        data = card_checkpoint(card, str(spec_field(card, "office", "")))
+        if not data:
+            self.checkpoint_label.setVisible(False)
+            self.checkpoint_label.setText("")
+            return
+        summary = str(data.get("summary") or data.get("done") or "").strip()
+        nxt = str(data.get("next_steps") or "").strip()
+        updated = str(data.get("updated_at") or "")
+        parts = [f"<b style='color:{RT['text']};'>Kaldığı yer</b>"]
+        if updated:
+            parts.append(
+                f" <span style='color:{RT['text_dim']};'>· {updated}</span>"
+            )
+        parts.append("<br>")
+        parts.append(summary or "<i>özet yok</i>")
+        if nxt:
+            parts.append(
+                f"<br><span style='color:{RT['text_dim']};'>Sonraki:</span> {nxt}"
+            )
+        files = list(data.get("files_touched") or [])
+        if files:
+            parts.append(
+                f"<br><span style='color:{RT['text_dim']};'>Dosyalar: "
+                f"{', '.join(str(f) for f in files[:6])}</span>"
+            )
+        self.checkpoint_label.setText("".join(parts))
+        self.checkpoint_label.setVisible(True)
+
+    def _render_proof(self, card: Any) -> None:
+        """"Kanıt": komut + yeşil/kırmızı rozet + özet; yoksa "kanıt yok"."""
+        proof = card_proof(card)
+        if not proof:
+            missing = proof_is_missing(card)
+            self.proof_label.setText(
+                f"<b style='color:{RT['text']};'>Kanıt</b> "
+                f"<span style='background:#4A3A12; color:#FFC24D; padding:1px 5px;"
+                f" border-radius:3px;'>kanıt yok</span>"
+                + ("<br><span style='color:" + RT["text_dim"] + ";'>"
+                   "İşçi testsiz 'bitti' diyemez.</span>" if missing else "")
+            )
+            self.proof_label.setVisible(True)
+            return
+        result = str(proof.get("result") or "unknown").lower()
+        badge = {
+            "green": ("#12331F", "#3DE8A8", "yeşil"),
+            "red": ("#4A1A1F", "#FF6B6B", "kırmızı"),
+        }.get(result, ("#33302A", "#FFC24D", "belirsiz"))
+        command = str(proof.get("command") or "")
+        summary = str(proof.get("summary") or "")
+        html_parts = [
+            f"<b style='color:{RT['text']};'>Kanıt</b> ",
+            f"<span style='background:{badge[0]}; color:{badge[1]}; padding:1px 5px;"
+            f" border-radius:3px;'>{badge[2]}</span>",
+        ]
+        if command:
+            html_parts.append(
+                f"<br><code style='color:{RT['text_body']};'>{command}</code>"
+            )
+        if summary:
+            html_parts.append(
+                f"<br><span style='color:{RT['text_dim']};'>{summary}</span>"
+            )
+        self.proof_label.setText("".join(html_parts))
+        self.proof_label.setVisible(True)
+
     # --------------------------------------------------------- eylemler
 
     def _on_provider_changed(self, provider: str) -> None:
@@ -324,6 +495,31 @@ class TaskDetailPanel(QFrame):
         else:
             self.model_combo.setCurrentText("")
         self.model_combo.blockSignals(False)
+        self._refresh_effort()
+
+    def _on_model_changed(self, _model: str) -> None:
+        self._refresh_effort()
+
+    def _refresh_effort(self) -> None:
+        combo = getattr(self, "effort_combo", None)
+        if combo is None:
+            return
+        from entropy.ui.widgets.agents_widget import populate_effort_combo
+
+        levels = populate_effort_combo(
+            combo,
+            self.provider_combo.currentText().strip(),
+            self.model_combo.currentText().strip(),
+            getattr(self.board_widget, "bridge", None),
+            allow_empty=True,
+        )
+        # Kart seçili değilken panel bütünüyle pasif kalır.
+        combo.setEnabled(bool(levels) and getattr(self, "card", None) is not None)
+
+    def effort_choices(self) -> List[str]:
+        """Test için: efor kutusundaki seçenekler (boş girdi hariç)."""
+        return [self.effort_combo.itemText(i) for i in range(self.effort_combo.count())
+                if self.effort_combo.itemText(i)]
 
     def model_choices(self) -> List[str]:
         """Test için: kutudaki model adları (boş girdi hariç)."""

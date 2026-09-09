@@ -73,7 +73,7 @@ def test_collect_recent_entries_keeps_kind_and_office(tmp_path, monkeypatch):
 
     # Ofis raporu: kasa taramasi bunu kind=office_report, office=<ad> olarak
     # kunyeler. Yol duzeni vault_manager.get_research_reports ile ayni olmali.
-    office_reports = tmp_path / "Entropy" / "Desk" / "Offices" / "finans" / "Reports"
+    office_reports = tmp_path / "Desk" / "Offices" / "finans" / "Reports"
     office_reports.mkdir(parents=True, exist_ok=True)
     (office_reports / "2026-09-09-bilanco.md").write_text(
         "---\ntitle: Bilanco Ozeti\n---\n# Bilanco\n", encoding="utf-8"

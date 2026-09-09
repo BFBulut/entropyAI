@@ -49,6 +49,7 @@ from entropy.ui.widgets.slash_prompt import (
 from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
+from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
 from entropy.ui.widgets.frameless import FramelessWindowHelper
 from entropy.ui.window_sizing import fit_window_to_screen, maximize_window_to_screen
@@ -198,7 +199,9 @@ class ZenModeWindow(QMainWindow):
         fit_combo_to_contents(self.provider_combo)
 
         # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
-        self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
+        self.effort_combo = install_effort_selector(
+            h_layout, self.bridge, self, model_combo=self.model_combo
+        )
 
         h_layout.addSpacing(6)
 
@@ -341,7 +344,22 @@ class ZenModeWindow(QMainWindow):
         self.left_tabs.addTab(self.skills_widget, "🎯 Yetenekler")
         self.left_tabs.addTab(tasks_tab, "⏰ Görevler")
         self.left_tabs.addTab(self.mcp_drawer, "🔌 MCP Sunucuları")
-        self.left_tabs.addTab(self.agents_widget, "🤖 Ajanlar")
+        # Faz 10-B: Entropy'nin KENDİ kural adayları (ofis = "entropy").
+        # Ajan bir kural keşfedince kullanıcıya burada sorulur; "Kalıcı yap"
+        # denmeden kural sistem istemine girmez.
+        self.entropy_rules_panel = RuleCandidatesPanel(office="entropy")
+        self.entropy_rules_panel.setMinimumHeight(120)
+        agents_tab = QWidget()
+        agents_tab_layout = QVBoxLayout(agents_tab)
+        agents_tab_layout.setContentsMargins(0, 0, 0, 0)
+        agents_tab_layout.setSpacing(6)
+        agents_split = QSplitter(Qt.Orientation.Vertical)
+        agents_split.addWidget(self.agents_widget)
+        agents_split.addWidget(self.entropy_rules_panel)
+        agents_split.setSizes([420, 200])
+        agents_tab_layout.addWidget(agents_split)
+        self.agents_tab = agents_tab
+        self.left_tabs.addTab(agents_tab, "🤖 Ajanlar")
 
         # Yasam tarzi arayuz (Faz 5.5): "bugun ne oldu" zaman cizelgesi ve
         # bus olaylarinin son 50'sini tutan bildirim merkezi. Ikisi de tikla
@@ -803,6 +821,18 @@ class ZenModeWindow(QMainWindow):
         if hasattr(self, "badge_model"):
             clean_name = (model_name or config.model_fallback_name).strip("[]")
             self.badge_model.setText(f"[{clean_name}]")
+        # HOTFIX v0.7.1: agy'de efor model adına gömülü; model değişince
+        # efor kutusu yeni modelin son eklerine göre yeniden dolar.
+        self._refresh_effort_combo()
+
+    def _refresh_effort_combo(self):
+        """Efor kutusunu (varsa) sağlayıcı+model değişiminden sonra tazeler."""
+        combo = getattr(self, "effort_combo", None)
+        if combo is not None:
+            try:
+                combo.refresh()
+            except Exception:
+                pass
 
     def refresh_provider_ui(self):
         """
@@ -829,7 +859,7 @@ class ZenModeWindow(QMainWindow):
             self.model_combo.blockSignals(False)
         # Faz 9: yeni saglayicinin model adlari daha uzun olabilir; kutuyu yeniden olc.
         fit_combo_to_contents(self.model_combo, min_width=180)
-
+        self._refresh_effort_combo()
 
     @Slot(int)
     def _update_tokens(self, tokens: int):

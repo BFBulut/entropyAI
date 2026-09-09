@@ -2,6 +2,7 @@
 
 import os
 import pytest
+import tempfile
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
@@ -10,6 +11,19 @@ from PySide6.QtWidgets import QApplication
 src_path = Path(__file__).parent.parent / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
+
+# --- kullanici durumu yalitimi (MODUL YUKLENIRKEN) ------------------------
+# `entropy.core.task_ledger` ice aktarilir aktarilmaz `TaskLedger()` orneginin
+# yolu sabitlenir (satir 477: `task_ledger = TaskLedger()`), yani fixture'a
+# birakilirsa gec kalinir. Ayni sekilde `CognitiveMemorySystem()` varsayilani
+# da burada tmp'ye baglanir. Olculen sizinti: kullanicinin gercek
+# `~/.entropy/tasks_ledger.db` dosyasinda `project_path` sutunu
+# `...\pytest-of-batu_\pytest-2301\...` olan satirlar.
+_USER_STATE_TMP = Path(tempfile.mkdtemp(prefix="entropy_test_state_"))
+os.environ["ENTROPY_TASK_LEDGER_DB"] = str(_USER_STATE_TMP / "tasks_ledger.db")
+os.environ.setdefault(
+    "ENTROPY_COGNITIVE_DB", str(_USER_STATE_TMP / "cognitive_memory.db")
+)
 
 @pytest.fixture
 def sample_config():
@@ -150,3 +164,41 @@ def _reset_distiller_state():
     _d._ACTIVE_TASKS.clear()
     _d._CANCELLED.clear()
     _d._RETRIES.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_cognitive_memory_db(tmp_path, monkeypatch):
+    """
+    Hicbir test uretim bellek veritabanina (`~/.entropy/cognitive_memory.db`)
+    yazmasin.
+
+    Kanit: `CognitiveMemorySystem()` yol verilmeden kurulunca varsayilani
+    `Path.home()/".entropy"` altindaydi; UI/damitici/graf testlerinin cogu yol
+    gecmiyor ve kullanicinin canli belleğine satir ekliyordu. `ENTROPY_COGNITIVE_DB`
+    ile tmp'ye yonlendirilir (kasa yalitimiyla ayni desen).
+    """
+    db = tmp_path / "cognitive" / "cognitive_memory.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ENTROPY_COGNITIVE_DB", str(db))
+    yield db
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_user_state_session(tmp_path_factory):
+    """
+    Oturum boyu: gorev defteri ve ayar dosyasi kullanicinin canli
+    `~/.entropy/tasks_ledger.db` ile `.entropy/settings.json` dosyalarina
+    DEGMESIN.
+
+    Neden oturum kapsami: test bazli monkeypatch yetmiyor; koprunun
+    `_execute_background_task_worker` is parcacigi teardown'dan sonra yaziyor
+    (kasa yalitiminda ayni yaris gorulmustu). Olculen sizinti: defterde
+    `project_path = ...pytest-of-batu_/pytest-2301/...` satirlari, ayar
+    dosyasinda ayni yolu tasiyan `default_project_path`.
+    """
+    import entropy.core.config  # noqa: F401
+
+    root = tmp_path_factory.mktemp("user_state")
+    cfg_mod = sys.modules["entropy.core.config"]
+    cfg_mod.SETTINGS_FILE = root / "settings.json"
+    yield root

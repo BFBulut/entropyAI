@@ -226,7 +226,7 @@ def test_office_roundtrip_and_no_seeds(offices, vault):
     # Tohum yok: hiçbir şey yapmadan ofis listesi boş.
     assert offices.list() == []
     spec = make_office(offices)
-    assert (vault / "Entropy" / "Desk" / "Offices" / "arastirma-ofisi" / OFFICE_FILENAME).is_file()
+    assert (vault / "Desk" / "Offices" / "arastirma-ofisi" / OFFICE_FILENAME).is_file()
     assert spec.orchestrator == "orkestrator"
     assert spec.evaluator == "degerlendirici"
     assert sorted(spec.members) == ["analist", "arastirmaci", "yazar"]

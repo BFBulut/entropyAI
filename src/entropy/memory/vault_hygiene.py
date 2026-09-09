@@ -6,10 +6,10 @@ Neyi çözüyor
 Kasada iki tür çöp birikiyor:
 
 1. `Entropy/AgentDesk/office_*` — Faz 6'da Desk ayrıldığında (tek kaynak
-   `Entropy/Desk/Offices`) geride kalan eski ofis klasörleri. Rapor taraması
+   `Desk/Offices`) geride kalan eski ofis klasörleri. Rapor taraması
    bunları zaten atlıyor (`vault_manager._REPORT_SCAN_SKIP_DIRS`), ama kasa
    gezgininde ve graf kurmada gürültü yapıyorlar.
-2. `Entropy/Desk/Offices/<ad>` altında `OFFICE.md` künyesi olmayan klasörler
+2. `Desk/Offices/<ad>` altında `OFFICE.md` künyesi olmayan klasörler
    ("hayalet ofis"): genelde yalnız `layout.json` taşırlar, ofis grafı boştur.
 
 Kural: bu modül **hiçbir şeyi silmez**. `archive_stale()` seçilen klasörleri
@@ -41,6 +41,14 @@ STALE_AGENTDESK_PATTERN = "office_*"
 def _entropy_dir(vault_path: Optional[Path] = None) -> Path:
     root = Path(vault_path) if vault_path else Path(config.obsidian_vault_path)
     return root / "Entropy"
+
+
+def _allowed_roots(vault_path: Optional[Path] = None) -> List[Path]:
+    """Arşivlenmesine izin verilen kökler: Entropy'nin verisi + Desk'in verisi."""
+    from entropy.core import paths as _paths
+
+    root = Path(vault_path) if vault_path else Path(config.obsidian_vault_path)
+    return [_entropy_dir(vault_path), _paths.desk_root(root)]
 
 
 def _dir_stats(path: Path) -> Dict[str, Any]:
@@ -88,7 +96,7 @@ def find_stale_agentdesk_dirs(
 
 def find_ghost_offices(vault_path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """
-    `Entropy/Desk/Offices/` altında `OFFICE.md` künyesi olmayan klasörler.
+    `Desk/Offices/` altında `OFFICE.md` künyesi olmayan klasörler.
 
     Bunlar Desk yüzeyinde ofis gibi görünür ama künyesiz oldukları için
     `desk_roster()` onları eksik doldurur ve ofis grafı boş kalır.
@@ -317,7 +325,13 @@ def archive_stale(
             continue
         try:
             src_resolved = src.resolve()
-            inside = src_resolved.is_relative_to(root.resolve())
+            # Faz 10-B: Desk'in veri kökü `Entropy/` altından çıktı. İzinli
+            # kökler artık İKİ tane; arşiv hedefi ise tek yerde kalır
+            # (`Entropy/_archive`), kullanıcı tek bir çöp kutusu görsün diye.
+            inside = any(
+                src_resolved.is_relative_to(allowed.resolve())
+                for allowed in _allowed_roots(vault_path)
+            )
         except (OSError, ValueError):
             inside = False
             src_resolved = src

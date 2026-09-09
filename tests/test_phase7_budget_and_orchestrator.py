@@ -19,7 +19,7 @@ from entropy.agents.harness import (
     OfficeHarness,
     orchestrator_produced_code,
 )
-from entropy.agents.registry import AgentSpec
+from entropy.agents.registry import AgentRegistry, AgentSpec
 from entropy.agents.tasks import MAX_STEPS_PER_CARD, TaskBoard, TaskCard, new_task_id
 from entropy.core.task_ledger import TaskLedger, TaskStatus
 
@@ -531,19 +531,30 @@ def test_plan_prompt_carries_memory_context_and_recent_reports(board, offices, s
     assert "Önceki bulgu 0." not in prompt
 
 
-def test_plan_prompt_asks_for_research_notes_only_with_websearch_member(board, offices, seeded):
+def test_plan_prompt_asks_for_research_notes_when_web_tools_exist(board, offices, seeded):
     harness = OfficeHarness("arastirma-ofisi", board=board, offices=offices)
     card = board.get(_office_card(board).id)
     # `arastirmaci` read-only → WebSearch var.
     prompt = harness.build_plan_prompt(offices.get("arastirma-ofisi"), card)
     assert "[ARAŞTIRMA NOTU]" in prompt and "research_notes" in prompt
 
+    # Faz 10-A / 5: kadroda WebSearch yetkili ÜYE kalmasa bile araştırma adımı
+    # istenir — orkestratörün kendisi `read-only` politikayla `WebFetch,
+    # WebSearch` alıyor ve araştırmayı asıl o yapıyor. Eski kontrol yalnızca
+    # `office.members`e bakıyordu; o liste orkestratörü kasten dışlıyor ve
+    # bölüm hiçbir ofiste açılmıyordu.
     agents = offices.agents("arastirma-ofisi")
     agents.update(AgentSpec(name="arastirmaci", role="worker", description="araştırır",
                             provider="agy", tools_policy="read-write"))
     harness2 = OfficeHarness("arastirma-ofisi", board=board, offices=offices)
     prompt2 = harness2.build_plan_prompt(offices.get("arastirma-ofisi"), card)
-    assert "[ARAŞTIRMA NOTU]" not in prompt2 and "research_notes" not in prompt2
+    assert "[ARAŞTIRMA NOTU]" in prompt2 and "research_notes" in prompt2
+
+    # Orkestratör defterden okunamıyorsa (bozuk kurulum) bölüm açılmaz.
+    empty = OfficeHarness("arastirma-ofisi", board=board, offices=offices,
+                          registry=AgentRegistry(vault_path=board.vault_path / "bos"))
+    assert "[ARAŞTIRMA NOTU]" not in empty.build_plan_prompt(
+        offices.get("arastirma-ofisi"), card)
 
 
 def test_research_notes_become_office_graph_findings(board, offices, seeded, vault):

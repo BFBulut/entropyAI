@@ -2,7 +2,7 @@
 Faz 6 — Entropy Agent Desk ofis belleği: düğüm-bağ (A-MEM) grafı.
 
 Veri kökü **Desk'in kendi kasası**dır:
-    <kasa>/Entropy/Desk/Offices/<ofis>/
+    <kasa>/Desk/Offices/<ofis>/
         OFFICE.md
         agents/<ad>/AGENT.md , MEMORY.md
         memory/graph.json          <- bu modülün deposu
@@ -37,12 +37,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from entropy.core import paths as _paths
 from entropy.core.config import config
 from entropy.memory.reconcile import tr_lower
 
 # --- sözleşme ---------------------------------------------------------------
 
-DESK_SUBDIR = "Desk"
+DESK_SUBDIR = _paths.DESK_ROOT_SUBDIR
 DESK_SCOPE_PREFIX = "desk:"
 
 # Düğüm türleri (Türkçe anahtar, UI etiketi de aynı).
@@ -94,12 +95,12 @@ def _vault_root(vault_path: Optional[Path] = None) -> Path:
 
 
 def desk_root(vault_path: Optional[Path] = None) -> Path:
-    """`<kasa>/Entropy/Desk` — Desk'in kendi veri kökü."""
-    return _vault_root(vault_path) / "Entropy" / DESK_SUBDIR
+    """`<kasa>/Desk` — Desk'in kendi veri kökü (tek kaynak: `core.paths`)."""
+    return _paths.desk_root(_vault_root(vault_path))
 
 
 def desk_offices_dir(vault_path: Optional[Path] = None) -> Path:
-    return desk_root(vault_path) / "Offices"
+    return _paths.desk_offices_dir(_vault_root(vault_path))
 
 
 def desk_office_dir(office: str, vault_path: Optional[Path] = None) -> Path:
@@ -915,7 +916,7 @@ def migrate_legacy_offices(
     vault_path: Optional[Path] = None, dry_run: bool = True
 ) -> Dict[str, Any]:
     """
-    `Entropy/Offices/*` -> `Entropy/Desk/Offices/*` taşıması ve tohum temizliği.
+    `Entropy/Offices/*` -> Desk ofis kökü taşıması ve tohum temizliği.
 
     - Tohum ofis (`arastirma-ofisi`) taşınmaz, silinir: kullanıcı ofisini
       kendisi kuracak.

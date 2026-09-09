@@ -232,7 +232,20 @@ def test_organic_layout_settles_deterministically_without_overlap(qapp, tmp_path
         pytest.skip("Node.js kurulu değil")
 
     vm = ObsidianVaultManager(vault_path=tmp_path)
-    topics = ["SABR volatilite", "CLO kredi riski", "Otonom ajan harness", "Obsidian bellek"]
+    # Baslıklar cok kelimeli: `build_similarity_links` TF-IDF esigi (0.34)
+    # korpus buyuklugune duyarlidir; iki kelimelik basliklarda ("SABR
+    # volatilite FazN") benzersiz `fazN` belirteci normalize vektorde payi
+    # ezip kosinusu 0.23'e dusuruyor ve HIC benzerlik kenari uretilmiyor.
+    # Bu test eskiden yalnizca kullanicinin GERCEK `~/.entropy/cognitive_memory.db`
+    # dosyasindaki ~80 anlamsal dugum korpusu buyuttugu icin geciyordu
+    # (genel durum bagimliligi). Kendi korpusuyla ayakta durmasi icin
+    # basliklar gercek rapor baslıklari gibi zenginlestirildi.
+    topics = [
+        "SABR volatilite yuzeyi kalibrasyonu",
+        "CLO kredi riski dilim analizi",
+        "Otonom ajan harness mimarisi",
+        "Obsidian bellek grafi senkronizasyonu",
+    ]
     for i in range(report_count):
         tag = "autonomous-agent" if i % 2 == 0 else "financial-auditor"
         vm.save_research_report(f"{topics[i % 4]} Faz{i}", f"# Rapor {i}", tags=[tag])

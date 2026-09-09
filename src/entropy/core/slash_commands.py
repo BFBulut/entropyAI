@@ -357,9 +357,17 @@ def _handle_effort(cmd: dict, bridge) -> str:
     except Exception as e:
         return f"<span style='color:#e06c75;'>Efor ayarlanamadı: {_html_escape(e)}</span>"
     provider = getattr(bridge, "provider_name", "")
+    # agy'de efor ayrı bir bayrak değil, MODEL VARYANTIDIR: `/effort low` model
+    # adını da değiştirir ve kullanıcı bunu görmeli (üst çubuktaki model kutusu
+    # sessizce başka bir ada geçmiş gibi görünüyordu).
+    model_note = ""
+    if provider == "agy":
+        model = getattr(bridge, "selected_model", "") or ""
+        if model:
+            model_note = f" Model: <code>{_html_escape(model)}</code>."
     return (
         f"<b>Akıl Yürütme Eforu</b> artık <b>{_html_escape(level)}</b>"
-        f"{f' ({_html_escape(provider)})' if provider else ''}."
+        f"{f' ({_html_escape(provider)})' if provider else ''}.{model_note}"
     )
 
 

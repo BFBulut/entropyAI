@@ -5,7 +5,7 @@ Düzen şeması (pixel-agents `default-layout-1.json` ile aynı):
     {version, cols, rows, layoutRevision, tiles[], tileColors[], furniture[]}
 `tiles` satır-önce düzleştirilmiş; 255 = boşluk, 0 = duvar, >=1 = zemin indeksi.
 
-Ofis başına düzen `<kasa>/Entropy/Desk/Offices/<ofis>/layout.json` altında
+Ofis başına düzen `<kasa>/Desk/Offices/<ofis>/layout.json` altında
 tutulur; yoksa ilk açılışta varsayılan düzen oraya kopyalanır. Böylece
 kullanıcı düzeni elle değiştirebilir ve güncelleme onu ezmez.
 
@@ -316,7 +316,7 @@ def parse_layout(data: dict, furniture_lib: Optional[FurnitureLibrary] = None,
 
 
 def office_layout_path(office: str) -> Optional[Path]:
-    """`<kasa>/Entropy/Desk/Offices/<ofis>/layout.json` (kasa yoksa None)."""
+    """`<kasa>/Desk/Offices/<ofis>/layout.json` (kasa yoksa None)."""
     if not office:
         return None
     try:
@@ -334,7 +334,7 @@ def load_layout(office: str = "", furniture_lib: Optional[FurnitureLibrary] = No
 
     "Hayalet ofis" kuralı: bu işlev ofis klasörü AÇMAZ. Eskiden `mkdir(parents)`
     ile her ada klasör açıyordu; kayıt defterinden silinen ya da arşive taşınan
-    bir ofis sahnede seçili kaldığında `<kasa>/Entropy/Desk/Offices/<ad>/`
+    bir ofis sahnede seçili kaldığında `<kasa>/Desk/Offices/<ad>/`
     yalnızca `layout.json` ile yeniden beliriyordu (künyesiz ofis; kasa
     hijyeni her turda aynı klasörleri arşivliyordu). Artık künye (`OFFICE.md`)
     yoksa diske hiç dokunulmaz, sahne bellekteki varsayılan düzenle çizilir.

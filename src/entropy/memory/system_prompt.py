@@ -54,8 +54,14 @@ BUDGET_HISTORY = 700
 # (yarım kalmış bir playbook alıntısı hiç olmamasından kötüdür).
 MIN_CONTEXT_CHARS = 300
 
-# Kırpma önceliği: sona doğru gidildikçe önce düşer.
-TRIM_ORDER = ("history", "context", "manifest", "tools", "identity")
+# Entropy'nin kendi onaylı kurallarının payı (Faz 10-A): kimlik bölümünün
+# sonuna eklenir, bütçesi kimliğin bütçesinden AYRIDIR.
+BUDGET_RULES = 600
+
+# Kırpma önceliği: sona doğru gidildikçe önce düşer. Kurallar bağlamdan sonra
+# düşer: kullanıcının "kalıcı yap" dediği bir kural, geri çağrılan bir nottan
+# daha bağlayıcıdır.
+TRIM_ORDER = ("history", "context", "rules", "manifest", "tools", "identity")
 
 VALID_KINDS = ("chat", "card")
 
@@ -93,6 +99,21 @@ def identity_section(orchestrators: Optional[List[Dict[str, str]]] = None) -> st
     if names:
         text += "\nKomuta ettiğin ofisler: " + ", ".join(sorted(set(names))) + "."
     return text
+
+
+def promoted_rules_section(max_chars: int = BUDGET_RULES) -> str:
+    """
+    Bölüm 1'in devamı: kullanıcının "kalıcı yap" dediği kurallar.
+
+    Kaynak ofis ajanlarınınkiyle AYNI depodur (`memory.promoted_rules`); Entropy
+    kendi kayıtlarını `office="entropy"` altında tutar. Onaysız aday asla girmez.
+    """
+    try:
+        from entropy.memory.promoted_rules import ENTROPY_OFFICE, rules_section
+
+        return _trim(rules_section(ENTROPY_OFFICE, max_chars=max_chars), max_chars)
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +380,7 @@ def build_system_prompt(
     desk_rows = _desk_rows()
     sections: Dict[str, str] = {
         "identity": _trim(identity_section(desk_rows), BUDGET_IDENTITY),
+        "rules": promoted_rules_section(),
         "tools": _trim(tool_contract_section(), BUDGET_TOOL_CONTRACT) if is_claude else "",
         "manifest": _trim(
             manifest_section(agent_spec if kind == "card" else None), BUDGET_MANIFEST
@@ -368,8 +390,10 @@ def build_system_prompt(
 
     # Bilişsel bağlam artan payı alır: sabit bölümler yerleştikten sonra kalan
     # yer neyse odur. Bu yüzden bütçesi sabit değil, hesaplanır.
-    fixed = sum(len(sections[k]) for k in ("identity", "tools", "manifest", "history"))
-    separators = 4 * 2  # bölümler arası "\n\n"
+    fixed = sum(
+        len(sections[k]) for k in ("identity", "rules", "tools", "manifest", "history")
+    )
+    separators = 5 * 2  # bölümler arası "\n\n"
     context_budget = limit - fixed - separators
     context = ""
     if context_budget >= MIN_CONTEXT_CHARS:
@@ -384,7 +408,7 @@ def build_system_prompt(
     sections["context"] = context
 
     # Metindeki sıra: kimlik → araç sözleşmesi → bağlam → manifest → özet.
-    order = ("identity", "tools", "context", "manifest", "history")
+    order = ("identity", "rules", "tools", "context", "manifest", "history")
     parts = [sections[k] for k in order if sections.get(k)]
     text = "\n\n".join(parts)
 
@@ -430,6 +454,7 @@ def section_lengths(
     )
     headers = {
         "identity": "[KİMLİK]",
+        "rules": "[ONAYLI KURALLAR]",
         "tools": "[ARAÇ SÖZLEŞMESİ]",
         "context": "[BİLİŞSEL BAĞLAM]",
         "manifest_agents": "[AJANLAR]",

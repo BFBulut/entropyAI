@@ -348,7 +348,7 @@ def test_office_delete_button_archives_instead_of_deleting(app, tmp_path, monkey
     from entropy.memory import vault_hygiene
 
     monkeypatch.setattr(config, "obsidian_vault_path", str(tmp_path), raising=False)
-    office_dir = tmp_path / "Entropy" / "Desk" / "Offices" / "alfa"
+    office_dir = tmp_path / "Desk" / "Offices" / "alfa"
     (office_dir / "cards").mkdir(parents=True)
     (office_dir / "MEMORY.md").write_text("ofis belleği", encoding="utf-8")
 

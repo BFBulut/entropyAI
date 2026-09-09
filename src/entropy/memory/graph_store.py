@@ -320,6 +320,39 @@ class GraphStore:
             self._mirror_to_cognitive(node)
         return node  # type: ignore[return-value]
 
+    def _existing_node_ids(self, candidates: Optional[Sequence[str]] = None) -> set:
+        """Graf `nodes` tablosunda hâlihazırda bulunan kimlikler."""
+        with self._connect() as conn:
+            if candidates is None:
+                return {r[0] for r in conn.execute("SELECT id FROM nodes")}
+            out: set = set()
+            ids = list(dict.fromkeys(candidates))
+            # SQLite değişken sınırı (999) aşılmasın diye parçalanır.
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                ph = ",".join("?" for _ in chunk)
+                out |= {r[0] for r in conn.execute(f"SELECT id FROM nodes WHERE id IN ({ph})", chunk)}
+            return out
+
+    def _known_edge_keys(self, srcs: Optional[Sequence[str]] = None) -> set:
+        """(src, dst, type) üçlüleri; kenar çoğaltmasını önlemek için."""
+        with self._connect() as conn:
+            if srcs is None:
+                return {(r[0], r[1], r[2]) for r in conn.execute("SELECT src, dst, type FROM edges")}
+            out: set = set()
+            ids = list(dict.fromkeys(srcs))
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                ph = ",".join("?" for _ in chunk)
+                out |= {
+                    (r[0], r[1], r[2])
+                    for r in conn.execute(
+                        f"SELECT src, dst, type FROM edges WHERE src IN ({ph}) OR dst IN ({ph})",
+                        chunk + chunk,
+                    )
+                }
+            return out
+
     def _mirror_to_cognitive(self, node: GraphNode) -> None:
         """
         Graf düğümünü eski `cognitive_nodes` tablosuna aynalar (aynı kimlikle).
@@ -524,22 +557,66 @@ class GraphStore:
         sim_threshold: float = 0.80,
     ) -> Dict[str, Any]:
         """
-        Mevcut `cognitive_nodes` içeriğini kayıpsız olarak grafa aktarır.
+        Tam göç: `cognitive_nodes` içeriğini kayıpsız olarak grafa aktarır.
 
-        - category -> type eşlemesi (bilinmeyen kategori `fact`; özgün kategori
-          `metadata.legacy_category` içinde saklanır, hiçbir bilgi düşmez).
-        - `[[wikilink]]` -> `entity` düğümü + `member_of` kenarı.
-        - Gömme benzerliği (varsa) -> `similar_to` kenarı (karşılıklı tek kayıt).
-        - Eski tablo **silinmez**; eski API'ler aynı veriden okumaya devam eder.
+        Faz 10-A'dan sonra bu işlev `sync_from_cognitive()`'in yedek alan tam
+        kapsamlı sarıcısıdır; iki kod yolu yoktur (mantık kopyalanmamıştır).
+        """
+        return self.sync_from_cognitive(
+            node_ids=None,
+            backup=backup,
+            similarity_edges=similarity_edges,
+            sim_top_k=sim_top_k,
+            sim_threshold=sim_threshold,
+        )
+
+    def sync_from_cognitive(
+        self,
+        node_ids: Optional[Sequence[str]] = None,
+        backup: bool = False,
+        similarity_edges: bool = True,
+        sim_top_k: int = 3,
+        sim_threshold: float = 0.80,
+    ) -> Dict[str, Any]:
+        """
+        `cognitive_nodes` satırlarını graf tablolarına yansıtır (idempotent).
+
+        - `node_ids=None`: tüm tablo (tam göç / uzlaştırma).
+        - `node_ids=[...]`: yalnızca verilen düğümler — yazma yolundan
+          (`CognitiveMemorySystem._save_node`) her yeni anı için çağrılır; böylece
+          graf katmanı canlı kalır. Önceden yalnızca elle göç vardı ve gerçek
+          veritabanında 35 düğüm grafın dışında kalmıştı.
+
+        Kurallar değişmedi: category -> type eşlemesi (özgün kategori
+        `metadata.legacy_category`'de saklanır), `[[wikilink]]` -> `entity`
+        düğümü + `member_of` kenarı, gömme kosinüsü -> `similar_to`. Eski tablo
+        silinmez. Benzerlik kenarları yalnızca verilen küme içinde hesaplanır;
+        tek düğümlü yazmada anlamsız ve pahalı olduğu için yazma yolu bunu
+        kapalı çağırır, tam uzlaştırma açık çağırır.
         """
         started = time.time()
         backup_path = self.backup_database() if backup else None
 
+        base_sql = (
+            "SELECT id, category, content, importance, created_at, last_accessed,"
+            " access_count, metadata_json, embedding_json FROM cognitive_nodes"
+        )
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id, category, content, importance, created_at, last_accessed,"
-                " access_count, metadata_json, embedding_json FROM cognitive_nodes"
-            ).fetchall()
+            if node_ids is None:
+                rows = conn.execute(base_sql).fetchall()
+            else:
+                wanted = list(dict.fromkeys(node_ids))
+                if not wanted:
+                    return {
+                        "source_nodes": 0, "migrated_nodes": 0, "synced_nodes": 0,
+                        "entity_nodes": 0, "graph_nodes": self.node_count(),
+                        "wikilink_edges": 0, "similarity_edges": 0, "edges": 0,
+                        "edges_total": self.edge_count(), "duration_s": 0.0, "backup_path": "",
+                    }
+                placeholders = ",".join("?" for _ in wanted)
+                rows = conn.execute(
+                    f"{base_sql} WHERE id IN ({placeholders})", wanted
+                ).fetchall()
 
         source_total = len(rows)
         node_payload: List[tuple] = []
@@ -548,7 +625,9 @@ class GraphStore:
         ids: List[str] = []
         embeddings: List[Optional[List[float]]] = []
 
-        existing_ids = {n.id for n in self.all_nodes()}
+        # Yazma yolu her anıda çağrıldığı için tüm düğümleri nesneye çevirmek
+        # (1400+ satır) kabul edilemez; yalnızca ilgili kimlikler sorgulanır.
+        existing_ids = self._existing_node_ids(None if node_ids is None else [r[0] for r in rows])
 
         for row in rows:
             nid, category, content, importance, created_at, last_accessed, access_count, meta_json, emb_json = row
@@ -598,6 +677,8 @@ class GraphStore:
                 )
                 conn.commit()
 
+        if node_ids is not None and entity_nodes:
+            existing_ids |= self._existing_node_ids(list(entity_nodes.keys()))
         for ent_id, (name, prov) in entity_nodes.items():
             if ent_id not in existing_ids:
                 # Varlık saplaması eski tabloya aynalanmaz: tek sözcüklük
@@ -607,7 +688,7 @@ class GraphStore:
                                  mirror=False)
 
         # Aynı kenarın göç iki kez koşarsa çoğalmaması için mevcut çiftler elenir.
-        known = {(e.src, e.dst, e.type) for e in self.get_edges()}
+        known = self._known_edge_keys(None if node_ids is None else [r[0] for r in rows])
         fresh = [m for m in mention_edges if (m[0], m[1], m[2]) not in known]
         # Aynı göç içinde tekrar eden mention'lar da tekilleştirilir.
         seen_pairs = set()
@@ -630,10 +711,14 @@ class GraphStore:
         return {
             "source_nodes": source_total,
             "migrated_nodes": len(node_payload),
+            # `synced_nodes` = bu çağrıda grafa YENİ giren düğüm sayısı
+            # (`migrated_nodes` ile aynı değer, uzlaştırma diliyle adlandırılmış).
+            "synced_nodes": len(node_payload),
             "entity_nodes": len(entity_nodes),
             "graph_nodes": self.node_count(),
             "wikilink_edges": wiki_edges,
             "similarity_edges": sim_edges,
+            "edges": wiki_edges + sim_edges,
             "edges_total": self.edge_count(),
             "duration_s": round(duration, 3),
             "backup_path": str(backup_path) if backup_path else "",

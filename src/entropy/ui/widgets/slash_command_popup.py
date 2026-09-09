@@ -68,6 +68,43 @@ class SlashCommandItemWidget(QWidget):
             self.check_lbl.setStyleSheet("color: #30363D; font-family: 'Consolas', monospace; font-size: 11px;")
 
 
+def effort_command_hint(bridge=None) -> str:
+    """
+    HOTFIX v0.7.1: `/effort` satırının kullanım metni sağlayıcıya göre değişir.
+
+    claude'da beş seviye vardır; agy'de efor model adının son ekidir, bu yüzden
+    yardım metni "model adının son eki" der ve o modelin gerçek seçeneklerini
+    listeler (yoksa "efor seçimi yok").
+    """
+    try:
+        from entropy.ui.widgets.effort_selector import effort_help_text
+
+        if bridge is None:
+            from entropy.ui.manager import EntropyUIManager
+
+            manager = getattr(EntropyUIManager, "instance", None)
+            bridge = getattr(manager, "bridge", None) if manager is not None else None
+        provider = str(getattr(bridge, "provider_name", "") or "")
+        model = str(getattr(bridge, "selected_model", "") or "")
+        return effort_help_text(provider, model, bridge)
+    except Exception:
+        return "/effort <seviye>"
+
+
+def _decorate_command(cmd: SlashCommand, bridge=None) -> SlashCommand:
+    """Sağlayıcıya bağlı yardım metinlerini (şimdilik /effort) uygular."""
+    if getattr(cmd, "name", "") != "/effort":
+        return cmd
+    try:
+        import copy
+
+        clone = copy.copy(cmd)
+        clone.usage = effort_command_hint(bridge)
+        return clone
+    except Exception:
+        return cmd
+
+
 class SlashCommandPopupWidget(QFrame):
     """Floating autocomplete popup supporting single and multi-selection of slash commands."""
 
@@ -208,6 +245,7 @@ class SlashCommandPopupWidget(QFrame):
             self.selected_commands = list(preselected)
 
         for cmd in commands:
+            cmd = _decorate_command(cmd, getattr(self, "bridge", None))
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, cmd.name)
             item.setSizeHint(QSize(100, 32))

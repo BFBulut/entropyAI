@@ -438,8 +438,10 @@ def test_autonomous_rules_injected_in_existing_conversation(bridge, monkeypatch)
     assert "TEMEL YÜRÜTME VE KODLAMA KURALLARI" in payload
     assert "FİİLİ OLARAK dosya oluşturma ve düzenleme araçlarını" in payload
     assert "[MOD: BOOST]" in payload
-    assert "--effort" in captured_cmd
-    assert captured_cmd[captured_cmd.index("--effort") + 1] == "high"
+    # agy'de efor MODEL ADININ SON EKİDİR; `--effort` bayrağı son ekli bir
+    # modelle çakışıp turu hiç başlatmıyordu (Hotfix 0.7.1).
+    assert "--effort" not in captured_cmd
+    assert captured_cmd[captured_cmd.index("--model") + 1].endswith("-high")
 
 
 def test_chat_mode_turn_started_auto_expands_terminal(qapp):
@@ -516,12 +518,14 @@ def test_natural_language_boost_and_teamwork_directives(bridge, monkeypatch):
     payload = captured_cmd[prompt_flag_idx + 1]
 
     assert "[MOD: TEAMWORK-PREVIEW]" in payload
-    assert "--effort" in captured_cmd
-    assert captured_cmd[captured_cmd.index("--effort") + 1] == "high"
+    # agy'de efor MODEL ADININ SON EKİDİR; `--effort` bayrağı son ekli bir
+    # modelle çakışıp turu hiç başlatmıyordu (Hotfix 0.7.1).
+    assert "--effort" not in captured_cmd
+    assert captured_cmd[captured_cmd.index("--model") + 1].endswith("-high")
 
 
 def test_background_task_effort_high_for_coding_tasks(bridge, monkeypatch):
-    """Verify background tasks with coding prompt receive --effort high."""
+    """Kodlama prompt'u arka planda en yüksek efor VARYANTIYLA koşmalı."""
     import subprocess
     captured_cmd = []
 
@@ -541,8 +545,10 @@ def test_background_task_effort_high_for_coding_tasks(bridge, monkeypatch):
     prompt = "⏰ [OTONOM KODLAMA VE PROJE GELİŞTİRME GÖREVİ: Test Görev]\nTalimat: Projeyi geliştir"
     bridge._execute_background_task_worker("task-bg-1", "Test Görev", prompt)
 
-    assert "--effort" in captured_cmd
-    assert captured_cmd[captured_cmd.index("--effort") + 1] == "high"
+    # agy'de efor MODEL ADININ SON EKİDİR; `--effort` bayrağı son ekli bir
+    # modelle çakışıp turu hiç başlatmıyordu (Hotfix 0.7.1).
+    assert "--effort" not in captured_cmd
+    assert captured_cmd[captured_cmd.index("--model") + 1].endswith("-high")
 
 
 def test_decoupled_thought_and_text_delta_streaming(bridge, monkeypatch):
@@ -623,3 +629,42 @@ def test_tasks_widget_extracts_project_path_from_prompt(qapp, tmp_path):
 
 
 
+
+
+def test_kartin_acik_modeli_kalici_eforla_ezilmez():
+    """
+    Hotfix 0.7.1 / canli kosum bulgusu: `--model gemini-3.8-flash-medium`
+    istenen bir kart, ust cubugun kalici efor ayari "low" iken argv'ye
+    `gemini-3.8-flash-low` olarak dusuyordu. Acik secim kalici ayardan
+    gucludur; yalniz istemdeki `/effort` ve boost onu asar.
+    """
+    from entropy.core.agy_bridge import AgyProcessBridge
+
+    bridge = AgyProcessBridge()
+    bridge.selected_model = "gemini-3.8-flash-low"
+    bridge.selected_effort = "low"
+    if "medium" not in bridge.effort_levels():
+        import pytest as _pytest
+
+        _pytest.skip("bu kurulumda medium varyanti yok")
+
+    explicit = bridge._explicit_run_effort("gemini-3.8-flash-medium")
+    assert explicit == "medium"
+
+    run_model = bridge.apply_effort_to_model(
+        bridge.model_for_run("gemini-3.8-flash-medium"),
+        bridge.effort_for_prompt("Merhaba, tek cumle.", default_effort=explicit),
+    )
+    assert run_model == "gemini-3.8-flash-medium"
+
+    # Model verilmezse kalici efor gecerli kalir.
+    assert bridge.apply_effort_to_model(
+        bridge.model_for_run(None),
+        bridge.effort_for_prompt("Merhaba", default_effort=bridge._explicit_run_effort(None)),
+    ) == "gemini-3.8-flash-low"
+
+    # `/boost` acik secimi de asar.
+    assert bridge.apply_effort_to_model(
+        bridge.model_for_run("gemini-3.8-flash-medium"),
+        bridge.effort_for_prompt("/boost hadi", default_effort=explicit),
+    ).endswith("-high")

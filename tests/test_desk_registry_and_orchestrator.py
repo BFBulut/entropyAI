@@ -2,7 +2,7 @@
 FAZ 6 — Agent Desk'in kendi kayıt defteri, orkestratör sözleşmesi ve komutları.
 
 Doğrulanan kullanıcı kuralları:
-  1. Desk'in kendi veri kökü var (`Entropy/Desk/Offices/...`) ve Entropy'nin
+  1. Desk'in kendi veri kökü var (`Desk/Offices/...`) ve Entropy'nin
      `Entropy/Agents` kadrosunu KULLANMAZ.
   2. Tohum ofis/ajan yok; ofis açılınca orkestratörü otomatik doğar.
   3. Orkestratör kod yazmaz: derlemesinde araçlar kısıtlı, yasaklar yazılı.
@@ -111,7 +111,7 @@ def test_office_creation_spawns_orchestrator_and_skeleton(desk, vault):
     assert desk.list() == []  # tohum yok
 
     office = desk.create(DeskOffice(name="medya", purpose="Medya işleri", charter="Tüzük."))
-    base = vault / "Entropy" / "Desk" / "Offices" / "medya"
+    base = vault / "Desk" / "Offices" / "medya"
     assert (base / "OFFICE.md").is_file()
     for folder in ("agents", "projects", "reports", "inbox", "memory"):
         assert (base / folder).is_dir()
@@ -215,7 +215,15 @@ def test_compiled_office_agents_never_mention_entropy(desk, board, vault):
 
     Ofis tüzüğü kullanıcı metni olduğu için hariç tutulur; bu testte tüzüğe
     bilerek "Entropy" yazılmaz.
+
+    Faz 10-B: kural artık SIKI. Faz 10-A'da doğuş talimatındaki mutlak yollar
+    `Entropy/Desk/Offices` klasör adını taşıdığı için yol satırları ölçümden
+    çıkarılıyordu; Desk'in veri kökü kasa köküne (`Desk/Offices`) taşındığından
+    o istisnaya gerek kalmadı — yollar da ölçülür.
     """
+    def _prose(text: str) -> str:
+        return text
+
     desk.create(DeskOffice(name="medya", purpose="Medya işleri", charter="Kaynaklı yaz."))
     agents = desk.agents("medya")
     agents.update(AgentSpec(name="yazar", role="worker", description="Yazar",
@@ -232,9 +240,9 @@ def test_compiled_office_agents_never_mention_entropy(desk, board, vault):
                                  office="medya"))
     harness = OfficeHarness("medya", board=board, offices=desk)
     plan_prompt = harness.build_plan_prompt(office, card)
-    assert "Entropy" not in plan_prompt
+    assert "Entropy" not in _prose(plan_prompt)
     eval_prompt = harness.build_eval_prompt(office, card, [card])
-    assert "Entropy" not in eval_prompt
+    assert "Entropy" not in _prose(eval_prompt)
 
 
 # ---------------------------------------------------------------------------

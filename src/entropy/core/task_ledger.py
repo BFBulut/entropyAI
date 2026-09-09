@@ -1,6 +1,7 @@
 """SQLite Task FSM Ledger for autonomous background tasks and job lifecycle tracking."""
 
 import datetime
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -23,7 +24,14 @@ class TaskLedger:
 
     def __init__(self, db_path: Optional[Path | str] = None):
         if db_path is None:
-            self.db_path = Path.home() / ".entropy" / "tasks_ledger.db"
+            # `ENTROPY_TASK_LEDGER_DB` varsayilani gecersiz kilar: test
+            # kosumlari aksi hâlde kullanicinin GERCEK gorev defterine
+            # (pytest tmp yollariyla) satir ekliyordu.
+            _override = os.environ.get("ENTROPY_TASK_LEDGER_DB", "").strip()
+            self.db_path = (
+                Path(_override) if _override
+                else Path.home() / ".entropy" / "tasks_ledger.db"
+            )
         else:
             self.db_path = Path(db_path)
 

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QFrame, QLabel, QSplitter, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 
 # Düğüm türü -> renk. Bilinmeyen tür gri.
@@ -260,7 +261,13 @@ class OfficeMemoryPanel(QFrame):
         self.memory_view = QTextBrowser()
         self.memory_view.setStyleSheet(self._text_style())
         self.split.addWidget(self.memory_view)
-        self.split.setSizes([260, 220])
+
+        # Faz 10-B: kural adayları bölümü. Ajanın keşfettiği kural burada
+        # kullanıcıya sorulur; onaylanmadan sistem istemine GİRMEZ.
+        self.rules_panel = RuleCandidatesPanel(parent=self, office=self.office)
+        self.rules_panel.setMinimumHeight(90)
+        self.split.addWidget(self.rules_panel)
+        self.split.setSizes([260, 220, 180])
         layout.addWidget(self.split, 1)
 
         self.setMinimumWidth(240)
@@ -278,6 +285,7 @@ class OfficeMemoryPanel(QFrame):
 
     def set_office(self, office: str) -> None:
         self.office = office or ""
+        self.rules_panel.set_office(self.office)
         self.refresh()
 
     def refresh(self) -> None:

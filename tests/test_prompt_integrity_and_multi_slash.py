@@ -198,14 +198,16 @@ description: Kapsamlı denetim uzmanlığı
     assert len(saved_turns) == 1
     assert saved_turns[0][0] == original_user_prompt
 
-    # 5. Verify /boost triggered --effort high
-    assert "--effort" in cli_cmd
-    effort_idx = cli_cmd.index("--effort")
-    assert cli_cmd[effort_idx + 1] == "high"
+    # 5. /boost yuksek efor ister. Hotfix 0.7.1: agy argv'sinde `--effort`
+    # BAYRAGI YOKTUR (CLI "--model ... conflicts with --effort" diye reddediyor);
+    # efor model adinin son ekiyle ifade edilir.
+    assert "--effort" not in cli_cmd
+    assert "--model" in cli_cmd
+    assert cli_cmd[cli_cmd.index("--model") + 1].endswith("-high")
 
 
 def test_regex_boost_detection_anywhere_in_prompt(tmp_path, monkeypatch):
-    """Verify /boost is detected anywhere in prompt via regex, adding --effort high."""
+    """/boost istemin herhangi bir yerinde yakalanir ve yuksek efor modeline gecer."""
     bridge = AgyProcessBridge()
     bridge.set_project_directory(tmp_path)
 
@@ -231,8 +233,11 @@ def test_regex_boost_detection_anywhere_in_prompt(tmp_path, monkeypatch):
         bridge._execute_prompt_worker(prompt=p, mode="accept-edits")
         assert len(captured_cmds) == 1
         cmd = captured_cmds[0]
-        assert "--effort" in cmd, f"Expected --effort high for prompt: {p}"
-        assert cmd[cmd.index("--effort") + 1] == "high"
+        assert "--effort" not in cmd, f"agy argv'sinde --effort olmamali: {p}"
+        assert "--model" in cmd, f"Expected model suffix for prompt: {p}"
+        assert cmd[cmd.index("--model") + 1].endswith("-high"), (
+            f"Expected high effort model suffix for prompt: {p}"
+        )
 
 
 def test_windows_32kb_limit_never_truncates_user_prompt(tmp_path, monkeypatch):
@@ -460,8 +465,9 @@ def test_multi_slash_directives_and_effort_parameter(tmp_path, monkeypatch):
         mode="accept-edits"
     )
     cmd = captured_cmds[-1]
-    assert "--effort" in cmd
-    assert cmd[cmd.index("--effort") + 1] == "medium"
+    assert "--effort" not in cmd
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1].endswith("-medium")
     cmd_str = " ".join(cmd)
     assert "[MOD: GRILL-ME]" in cmd_str
 

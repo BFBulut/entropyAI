@@ -13,7 +13,12 @@ a = Analysis(
     datas=[
         ('entropy.ico', '.'),
         ('skills', 'skills'),
-        ('AGENTS.md', '.'),
+        # AGENTS.md PAKETLENMEZ: eski, elle yazılmış bir kadro listesiydi
+        # (CodeArchitect / Tester / Researcher / MemoryConsolidator) ve
+        # `_internal/AGENTS.md` olarak .exe'nin yanına düşüyordu. Ajan okuma
+        # izni o klasöre uzandığında Entropy kendi kadrosunu oradan
+        # "öğreniyor" ve var olmayan ajanları sayıyordu. Tek gerçek kaynak
+        # kasadaki `Entropy/Agents` kayıt defteridir (entropy.agents.registry).
         ('src/entropy/desk/assets', 'entropy/desk/assets'),
     ],
     hiddenimports=[
@@ -37,6 +42,14 @@ a = Analysis(
         'entropy.core.claude_bridge',
         'entropy.core.masking',
         'entropy.core.perf_history',
+        # Faz 10: Desk veri koku, ofis calisma alani, kontrol noktalari,
+        # terfi eden kurallar ve bunlarin arayuz karsiliklari.
+        'entropy.core.paths',
+        'entropy.memory.office_workspace',
+        'entropy.memory.checkpoints',
+        'entropy.memory.promoted_rules',
+        'entropy.ui.widgets.rules_panel',
+        'entropy.desk.terminals_panel',
         'entropy.ui',
         'entropy.ui.manager',
         'entropy.ui.themes.cyber_theme',

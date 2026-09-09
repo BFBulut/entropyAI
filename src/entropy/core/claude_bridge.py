@@ -578,8 +578,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         """`claude --effort` seviyeleri (--help ile doğrulandı)."""
         return list(CLAUDE_EFFORT_LEVELS)
 
-    def set_effort(self, level: str) -> None:
-        """Kalıcı efor seviyesini ayarlar; geçersiz seviye reddedilir."""
+    def set_effort(self, level: str) -> bool:
+        """
+        Kalıcı efor seviyesini ayarlar; geçersiz seviye reddedilir.
+
+        Dönüş True (sözleşme: `set_effort(level) -> bool`, agy köprüsüyle ortak).
+        Claude'da efor ayrı bir bayraktır (`--effort`), model adına dokunulmaz.
+        """
         low = (level or "").strip().lower()
         if low not in CLAUDE_EFFORT_LEVELS:
             raise ValueError(
@@ -591,6 +596,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             config.save_settings()
         except Exception:
             pass
+        return True
 
     def set_project_directory(self, project_path: Path | str) -> None:
         self.active_project_dir = Path(project_path).resolve()
@@ -690,10 +696,28 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 # automatic fallback ... when the default model is overloaded
                 # or not available".
                 cmd.extend(["--fallback-model", CLAUDE_FALLBACK_MODEL])
+        # Erişilebilir dizinler. Saf kipte süreç NÖTR bir çalışma dizininde koşar
+        # (bkz. run_cwd), bu yüzden proje kökü ve kasa AÇIKÇA verilmelidir; aksi
+        # hâlde model "C:\\EntropiAI için okuma izni verilmedi" / "Obsidian kasası
+        # izinli dizinlerimde değil" diyerek kendi exe klasörüne düşüyordu.
+        seen_dirs = []
+
+        def _add_dir(value) -> None:
+            if not value:
+                return
+            text = str(value)
+            if text in seen_dirs:
+                return
+            seen_dirs.append(text)
+            cmd.extend(["--add-dir", text])
+
         if project_dir is not None:
-            cmd.extend(["--add-dir", str(project_dir)])
+            _add_dir(project_dir)
+        if isolated:
+            for d in self.isolation_read_dirs():
+                _add_dir(d)
         for d in extra_dirs or []:
-            cmd.extend(["--add-dir", str(d)])
+            _add_dir(d)
         if agent:
             cmd.extend(["--agent", agent])
         if system_prompt:
@@ -1002,9 +1026,18 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         sink: Optional[Callable[[str], None]] = None,
         max_steps: Optional[int] = None,
         on_step_limit: Optional[Callable[[int], None]] = None,
+        stream_meta: Optional[dict] = None,
+        task_id: str = "",
+        model: Optional[str] = None,
     ) -> Dict[str, object]:
         """
         Claude stream-json satırlarını bus sinyallerine çevirir.
+
+        stream_meta / task_id / model: `bus.agent_stream` yükünün etiketi
+        (ajan, ofis, kart). Sohbet yolu bunları geçmez; o zaman olaylar
+        agent="entropy", office="" ile yayılır. Etiket olsun olmasın akış
+        HER ZAMAN yayılır — sahne etiketsiz olayları Entropy'nin kendi
+        avatarına düşürür.
 
         Dönüş: {"text", "usage", "session_id", "cost_usd", "is_error",
         "tool_steps", "step_limit_hit"}.
@@ -1018,6 +1051,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         paylaşır ve test bu metodu sahte bir satır listesiyle doğrudan
         sürebilir (süreç kurmadan).
         """
+        emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         text_parts: List[str] = []
         usage: Dict[str, int] = {}
         session_id: Optional[str] = None
@@ -1038,6 +1072,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 # stream-json olmayan satır (uyarı, yardım metni) kullanıcıya
                 # ham geçirilir; yutulursa hata ayıklama imkânsızlaşıyordu.
                 bus.terminal_output_received.emit(raw_line)
+                emit_stream("text", raw_line)
                 continue
 
             ev_type = data.get("type")
@@ -1054,6 +1089,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                         f"\n[Claude Code] Oturum başladı (model: {model or 'bilinmiyor'}, "
                         f"{len(tools)} araç).\n"
                     )
+                    emit_stream("status", f"Oturum başladı ({model or 'model bilinmiyor'})")
                     bus.core_state_changed.emit("thinking")
                 continue
 
@@ -1069,6 +1105,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                             text_parts.append(chunk)
                             bus.token_chunk_received.emit(chunk)
                             bus.terminal_output_received.emit(chunk)
+                            emit_stream("text", chunk)
                             if sink:
                                 sink(chunk)
                             bus.core_pulse_triggered.emit(0.5)
@@ -1076,6 +1113,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                         thought = (block.get("thinking") or "").strip()
                         if thought:
                             bus.terminal_output_received.emit(f"[🧠 Düşünce]: {thought}\n")
+                            emit_stream("thinking", thought)
                             bus.core_pulse_triggered.emit(0.5)
                     elif btype == "tool_use":
                         # Adım sayacı: Claude'un araç çağrısı olayı tek biçimde
@@ -1086,6 +1124,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                         bus.terminal_output_received.emit(
                             f"\n[⚡ ARAÇ YÜRÜTÜLÜYOR: {name}]\n   Parametreler: {params}...\n"
                         )
+                        tool_payload = self._tool_payload(name, block.get("input") or {})
+                        emit_stream(
+                            "tool_call",
+                            f"{name}: {tool_payload['input_summary']}",
+                            tool=tool_payload,
+                        )
                         bus.core_pulse_triggered.emit(0.7)
                 turn_usage = parse_usage(message.get("usage"))
                 if turn_usage:
@@ -1093,6 +1137,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 if max_steps and not step_limit_hit and tool_steps > int(max_steps):
                     step_limit_hit = True
                     is_error = True
+                    emit_stream(
+                        "error",
+                        f"Araç adımı sınırı aşıldı ({tool_steps} > {int(max_steps)}).",
+                    )
                     if on_step_limit is not None:
                         try:
                             on_step_limit(tool_steps)
@@ -1113,6 +1161,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                             f"[✔ ARAÇ TAMAMLANDI: {block.get('name', 'Araç')}]\n"
                             f"   Sonuç: {str(body)[:300]}...\n"
                         )
+                        emit_stream(
+                            "tool_result",
+                            str(body),
+                            tool=self._tool_payload(block.get("name"), None),
+                        )
                         bus.core_pulse_triggered.emit(0.4)
                 continue
 
@@ -1124,11 +1177,19 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 if isinstance(final, str) and final and not text_parts:
                     text_parts.append(final)
                     bus.terminal_output_received.emit(final)
+                    bus.token_chunk_received.emit(final)
+                    emit_stream("text", final)
                     if sink:
                         sink(final)
                 result_usage = parse_usage(data.get("usage"))
                 if result_usage:
                     usage = result_usage
+                # Turun kapanışı: hata "error" (sahnede kırmızı), yoksa "idle"
+                # (volta). Sahne bunu kartın bittiği an olarak okur.
+                if is_error:
+                    emit_stream("error", str(final or "").strip() or "Görev hatayla bitti.")
+                else:
+                    emit_stream("result", "".join(text_parts))
                 continue
 
         return {
@@ -1425,6 +1486,27 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "\n[Entropy] Sistem istemi değişti; temiz bir Claude oturumu açılıyor.\n"
         )
         return True
+
+    def isolation_read_dirs(self) -> List[str]:
+        """
+        Saf kipte her koşuya eklenen kalıcı okuma dizinleri.
+
+        Obsidian kasası: Entropy'nin belleği/raporları orada; kasa verilmeyince
+        model "izinli dizinlerimde değil" diyordu. Çalışma dizini (`~/.entropy/
+        workspace`) kendi cwd'sidir ama Claude Code cwd'yi kendiliğinden izinli
+        saymıyor. Var olmayan yol eklenmez: CLI onu hata sayıyor.
+        """
+        dirs: List[str] = []
+        for candidate in (
+            getattr(config, "obsidian_vault_path", None),
+            config_module.claude_workspace_path(),
+        ):
+            try:
+                if candidate and Path(candidate).is_dir():
+                    dirs.append(str(Path(candidate).resolve()))
+            except Exception:
+                continue
+        return dirs
 
     def run_cwd(self, project_dir: Optional[Path]) -> Optional[str]:
         """
@@ -1727,9 +1809,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         max_steps: Optional[int] = None,
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
+        stream_meta: Optional[dict] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
+
+        stream_meta: `bus.agent_stream` yükünü etiketleyen bağlam
+        ({"agent", "office", "card_id"}); harness/görev pompası geçmezse boş.
 
         conversation_id burada `--resume <session-id>` olur (agy'de
         `--conversation`); iki bayrağın adı farklı, anlamı aynı olduğu için
@@ -1754,9 +1840,32 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             target=self._execute_background_task_worker,
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
-                  model, agent_spec),
+                  model, agent_spec, stream_meta),
             daemon=True,
         ).start()
+
+    def send_followup(self, task_id: str, text: str) -> bool:
+        """
+        Koşan bir kart sürecine stdin üzerinden ek kullanıcı mesajı gönderir.
+
+        Sprite'a tıklayıp o ajanın terminaline yazmanın (10.2) altyapısı. Claude
+        CLI'ın stream-json kullanıcı olayı, uzun prompt yolunda zaten kullanılan
+        `build_stdin_prompt_payload` ile aynıdır ({"type":"user",...}); ikinci
+        bir şema icat edilmez. Süreç yoksa ya da stdin borusu kapalıysa False.
+        """
+        if not text or not str(text).strip():
+            return False
+        with self._lock:
+            proc = self._background_processes.get(task_id)
+        stdin = getattr(proc, "stdin", None) if proc is not None else None
+        if stdin is None or getattr(stdin, "closed", False):
+            return False
+        try:
+            stdin.write(build_stdin_prompt_payload(str(text)))
+            stdin.flush()
+        except Exception:
+            return False
+        return True
 
     def background_conversation_id(self, task_id: str) -> Optional[str]:
         """Biten arka plan görevinin Claude oturum kimliği (`--resume` girdisi)."""
@@ -1788,7 +1897,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         max_steps: Optional[int] = None,
         model: Optional[str] = None,
         agent_spec: Optional[dict] = None,
+        stream_meta: Optional[dict] = None,
     ) -> None:
+        emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -1918,7 +2029,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 readline_fn = getattr(proc.stdout, "readline", None)
                 stream = iter(readline_fn, "") if callable(readline_fn) else iter(proc.stdout)
                 result = self.consume_stream(
-                    stream, max_steps=max_steps, on_step_limit=_on_step_limit
+                    stream,
+                    max_steps=max_steps,
+                    on_step_limit=_on_step_limit,
+                    stream_meta=stream_meta,
+                    task_id=task_id,
+                    model=model,
                 )
                 if writer is not None:
                     writer.join(timeout=5.0)
@@ -1932,6 +2048,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 bus.terminal_output_received.emit(
                     f"[Otonom Görev Hata] {task_name} yürütülemedi: {execution_error}\n"
                 )
+                emit_stream("error", f"{task_name} yürütülemedi: {execution_error}")
             finally:
                 with self._lock:
                     self._background_processes.pop(task_id, None)

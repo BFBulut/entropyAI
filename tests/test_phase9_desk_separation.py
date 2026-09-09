@@ -115,7 +115,7 @@ class ScriptedBridge:
 def test_office_card_is_written_under_office_vault(board, offices, vault):
     card = board.create(TaskCard(id=new_task_id("Ofis"), title="Ofis kartı",
                                  office="alfa-ofisi", agent="isci"))
-    expected = vault / "Entropy/Desk/Offices/alfa-ofisi/cards" / f"{card.id}.md"
+    expected = vault / "Desk/Offices/alfa-ofisi/cards" / f"{card.id}.md"
     assert expected.is_file()
     assert not (vault / TASKS_SUBDIR / f"{card.id}.md").exists()
     # Kimlikten okuma iki kökü de bilir.
@@ -154,7 +154,7 @@ def test_legacy_office_cards_migrate_once_and_are_logged(vault, offices):
 
     board = TaskBoard(vault_path=vault)  # __init__ taşımayı tetikler
 
-    moved = vault / "Entropy/Desk/Offices/alfa-ofisi/cards/eski-ofis-karti.md"
+    moved = vault / "Desk/Offices/alfa-ofisi/cards/eski-ofis-karti.md"
     assert moved.is_file()
     assert not (legacy_dir / "eski-ofis-karti.md").exists()
     assert (legacy_dir / "eski-entropy-karti.md").is_file()
@@ -169,7 +169,7 @@ def test_legacy_office_cards_migrate_once_and_are_logged(vault, offices):
     # İkinci koşu idempotent: yeni taşıma yok, dosya çoğalmıyor.
     TaskBoard._migrated_vaults.clear()
     assert TaskBoard(vault_path=vault).migrate_office_cards() == []
-    assert len(list((vault / "Entropy/Desk/Offices/alfa-ofisi/cards").glob("*.md"))) == 1
+    assert len(list((vault / "Desk/Offices/alfa-ofisi/cards").glob("*.md"))) == 1
 
 
 def test_office_status_and_stop_read_new_root(vault, offices, board):
@@ -417,13 +417,13 @@ def test_orchestrator_tools_policy_is_normalized_on_load(vault):
     agy_file = desk.workdir("Arastirma Ofisi") / ".agents" / "agents" / "Alfa" / "agent.md"
     assert agy_file.is_file()
 
-    log = (vault / "Entropy/Desk/_migrations.log").read_text(encoding="utf-8")
+    log = (vault / "Desk/_migrations.log").read_text(encoding="utf-8")
     assert "orkestratör-politika" in log and "read-only" in log
 
     # İdempotent: ikinci koşuda değişiklik ve yeni günlük satırı yok.
     before = log
     assert DeskRegistry(vault_path=vault).migrate_orchestrator_policies() == []
-    assert (vault / "Entropy/Desk/_migrations.log").read_text(encoding="utf-8") == before
+    assert (vault / "Desk/_migrations.log").read_text(encoding="utf-8") == before
 
 
 def test_normalize_model_text_rules():
@@ -483,7 +483,7 @@ def test_desk_agent_cards_are_claimed_by_their_office(vault):
     TaskBoard._migrated_vaults.clear()
     board = TaskBoard(vault_path=vault)
 
-    cards_dir = vault / "Entropy/Desk/Offices/Arastirma/cards"
+    cards_dir = vault / "Desk/Offices/Arastirma/cards"
     assert sorted(p.name for p in cards_dir.glob("*.md")) == ["kart-1.md", "kart-2.md"]
     assert not (legacy / "kart-1.md").exists()
     assert (legacy / "kendi.md").is_file()

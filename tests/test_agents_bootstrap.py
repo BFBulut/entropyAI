@@ -74,7 +74,13 @@ def test_bootstrap_without_project_dir_still_writes(isolated):
     result = bootstrap_agents(project_dir=None, vault_path=vault)
 
     assert result.ok, result.error
-    assert set(result.roots) == {app_root.resolve(), project.resolve()}
+    # Nötr Claude çalışma dizini de köklere dâhil (Hotfix 0.7.1): saf kipte
+    # süreç orada koşuyor ve ajanlar oradan keşfediliyor.
+    from entropy.core.config import claude_workspace_path
+
+    assert set(result.roots) == {
+        app_root.resolve(), project.resolve(), claude_workspace_path().resolve(),
+    }
     for name in result.compiled:
         assert _agy(app_root, name).is_file()
         assert _agy(project, name).is_file()

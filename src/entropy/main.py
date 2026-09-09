@@ -7,7 +7,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
+import entropy.core.config  # noqa: F401  (alt modülün yüklenmesi için)
 from entropy.core.config import config
+
+# `import entropy.core.config as m` MODÜLÜ değil config NESNESİNİ bağlar
+# (entropy/core/__init__.py adı yeniden dışa aktarıyor); modül yalnızca
+# sys.modules üzerinden güvenle alınır.
+config_module = sys.modules["entropy.core.config"]
 from entropy.core.provider import create_bridge
 from entropy.scheduler.cron_engine import TaskScheduler
 from entropy.ui.manager import EntropyUIManager
@@ -66,6 +72,12 @@ def main():
           f"(model: {bridge.selected_model})")
     if args.project:
         bridge.set_project_directory(args.project)
+    elif config_module.is_bundle_dir(bridge.active_project_dir):
+        # Paketlenmiş sürümde proje kökü .exe klasörüne düşmüş: ajan orada
+        # kendi paket artıklarını (`_internal/AGENTS.md`, `_internal/skills`)
+        # gerçek proje sanıyordu. Nötr çalışma alanına al; kullanıcı gerçek
+        # projeyi üst çubuktaki "Proje" düğmesiyle seçer.
+        bridge.set_project_directory(config_module.default_workspace_root())
 
     # Önceki oturum bir arka plan görevi sürerken kapandıysa ledger'da o satır
     # sonsuza dek RUNNING kalıyordu; görev panelinde hayalet iş olarak görünüyordu.

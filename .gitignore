@@ -16,3 +16,9 @@ venv/
 # Gecici build dogrulama ciktisi
 dist_check/
 build_check/
+
+# Faz 10-A: SQLite artiklari depoya girmesin (src icinde 340 KB olu bir
+# cognitive_memory.db birikmisti; kod her zaman ~/.entropy altini okur).
+*.db
+*.db-wal
+*.db-shm

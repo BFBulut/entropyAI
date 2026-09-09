@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -15,12 +16,49 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from entropy.core.config import config
 
+# Faz 10-A: bellek katmanı loglara HİÇ yazmıyordu (teşhis notu §A.1: 363 satırlık
+# entropy.log'da "cognitive_memory", "embedding", "recall", "dream" için 0 eşleşme).
+# Sessiz `except Exception: pass` blokları yüzünden kullanıcı "hafızam çalışmıyor
+# ama hata da görmüyorum" durumundaydı. Artık her yutulan istisna buraya yazılır.
+logger = logging.getLogger("entropy.memory.cognitive")
+
+# `last_errors` listesinin üst sınırı: hata döngüsünde bellek şişmesin.
+MAX_TRACKED_ERRORS = 20
+
+# Rüya döngüsünde bir turda yenilenecek en fazla gömme sayısı. Sinirsel çıkarım
+# metin başına ~90 ms; 200 satır ~18 sn eder ve rüya zaten arka plan görevidir.
+REEMBED_DREAM_BATCH = 200
+
+# Açılış ısınmasında yenilenecek gömme sayısı: açılışı geciktirmemek için küçük.
+REEMBED_WARMUP_BATCH = 32
+
+
+class DreamResult(list):
+    """
+    `dream_and_consolidate` dönüşü: sentezlenen kuralların listesi + hata kaydı.
+
+    Neden list alt sınıfı: eski çağıranlar (`main.py:157`,
+    `ui/widgets/tasks_widget.py:425`) dönüşü liste gibi kullanıyor. Sözlüğe
+    çevirmek onları kırardı; liste kalıp `.errors` / `.report` eklemek kısmi
+    başarısızlığı görünür kılar ve geriye dönük uyumu korur.
+    """
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.errors: List[Dict[str, Any]] = []
+        self.report: Dict[str, Any] = {}
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
 # numpy sert bir bağımlılık (pyproject) ama yokluğunda bellek modülü tamamen
 # çökmemeli: vektörleştirilmiş geri çağırma kapanır, eski skaler yol çalışır.
 try:
     import numpy as _np
 except Exception:  # pragma: no cover - numpy kurulu olmayan ortam
     _np = None
+    logger.warning("numpy yüklenemedi: vektörleştirilmiş geri çağırma kapalı, skaler yola düşülüyor")
 
 @dataclass
 class CognitiveMemoryNode:
@@ -103,7 +141,13 @@ class LocalEmbeddingEngine:
                 self._model_name = candidate
                 break
             except Exception:
+                logger.warning("Gömme modeli yüklenemedi: %s", candidate, exc_info=True)
                 continue
+        if not self._is_neural:
+            logger.error(
+                "Hiçbir sinirsel gömme modeli yüklenemedi; hash tabanlı yedeğe düşüldü. "
+                "Anlamsal geri çağırma kalitesi düşecek."
+            )
 
     @property
     def model_name(self) -> str:
@@ -112,30 +156,53 @@ class LocalEmbeddingEngine:
 
     def embed_text(self, text: str) -> List[float]:
         """Generate a 384-dimensional dense embedding vector (önbellekli)."""
+        return self.embed_text_status(text)[0]
+
+    def embed_text_status(self, text: str) -> Tuple[List[float], str]:
+        """
+        Gömme + durumu döndürür: `("ok"|"fallback"|"empty")`.
+
+        Faz 10-A: eski `embed_text` sinirsel çıkarım patladığında sessizce hash
+        yedeğine düşüyordu. Hash vektörü sinirsel uzayla aynı uzayda DEĞİLDİR;
+        o düğümün anlamsal geri çağırması kalıcı olarak ölür. Çağıran artık
+        durumu görüp düğümü `embedding_status='pending'` ile işaretleyebilir ve
+        `reembed_stale()` sonradan doldurur.
+        """
         if not text or not text.strip():
-            return [0.0] * 384
+            return [0.0] * 384, "empty"
 
         with self._cache_lock:
             cached = self._cache.get(text)
             if cached is not None:
                 self._cache.move_to_end(text)
-                return list(cached)
+                return list(cached), "ok"
 
         vector: Optional[List[float]] = None
+        status = "ok"
         if self._is_neural and self._model is not None:
             try:
                 vecs = list(self._model.embed([text]))
                 vector = [float(x) for x in vecs[0]]
             except Exception:
+                logger.warning(
+                    "Gömme üretimi başarısız (%s), hash yedeğine düşülüyor; düğüm "
+                    "yeniden gömme için işaretlenecek.", self._model_name, exc_info=True,
+                )
                 vector = None
         if vector is None:
+            # Sinirsel model hiç yoksa bu beklenen durumdur (kalıcı hash modu);
+            # model varken başarısızlıksa geçicidir ve yeniden denenmelidir.
+            status = "fallback" if self._is_neural else "ok"
             vector = self._hash_dense_embedding(text, dim=384)
 
         with self._cache_lock:
-            self._cache[text] = vector
-            while len(self._cache) > EMBEDDING_CACHE_SIZE:
-                self._cache.popitem(last=False)
-        return list(vector)
+            # Başarısız çıkarımın hash sonucu önbelleğe konmaz: aksi hâlde aynı
+            # metin bir daha asla sinirsel olarak gömülemezdi.
+            if status != "fallback":
+                self._cache[text] = vector
+                while len(self._cache) > EMBEDDING_CACHE_SIZE:
+                    self._cache.popitem(last=False)
+        return list(vector), status
 
     def cache_stats(self) -> Dict[str, int]:
         """Önbelleğin doluluğu; ölçüm ve testler için."""
@@ -173,6 +240,23 @@ def embedding_warmup_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def maintenance_enabled() -> bool:
+    """
+    Açılış bakımı (depo uzlaştırma + bekleyen gömme tamamlama) açık mı.
+
+    ENTROPY_MEMORY_MAINTENANCE=0 ile kapatılır; ölçüm alırken ya da salt okunur
+    bir profille açılırken kapatılabilir olmalıdır.
+    """
+    # Test koşumu üretim profiline dokunmamalı: bazı testler (ör.
+    # tests/test_ui_modes.py:186) varsayılan yolla `CognitiveMemorySystem()`
+    # kuruyor; arka planda uzlaştırma başlatmak gerçek veritabanını
+    # sessizce değiştirirdi.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    raw = (os.environ.get("ENTROPY_MEMORY_MAINTENANCE") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def warm_embedding_engine(blocking: bool = False) -> Optional[threading.Thread]:
     """
     fastembed modelini arka plan iş parçacığında yükler (~1,9 sn tek seferlik).
@@ -192,7 +276,7 @@ def warm_embedding_engine(blocking: bool = False) -> Optional[threading.Thread]:
             LocalEmbeddingEngine.get_instance()
         except Exception:
             # Isıtma en iyi çaba: başarısız olursa ilk çağrı eskisi gibi yükler.
-            pass
+            logger.warning("Gömme motoru ısıtması başarısız", exc_info=True)
 
     with _WARMUP_LOCK:
         if _WARMUP_THREAD is not None and _WARMUP_THREAD.is_alive():
@@ -301,21 +385,55 @@ class _RecallIndex:
         )
 
 
+def default_cognitive_db_path() -> Path:
+    """
+    Varsayilan bilissel bellek veritabani yolu (TEK KAYNAK).
+
+    `ENTROPY_COGNITIVE_DB` gecersiz kilar. Uc ayri yerde (`vault_manager`,
+    `memory_inspector_dialog`, `reports_viewer`) yol elle kuruluyordu; bu
+    yuzden test yalitimi delinip kullanicinin GERCEK veritabani aciliyordu.
+    """
+    override = os.environ.get("ENTROPY_COGNITIVE_DB", "").strip()
+    if override:
+        path = Path(override)
+    else:
+        path = Path.home() / ".entropy" / "cognitive_memory.db"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
 class CognitiveMemorySystem:
     """Manages multi-layered cognitive memory with Supabase pgvector and offline SQLite fallback."""
 
     def __init__(self, db_path: Optional[Path] = None):
         if db_path is None:
-            entropy_home = Path.home() / ".entropy"
-            entropy_home.mkdir(parents=True, exist_ok=True)
-            self.db_path = entropy_home / "cognitive_memory.db"
+            # `ENTROPY_COGNITIVE_DB` varsayilan yolu gecersiz kilar. Testler
+            # bunu tmp'ye yonlendirir: yol gecmeyen her `CognitiveMemorySystem()`
+            # aksi hâlde kullanicinin gercek `~/.entropy/cognitive_memory.db`
+            # dosyasina yaziyordu (kasa yalitiminin bellek karsiligi).
+            self.db_path = default_cognitive_db_path()
+            self._is_default_db = True
         else:
             self.db_path = Path(db_path)
+            self._is_default_db = False
         
         # Hibrit geri çağırma önbelleği; ilk sorguda kurulur.
         self._recall_index: Optional[_RecallIndex] = None
         self._recall_stat_sig: Optional[tuple] = None
         self._recall_lock = threading.RLock()
+
+        # Faz 10-A: sessiz istisnaların görünür kaydı. En fazla
+        # MAX_TRACKED_ERRORS girdi tutulur; UI/teşhis buradan okur.
+        self.last_errors: List[Dict[str, Any]] = []
+        self._error_lock = threading.Lock()
+        # Graf katmanı köprüsü (tembel kurulur; graph_store bu modülü içe
+        # aktardığı için modül düzeyinde import döngü yaratır).
+        self._graph_store = None
+        self._graph_lock = threading.RLock()
+        self._graph_sync_enabled = True
 
         self._init_sqlite_db()
         self._seed_ego_identity()
@@ -325,7 +443,94 @@ class CognitiveMemorySystem:
         try:
             warm_embedding_engine()
         except Exception:
+            self._record_error("warm_embedding_engine", "Gömme motoru ısıtması başlatılamadı")
+        # Açılış bakımı yalnızca gerçek profil veritabanı için otomatik koşar;
+        # testlerin geçici veritabanları arka plan iş parçacığı açmaz (belirlilik).
+        if self._is_default_db:
+            self.startup_maintenance(background=True)
+
+    # -- açılış bakımı (Faz 10-A) -----------------------------------------
+
+    def startup_maintenance(self, background: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Açılışta iki depoyu uzlaştırır ve bekleyen gömmeleri tamamlar.
+
+        Idempotenttir ve sapma/bekleyen yoksa neredeyse bedavadır (iki COUNT
+        sorgusu). Model çağrısı yapmaz, kota harcamaz.
+        """
+        # Bayrak yalnızca kendiliğinden (arka planda) koşmayı kapatır; açık
+        # çağrı (background=False) her zaman çalışır, çünkü niyet açıktır.
+        if background and not maintenance_enabled():
+            return None
+        if background:
+            thread = threading.Thread(
+                target=self._run_startup_maintenance, name="entropy-memory-maintenance", daemon=True
+            )
+            thread.start()
+            return None
+        return self._run_startup_maintenance()
+
+    def _run_startup_maintenance(self) -> Dict[str, Any]:
+        started = time.time()
+        out: Dict[str, Any] = {"reconciled": None, "reembedded": None}
+        try:
+            if self.store_drift() > 0:
+                out["reconciled"] = self.reconcile_stores()
+        except Exception as exc:
+            self._record_error("startup_maintenance", "Açılış uzlaştırması başarısız", exc)
+        try:
+            if self.pending_embedding_count() > 0:
+                out["reembedded"] = self.reembed_stale(batch_limit=REEMBED_WARMUP_BATCH)
+        except Exception as exc:
+            self._record_error("startup_maintenance", "Bekleyen gömmeler tamamlanamadı", exc)
+        out["duration_s"] = round(time.time() - started, 3)
+        return out
+
+    def pending_embedding_count(self) -> int:
+        """Gömmesi başarısız olup 'pending' işaretlenmiş satır sayısı."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM cognitive_nodes "
+                    "WHERE COALESCE(embedding_status, 'ok') = 'pending'"
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.Error:
+            return 0
+
+    # -- hata görünürlüğü (Faz 10-A) --------------------------------------
+
+    def _record_error(self, stage: str, message: str, exc: Optional[BaseException] = None) -> Dict[str, Any]:
+        """
+        Yutulan bir istisnayı görünür kılar: log + sayaç + (varsa) bus sinyali.
+
+        `stage` işlev adıdır; UI aynı aşamanın tekrarını gruplayabilsin diye ayrı
+        alanda tutulur. Dönüş değeri çağıranın `errors` listesine ekleyebileceği
+        sözlüktür.
+        """
+        detail = f"{message}: {exc}" if exc is not None else message
+        logger.warning("[bellek:%s] %s", stage, detail, exc_info=exc is not None)
+        entry = {"stage": stage, "message": message, "error": str(exc) if exc else "", "at": time.time()}
+        with self._error_lock:
+            self.last_errors.append(entry)
+            while len(self.last_errors) > MAX_TRACKED_ERRORS:
+                self.last_errors.pop(0)
+        # UI'ya duyuru: `bus.memory_error` sinyali HENÜZ tanımlı değil (core/**
+        # bu fazın kapsamı dışında). Sinyal eklendiğinde bu kod kendiliğinden
+        # yayınlamaya başlar; yoksa sessizce atlanır.
+        try:
+            from entropy.core.event_bus import bus  # yerel içe aktarma: döngü ve açılış maliyeti yok
+
+            signal = getattr(bus, "memory_error", None)
+            if signal is not None:
+                signal.emit(stage, detail)
+        except Exception:
             pass
+        return entry
+
+    def clear_errors(self) -> None:
+        with self._error_lock:
+            self.last_errors.clear()
 
     def _init_sqlite_db(self):
         """Initialize local SQLite persistence schema with embedding vector support (T2.1)."""
@@ -358,6 +563,11 @@ class CognitiveMemorySystem:
             # tespit edilip yeniden üretilebilir.
             if "embedding_model" not in cols:
                 cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_model TEXT")
+            # Faz 10-A: gömme üretimi patladığında düğüm ATILMAZ; hash yedeğiyle
+            # yazılır ve burada 'pending' işaretlenir. reembed_stale() rüya
+            # döngüsünde ve açılış ısınmasında bu satırları gerçek modelle doldurur.
+            if "embedding_status" not in cols:
+                cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_status TEXT DEFAULT 'ok'")
             conn.commit()
 
     def reembed_stale(self, batch_limit: Optional[int] = None) -> Dict[str, int]:
@@ -372,9 +582,12 @@ class CognitiveMemorySystem:
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # Faz 10-A: model uyuşmazlığına EK olarak 'pending' işaretli
+            # (gömmesi başarısız olmuş) satırlar da yeniden gömülür.
             cursor.execute(
                 "SELECT id, content FROM cognitive_nodes "
-                "WHERE embedding_model IS NULL OR embedding_model != ?",
+                "WHERE embedding_model IS NULL OR embedding_model != ? "
+                "   OR COALESCE(embedding_status, 'ok') = 'pending'",
                 (active,),
             )
             rows = cursor.fetchall()
@@ -384,24 +597,39 @@ class CognitiveMemorySystem:
             rows = rows[:batch_limit]
 
         updates = []
+        failed = 0
         for node_id, content in rows:
             try:
-                updates.append((json.dumps(engine.embed_text(content or "")), active, node_id))
-            except Exception:
+                vector, status = engine.embed_text_status(content or "")
+                if status == "fallback":
+                    # Hâlâ üretilemiyor: 'pending' kalsın, bir sonraki turda denenir.
+                    failed += 1
+                    continue
+                updates.append((json.dumps(vector), active, node_id))
+            except Exception as exc:
+                failed += 1
+                self._record_error("reembed_stale", f"Yeniden gömme başarısız: {node_id}", exc)
                 continue
 
         if updates:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.executemany(
-                    "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ? WHERE id = ?",
+                    "UPDATE cognitive_nodes SET embedding_json = ?, embedding_model = ?,"
+                    " embedding_status = 'ok' WHERE id = ?",
                     updates,
                 )
                 conn.commit()
+            self._invalidate_recall_index()
+        if stale_total or failed:
+            logger.info(
+                "reembed_stale: %s bayat/pending satır, %s güncellendi, %s başarısız",
+                stale_total, len(updates), failed,
+            )
 
         if updates:
             self._invalidate_recall_index()
-        return {"stale": stale_total, "reembedded": len(updates), "model": active}
+        return {"stale": stale_total, "reembedded": len(updates), "failed": failed, "model": active}
 
     def _seed_ego_identity(self):
         """Layer 12: Ensure core Ego / Identity persona node exists."""
@@ -474,24 +702,31 @@ class CognitiveMemorySystem:
         h = hashlib.sha256(f"{category}:{content.strip().lower()}".encode("utf-8")).hexdigest()[:16]
         return f"{category}-{h}"
 
-    def _save_node(self, node: CognitiveMemoryNode):
+    def _save_node(self, node: CognitiveMemoryNode, embedding_status: str = ""):
         engine = LocalEmbeddingEngine.get_instance()
         if node.embedding is None or len(node.embedding) == 0:
-            node.embedding = engine.embed_text(node.content)
+            node.embedding, status = engine.embed_text_status(node.content)
+            embedding_status = embedding_status or status
         active_model = engine.model_name or "hash-fallback"
+        # Gömme sinirsel modelle üretilemediyse satır o modelin adıyla
+        # etiketlenmemeli: reembed_stale bir daha asla dokunmazdı.
+        if embedding_status == "fallback":
+            active_model = "hash-fallback"
+        status_col = "pending" if embedding_status == "fallback" else "ok"
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model, embedding_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     importance = excluded.importance,
                     last_accessed = excluded.last_accessed,
                     access_count = cognitive_nodes.access_count + 1,
                     metadata_json = excluded.metadata_json,
                     embedding_json = excluded.embedding_json,
-                    embedding_model = excluded.embedding_model
+                    embedding_model = excluded.embedding_model,
+                    embedding_status = excluded.embedding_status
             """, (
                 node.id,
                 node.category,
@@ -502,10 +737,135 @@ class CognitiveMemorySystem:
                 node.access_count,
                 json.dumps(node.metadata or {}),
                 json.dumps(node.embedding or []),
-                active_model
+                active_model,
+                status_col,
             ))
             conn.commit()
         self._invalidate_recall_index()
+        # Faz 10-A (P0): yazma yolu artık TEK giriş noktasından iki depoya da
+        # yazar. Önceden yalnızca cognitive_nodes güncelleniyordu ve graf
+        # katmanı yalnızca elle koşturulan göçle doluyordu; gerçek veritabanında
+        # 35 düğüm grafın dışında kalmıştı.
+        self._sync_node_to_graph(node)
+
+    # -- graf katmanı köprüsü (Faz 10-A, P0) ------------------------------
+
+    def graph_store(self):
+        """
+        Aynı veritabanı dosyası üzerindeki `GraphStore` (tembel, süreç başına tek).
+
+        `graph_store` modülü bu modülü içe aktardığı için import yereldir.
+        Kurulum başarısızsa None döner; yazma yolu bundan etkilenmez.
+        """
+        if not self._graph_sync_enabled:
+            return None
+        with self._graph_lock:
+            if self._graph_store is not None:
+                return self._graph_store
+            try:
+                from entropy.memory.graph_store import GraphStore
+
+                self._graph_store = GraphStore(memory=self)
+            except Exception as exc:
+                self._graph_sync_enabled = False
+                self._record_error("graph_store", "Graf katmanı kurulamadı, senkron kapatıldı", exc)
+                return None
+            return self._graph_store
+
+    def _sync_node_to_graph(self, node: CognitiveMemoryNode) -> bool:
+        """Tek düğümü graf tablolarına yansıtır (kenarlar dâhil). Sessiz kalmaz."""
+        store = self.graph_store()
+        if store is None:
+            return False
+        try:
+            store.sync_from_cognitive(node_ids=[node.id], similarity_edges=False)
+            return True
+        except Exception as exc:
+            self._record_error("sync_node_to_graph", f"Düğüm grafa yazılamadı: {node.id}", exc)
+            return False
+
+    def reconcile_stores(self, similarity_edges: bool = True) -> Dict[str, Any]:
+        """
+        İki depo arasındaki sapmayı kapatır: `cognitive_nodes` \\ `nodes`.
+
+        Idempotenttir: sapma yoksa hiçbir yazma yapmaz ve `synced=0` döner.
+        Açılışta ve rüya döngüsünde çağrılır; sayılar günlüğe yazılır.
+        """
+        started = time.time()
+        store = self.graph_store()
+        if store is None:
+            return {"synced": 0, "drift_before": -1, "drift_after": -1, "duration_s": 0.0,
+                    "error": "graph_store_unavailable"}
+        try:
+            before = self.store_drift()
+            if before == 0:
+                # Idempotent kısayol: sapma yoksa hiçbir yazma yapılmaz.
+                # (Tam uzlaştırma 1400+ düğümde O(n^2) benzerlik hesabı demektir;
+                # her rüya turunda bedava koşmamalı.)
+                return {"synced": 0, "entity_nodes": 0, "edges": 0, "drift_before": 0,
+                        "drift_after": 0, "duration_s": round(time.time() - started, 3)}
+            result = store.sync_from_cognitive(similarity_edges=similarity_edges)
+            after = self.store_drift()
+            payload = {
+                "synced": result.get("synced_nodes", 0),
+                "entity_nodes": result.get("entity_nodes", 0),
+                "edges": result.get("edges", 0),
+                "drift_before": before,
+                "drift_after": after,
+                "duration_s": round(time.time() - started, 3),
+            }
+            if before or after:
+                logger.info(
+                    "Depo uzlaştırma: sapma %s -> %s, %s düğüm senkronlandı (%.3f sn)",
+                    before, after, payload["synced"], payload["duration_s"],
+                )
+            return payload
+        except Exception as exc:
+            self._record_error("reconcile_stores", "Depo uzlaştırma başarısız", exc)
+            return {"synced": 0, "drift_before": -1, "drift_after": -1,
+                    "duration_s": round(time.time() - started, 3), "error": str(exc)}
+
+    def store_drift(self) -> int:
+        """`cognitive_nodes`'ta olup graf `nodes`'ta olmayan satır sayısı."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM cognitive_nodes c "
+                    "LEFT JOIN nodes n ON c.id = n.id WHERE n.id IS NULL"
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except sqlite3.Error:
+            # `nodes` tablosu henüz yoksa sapma tanımsızdır, sıfır sayılır.
+            return 0
+
+    def delete_memory(self, node_id: str) -> Dict[str, int]:
+        """
+        Bir anıyı HER İKİ depodan siler (tek silme giriş noktası).
+
+        Önceden silme yalnızca `cognitive_nodes`'tan yapılıyordu
+        (`ui/dialogs/memory_inspector_dialog.py:494-499`); graf düğümü ve
+        kenarları yerinde kalıp geri çağırmaya sızmaya devam ediyordu.
+        """
+        removed = {"cognitive_nodes": 0, "nodes": 0, "edges": 0}
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM cognitive_nodes WHERE id = ?", (node_id,))
+                removed["cognitive_nodes"] = cur.rowcount or 0
+                for table, where in (("nodes", "id = ?"), ("edges", "src = ? OR dst = ?")):
+                    try:
+                        params = (node_id,) if table == "nodes" else (node_id, node_id)
+                        cur.execute(f"DELETE FROM {table} WHERE {where}", params)
+                        removed[table] = cur.rowcount or 0
+                    except sqlite3.Error:
+                        # Graf tabloları hiç kurulmamış olabilir (eski profil).
+                        removed[table] = 0
+                conn.commit()
+        except sqlite3.Error as exc:
+            self._record_error("delete_memory", f"Anı silinemedi: {node_id}", exc)
+            return removed
+        self._invalidate_recall_index()
+        return removed
 
     def get_node(self, node_id: str) -> Optional[CognitiveMemoryNode]:
         with sqlite3.connect(self.db_path) as conn:
@@ -573,8 +933,14 @@ class CognitiveMemorySystem:
             self._save_node(existing)
             return existing, False
 
-        # Novel memory: insert new node with dense embedding
-        embedding = LocalEmbeddingEngine.get_instance().embed_text(content)
+        # Novel memory: insert new node with dense embedding.
+        # Gömme başarısız olsa bile düğüm KAYBEDİLMEZ: hash yedeğiyle yazılır,
+        # 'pending' işaretlenir, reembed_stale() sonradan gerçek vektörü koyar.
+        embedding, embed_status = LocalEmbeddingEngine.get_instance().embed_text_status(content)
+        if embed_status == "fallback":
+            self._record_error(
+                "record_memory", f"Gömme üretilemedi, düğüm 'pending' kaydedildi: {node_id}"
+            )
         new_node = CognitiveMemoryNode(
             id=node_id,
             category=category,
@@ -586,7 +952,7 @@ class CognitiveMemorySystem:
             metadata=metadata or {},
             embedding=embedding
         )
-        self._save_node(new_node)
+        self._save_node(new_node, embedding_status=embed_status)
         return new_node, True
 
     def hybrid_recall(
@@ -606,9 +972,13 @@ class CognitiveMemorySystem:
         if _np is not None:
             try:
                 return self._hybrid_recall_indexed(query, top_k, min_threshold)
-            except Exception:
-                # İndeks kurulamazsa geri çağırma tamamen kaybolmasın.
+            except Exception as exc:
+                # İndeks kurulamazsa geri çağırma tamamen kaybolmasın; ama artık
+                # sessiz değil: kullanıcı yavaşlığın nedenini görebilmeli.
                 self._invalidate_recall_index()
+                self._record_error(
+                    "hybrid_recall", "İndeksli geri çağırma düştü, skaler yola geçildi", exc
+                )
         return self._hybrid_recall_scalar(query, top_k, min_threshold)
 
     # -- geri çağırma: bellek içi indeks ---------------------------------
@@ -741,8 +1111,10 @@ class CognitiveMemorySystem:
                         backfill,
                     )
                     conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_error(
+                    "_build_recall_index", f"{len(backfill)} eksik gomme geri yazilamadi", exc
+                )
         return idx
 
     def _hybrid_recall_indexed(
@@ -886,8 +1258,10 @@ class CognitiveMemorySystem:
                         nodes_to_update,
                     )
                     conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._record_error(
+                    "_hybrid_recall_scalar", f"{len(nodes_to_update)} gomme geri yazilamadi", exc
+                )
 
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
@@ -916,7 +1290,7 @@ class CognitiveMemorySystem:
             for node, score in results
         ]
 
-    def dream_and_consolidate(self) -> List[str]:
+    def dream_and_consolidate(self) -> "DreamResult":
         """
         Layer 6: Dreaming / Clustering Consolidation (T3.1 & T3.2).
         Gathers episodic memories from the past 24-48 hours, aggregates themes,
@@ -924,7 +1298,13 @@ class CognitiveMemorySystem:
         """
         now = time.time()
         two_days_ago = now - (2 * 86400.0)
-        synthesized_rules = []
+        # DreamResult bir list'tir: eski cagiranlar (main.py, tasks_widget.py)
+        # degismeden calisir, ama artik `.errors` ve `.report` ile kismi
+        # basarisizlik gorunur. Onceden uc adim sessizce atlanip islev yine
+        # "basarili" donuyordu (teshis notu SS A.4).
+        synthesized_rules = DreamResult()
+        errors = synthesized_rules.errors
+        report = synthesized_rules.report
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -970,19 +1350,42 @@ class CognitiveMemorySystem:
                 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 ovm.append_to_global_memory("Otonom Bilişsel Konsolidasyon (Rüya)", summary)
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(self._record_error(
+                    "dream:obsidian_export", "Konsolidasyon ozeti kasaya yazilamadi", exc))
 
         # Also run pruning during dream cycle
-        self.prune_decayed_memories()
+        try:
+            self.prune_decayed_memories()
+        except Exception as exc:
+            errors.append(self._record_error(
+                "dream:prune", "Sonmus ani budama basarisiz", exc))
+
+        # Faz 10-A: gecikmis/bayat gommeler burada tamamlanir. reembed_stale
+        # uretimde HIC cagrilmiyordu; model degisirse eski dugumler sonsuza dek
+        # eski vektor uzayinda kaliyordu.
+        try:
+            report["reembed"] = self.reembed_stale(batch_limit=REEMBED_DREAM_BATCH)
+        except Exception as exc:
+            errors.append(self._record_error(
+                "dream:reembed", "Bayat gommeler yenilenemedi", exc))
+
+        # Faz 10-A: iki depo arasindaki sapma ruya dongusunde de kapatilir
+        # (yazma yolu artik senkron yaziyor; bu, dis araclarla olusan sapma icin).
+        try:
+            report["reconcile"] = self.reconcile_stores()
+        except Exception as exc:
+            errors.append(self._record_error(
+                "dream:reconcile", "Depo uzlastirma basarisiz", exc))
 
         # Faz 5: graf katmanı konsolidasyonu (LLM'siz, kota harcamaz). Graf
         # katmanı yoksa veya şema kurulamazsa rüya döngüsü bozulmamalıdır.
         try:
             from entropy.memory.graph_store import GraphStore
             GraphStore(memory=self).consolidate()
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(self._record_error(
+                "dream:graph_consolidate", "Graf konsolidasyonu atlandi", exc))
 
         # Faz 7: Desk ofis belleğinin Entropy grafına akışı da rüya döngüsünde
         # tetiklenir (modelsiz, kota harcamaz). Ayrı bir kullanıcı komutu yok;
@@ -994,9 +1397,12 @@ class CognitiveMemorySystem:
             # Depo bu bellek örneğine bağlanır: testlerdeki geçici veritabanı
             # yerine üretim grafına yazılmasın.
             schedule_office_ingest(store=GraphStore(memory=self), background=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(self._record_error(
+                "dream:office_ingest", "Ofis bellegi grafina akis atlandi", exc))
 
+        if errors:
+            logger.warning("Ruya dongusu %s adimda kismi basarisizlikla bitti", len(errors))
         return synthesized_rules
 
     _PLACEHOLDER_RE = re.compile(r"^Konsolide Bilişsel Özet \(\d{4}-\d{2}-\d{2}\): \d+ bölümsel etkileşimden damıtıldı\.?$")
@@ -1013,8 +1419,9 @@ class CognitiveMemorySystem:
                     cursor.executemany("DELETE FROM cognitive_nodes WHERE id = ?", [(j,) for j in junk])
                     conn.commit()
                     removed = len(junk)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._record_error(
+                "purge_placeholder_consolidations", "Yer tutucu dugumler temizlenemedi", exc)
         if removed:
             self._invalidate_recall_index()
         return removed

@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout,
+    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTextBrowser,
+    QVBoxLayout,
 )
 
 from entropy.core.event_bus import bus
@@ -122,6 +123,45 @@ class ProjectsPanel(QFrame):
         )
         layout.addWidget(self.list_widget, 1)
 
+        # --- Faz 10-B: "Çalışma belleği" hızlı görüntüleyici -----------------
+        # Ofisin ortak çalışma dosyaları (BOARD.md / ARCHITECTURE.md /
+        # RULES.md) SALT OKUNUR gösterilir; arayüz kasaya yazmaz — dosyaların
+        # tek yazarı ajanlar/bellek katmanıdır.
+        ws_head = QHBoxLayout()
+        ws_head.setSpacing(4)
+        ws_title = QLabel("Çalışma belleği:")
+        ws_title.setStyleSheet(
+            f"color:{RT['text_dim']}; font-size:{RT['font_size_small']};"
+            f" background:transparent; border:none;"
+        )
+        ws_head.addWidget(ws_title)
+        self.workspace_buttons: Dict[str, QPushButton] = {}
+        for key, label in (("board", "BOARD.md"),
+                           ("architecture", "ARCHITECTURE.md"),
+                           ("rules", "RULES.md")):
+            btn = QPushButton(label)
+            btn.setFixedHeight(22)
+            btn.setProperty("workspace_key", key)
+            btn.setToolTip(f"{label} dosyasını salt okunur göster")
+            btn.clicked.connect(self._on_workspace_clicked)
+            ws_head.addWidget(btn)
+            self.workspace_buttons[key] = btn
+        ws_head.addStretch()
+        layout.addLayout(ws_head)
+
+        self.workspace_view = QTextBrowser()
+        self.workspace_view.setReadOnly(True)
+        self.workspace_view.setOpenExternalLinks(False)
+        self.workspace_view.setMaximumHeight(200)
+        self.workspace_view.setStyleSheet(
+            f"QTextBrowser {{ background-color:{RT['surface_base']};"
+            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
+            f" color:{RT['text_body']}; padding:8px;"
+            f" font-size:{RT['font_size_small']}; }}"
+        )
+        self.workspace_view.setVisible(False)
+        layout.addWidget(self.workspace_view)
+
         self.setMinimumWidth(220)
         self.set_office(self.office)
 
@@ -130,7 +170,57 @@ class ProjectsPanel(QFrame):
     def set_office(self, office: str) -> None:
         self.office = office or ""
         self.filtered_project = ""
+        self.workspace_view.setVisible(False)
+        self.workspace_view.clear()
         self.refresh()
+
+    # ------------------------------------------------ çalışma belleği
+
+    def workspace_paths(self) -> Dict[str, Any]:
+        """`office_workspace.workspace_paths`; modül/ofis yoksa boş sözlük."""
+        if not self.office:
+            return {}
+        try:
+            from entropy.memory.office_workspace import workspace_paths  # type: ignore
+
+            return dict(workspace_paths(self.office) or {})
+        except Exception:
+            return {}
+
+    @Slot()
+    def _on_workspace_clicked(self) -> None:
+        sender = self.sender()
+        self.show_workspace(str(sender.property("workspace_key") or ""))
+
+    def show_workspace(self, key: str) -> str:
+        """
+        Çalışma belleği dosyasını görüntüler ve gösterilen metni döndürür.
+
+        Dosya yoksa açıklayıcı bir satır basılır (boş kutu "bozuk mu?"
+        sorusunu doğuruyordu).
+        """
+        paths = self.workspace_paths()
+        path = paths.get(key)
+        text = ""
+        if path is not None:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:
+                text = ""
+        self.workspace_view.setVisible(True)
+        if not text.strip():
+            name = getattr(path, "name", key or "dosya")
+            self.workspace_view.setMarkdown("")
+            self.workspace_view.setPlainText(
+                f"{name} henüz yazılmadı. Ofis çalışmaya başlayınca ajanlar doldurur."
+            )
+            return ""
+        self.workspace_view.setMarkdown(text)
+        return text
+
+    def workspace_text(self) -> str:
+        """Test için: görüntüleyicideki düz metin."""
+        return self.workspace_view.toPlainText()
 
     def list_projects(self) -> List[Any]:
         if self.desk is None or not self.office:
@@ -145,7 +235,7 @@ class ProjectsPanel(QFrame):
         out: Dict[str, Dict[str, int]] = {}
         if self.board is None or not self.office:
             return out
-        # Faz 9: ofis kartları `Entropy/Desk/Offices/<ofis>/cards/` altında;
+        # Faz 9: ofis kartları `Desk/Offices/<ofis>/cards/` altında;
         # `list()` (ofissiz) yalnızca Entropy kartlarını döndürdüğü için
         # sayaçlar sıfır görünüyordu.
         cards = list_cards_for(self.board, self.office)

@@ -7,7 +7,7 @@ Ajan katmanı: kasadaki ajan tanımları, sağlayıcı derlemesi ve görev kartl
                  (.claude/agents/<ad>.md) biçimlerine derler.
   tasks.py     — `<kasa>/Entropy/Tasks/<id>.md` görev kartları ve yürütme.
   desk_registry.py — Agent Desk'in KENDİ ofisleri, ajanları ve projeleri
-                 (`<kasa>/Entropy/Desk/Offices/<ofis>/`). Entropy'nin kadrosundan
+                 (`<kasa>/Desk/Offices/<ofis>/`). Entropy'nin kadrosundan
                  tamamen ayrı; `offices.py` yalnızca eski adların takma adı.
   harness.py   — ofis zinciri: planla → paralel koş → notla → kapat (dosya
                  tabanlı, kesintiden devam eder).

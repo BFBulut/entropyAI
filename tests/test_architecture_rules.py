@@ -7,7 +7,7 @@ Bu dosya kullaniciya soz verilen dort kurali her QA kosusunda olcer:
    (orkestrator Entropy AI'in varligini bilmez).
 2. Orkestratorun araclari salt okunurdur (kod yazamaz, kabuk calistiramaz).
 3. `Entropy/Agents` (Entropy'nin kendi ajanlari) ile
-   `Entropy/Desk/Offices/<ofis>/agents` (Desk ajanlari) kesismez.
+   `Desk/Offices/<ofis>/agents` (Desk ajanlari) kesismez.
 4. Kaynaklarda ve `docs/` altinda yasakli marka adi gecmez.
 """
 
@@ -168,7 +168,7 @@ def test_task_board_list_does_not_return_office_cards(tmp_path):
     """
     Kural (a): `TaskBoard.list()` varsayilaniyla Entropy kartlarini dondurur.
 
-    Ofis kartlari `Entropy/Desk/Offices/<ofis>/Tasks` altinda ayri kokte durur;
+    Ofis kartlari `Desk/Offices/<ofis>/Tasks` altinda ayri kokte durur;
     Entropy panosunda gorunurlerse kullanici ofisin ic isini kendi gorevi
     sanar ve iki kadro birbirine karisir.
     """

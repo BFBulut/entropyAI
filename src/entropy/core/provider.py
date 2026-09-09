@@ -41,6 +41,127 @@ CLAUDE_MODEL_CONTEXT_WINDOWS: Dict[str, int] = {
     "claude-haiku-4-5": 200_000,
 }
 
+# ---------------------------------------------------------------------------
+# Efor (reasoning effort) — sağlayıcıya göre TAMAMEN farklı iki mekanizma
+#
+# claude: ayrı bir bayrak (`--effort low|medium|high|xhigh|max`).
+# agy   : efor MODEL ADININ SON EKİDİR (`gemini-3.8-flash-high`). `agy --effort`
+#         bayrağı da var ama son ekli bir modelle BİRLİKTE verilemez; CLI turu
+#         hiç başlatmadan reddeder:
+#             error: invalid model selection (--model "gemini-3.8-flash-high"
+#             --effort "medium"): --model gemini-3.8-flash-high conflicts with
+#             --effort=medium
+#         Bu yüzden agy argv'sine `--effort` HİÇ yazılmaz; efor değiştirmek
+#         model adını yeniden bestelemek demektir (compose_agy_model).
+# ---------------------------------------------------------------------------
+
+#: `claude --effort` seviyeleri (--help ile doğrulandı).
+CLAUDE_EFFORT_LEVEL_NAMES = ["low", "medium", "high", "xhigh", "max"]
+
+#: Bir model adının sonunda efor olarak okunabilecek sözcükler. "medium"dan
+#: önce "xhigh" denenir; sıralama uzunluk değil ÖNEM sırasıdır (aşağıda ayrıca
+#: en uzun eşleşme seçilir).
+EFFORT_SUFFIX_WORDS = ("low", "medium", "high", "xhigh", "max")
+
+#: Efor seviyelerinin gücüne göre sırası; "en yakın varyant" seçimi buna dayanır.
+EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
+
+#: `agy models` erişilemediğinde kullanılan yedek katalog (canlı çıktıdan
+#: alındı, 2026-09). Canlı liste her zaman önceliklidir.
+FALLBACK_AGY_MODELS = (
+    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
+    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
+    "claude-sonnet-4-6", "claude-opus-4-6-thinking",
+    "gpt-oss-120b-medium",
+)
+
+
+def split_agy_model(name: str) -> tuple:
+    """
+    agy model adını `(taban, efor)` olarak ayırır; son ek yoksa efor None.
+
+    `gemini-3.8-flash-high` -> `("gemini-3.8-flash", "high")`
+    `claude-opus-4-6-thinking` -> `("claude-opus-4-6-thinking", None)`
+    """
+    low = (name or "").strip().lower()
+    if not low:
+        return "", None
+    best = None
+    for word in EFFORT_SUFFIX_WORDS:
+        suffix = "-" + word
+        if low.endswith(suffix) and len(low) > len(suffix):
+            # En uzun eşleşme kazanır: "...-xhigh" hem "high" hem "xhigh" ile biter.
+            if best is None or len(word) > len(best):
+                best = word
+    if best is None:
+        return low, None
+    return low[: -(len(best) + 1)], best
+
+
+def agy_effort_variants(base: str, available: Optional[List[str]] = None) -> List[str]:
+    """Bir taban model için canlı katalogda bulunan efor son ekleri (güç sırasıyla)."""
+    base_low = (base or "").strip().lower()
+    if not base_low:
+        return []
+    names = [str(m).strip().lower() for m in (available or FALLBACK_AGY_MODELS) if str(m).strip()]
+    found = set()
+    for n in names:
+        b, e = split_agy_model(n)
+        if b == base_low and e:
+            found.add(e)
+    return sorted(found, key=lambda x: EFFORT_ORDER.get(x, 99))
+
+
+def compose_agy_model(base: str, effort: Optional[str],
+                      available: Optional[List[str]] = None) -> str:
+    """
+    Taban model + istenen eforu geçerli bir agy model adına çevirir.
+
+    İstenen varyant katalogda yoksa EN YAKIN varyanta düşülür (ör. pro modelinde
+    "medium" istenirse `gemini-3.1-pro-low`/`-high` arasından en yakını). Taban
+    modelin hiç varyantı yoksa ad olduğu gibi döner — `claude-sonnet-4-6` gibi
+    modellerde efor seçilemez.
+    """
+    base_low = (base or "").strip().lower()
+    # Çağıran tam ad verdiyse (ör. zaten son ekli) tabanına indir.
+    stripped, _ = split_agy_model(base_low)
+    variants = agy_effort_variants(stripped, available)
+    if not variants:
+        # Tabanın varyantı yok; belki `base` zaten katalogdaki tam addır.
+        return base_low
+    base_low = stripped
+    want = (effort or "").strip().lower()
+    if want in variants:
+        return f"{base_low}-{want}"
+    if not want:
+        want = "high" if "high" in variants else variants[-1]
+        return f"{base_low}-{want}"
+    target = EFFORT_ORDER.get(want, EFFORT_ORDER["high"])
+    nearest = min(variants, key=lambda v: (abs(EFFORT_ORDER.get(v, 99) - target),
+                                           EFFORT_ORDER.get(v, 99)))
+    return f"{base_low}-{nearest}"
+
+
+def effort_levels_for(provider: str, model: Optional[str] = None,
+                      available: Optional[List[str]] = None) -> List[str]:
+    """
+    Bu sağlayıcı+model çifti için arayüzün gösterebileceği efor seviyeleri.
+
+    claude: modelden bağımsız sabit beşli. agy: seçili modelin TABANI için
+    katalogda gerçekten var olan son ekler (flash -> low/medium/high,
+    pro -> low/high, son eksiz model -> boş liste = efor kutusu gizlenir).
+    """
+    p = (provider or "").strip().lower()
+    if p == "claude":
+        return list(CLAUDE_EFFORT_LEVEL_NAMES)
+    if p == "agy":
+        base, _ = split_agy_model(model or "")
+        return agy_effort_variants(base, available)
+    return []
+
+
 # Bağlam bu orana ulaşınca baskı sinyali yayılır ve (varsa) aktarım sayfası yazılır.
 CONTEXT_PRESSURE_THRESHOLD = 0.60
 
@@ -69,6 +190,127 @@ def context_window_for(provider: str, model: Optional[str] = None) -> int:
             if model.startswith(name):
                 return size
     return DEFAULT_CONTEXT_WINDOWS.get(provider, 200_000)
+
+
+# ----------------------------------------------------------------------
+# Ajan akışı (Faz 10-B): piksel ajan sahnesinin ortak sözleşmesi
+# ----------------------------------------------------------------------
+#
+# Piksel ajanlar arka planda koşan gizli terminallerin avatarıdır: köprü
+# stdout'unu satır satır ayrıştırır, her olayı tek bir sözlük yükü hâline
+# getirir ve `bus.agent_stream` ile yayar. Sahne yalnızca `state` alanına
+# bakarak animasyonu seçer (düşünüyor → balon, çalışıyor → tuşlama, boşta →
+# volta), `text` alanını balona basar. Eşleme burada — tek yerde — durur:
+# iki köprü de aynı yardımcıları çağırdığı için agy ve Claude kartları
+# sahnede birbirinden ayırt edilemez biçimde davranır.
+
+# Konuşma balonuna sığan en uzun metin. Tam metin `full_text` alanında durur;
+# sahne kırpılmışı gösterir, terminal bölmesi tamamını.
+BUBBLE_TEXT_LIMIT = 280
+
+# Dosyaya/sisteme YAZAN araçlar: masada tuşlama animasyonu. agy ve Claude
+# araç adlarını farklı yazıyor (agy'de `write_file`, Claude'da `Write`), bu
+# yüzden karşılaştırma küçük harfe indirgenmiş adla yapılır.
+WRITE_TOOL_NAMES = {
+    "edit", "write", "bash", "multiedit", "notebookedit",
+    "write_file", "edit_file", "create_file", "apply_patch", "replace",
+    "run_command", "run_terminal_command", "shell", "execute_command",
+}
+
+# OKUYAN/arayan araçlar: ajan hâlâ "düşünüyor" sayılır, masaya oturmaz.
+READ_TOOL_NAMES = {
+    "read", "glob", "grep", "webfetch", "websearch",
+    "read_file", "list_directory", "ls", "find", "search",
+    "search_file_content", "google_web_search", "web_fetch",
+}
+
+
+def stream_state_for(kind: str, tool_name: Optional[str] = None) -> str:
+    """
+    Olay türünü (ve varsa araç adını) sahne durumuna çevirir.
+
+    Bilinmeyen bir araç adı "working" sayılır: araç koşarken ajanın masada
+    olduğunu varsaymak, boşta göstermekten daha az yanıltıcıdır.
+    """
+    if kind == "error":
+        return "error"
+    if kind == "result":
+        return "idle"
+    if kind == "tool_call":
+        name = (tool_name or "").strip().lower()
+        if name in READ_TOOL_NAMES:
+            return "thinking"
+        return "working"
+    # text / thinking / tool_result / status
+    return "thinking"
+
+
+def truncate_bubble(text: Optional[str], limit: int = BUBBLE_TEXT_LIMIT) -> str:
+    """Balon metnini `limit` karaktere kırpar; kırpıldıysa sonuna "…" koyar."""
+    body = (text or "").strip()
+    if len(body) <= limit:
+        return body
+    return body[: max(0, limit - 1)].rstrip() + "…"
+
+
+def build_agent_stream_event(
+    kind: str,
+    text: str = "",
+    *,
+    task_id: str = "",
+    card_id: str = "",
+    office: str = "",
+    agent: str = "entropy",
+    provider: str = "",
+    model: str = "",
+    tool: Optional[Dict[str, str]] = None,
+    state: Optional[str] = None,
+) -> Dict[str, object]:
+    """
+    `bus.agent_stream` yükünü kurar (sözleşmenin TEK üretim noktası).
+
+    `text` balon için kırpılır; kırpma olduysa tamamı `full_text` alanında da
+    taşınır. `state` verilmezse `stream_state_for` ile türetilir.
+    """
+    import time
+
+    full = (text or "").strip()
+    payload: Dict[str, object] = {
+        "task_id": task_id or "",
+        "card_id": card_id or "",
+        "office": office or "",
+        "agent": agent or "",
+        "provider": provider or "",
+        "model": model or "",
+        "kind": kind,
+        "text": truncate_bubble(full),
+        "tool": tool,
+        "state": state or stream_state_for(kind, (tool or {}).get("name") if tool else None),
+        "ts": time.time(),
+    }
+    if len(full) > BUBBLE_TEXT_LIMIT:
+        payload["full_text"] = full
+    return payload
+
+
+def emit_agent_stream(kind: str, text: str = "", **kwargs) -> Optional[Dict[str, object]]:
+    """
+    Yükü kurar ve yayar; sinyal yayımı hiçbir koşulda köprüyü düşürmez.
+
+    Yayım hatası (bus yok, alıcı patladı) yutulur: ajan akışı telemetridir,
+    görevin kendisi ona bağlı değildir.
+    """
+    try:
+        payload = build_agent_stream_event(kind, text, **kwargs)
+    except Exception:
+        return None
+    try:
+        from entropy.core.event_bus import bus
+
+        bus.agent_stream.emit(payload)
+    except Exception:
+        pass
+    return payload
 
 
 @runtime_checkable
@@ -146,6 +388,58 @@ class ProviderCommonMixin:
     """
 
     provider_name: str = "agy"
+
+    # ------------------------------------------------------------------
+    # Ajan akışı (Faz 10-B)
+    # ------------------------------------------------------------------
+
+    def _agent_stream_emitter(
+        self,
+        task_id: str = "",
+        stream_meta: Optional[dict] = None,
+        model: Optional[str] = None,
+    ):
+        """
+        Bir koşuya ait `bus.agent_stream` yayıcısını üretir.
+
+        Kart bağlamı (ajan/ofis/kart kimliği) her olayda yeniden yazılmasın diye
+        kapanışta (closure) tutulur; çağrı yerinde yalnızca tür ve metin kalır.
+        Meta yoksa sohbet yolu varsayılanı uygulanır: agent="entropy", office="".
+        İki köprü de bunu kullanır; sahne kaynağı ayırt edemesin diye tek gövde.
+        """
+        meta = dict(stream_meta or {})
+        try:
+            run_model = self.model_for_run(model)
+        except Exception:
+            run_model = model or ""
+        base = dict(
+            task_id=task_id or "",
+            card_id=str(meta.get("card_id") or ""),
+            office=str(meta.get("office") or ""),
+            agent=str(meta.get("agent") or "entropy"),
+            provider=self.provider_name,
+            model=run_model or "",
+        )
+
+        def _emit(kind: str, text: str = "", tool: Optional[dict] = None,
+                  state: Optional[str] = None):
+            return emit_agent_stream(kind, text, tool=tool, state=state, **base)
+
+        return _emit
+
+    @staticmethod
+    def _tool_payload(name: Optional[str], params) -> Dict[str, str]:
+        """Araç adı + kısa parametre özeti (balonda ve terminal başlığında aynı)."""
+        import json as _json
+
+        try:
+            summary = "" if not params else (
+                params if isinstance(params, str)
+                else _json.dumps(params, ensure_ascii=False)
+            )
+        except Exception:
+            summary = str(params)
+        return {"name": str(name or "Araç"), "input_summary": summary[:200]}
 
     # Bu eşiğin altında seçilen yetenek "zayıf karar" sayılır. 0,6 keyfi değil:
     # score_skill_for_prompt seçilen kararları 0,5–1,0 aralığına yerleştirir, yani

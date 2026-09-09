@@ -120,6 +120,22 @@ STAGE_TO_STATE = {
 # Araç adı bu köklerden birini içeriyorsa ajan "okuyor" sayılır.
 READ_TOOL_HINTS = ("read", "oku", "grep", "search", "ara", "glob", "fetch")
 
+# Faz 10-B: `bus.agent_stream` yükündeki `state` -> sahne durumu.
+STREAM_STATE_TO_SCENE = {
+    "thinking": STATE_THINKING,
+    "working": STATE_WORKING,
+    "idle": STATE_IDLE,
+    "error": STATE_ERROR,
+}
+
+# Baş üstü balon metni bu uzunlukta kırpılır (16 px ızgarada daha uzunu
+# sahnenin yarısını kaplıyordu) ve bu süre sonunda söner.
+BUBBLE_MAX_CHARS = 80
+BUBBLE_TTL_MS = 6000
+# Balonun mantıksal genişlik tavanı (6 karo): daha genişi komşu masaların
+# üstüne taşıyor, kalabalık ofiste balonlar birbirini örtüyordu.
+BUBBLE_MAX_WIDTH_PX = 6 * 16
+
 ROLE_ORCHESTRATOR = "orchestrator"
 ROLE_EVALUATOR = "evaluator"
 ROLE_WORKER = "worker"
@@ -158,6 +174,11 @@ class DeskSlot:
     path_step: int = 0
     walking: bool = False
     idle_ms: int = 0
+    # Faz 10-B: akıştan gelen konuşma balonu (metin + kalan ömür ms).
+    bubble_text: str = ""
+    bubble_ms: int = 0
+    task_id: str = ""
+    card_id: str = ""
 
     @property
     def rect(self) -> QRect:
@@ -258,6 +279,8 @@ class OfficeScene(QWidget):
             ("agent_turn_started", self._on_turn_started),
             ("agent_turn_completed", self._on_turn_completed),
             ("offices_updated", self._on_offices_updated),
+            # Faz 10-B: ajan etiketli akış (gizli terminallerin avatar beslemesi).
+            ("agent_stream", self.handle_stream),
         ):
             signal = getattr(bus, signal_name, None)
             if signal is not None:
@@ -466,9 +489,96 @@ class OfficeScene(QWidget):
         if state in (STATE_WORKING, STATE_READING, STATE_THINKING):
             # Gelen görev: karakter masasına yürür (boşta kanepeye gitmiş olabilir).
             self.walk_to_seat(agent)
+        elif state == STATE_IDLE:
+            # Faz 10-B: boşta kalan ajan masadan kalkar, volta atar / kahve
+            # makinesine gider. Hedef yoksa masasında kalır (sahne bozulmaz).
+            self.wander(agent)
         self._sync_timer()
         self.update()
         return True
+
+    # --------------------------------------------------- akış -> durum
+
+    @Slot(dict)
+    def handle_stream(self, payload: dict) -> None:
+        """
+        `bus.agent_stream` alıcısı: yükün `state` alanını sahneye eşler ve
+        `text` alanını baş üstü balona basar.
+
+        QObject slotu (lambda değil): köprünün işçi iş parçacığından gelen
+        sinyal kuyruklanır, çizim ana iş parçacığında kalır.
+        """
+        if not isinstance(payload, dict):
+            return
+        office = str(payload.get("office") or "")
+        if self.office.name and office and office != self.office.name:
+            return
+        agent = str(payload.get("agent") or "")
+        slot = self.slot_for(agent)
+        if slot is None:
+            return
+        card_id = str(payload.get("card_id") or "")
+        if card_id:
+            self.agent_cards[agent] = card_id
+            slot.card_id = card_id
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            slot.task_id = task_id
+
+        state = STREAM_STATE_TO_SCENE.get(
+            str(payload.get("state") or "").strip().lower()
+        )
+        kind = str(payload.get("kind") or "").strip().lower()
+        if state is None:
+            # Durum yoksa türden çıkar: araç çağrısı çalışma, hata hata sayılır.
+            state = {
+                "error": STATE_ERROR,
+                "thinking": STATE_THINKING,
+                "tool_call": STATE_WORKING,
+            }.get(kind, STATE_WORKING)
+        text = str(payload.get("text") or "")
+        self.set_state(agent, state, note=text[:120])
+        if state == STATE_ERROR:
+            self.set_bubble(agent, text or "hata")
+        elif text and state in (STATE_THINKING, STATE_WORKING):
+            self.set_bubble(agent, text)
+
+    def set_bubble(self, agent: str, text: str) -> bool:
+        """Balon metnini kurar; 80 karakterde kırpılır, 6 sn sonra söner."""
+        slot = self.slot_for(agent)
+        if slot is None:
+            return False
+        clean = " ".join(str(text or "").split())
+        if len(clean) > BUBBLE_MAX_CHARS:
+            clean = clean[: BUBBLE_MAX_CHARS - 1] + "…"
+        slot.bubble_text = clean
+        slot.bubble_ms = BUBBLE_TTL_MS if clean else 0
+        self._sync_timer()
+        self.update()
+        return True
+
+    def bubbles(self) -> Dict[str, str]:
+        """Test ve ipucu için: ajan -> görünen balon metni."""
+        return {s.agent: s.bubble_text for s in self.slots if s.bubble_text}
+
+    def expire_bubbles(self, dt_ms: int) -> None:
+        """Balon ömrünü düşürür; süresi dolan söner."""
+        for slot in self.slots:
+            if slot.bubble_ms > 0:
+                slot.bubble_ms -= max(0, int(dt_ms))
+                if slot.bubble_ms <= 0:
+                    slot.bubble_ms = 0
+                    slot.bubble_text = ""
+
+    def wander(self, agent: str) -> bool:
+        """Boşta ajanı masasından kaldırıp bir dinlenme hücresine yürütür."""
+        slot = self.slot_for(agent)
+        if slot is None or not self._lounge_cells:
+            return False
+        # Deterministik hedef: aynı ajan hep aynı köşeye gider, sahne
+        # her karede zıplamasın.
+        target = self._lounge_cells[abs(hash(slot.agent)) % len(self._lounge_cells)]
+        return self._walk_to(slot, target)
 
     # ------------------------------------------------------------ yürüme
 
@@ -607,7 +717,8 @@ class OfficeScene(QWidget):
 
     def is_busy(self) -> bool:
         return any(
-            s.walking or s.state in (STATE_THINKING, STATE_WORKING, STATE_READING)
+            s.walking or s.bubble_ms > 0
+            or s.state in (STATE_THINKING, STATE_WORKING, STATE_READING)
             for s in self.slots
         )
 
@@ -636,6 +747,7 @@ class OfficeScene(QWidget):
         self._pulse_frame = (self._pulse_frame + 1) % 60
         for slot in self.slots:
             self._advance_walk(slot, dt)
+        self.expire_bubbles(dt)
         self._sync_timer()
         self.update()
 
@@ -827,9 +939,13 @@ class OfficeScene(QWidget):
             # Varlık yüklenemediyse yine de bir gövde çizilir (sahne boş kalmasın).
             painter.fillRect(slot.x + 4, top + 12, 8, 20, STATE_COLORS[slot.state])
 
-        bubble = STATE_BUBBLE.get(slot.state, "")
-        if bubble:
-            self._draw_bubble(painter, slot, top, bubble)
+        # Akıştan gelen metin balonu, sembolik balonun (…/⏳/!) önüne geçer.
+        if slot.bubble_text:
+            self._draw_text_bubble(painter, slot, top, slot.bubble_text)
+        else:
+            bubble = STATE_BUBBLE.get(slot.state, "")
+            if bubble:
+                self._draw_bubble(painter, slot, top, bubble)
 
     def _draw_bubble(self, painter: QPainter, slot: DeskSlot, top: int, text: str) -> None:
         """Baş üstü balon: düşünüyor '…', bekliyor '⏳', hata kırmızı '!'."""
@@ -844,6 +960,46 @@ class OfficeScene(QWidget):
         font.setPixelSize(8)
         painter.setFont(font)
         painter.drawText(QRect(bx, by, 12, 10), Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_text_bubble(self, painter: QPainter, slot: DeskSlot,
+                          top: int, text: str) -> None:
+        """
+        Akıştan gelen metin balonu: karakterin başının üstünde kutu + yazı.
+
+        Yazı mantıksal ızgarada 6 px'e ayarlanır (16 px karakterin üstünde
+        okunur kalan en büyük boy); sahne 2x/3x ölçeklendiğinde büyür.
+        """
+        font = QFont("Segoe UI")
+        font.setPixelSize(6)
+        metrics = QFontMetrics(font)
+        # Genişlik ~6 karo ile sınırlı: daha genişi komşu masaların üstüne
+        # taşıyor, kalabalık ofiste balonlar birbirini örtüyordu.
+        width = max(20, min(BUBBLE_MAX_WIDTH_PX, metrics.horizontalAdvance(text) + 6))
+        box = metrics.boundingRect(
+            QRect(0, 0, width - 4, 1000),
+            int(Qt.TextFlag.TextWordWrap),
+            text,
+        )
+        height = box.height() + 4
+        bx = slot.x + TILE_SIZE // 2 - width // 2
+        by = top - height - 3
+        # Sahne sınırları içinde tut (kenardaki ajanın balonu kırpılmasın).
+        left = self._origin[0]
+        right = self._origin[0] + self._logical_size[0] - width
+        bx = max(left, min(bx, max(left, right)))
+        by = max(self._origin[1], by)
+        error = slot.state == STATE_ERROR
+        painter.setPen(QPen(QColor(18, 22, 30), 1))
+        painter.setBrush(QColor(239, 68, 68) if error else QColor(238, 244, 252))
+        painter.drawRect(bx, by, width, height)
+        painter.setPen(QColor(255, 255, 255) if error else QColor(18, 22, 30))
+        painter.setFont(font)
+        painter.drawText(
+            QRect(bx + 2, by + 1, width - 4, height - 2),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            | int(Qt.TextFlag.TextWordWrap),
+            text,
+        )
 
     def _draw_label(self, painter: QPainter, slot: DeskSlot,
                     scale: float, dx: float, dy: float) -> None:

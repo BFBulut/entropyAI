@@ -39,6 +39,7 @@ from entropy.desk.scene import OfficeScene
 from entropy.desk.memory_panel import OfficeMemoryPanel
 from entropy.desk.projects_panel import ProjectsPanel
 from entropy.desk.stream_panel import StreamPanel
+from entropy.desk.terminals_panel import TerminalsPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 
 WINDOW_TITLE = "Entropy Agent Desk"
@@ -58,7 +59,11 @@ DESK_MIN_SIZE = (860, 540)
 ROSTER_MIN_WIDTH = 380
 
 TAB_CARDS = 0
+# Faz 10-B: eski "Akış" sekmesi "Terminaller" oldu. Kart özeti (StreamPanel)
+# sekmenin üst bölmesinde durur, altında ajan başına terminal bölmeleri.
+# `TAB_STREAM` adı geriye uyum için korunur; `TAB_TERMINALS` yeni adıdır.
 TAB_STREAM = 1
+TAB_TERMINALS = 1
 TAB_PROJECTS = 2
 TAB_MEMORY = 3
 
@@ -140,9 +145,11 @@ def load_office_memory(office_name: str) -> str:
     try:
         from pathlib import Path
 
+        from entropy.core import paths as _paths
+
         vault = Path(config.obsidian_vault_path)
-        # Faz 6: Desk verisi Entropy/Desk/Offices altında.
-        path = vault / "Entropy" / "Desk" / "Offices" / office_name / "MEMORY.md"
+        # Faz 10-B: Desk verisi kasa kökündeki `Desk/Offices` altında.
+        path = _paths.desk_offices_dir(vault) / office_name / "MEMORY.md"
         if path.exists():
             return path.read_text(encoding="utf-8")
     except Exception:
@@ -289,8 +296,22 @@ class AgentDeskWindow(QMainWindow):
         # Geri uyum: eski çağrılar (ve testler) `memory_view` ile MEMORY.md
         # metnine bakıyor; panelin alt bölmesi aynı nesnedir.
         self.memory_view = self.memory_panel.memory_view
+        self.terminals_panel = TerminalsPanel(
+            parent=self, office="", bridge=self.bridge, board=self.board
+        )
+        terminals_tab = QWidget()
+        terminals_layout = QVBoxLayout(terminals_tab)
+        terminals_layout.setContentsMargins(0, 0, 0, 0)
+        terminals_layout.setSpacing(0)
+        terminals_split = QSplitter(Qt.Orientation.Vertical)
+        terminals_split.addWidget(self.stream_panel)
+        terminals_split.addWidget(self.terminals_panel)
+        terminals_split.setSizes([180, 420])
+        terminals_layout.addWidget(terminals_split)
+        self.terminals_tab = terminals_tab
+
         self.tabs.addTab(self.board_panel, "Kartlar")
-        self.tabs.addTab(self.stream_panel, "Akış")
+        self.tabs.addTab(terminals_tab, "Terminaller")
         self.tabs.addTab(self.projects_panel, "Projeler")
         self.tabs.addTab(self.memory_panel, "Bellek")
         center_splitter.addWidget(self.tabs)
@@ -326,7 +347,7 @@ class AgentDeskWindow(QMainWindow):
         # istemeye zorluyor, sahne ile birlikte pencerenin mantıksal asgari
         # yüksekliği %200 ölçekte 712 px'e çıkıyordu. Panel içerikleri kendi
         # kaydırma alanlarında daralır.
-        for panel in (self.board_panel, self.stream_panel,
+        for panel in (self.board_panel, self.stream_panel, self.terminals_panel,
                       self.projects_panel, self.memory_panel):
             panel.setMinimumWidth(220)
             panel.setMinimumHeight(120)
@@ -364,6 +385,7 @@ class AgentDeskWindow(QMainWindow):
         self.board_panel.set_office(self.current_office)
         self.roster_panel.set_office(self.current_office)
         self.stream_panel.set_office(self.current_office)
+        self.terminals_panel.set_office(self.current_office)
         self.projects_panel.set_office(self.current_office)
         self.refresh_memory()
         self.refresh_spend()
@@ -403,7 +425,43 @@ class AgentDeskWindow(QMainWindow):
         self.spend_label.setText(
             f"<span style='color:{RT['text_dim']}; font-size:11px;'>{text}</span>"
         )
+        self.spend_label.setToolTip(self.spend_tooltip(info))
         self.spend_label.setVisible(True)
+
+    @staticmethod
+    def spend_tooltip(info: dict) -> str:
+        """
+        Rozetin ipucu: koşan kart başına `harcanan/bütçe` satırı.
+
+        Sayılar `office_status` çıktısından BİREBİR alınır; burada yeniden
+        hesaplanmaz (iki yerde ayrı hesap panoların birbirini tutmamasına yol
+        açıyordu).
+        """
+        running = list((info or {}).get("running", []) or [])
+        lines = []
+        for card in running:
+            if not isinstance(card, dict):
+                continue
+            title = str(card.get("title") or card.get("id") or "—")
+            tokens = int(card.get("tokens", 0) or 0)
+            budget = int(card.get("budget", 0) or 0)
+            amount = f"{tokens:,}".replace(",", ".")
+            if budget:
+                amount += " / " + f"{budget:,}".replace(",", ".")
+            phase = str(card.get("phase") or "")
+            line = f"{title}: {amount} token"
+            if phase:
+                line += f" · {phase}"
+            lines.append(line)
+        if not lines:
+            spent = int((info or {}).get("spent_tokens",
+                                         (info or {}).get("tokens", 0)) or 0)
+            return (
+                "Koşan kart yok. Ofis toplamı: "
+                + f"{spent:,}".replace(",", ".")
+                + " token"
+            )
+        return "Koşan kartlar (harcanan / bütçe):\n" + "\n".join(lines)
 
     # -------------------------------------------------------- talimat
 
@@ -480,7 +538,9 @@ class AgentDeskWindow(QMainWindow):
     def _on_agent_clicked(self, agent: str) -> None:
         """Sprite tıklaması: Akış sekmesine geç ve paneli o ajana odakla."""
         self.stream_panel.focus_agent(agent)
-        self.tabs.setCurrentIndex(TAB_STREAM)
+        # Faz 10-B: sprite tıklaması ajanın GERÇEK terminal bölmesini öne alır.
+        self.terminals_panel.focus_agent(agent)
+        self.tabs.setCurrentIndex(TAB_TERMINALS)
 
     # ------------------------------------------------------------ geometri
 

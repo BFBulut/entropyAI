@@ -150,7 +150,7 @@ class TasksWatcher(_VaultWatcher):
     Görev kartı izleyicisi — İKİ kök (Faz 9 kart kökü ayrımı).
 
     1. `<kasa>/Entropy/Tasks/*.md`                       — Entropy kartları
-    2. `<kasa>/Entropy/Desk/Offices/<ofis>/cards/*.md`   — ofis kartları
+    2. `<kasa>/Desk/Offices/<ofis>/cards/*.md`           — ofis kartları
 
     Ofis kökü eklenmeseydi bir ofis kartı elle (Obsidian'dan ya da harness
     tarafından) düzenlendiğinde `task_cards_updated` yayılmaz, Desk'in Kartlar
@@ -170,7 +170,7 @@ class TasksWatcher(_VaultWatcher):
         try:
             from entropy.agents.tasks import DESK_OFFICES_SUBDIR, OFFICE_CARDS_DIRNAME
         except Exception:  # sözleşme eski sürümdeyse tek kökle çalış
-            DESK_OFFICES_SUBDIR, OFFICE_CARDS_DIRNAME = "Entropy/Desk/Offices", "cards"
+            DESK_OFFICES_SUBDIR, OFFICE_CARDS_DIRNAME = "Desk/Offices", "cards"
         self.desk_offices_root = Path(vault_path) / DESK_OFFICES_SUBDIR
         self._office_cards_dirname = OFFICE_CARDS_DIRNAME
         super().__init__(vault_path, poll_interval_ms, parent)

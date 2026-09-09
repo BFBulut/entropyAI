@@ -338,7 +338,9 @@ class ChatModeWindow(QMainWindow):
         fit_combo_to_contents(self.provider_combo)
 
         # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
-        self.effort_combo = install_effort_selector(h_layout, self.bridge, self)
+        self.effort_combo = install_effort_selector(
+            h_layout, self.bridge, self, model_combo=self.model_combo
+        )
 
         # Dynamic Skill Selector Combo
         self.skill_combo = QComboBox()
@@ -1158,6 +1160,18 @@ class ChatModeWindow(QMainWindow):
             from entropy.ui.widgets.ui_polish import accept_model_selection
 
             accept_model_selection(self.bridge, self.model_combo, model_name)
+        # HOTFIX v0.7.1: agy'de efor model adına gömülü; model değişince
+        # efor kutusu yeni modelin son eklerine göre yeniden dolar.
+        self._refresh_effort_combo()
+
+    def _refresh_effort_combo(self):
+        """Efor kutusunu (varsa) sağlayıcı+model değişiminden sonra tazeler."""
+        combo = getattr(self, "effort_combo", None)
+        if combo is not None:
+            try:
+                combo.refresh()
+            except Exception:
+                pass
 
     def _on_provider_selected(self, provider: str):
         """Sağlayıcı listesinden seçim: köprüyü yönetici üzerinden değiştirir."""
@@ -1188,6 +1202,7 @@ class ChatModeWindow(QMainWindow):
             self.model_combo.blockSignals(False)
         # Faz 9: yeni saglayicinin model adlari daha uzun olabilir; kutuyu yeniden olc.
         fit_combo_to_contents(self.model_combo)
+        self._refresh_effort_combo()
 
     @Slot(int)
     def _update_tokens(self, tokens: int):

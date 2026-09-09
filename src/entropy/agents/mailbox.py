@@ -17,7 +17,7 @@ A2A sunucusuna geçilirse taşıyıcı değişir, mesaj gövdesi aynı kalır.
     }
 
 Dosya düzeni:
-    <kasa>/Entropy/Desk/Offices/<ofis>/inbox/<ts>-<id>.json
+    <kasa>/Desk/Offices/<ofis>/inbox/<ts>-<id>.json
     <kasa>/Entropy/Agents/<ad>/inbox/<ts>-<id>.json
     <kasa>/Entropy/Inbox/<ts>-<id>.json          (Entropy'nin kendi kutusu)
 
@@ -42,12 +42,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from entropy.core import paths as _paths
+
 logger = logging.getLogger(__name__)
 
 INBOX_DIRNAME = "inbox"
 ENTROPY_INBOX_SUBDIR = "Entropy/Inbox"
-# Desk ofis kökü (Faz 6): posta kutuları da Entropy/Desk/Offices altına taşındı.
-OFFICES_SUBDIR = "Entropy/Desk/Offices"
+# Desk ofis kökü: posta kutuları ofis klasörünün içindedir. Yol tek kaynaktan
+# (`entropy.core.paths`) gelir; Faz 10-B'de kök kasa köküne taşındı.
+OFFICES_SUBDIR = _paths.DESK_SUBDIR
 AGENTS_SUBDIR = "Entropy/Agents"
 
 OWNER_KINDS = ("office", "agent", "entropy")
@@ -541,19 +544,75 @@ def has_terminal_event(task_id: str, vault_path=None) -> bool:
     )
 
 
-def pending_instructions(office: str, vault_path=None, mark: bool = True) -> List[Message]:
+def pending_instructions(office: str, vault_path=None, mark: bool = True,
+                         card_scoped: bool = False) -> List[Message]:
     """
     Ofisin okunmamış talimat/soru mesajları; okundu işaretlenir.
 
     Harness planlamadan ÖNCE çağırır: kullanıcının `/ask` ile bıraktığı yön
     plan çağrısına girmezse posta kutusu yalnızca bir arşiv olurdu.
+
+    `card_scoped=False` (varsayılan): belirli bir karta yazılmış mesajlar
+    (`task_id` dolu) DIŞARIDA kalır — onlar `card_comments` ile o kartın kendi
+    istemine `[YORUM]` olarak girer. İki yol aynı mesajı tüketirse kullanıcının
+    notu ya plana ya karta düşerdi, ikisine birden değil.
     """
     box = office_mailbox(office, vault_path=vault_path)
-    msgs = [m for m in box.list(unread=True) if m.kind in ("instruction", "question")]
+    msgs = [
+        m for m in box.list(unread=True)
+        if m.kind in ("instruction", "question") and (card_scoped or not m.task_id)
+    ]
     if mark:
         for m in msgs:
             box.mark_read(m.id)
     return msgs
+
+
+def card_comments(office: str, card_ids: Iterable[str], vault_path=None,
+                  mark: bool = True) -> List[Message]:
+    """
+    KOŞAN bir karta yazılmış okunmamış talimat/sorular (Faz 10-A / 6).
+
+    `instruct_office(office, text, task_id=<kart>)` mesajları buradan okunur ve
+    ilgili kartın bir sonraki (alt kart / yeniden koşu) istemine `[YORUM]`
+    bölümü olarak girer. Kart DURMAZ: yorum akan işe eklenen bir nottur, yeni
+    bir plan turu değil. Okunanlar `read=true` olur ki aynı yorum her yeniden
+    koşuda tekrar enjekte edilmesin.
+    """
+    wanted = {str(c) for c in card_ids if c}
+    if not wanted:
+        return []
+    box = office_mailbox(office, vault_path=vault_path)
+    msgs = [
+        m for m in box.list(unread=True)
+        if m.kind in ("instruction", "question") and m.task_id in wanted
+    ]
+    if mark:
+        for m in msgs:
+            box.mark_read(m.id)
+    return msgs
+
+
+def comments_section(messages: Iterable[Message]) -> str:
+    """Koşan karta gelen yorumların istem bölümü; boşsa boş dize."""
+    rows: List[str] = []
+    total = 0
+    for msg in messages:
+        text = " ".join((msg.text or "").split())
+        if not text:
+            continue
+        row = f"- {msg.from_ or '?'}: {text}"
+        if total + len(row) > INSTRUCTION_CHAR_BUDGET:
+            rows.append("- … (kalan yorumlar posta kutusunda)")
+            break
+        rows.append(row)
+        total += len(row)
+    if not rows:
+        return ""
+    return (
+        "[YORUM — koşan karta kullanıcı notu]\n"
+        "Bu notlar işini DURDURMAZ; sürdürdüğün işe uygula.\n" + "\n".join(rows)
+    )
 
 
 def instructions_section(messages: Iterable[Message]) -> str:

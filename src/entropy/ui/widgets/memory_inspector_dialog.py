@@ -491,12 +491,37 @@ class MemoryInspectorDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            import sqlite3
-            db_p = Path.home() / ".entropy" / "cognitive_memory.db"
-            if db_p.exists():
-                with sqlite3.connect(db_p) as conn:
-                    conn.execute("DELETE FROM cognitive_nodes WHERE id = ?", (node_id,))
-                    conn.commit()
+            # Faz 10-B: silmenin TEK girişi bellek katmanıdır (`delete_memory`);
+            # arayüz doğrudan SQL çalıştırınca bağlı kenarlar/indeksler geride
+            # kalıyordu. Sözleşme yoksa (paralel ajan yazıyor) eski yola düşülür.
+            deleted = False
+            for module_path in (
+                "entropy.memory.graph_store",
+                "entropy.memory.cognitive_memory",
+                "entropy.core.cognitive_memory",
+            ):
+                try:
+                    import importlib
+
+                    fn = getattr(importlib.import_module(module_path), "delete_memory", None)
+                    if fn is None:
+                        continue
+                    deleted = bool(fn(node_id))
+                except Exception:
+                    deleted = False
+                if deleted:
+                    break
+            if not deleted:
+                import sqlite3
+                from entropy.memory.supabase.cognitive_memory import (
+                    default_cognitive_db_path,
+                )
+
+                db_p = default_cognitive_db_path()
+                if db_p.exists():
+                    with sqlite3.connect(db_p) as conn:
+                        conn.execute("DELETE FROM cognitive_nodes WHERE id = ?", (node_id,))
+                        conn.commit()
             bus.terminal_output_received.emit(f"[Bilişsel Hafıza] '{node_id}' düğümü silindi.\n")
             bus.knowledge_graph_updated.emit()
             self.accept()

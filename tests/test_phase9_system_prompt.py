@@ -205,7 +205,9 @@ def test_list_reports_without_cache_still_works(tmp_path):
 
 def _seed_office(tmp_path: Path, office: str = "dogrulama") -> Path:
     root = tmp_path / "Entropy"
-    off = root / "Desk" / "Offices" / office
+    # Faz 10-B: Desk verisi kasa kokunde (`<kasa>/Desk/Offices`); ofis klasoru
+    # artik `Entropy/` altinda DEGIL.
+    off = tmp_path / "Desk" / "Offices" / office
     (off / "reports").mkdir(parents=True, exist_ok=True)
     (off / "reports" / "20260909-171913-readme-ozeti.md").write_text(
         "---\ntype: office_report\n---\nrapor\n", encoding="utf-8"

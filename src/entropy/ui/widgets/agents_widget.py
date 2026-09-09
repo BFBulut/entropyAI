@@ -128,7 +128,7 @@ def list_cards_for(board: Any, office: str = "") -> List[Any]:
     Kart listesi tek yerden okunur (Faz 9 kart kökü ayrımı).
 
     `TaskBoard.list(office=None)` artık YALNIZCA Entropy kartlarını döndürüyor;
-    ofis kartları `Entropy/Desk/Offices/<ofis>/cards/` altında. Desk panelleri
+    ofis kartları `Desk/Offices/<ofis>/cards/` altında. Desk panelleri
     `office=` geçmezse boş görünürdü. Eski/sahte panolar `office` argümanını
     kabul etmeyebilir; o durumda konumsuz çağrıya düşülür.
     """
@@ -148,6 +148,47 @@ def list_cards_for(board: Any, office: str = "") -> List[Any]:
         return []
 
 EFFORT_LEVELS = ["low", "medium", "high"]
+
+
+def populate_effort_combo(combo, provider: str, model: str = "", bridge: Any = None,
+                          allow_empty: bool = False) -> List[str]:
+    """
+    HOTFIX v0.7.1: efor kutusunu SAĞLAYICI + MODEL'e göre doldurur.
+
+    agy'de efor `--effort` bayrağı değil, model adının son eki
+    (`gemini-3.8-flash-high`); bu yüzden son eki olmayan agy modellerinde
+    seçenek yoktur ve kutu pasifleşir. claude'da beş seviye geçerlidir.
+    Mevcut seçim korunur (listede yoksa eklenir), sinyaller engellenir.
+    """
+    from entropy.ui.widgets.effort_selector import NO_EFFORT_HINT, effort_levels_for
+
+    if not (provider or "").strip():
+        # Sağlayıcı boş = "ajanın/oturumun varsayılanı"; genel küme gösterilir.
+        levels = list(EFFORT_LEVELS)
+    else:
+        levels = effort_levels_for(provider, model, bridge)
+    current = combo.currentText().strip()
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        if allow_empty:
+            combo.addItem("")
+        for level in levels:
+            combo.addItem(level)
+        # Yeni kümede olmayan eski seçim taşınmaz; aksi halde agy'de Claude'un
+        # seviyeleri listede kalıyordu (hatanın kaynağı).
+        if current and combo.findText(current) >= 0:
+            combo.setCurrentText(current)
+        elif allow_empty:
+            combo.setCurrentText("")
+    finally:
+        combo.blockSignals(False)
+    combo.setEnabled(bool(levels))
+    combo.setToolTip(
+        NO_EFFORT_HINT if not levels
+        else "Efor düzeyi (" + " | ".join(levels) + ")"
+    )
+    return levels
 
 # Ofis rolleri (Faz 3 sözleşmesi): AgentSpec.role bu üç değerden biri olabilir;
 # eski ajanlarda serbest metin ("Mimari denetçi") duruyor, o zaman rozet çıkmaz.
@@ -350,6 +391,8 @@ class AgentEditDialog(QDialog):
             self.effort_combo.addItem(e)
         self.effort_combo.setCurrentText("medium")
         form.addRow("Efor:", self.effort_combo)
+        # HOTFIX v0.7.1: efor seçenekleri sağlayıcı + modele bağlı.
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
 
         self.skills_list = QListWidget()
         self.skills_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
@@ -398,6 +441,26 @@ class AgentEditDialog(QDialog):
         if current and self.model_combo.findText(current) >= 0:
             self.model_combo.setCurrentText(current)
         self.model_combo.blockSignals(False)
+        self._refresh_effort()
+
+    def _on_model_changed(self, _model: str) -> None:
+        self._refresh_effort()
+
+    def _refresh_effort(self) -> None:
+        combo = getattr(self, "effort_combo", None)
+        if combo is None:
+            return
+        populate_effort_combo(
+            combo,
+            self.provider_combo.currentText().strip(),
+            self.model_combo.currentText().strip(),
+            self.bridge,
+        )
+
+    def effort_choices(self) -> List[str]:
+        """Test için: efor kutusundaki seçenekler."""
+        return [self.effort_combo.itemText(i) for i in range(self.effort_combo.count())
+                if self.effort_combo.itemText(i)]
 
     def model_choices(self) -> List[str]:
         """Test için: kutudaki model adları."""
@@ -519,6 +582,9 @@ class AssignTaskDialog(QDialog):
             self.effort_combo.addItem(e)
         self.effort_combo.setCurrentText(effort or "")
         form.addRow("Efor:", self.effort_combo)
+        # HOTFIX v0.7.1: seçenekler sağlayıcı + modele bağlı.
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        self._refresh_effort()
 
         self.budget_input = QLineEdit()
         self.budget_input.setPlaceholderText("0 = ofis bütçesi")
@@ -566,6 +632,27 @@ class AssignTaskDialog(QDialog):
         else:
             self.model_combo.setCurrentText("")
         self.model_combo.blockSignals(False)
+        self._refresh_effort()
+
+    def _on_model_changed(self, _model: str) -> None:
+        self._refresh_effort()
+
+    def _refresh_effort(self) -> None:
+        combo = getattr(self, "effort_combo", None)
+        if combo is None:
+            return
+        populate_effort_combo(
+            combo,
+            self.provider_combo.currentText().strip(),
+            self.model_combo.currentText().strip(),
+            self.bridge,
+            allow_empty=True,
+        )
+
+    def effort_choices(self) -> List[str]:
+        """Test için: efor kutusundaki seçenekler (boş girdi hariç)."""
+        return [self.effort_combo.itemText(i) for i in range(self.effort_combo.count())
+                if self.effort_combo.itemText(i)]
 
     def model_choices(self) -> List[str]:
         """Test için: kutudaki adlar (baştaki boş girdi hariç)."""

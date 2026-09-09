@@ -1,6 +1,6 @@
 """
 Ajan başına kalıcı bellek: `<kasa>/Entropy/Agents/<ajan>/MEMORY.md`.
-Ofis başına kalıcı bellek: `<kasa>/Entropy/Desk/Offices/<ofis>/MEMORY.md` (aynı motor,
+Ofis başına kalıcı bellek: `<kasa>/Desk/Offices/<ofis>/MEMORY.md` (aynı motor,
 `append_office_memory` / `load_office_memory`).
 
 Neyi çözüyor
@@ -30,6 +30,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from entropy.core import paths as _paths
 from entropy.core.config import config
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,11 @@ def memory_path(agent: str, vault_path: Optional[Path] = None) -> Path:
 # değil bir ofistir. Ayrı bir modül açmak yerine aynı motoru "sahip türü"
 # (owner kind) ile parametreleştiriyoruz: iki kopya bakım borcu olurdu.
 _OWNER_KINDS = {
-    "agent": {"base": "Agents", "label": "Ajan Belleği", "fm_key": "agent", "fallback": "agent"},
-    # Faz 6: Desk ayrıldı; ofis belleği de Desk'in veri kökünde yaşar
-    # (bkz. office_graph.desk_offices_dir, desk/window.py, memory/wiki.py).
-    "office": {"base": "Desk/Offices", "label": "Ofis Belleği", "fm_key": "office", "fallback": "office"},
+    "agent": {"base": "Agents", "label": "Ajan Belleği", "fm_key": "agent", "fallback": "agent", "root": "Entropy"},
+    # Faz 6: Desk ayrıldı; Faz 10-B: veri kökü kasa köküne çıktı. Ofis belleği
+    # de Desk'in kendi kökünde yaşar (tek kaynak `core.paths.DESK_SUBDIR`);
+    # `root` bu yüzden `Entropy/` değil, kasa kökünün kendisidir.
+    "office": {"base": _paths.DESK_SUBDIR, "label": "Ofis Belleği", "fm_key": "office", "fallback": "office", "root": ""},
 }
 
 
@@ -95,7 +97,8 @@ def _owner_dir(name: str, kind: str, vault_path: Optional[Path] = None) -> Path:
     cleaned = _safe(name)
     if cleaned == "agent" and spec["fallback"] != "agent":
         cleaned = spec["fallback"]
-    return root / "Entropy" / spec["base"] / cleaned
+    base = root / spec["root"] if spec.get("root") else root
+    return base / spec["base"] / cleaned
 
 
 def office_dir(office: str, vault_path: Optional[Path] = None) -> Path:

@@ -211,8 +211,9 @@ def test_hygiene_finds_stale_and_ghost_dirs(tmp_path):
     _write(root / "AgentDesk" / "office_abc" / "layout.json", "{}")
     _write(root / "AgentDesk" / "office_def" / "layout.json", "{}")
     _write(root / "AgentDesk" / "global_template" / "layout.json", "{}")
-    _write(root / "Desk" / "Offices" / "hayalet" / "layout.json", "{}")
-    _write(root / "Desk" / "Offices" / "gercek" / "OFFICE.md", "---\nname: gercek\n---\n")
+    # Faz 10-B: Desk'in veri kökü kasa kökünde (`<kasa>/Desk`), Entropy altında değil.
+    _write(tmp_path / "Desk" / "Offices" / "hayalet" / "layout.json", "{}")
+    _write(tmp_path / "Desk" / "Offices" / "gercek" / "OFFICE.md", "---\nname: gercek\n---\n")
 
     stale = find_stale_agentdesk_dirs(tmp_path)
     ghosts = find_ghost_offices(tmp_path)
@@ -249,8 +250,7 @@ def test_archive_stale_rejects_paths_outside_vault(tmp_path):
 
 def test_archive_stale_skips_office_revived_before_move(tmp_path):
     """Kuru koşumdan sonra künyesi yazılan ofis arşive TAŞINMAZ."""
-    root = tmp_path / "Entropy"
-    ghost = root / "Desk" / "Offices" / "dogrulama"
+    ghost = tmp_path / "Desk" / "Offices" / "dogrulama"
     _write(ghost / "layout.json", "{}")
     plan = find_ghost_offices(vault_path=tmp_path)
     assert [p["name"] for p in plan] == ["dogrulama"]

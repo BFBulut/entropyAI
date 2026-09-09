@@ -1076,6 +1076,58 @@ class SkillManager:
     # Genişletilmiş yetenekte listelenecek azami araç sayısı.
     MANIFEST_MAX_SCRIPTS = 12
 
+    # --- Yetenek enjeksiyon bütçesi (Hotfix 0.7.1) --------------------------
+    # Tek bir yeteneğin isteme yazabileceği azami karakter. SKILL.md gövdeleri
+    # 45 KB'a kadar çıkıyor (financial-auditor); tam gövde ASLA yapıştırılmaz,
+    # "özet + ilgili bölüm" kırpılır ve tam metnin YOLU verilir — model gerekirse
+    # `Read` ile kendisi açar. 12.000 karakter ≈ 3.000 token.
+    SKILL_INJECTION_CHAR_BUDGET = 12_000
+    # Kataloğun tamamı (tüm yetenekler + seçili yeteneğin ayrıntısı) için tavan.
+    SKILLS_INJECTION_TOTAL_BUDGET = 20_000
+
+    def skill_injection_text(self, skill, query: str = "") -> str:
+        """
+        Bir yeteneğin isteme yazılacak, BÜTÇELİ gövdesi.
+
+        Sıra: özet -> sorguya en yakın başlık bölümleri -> "tam metin şurada"
+        satırı. Bütçe aşılırsa bölüm eklemesi durur; kesilen metin hiçbir zaman
+        sessizce kaybolmaz, çünkü SKILL.md yolu her zaman istemde yer alır.
+        """
+        if skill is None:
+            return ""
+        body = (getattr(skill, "instructions", "") or "").strip()
+        head = f"[YETENEK: {getattr(skill, 'name', '')}]\nÖzet: {getattr(skill, 'description', '')}"
+        tail = f"\nTam yönergeler: {getattr(skill, 'path', '')} (gerekirse Read ile aç)."
+        budget = self.SKILL_INJECTION_CHAR_BUDGET - len(head) - len(tail)
+        if budget <= 0 or not body:
+            return head + tail
+        if len(body) <= budget:
+            return f"{head}\n{body}{tail}"
+        # Kırpma: markdown başlıklarına göre bölüp sorguyla örtüşen bölümleri
+        # önceliklendir. Sıraya göre kesmek (ilk N karakter) yordamın ortasını
+        # kaybettiriyordu; alaka sırası en azından ilgili adımları getirir.
+        blocks = re.split(r"\n(?=#{1,6}\s)", body)
+        words = {w for w in re.findall(r"\w+", (query or "").lower()) if len(w) > 3}
+
+        def score(block: str) -> int:
+            low = block.lower()
+            return sum(1 for w in words if w in low)
+
+        ordered = sorted(range(len(blocks)), key=lambda i: (-score(blocks[i]), i))
+        chosen: List[int] = []
+        used = 0
+        for i in ordered:
+            b = blocks[i]
+            if used + len(b) + 1 > budget:
+                continue
+            chosen.append(i)
+            used += len(b) + 1
+        if not chosen:
+            return f"{head}\n{body[:budget].rstrip()}\n[…kırpıldı…]{tail}"
+        parts = [blocks[i] for i in sorted(chosen)]
+        note = "\n[…SKILL.md kısaltıldı; eksik bölümler için dosyayı okuyun…]"
+        return f"{head}\n" + "\n".join(parts) + note + tail
+
     def _script_label(self, script: Dict[str, str]) -> str:
         path = Path(script.get("path", ""))
         try:
@@ -1129,7 +1181,17 @@ class SkillManager:
             "Bir yeteneğin ayrıntısına ihtiyacınız varsa 'skills/<yetenek_adi>/SKILL.md' dosyasını okuyun. "
             "Gereken yetenek yoksa, SKILL.md ve Python scripti oluşturarak kendinize yeni bir yetenek kazandırabilirsiniz."
         )
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        # Sert tavan: katalog her turda enjekte edilir, sınırsız büyümemeli.
+        # 20.000 karakter ≈ 5.000 token; aşılırsa kural satırı korunarak kesilir.
+        if len(text) > self.SKILLS_INJECTION_TOTAL_BUDGET:
+            keep = self.SKILLS_INJECTION_TOTAL_BUDGET - len(lines[-1]) - 40
+            text = (
+                text[: max(0, keep)].rstrip()
+                + "\n[…katalog kısaltıldı…]\n"
+                + lines[-1]
+            )
+        return text
 
 
 class SkillWatcher(QObject):

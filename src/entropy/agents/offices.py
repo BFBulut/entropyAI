@@ -2,7 +2,7 @@
 Geriye dönük uyumluluk kabuğu — gerçek kaynak `entropy.agents.desk_registry`.
 
 Faz 6'da ofisler Entropy'nin kadrosundan ayrıldı: veri kökü `Entropy/Offices`
-değil `Entropy/Desk/Offices`, defter `OfficeRegistry` değil `DeskRegistry`,
+değil `Desk/Offices`, defter `OfficeRegistry` değil `DeskRegistry`,
 tohum ofis/ajan yok. Modül tamamen silinmedi çünkü ofis kavramına dışarıdan
 (desk panelleri, kimlik katmanı, komut paleti) onlarca yerden `OfficeSpec` ve
 `OfficeRegistry` adıyla erişiliyordu; adları burada takma ad olarak bırakmak,

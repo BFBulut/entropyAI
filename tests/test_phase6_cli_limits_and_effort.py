@@ -267,9 +267,15 @@ def isolated_settings(tmp_path, monkeypatch):
 
 
 def test_effort_levels_match_each_cli():
-    # `claude --help`: low, medium, high, xhigh, max. `agy -p --help`: low|medium|high.
+    # `claude --help`: low, medium, high, xhigh, max (modelden bağımsız).
     assert ClaudeCodeBridge().effort_levels() == ["low", "medium", "high", "xhigh", "max"]
-    assert AgyProcessBridge().effort_levels() == ["low", "medium", "high"]
+    # agy'de efor MODEL ADININ SON EKİDİR; seviye kümesi seçili modele bağlıdır
+    # (`agy models`: pro -> low/high, flash -> low/medium/high).
+    b = AgyProcessBridge()
+    b.selected_model = "gemini-3.1-pro-high"
+    assert b.effort_levels() == ["low", "high"]
+    b.selected_model = "gemini-3.8-flash-medium"
+    assert b.effort_levels() == ["low", "medium", "high"]
     assert CLAUDE_EFFORT_LEVELS[:3] == AGY_EFFORT_LEVELS
 
 

@@ -34,6 +34,45 @@ def _resolve_app_root() -> Path:
 APP_ROOT = _resolve_app_root()
 
 
+def is_bundle_dir(path) -> bool:
+    """
+    Yol .exe'nin paket klasörü mü (`dist/EntropyAI` ya da onun `_internal`ı)?
+
+    Paketlenmiş sürümde APP_ROOT .exe'nin klasörüdür. Oraya proje kökü demek,
+    ajanın gerçek projeyi değil PyInstaller çıktısını incelemesi demekti:
+    kullanıcı "hafızanı kontrol et" dediğinde model paketin içindeki eski ajan
+    listesini ve `_internal/skills/` klasörünü gerçek kadro sanıyordu.
+    """
+    if not path:
+        return False
+    try:
+        p = Path(path).resolve()
+    except Exception:
+        return False
+    if not getattr(sys, "frozen", False):
+        # Kaynaktan koşarken APP_ROOT deponun kendisidir; geçerli bir proje kökü.
+        return False
+    bundle = Path(sys.executable).resolve().parent
+    return p == bundle or bundle in p.parents or p.name == "_internal"
+
+
+def default_workspace_root() -> Path:
+    """
+    Proje kökü seçilmemişken kullanılacak NÖTR kök.
+
+    Paketlenmiş sürümde ASLA .exe klasörü olmaz: `%USERPROFILE%\\.entropy\\
+    workspace`. Kullanıcı gerçek projeyi üst çubuktaki "Proje" düğmesiyle seçer.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path.home() / ".entropy" / "workspace"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return base
+    return APP_ROOT
+
+
 def _resolve_state_dir() -> Path:
     """
     Ayarların ve sohbet geçmişinin yazılacağı dizini belirler.
@@ -285,7 +324,7 @@ class EntropyConfig(BaseModel):
     # Bir git deposunun içinde OLMAMALI (bkz. claude_workspace_path).
     claude_workspace_dir: str = ""
     obsidian_vault_path: Path = Field(default_factory=_default_obsidian_vault)
-    default_project_path: Path = Field(default_factory=lambda: APP_ROOT)
+    default_project_path: Path = Field(default_factory=lambda: default_workspace_root())
     default_mode: str = "floating"  # "floating", "zen", "chat"
     autostart_enabled: bool = True
     # Açılışta yarım kalmış ofis zincirlerini kaldığı yerden sürdür. Varsayılan
@@ -361,6 +400,54 @@ class EntropyConfig(BaseModel):
                 pass
         return repaired
 
+    def repair_provider_effort(self) -> dict:
+        """
+        `provider_effort["agy"]` değerini agy'nin gerçekten sunduğu kümeye çeker.
+
+        agy'de efor model adının son ekidir; Claude'da seçilen "xhigh"/"max" agy
+        ayarına sızdığında `gemini-3.8-flash-xhigh` gibi var olmayan bir ad
+        besteleniyordu. Onarım hem eforu hem — gerekiyorsa — modeli tutarlı hâle
+        getirir. Dönüş {"agy": (eski, yeni)}; boşsa değişiklik yok.
+        """
+        from entropy.core.provider import (
+            compose_agy_model, effort_levels_for, split_agy_model,
+        )
+
+        repaired: dict = {}
+        effort_map = self.provider_effort if isinstance(self.provider_effort, dict) else {}
+        model = str((self.provider_models or {}).get("agy") or "").strip()
+        levels = effort_levels_for("agy", model)
+        if not levels:
+            return repaired
+        current = str(effort_map.get("agy") or "").strip().lower()
+        model_effort = split_agy_model(model)[1]
+        # Tek gerçek kaynak model adıdır: ayardaki efor ondan farklıysa ve
+        # modelde karşılığı yoksa modele göre düzeltilir.
+        target = current if current in levels else (model_effort or levels[-1])
+        if target != current:
+            repaired["agy"] = (current, target)
+            effort_map["agy"] = target
+            self.provider_effort = effort_map
+        composed = compose_agy_model(model, target)
+        if composed and composed != model:
+            self.provider_models["agy"] = composed
+            if self.selected_model == model:
+                self.selected_model = composed
+            repaired.setdefault("agy", (current, target))
+        if repaired:
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "agy eforu onarıldı: %r -> %r (model %r); agy'de efor model "
+                "adının son ekidir.", repaired["agy"][0], repaired["agy"][1],
+                self.provider_models.get("agy"),
+            )
+            try:
+                self.save_settings()
+            except Exception:
+                pass
+        return repaired
+
     def save_settings(self):
         """Persist user preferences to disk."""
         try:
@@ -380,6 +467,10 @@ class EntropyConfig(BaseModel):
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
                 "claude_workspace_dir": self.claude_workspace_dir,
+                # Kullanıcının "Proje" düğmesiyle seçtiği kök kalıcı olmalıydı:
+                # kaydedilmediği için her açılışta APP_ROOT'a (paketlenmiş
+                # sürümde .exe klasörüne) düşüyordu.
+                "default_project_path": str(self.default_project_path),
             }
             # Atomik yazım: save_settings() işçi iş parçacıklarından da çağrılıyor
             # (her token güncellemesinde). Doğrudan write_text dosyayı önce kesiyor;
@@ -433,7 +524,24 @@ class EntropyConfig(BaseModel):
                     self.claude_isolated = data["claude_isolated"]
                 if isinstance(data.get("claude_workspace_dir"), str):
                     self.claude_workspace_dir = data["claude_workspace_dir"]
+                if isinstance(data.get("default_project_path"), str) and data["default_project_path"]:
+                    self.default_project_path = Path(data["default_project_path"])
                 self.repair_provider_models()
+                self.repair_provider_effort()
+                # Paketlenmiş sürümde .exe klasörü proje kökü OLAMAZ: eski ayar
+                # dosyaları `C:\\EntropiAI\\dist\\EntropyAI` taşıyordu ve ajan
+                # orada `_internal/AGENTS.md` okuyordu.
+                if is_bundle_dir(self.default_project_path):
+                    self.default_project_path = default_workspace_root()
+                # Var olmayan proje kökü de reddedilir. Ölçüm: test koşumları
+                # canlı ayar dosyasına `...\pytest-of-batu_\pytest-2301\...`
+                # yazmıştı; uygulama açılışta o silinmiş tmp klasörünü proje
+                # kökü olarak bağlıyor, ajan derlemesi oraya bakıyordu.
+                try:
+                    if not Path(self.default_project_path).is_dir():
+                        self.default_project_path = default_workspace_root()
+                except OSError:
+                    self.default_project_path = default_workspace_root()
         except Exception as e:
             print(f"[Entropy Config] Ayarlar okunamadı ({SETTINGS_FILE}): {e}", file=sys.stderr)
 

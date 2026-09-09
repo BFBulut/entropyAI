@@ -6,7 +6,7 @@ ajanlarını ödünç alıyordu. Bu iki şeyi birden bozuyordu — Entropy'nin k
 kadrosu ofis planlamasıyla kirleniyor, ofis ajanları da Entropy'nin sistem
 kimliğini (ve "Entropy" adını) miras alıyordu. Artık ayrım kesin:
 
-    <kasa>/Entropy/Desk/Offices/<ofis>/
+    <kasa>/Desk/Offices/<ofis>/
         OFFICE.md              ofis tüzüğü + ön bilgi (workdir dâhil)
         agents/<ad>/AGENT.md   ofisin kendi ajanları (orkestratör + altlar)
         MEMORY.md, memory/     bellek katmanının alanı (bu modül yazmaz)
@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from entropy.agents.compile import normalize_model_text
+from entropy.core import paths as _paths
 from entropy.agents.registry import (
     AGENT_FILENAME,
     VALID_PROVIDERS,
@@ -45,9 +46,11 @@ from entropy.agents.registry import (
     render_frontmatter,
 )
 
-# Desk'in veri kökü. `Entropy/Offices` (Faz 3) artık okunmaz; eski kurulumlar
-# `entropy.memory.office_graph.migrate_legacy_offices` ile taşınır.
-DESK_SUBDIR = "Entropy/Desk/Offices"
+# Desk'in veri kökü. Tek kaynak `entropy.core.paths`; burada yalnızca yeniden
+# dışa vurulur (eski çağrı yerleri `desk_registry.DESK_SUBDIR` bekliyor).
+# `Entropy/Offices` (Faz 3) artık okunmaz; `Entropy/Desk/Offices` (Faz 6) ise
+# `DeskRegistry.__init__` içindeki `migrate_desk_root` ile yeni köke taşınır.
+DESK_SUBDIR = _paths.DESK_SUBDIR
 OFFICE_FILENAME = "OFFICE.md"
 AGENTS_DIRNAME = "agents"
 PROJECTS_DIRNAME = "projects"
@@ -65,7 +68,7 @@ ORCHESTRATOR_ROLE = "orchestrator"
 
 # Geçiş günlüğü: kasada kendiliğinden yapılan her onarım buraya yazılır
 # (kart taşıması `tasks.py`, orkestratör politikası bu dosya).
-MIGRATION_LOG_SUBPATH = "Entropy/Desk/_migrations.log"
+MIGRATION_LOG_SUBPATH = _paths.MIGRATION_LOG_SUBPATH
 
 DEFAULT_MAX_PARALLEL = 2
 DEFAULT_BUDGET_TOKENS = 120000
@@ -324,6 +327,10 @@ class DeskRegistry:
 
             vault_path = config.obsidian_vault_path
         self.vault_path = Path(vault_path)
+        # Faz 10-B: veri kökü geçişi TEK yerden tetiklenir — burası. `main.py`
+        # açılışına konsaydı testler ve Desk'i doğrudan kuran yollar (CLI,
+        # izleyiciler) eski kökle çalışmaya devam ederdi. Kasa başına bir kez.
+        _paths.migrate_desk_root_once(self.vault_path)
         self.offices_dir = self.vault_path / DESK_SUBDIR
         self._migrate_orchestrator_policies_once()
 
@@ -614,7 +621,7 @@ class DeskRegistry:
         zaten kısıyor; agy tarafında ise KAYNAK politika okunuyor, yani yasak
         sağlayıcıya göre değişiyordu. Kaynak dosya tek gerçek olsun diye AGENT.md
         güncellenir, derlenmiş kopyalar yeniden üretilir ve
-        `Entropy/Desk/_migrations.log`'a satır düşer. İdempotent: politika zaten
+        `Desk/_migrations.log`'a satır düşer. İdempotent: politika zaten
         `read-only` ise dosyaya dokunulmaz.
         """
         changed: List[str] = []

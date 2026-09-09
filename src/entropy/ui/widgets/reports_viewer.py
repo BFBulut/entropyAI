@@ -884,7 +884,11 @@ class ReportsViewerWidget(QFrame):
                 # 2. Remove associated memory node from SQLite
                 try:
                     import sqlite3
-                    db_p = Path.home() / ".entropy" / "cognitive_memory.db"
+                    from entropy.memory.supabase.cognitive_memory import (
+                        default_cognitive_db_path,
+                    )
+
+                    db_p = default_cognitive_db_path()
                     if db_p.exists():
                         with sqlite3.connect(db_p) as conn:
                             pattern = f"%{p.stem}%"

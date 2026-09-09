@@ -396,7 +396,7 @@ def _ghost_vault(tmp_path, monkeypatch):
     from entropy.core.config import config
 
     monkeypatch.setattr(config, "obsidian_vault_path", str(tmp_path), raising=False)
-    return tmp_path / "Entropy" / "Desk" / "Offices"
+    return tmp_path / "Desk" / "Offices"
 
 
 def test_load_layout_kayitsiz_ofise_klasor_acmaz(tmp_path, monkeypatch):

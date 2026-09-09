@@ -5,9 +5,11 @@ Akış paneli: seçili ajanın son çıktısı ve canlı akışı.
 Sahnedeki sprite'a tıklandığında `focus_agent()` çağrılır; panel o ajanın son
 kart özetini basar ve o andan sonraki akış parçalarını eklemeye başlar.
 
-Not: köprü akışı ajan başına etiketlemiyor (tek `token_chunk_received` var).
-Bu yüzden canlı akış "o an odaklanılan ajanın penceresi" olarak gösterilir;
-ajan başına ayrıştırma köprü sözleşmesi genişleyince yapılabilir.
+Faz 10-B: ajan başına ayrıştırma `desk/terminals_panel.py`'ye taşındı
+(`bus.agent_stream` ajan/ofis/kart etiketi taşıyor). Bu panel artık
+"Terminaller" sekmesinin ÜST bölmesinde yalnızca seçili ajanın KART ÖZETİNİ ve
+etiketsiz eski `token_chunk_received` akışını gösterir; geriye uyum için
+`focus_agent`/`stream_text` sözleşmesi aynen korunur.
 """
 
 from __future__ import annotations

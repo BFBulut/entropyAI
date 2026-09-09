@@ -28,6 +28,24 @@ class EntropyEventBus(QObject):
     agent_turn_started = Signal(str)     # prompt
     agent_turn_completed = Signal(str)   # final response
 
+    # Ajan akışı (Faz 10-B): piksel ajan sahnesinin tek beslemesi. Eski
+    # sinyaller (token_chunk_received, terminal_output_received) OLDUĞU GİBİ
+    # kalır ve yayılmaya devam eder; bu sinyal onların yerine değil, yanına
+    # gelir. Fark: yük ajan/ofis/kart etiketini taşır, böylece aynı anda koşan
+    # birden çok gizli terminal sahnede ayrı avatarlara düşer — eski tek tampon
+    # (stream_panel) bunu ayırt edemiyordu.
+    #
+    # Yük (bkz. entropy.core.provider.build_agent_stream_event):
+    #   task_id, card_id, office, agent, provider, model,
+    #   kind:  "text" | "thinking" | "tool_call" | "tool_result" | "status"
+    #          | "result" | "error"
+    #   text:  balon metni (≤ 280 karakter, kırpıldıysa "…" ile biter)
+    #   full_text: yalnızca kırpma olduysa; tam metin
+    #   tool:  {"name", "input_summary"} veya None
+    #   state: "thinking" | "working" | "idle" | "error"  (sahne animasyonu)
+    #   ts:    time.time()
+    agent_stream = Signal(dict)
+
     # Project Context
     project_changed = Signal(str)        # absolute project directory path
 
@@ -98,6 +116,16 @@ class EntropyEventBus(QObject):
     # yalnızca "bak" der, içerik taşımaz — mesajı iki taraf da dosyadan okur ve
     # tek gerçek kaynak korunur.
     mailbox_updated = Signal(str, str)   # owner_kind, owner_name
+
+    # Harness / bellek katmanının Faz 10 sinyalleri. Burada yalnızca TANIMLI;
+    # yayım sahipleri ayrı: kuralları bellek katmanı (rules_updated,
+    # memory_error), kontrol noktası ve kanıt kaydını ofis harness'ı yayar.
+    # Tanımın burada durması zorunlu — bus tek sözleşme noktasıdır ve iki ekip
+    # aynı adı iki farklı imzayla icat etmesin diye.
+    rules_updated = Signal(str, int)     # (ofis adı; "" = genel), eklenen kural sayısı
+    memory_error = Signal(dict)          # {"where", "message", "ts"}
+    checkpoint_written = Signal(dict)    # {"office", "card_id", "path"}
+    proof_recorded = Signal(dict)        # {"office", "card_id", "ok", "command"}
 
     # Sağlayıcı kimlik/durum katmanı (Faz 5): giriş var mı, hangi hesap, kota
     # ipucu, son hata. Sözlük olarak taşınır çünkü alanlar sağlayıcıya göre

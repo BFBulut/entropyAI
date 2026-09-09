@@ -143,7 +143,7 @@ def entities_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Pat
 
 
 def offices_dir(vault_path: Optional[Path] = None) -> Path:
-    """Ofis kökü. Faz 6'da Desk ayrıldı: `Entropy/Desk/Offices` tek kaynaktır."""
+    """Ofis kökü. Desk ayrı bir kasadadır: `Desk/Offices` tek kaynaktır."""
     from entropy.memory.office_graph import desk_offices_dir
 
     return desk_offices_dir(vault_path)

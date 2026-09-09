@@ -41,6 +41,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from entropy.core import paths as _paths
+
 from entropy.agents.mailbox import emit_terminal
 from entropy.agents.registry import (
     AgentRegistry,
@@ -53,14 +55,14 @@ TASKS_SUBDIR = "Entropy/Tasks"
 
 # Faz 9 / B-9.2 — kart deposu ikiye ayrıldı. Entropy'nin KENDİ kartları
 # `Entropy/Tasks` altında kalır; ofis kartları ofisin kendi kasasında,
-# `Entropy/Desk/Offices/<ofis>/cards/` altında durur. Ayrım eskiden yalnızca
+# Desk ofis kökündeki `<ofis>/cards/` altında durur. Ayrım eskiden yalnızca
 # kart ön bilgisindeki `office:` alanındaydı; aynı klasörde durdukları için
 # Obsidian'da, yedeklemede ve panolarda iki dünya karışıyordu.
-DESK_OFFICES_SUBDIR = "Entropy/Desk/Offices"
+DESK_OFFICES_SUBDIR = _paths.DESK_SUBDIR
 OFFICE_CARDS_DIRNAME = "cards"
 
 # Taşıma günlüğü: geri alınabilirlik için her taşınan kartın eski/yeni yolu.
-MIGRATION_LOG_SUBPATH = "Entropy/Desk/_migrations.log"
+MIGRATION_LOG_SUBPATH = _paths.MIGRATION_LOG_SUBPATH
 
 # `list(office=ALL_CARDS)` iki kökü de tarar. Varsayılan (`office=None`)
 # YALNIZCA Entropy kartlarını döndürür: Entropy'nin panosu ofis kartlarını
@@ -91,6 +93,54 @@ COST_DISCIPLINE = (
     "- Aynı dosyayı ikinci kez okuma; gerekli bilgiyi ilk okumada çıkar.\n"
     "- Bilgi eksikse tahmin üretme, 'yapılamadı: <neden>' yaz."
 )
+
+# Faz 10-A — işçi disiplini. Üç blok da SATIR BAŞINDA köşeli etiketle yazılır;
+# harness çıktıdan bunları ayrıştırıp kart alanlarına (`checkpoint`, `proof`)
+# ve kural adayı kuyruğuna çevirir. Etiketler sabit: serbest metinden çıkarım
+# yapmaya çalışmak her sağlayıcıda başka sonuç veriyordu.
+CHECKPOINT_TAG = "[KONTROL NOKTASI]"
+PROOF_TAG = "[KANIT]"
+RULE_TAG = "[KURAL]"
+
+CHECKPOINT_DISCIPLINE = (
+    f"[KONTROL NOKTASI KURALI]\n"
+    f"Her modülü/adımı bitirdiğinde çıktına satır başında `{CHECKPOINT_TAG}` "
+    "bloğu yaz:\n"
+    "Yapılan: <bitirdiğin iş>\n"
+    "Sonraki: <sıradaki adım>\n"
+    "Dosyalar: <dokunduğun yollar>\n"
+    "Testler: <koşturduğun komut ve sonucu>\n"
+    "Koşu yarıda kesilirse bu bloktan sürdürülecek; blok yoksa iş baştan "
+    "yapılmak zorunda kalır."
+)
+
+RULE_DISCIPLINE = (
+    f"[KURAL ÖNERME]\n"
+    f"Projeye dair kalıcı bir kural keşfedersen satır başında `{RULE_TAG} <kural>` "
+    "yaz. Belleğe, kural dosyasına ya da tüzüğe KENDİN yazma: bunlar yalnızca "
+    "adaydır, onayı kullanıcı verir."
+)
+
+
+def proof_discipline(needs_write: bool) -> str:
+    """`[KANIT]` bloğu sözleşmesi; yazma niyeti olmayan kartta kanıt = üretilen yol."""
+    if needs_write:
+        body = (
+            "Çalıştırdığın test komutu: <komut>\n"
+            "Sonuç: yeşil | kırmızı (kaç test geçti/kaldı)\n"
+            "Özet: <tek cümle>\n"
+            "Test koşturmadan 'bitti' deme: kanıtsız ya da kırmızı çıktı "
+            "kabul edilmez, kart yeniden koşar."
+        )
+    else:
+        body = (
+            "Bu kart dosya değiştirmiyor; kanıt olarak ÜRETTİĞİN dosya/rapor "
+            "yolunu ver:\n"
+            "Çıktı: <ürettiğin dosya ya da rapor yolu>\n"
+            "Sonuç: yeşil\n"
+            "Özet: <tek cümle>"
+        )
+    return f"[KANIT — ZORUNLU]\nÇıktının sonuna satır başında `{PROOF_TAG}` bloğu yaz:\n{body}"
 
 
 @dataclass
@@ -135,6 +185,13 @@ class TaskCard:
     # Ofis alt kartları varsayılan olarak OKUMA: paylaşımlı kilitle aynı proje
     # dizininde birbirlerini beklemeden koşabilsinler.
     intent: str = ""
+    # Faz 10-A. `checkpoint`: ajanın son `[KONTROL NOKTASI]` bloğunun yazıldığı
+    # DOSYA yolu; çökme sonrası yeniden koşu bu dosyadan sürer (eski sohbet
+    # değil). `proof`: `[KANIT]` bloğunun kısa metni — kart yalnızca kanıtı
+    # yeşilse `done` olabilir. İkisi de kart ön bilgisinde durur: UI ve harness
+    # aynı tek kaynağı okur.
+    checkpoint: str = ""
+    proof: str = ""
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -158,6 +215,11 @@ class TaskCard:
             "attempt": int(self.attempt or 0),
             "budget_tokens": int(self.budget_tokens or 0),
             "intent": self.intent,
+            "checkpoint": self.checkpoint,
+            # Kanıt ön bilgide tek satıra sıkıştırılır: YAML çok satırlı değer
+            # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
+            # sonucu ikiye bölerdi.
+            "proof": " ".join((self.proof or "").split())[:400],
         }
 
 
@@ -384,7 +446,7 @@ class TaskBoard:
     # -- yollar --------------------------------------------------------
 
     def office_cards_dir(self, office: str) -> Path:
-        """Bir ofisin kart klasörü (`Entropy/Desk/Offices/<ofis>/cards`)."""
+        """Bir ofisin kart klasörü (`Desk/Offices/<ofis>/cards`)."""
         return self.desk_offices_dir / str(office).strip() / OFFICE_CARDS_DIRNAME
 
     def _office_card_dirs(self) -> List[Path]:
@@ -520,6 +582,8 @@ class TaskBoard:
             attempt=attempt,
             budget_tokens=budget_tokens,
             intent=str(front.get("intent") or "").strip().lower(),
+            checkpoint=str(front.get("checkpoint") or ""),
+            proof=str(front.get("proof") or ""),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -596,7 +660,7 @@ class TaskBoard:
         Tek işlemde, doğrulamalı ve idempotent: hedefte aynı içerik zaten
         varsa kaynak silinir, hedef farklıysa kaynak DOKUNULMADAN bırakılır
         (iki kaynaklı gerçeği sessizce çözmek veri kaybı riskiydi). Her adım
-        `Entropy/Desk/_migrations.log` dosyasına yazılır.
+        `Desk/_migrations.log` dosyasına yazılır.
         """
         moved: List[str] = []
         entries: List[str] = []
@@ -805,16 +869,27 @@ class TaskBoard:
             + "\n".join(f"- {p}" for p in paths)
         )
 
-    def build_prompt(self, card: TaskCard, agent_spec=None, project_path: Optional[str] = None) -> str:
+    def build_prompt(
+        self,
+        card: TaskCard,
+        agent_spec=None,
+        project_path: Optional[str] = None,
+        lead_sections: Optional[List[str]] = None,
+    ) -> str:
         """
         Ajanın gövdesi + görev sözleşmesi + kabul ölçütleri.
+
+        `lead_sections` istemin EN BAŞINA girer (doğuş talimatı, kaldığın yer,
+        koşan karta yorum). Sıra bilinçli: ajan doğar doğmaz önce panoyu ve
+        mimariyi okumalı; bu bilgi ajan gövdesinin altına düşerse uzun istemde
+        ilk okunanın altında kalıyordu.
 
         Ajan gövdesi prompt'a da konur (yalnızca `--agent` ile geçilmez): derlenmiş
         ajan tanımı sağlayıcının bulamadığı bir kökten koşulduğunda sessizce
         yok sayılıyor ve görev genel bir asistan tarafından yapılıyordu. Gövdenin
         prompt'ta olması bu durumda da rolü garanti eder.
         """
-        parts: List[str] = []
+        parts: List[str] = [s.strip() for s in (lead_sections or []) if (s or "").strip()]
         if agent_spec is not None and (agent_spec.prompt or "").strip():
             parts.append(agent_spec.prompt.strip())
         criteria = "\n".join(f"- {c}" for c in (card.criteria or [])) or "- (belirtilmedi)"
@@ -831,6 +906,12 @@ class TaskBoard:
             # bir alt kart tek başına ofisin bütçesini bitiriyordu.
             f"{COST_DISCIPLINE}"
         )
+        # Faz 10-A: kontrol noktası / kanıt / kural adayı disiplini. Kanıt
+        # metni kartın yazma niyetine göre değişir: salt araştırma kartında
+        # "test koştur" demek ajanı olmayan bir testi uydurmaya itiyordu.
+        parts.append(CHECKPOINT_DISCIPLINE)
+        parts.append(proof_discipline(card_needs_write(card, agent_spec=agent_spec)))
+        parts.append(RULE_DISCIPLINE)
         files_block = self.project_file_section(project_path)
         if files_block:
             parts.append(files_block)
@@ -845,6 +926,7 @@ class TaskBoard:
         on_done: Optional[Callable[[str, bool], None]] = None,
         agent_registry=None,
         project_path: Optional[str] = None,
+        lead_sections: Optional[List[str]] = None,
     ) -> Optional[str]:
         """
         Kartı arka planda çalıştırır; ledger görev kimliğini döndürür.
@@ -899,7 +981,8 @@ class TaskBoard:
         # ve o koşuya `model=` olarak geçirilir.
         run_model = resolve_card_model(card, agent_spec=agent_spec, provider=provider)
 
-        prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path)
+        prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path,
+                                   lead_sections=lead_sections)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
         task_id = f"card-{card.id}"
         card = replace(card, status="running", started_at=_now(), provider=provider)
@@ -933,6 +1016,13 @@ class TaskBoard:
             model=run_model or None,
             # Ajanın kimliği kartın sistem istemine girer (Faz 9.4).
             agent_spec=agent_spec_payload(agent_spec),
+            # Faz 10-A: akış olayları kart/ofis/ajan künyesiyle etiketlenir;
+            # Desk sahnesi ve terminal bölmeleri olayı bu meta ile eşler.
+            stream_meta={
+                "agent": card.agent or "",
+                "office": card.office or "",
+                "card_id": card.id,
+            },
         )
         # Ofis kartı kendi çalışma dizininde koşar; derlenmiş ajan tanımı orada.
         if project_path:
@@ -941,7 +1031,8 @@ class TaskBoard:
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
-        for optional in ("needs_write", "project_path", "max_steps", "model", "agent_spec"):
+        for optional in ("needs_write", "project_path", "max_steps", "model",
+                         "agent_spec", "stream_meta"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):
