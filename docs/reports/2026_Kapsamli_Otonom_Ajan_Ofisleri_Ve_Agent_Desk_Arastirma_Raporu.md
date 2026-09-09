@@ -41,7 +41,7 @@ Aşağıdaki tablo, literatürdeki öne çıkan otonom yazılım mühendisliği 
 | Çerçeve / Sistem | Topoloji | İzolasyon Mekanizması | SWE-bench Verified | Token Verimliliği | Bileşik Başarı Skoru |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Entropy AgentDesk (Faz 158/159 SOTA)** | `blackboard_tuple_space` | `git_worktree_cow` | **%99.6** | %96.0 | **0.982** |
-| **AgentSpace üreticisi AgentSpace** | `hierarchical_leader_worker` | `git_worktree_cow` | **%88.4** | %89.0 | **0.901** |
+| **AgentSpace (ticari)** | `hierarchical_leader_worker` | `git_worktree_cow` | **%88.4** | %89.0 | **0.901** |
 | **OpenHands (Devin Core)** | `hierarchical_leader_worker` | `docker_container` | **%68.5** | %72.0 | **0.756** |
 | **SWE-agent** | `hierarchical_leader_worker` | `docker_container` | **%65.2** | %78.0 | **0.748** |
 | **MetaGPT** | `hierarchical_leader_worker` | `none` | **%26.8** | %65.0 | **0.554** |
