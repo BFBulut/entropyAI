@@ -57,8 +57,9 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
 | Dilim | Durum | Not |
 |---|---|---|
 | 13-A UX ve çekirdek + onaylı canlı koşular | **tamamlandı, v0.10.1** | `docs/reports/2026-09-10_Faz13_Ilerleme_Raporu_v0.10.1.md` |
-| 13-B `entropy.memory` → `entropy.brain` taşıması | onay bekliyor | kota 0; tek başına koşar; uyumluluk shim'i bir sürüm; ADR-0004 ön koşulları 5/5 (yüzey 113 dosya) |
-| 13-C Desk kanıt zinciri ve temizlik | onay bekliyor | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı), `claude_bg` arşivi |
+| 13-A2 v0.10.1 geri bildirimi (donma, görünmeyen düğmeler, ajan durumu, pencere yanıp sönmesi, beyin kısa devresi kapalı) | **yürürlükte** | `v0.10.2` |
+| 13-B `entropy.memory` → `entropy.brain` taşıması | onaylandı (13-A2 sonrası, tek başına) | kota 0; tek başına koşar; uyumluluk shim'i bir sürüm; ADR-0004 ön koşulları 5/5 (yüzey 113 dosya) |
+| 13-C Desk kanıt zinciri ve temizlik + wiki ikinci parti | onaylandı (kota ~90k) | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı), `claude_bg` arşivi |
 | 13-D Kapanış | 13-B/C sonrası | v0.11.0 |
 
 ---

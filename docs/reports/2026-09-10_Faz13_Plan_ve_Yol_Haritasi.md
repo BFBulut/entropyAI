@@ -43,3 +43,19 @@ G13-1 boş etkileşimli öğe 0 · okundu tıklaması ≤ 50 ms (158 kartta) · 
 
 ## 5. Kararlar (araştırma K1–K10 → plan)
 K1–K5 ve K7 13-A/13-C'ye alındı; K6 (taşıma yapılsın) 13-B olarak onaya sunuldu; K8 (`claude_bg` arşive) 13-C'de; K9 (`[DESK …]` araçları, onaylı) 13-C'de; K10 tavan 120k → iki ayrı tavan (70k verildi + 60k onay bekliyor).
+
+## 6. Güncelleme (2026-09-10, v0.10.1 sonrası kullanıcı geri bildirimi ve onaylar)
+Kullanıcı üç kararı da onayladı: **13-B yapılacak**, **13-C ve ~60k Desk kanıt zinciri onaylı**, **wiki ikinci parti (~30k) onaylı**. v0.10.1'i gerçek ekranda denedikten sonra yedi yeni bulgu bildirdi; bunlar 13-B'den önce **13-A2** dilimi olarak kapatılır (etiket `v0.10.2`), çünkü 13-B tek başına koşar ve başka iş beklemez:
+
+| # | Bulgu (kullanıcı) | Ajan |
+|---|---|---|
+| 1 | Yetenekler'de "Etkin" kutusu donma yaratıyor ("EntropyAI.exe is not responding") | ui-engineer |
+| 2 | Bazı düğmeler hâlâ görünmüyor (yetenek satırlarında ikon-only boş kareler) → G13-1 bütün ekranları tarar, boş ikon nesnesi kapıdan geçmez | ui-engineer |
+| 3 | Sohbet rapor kartında "Raporu açSohbete al" bitişik | ui-engineer |
+| 4 | Ajanlar sekmesinde araştırmacının çalıştığı görünmüyor ("2 sa önce" derken kart çalışıyor); çekirdek Entropy yerine ajanın işini yansıtıyor | ui-engineer (görünüm) + agy-integration-engineer (`AgentSessionStore.status()` sözleşmesi) |
+| 5 | Görevler ekranı kalabalık; QA canlı koşularının artık kartları duruyor | ui-engineer (düzen) + agy-integration-engineer (QA kartlarını arşivle, kullanıcı kartlarına dokunma) |
+| 6 | Bir görev koşarken ~20 pencere açılıp kapanıyor | ui-engineer (ebeveynsiz Qt pencereleri) + agy-integration-engineer (alt süreç `CREATE_NO_WINDOW`) |
+| 7 | "Araştır" deyince her şey beyinden çekildi ("Beyinden yanıtlandı … CLI turu açılmadı", yanıt kimlik düğümü) → otomatik kısa devre varsayılan kapalı, beyin yalnız `[BEYİN]` bağlamı, kimlik/legacy düğümleri asla yanıt değil, `brain_only` açık tercih | memory-rag-engineer |
+| + | Üst çubuk durum kümesi kırpılıyor; "Oturumu yenile" sohbete otonom görev kartı düşürüyor | ui-engineer · agy-integration-engineer |
+
+Sıra: 13-A2 (`v0.10.2`) → 13-B tek başına (`v0.10.3`) → 13-C + wiki ikinci parti + Desk kanıt zinciri (`v0.10.4`) → 13-D (`v0.11.0`).
