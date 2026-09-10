@@ -765,3 +765,233 @@ def ingest_playbook_to_wiki(
     except Exception as exc:  # pragma: no cover
         logger.warning("Wiki günlüğü yazılamadı (%s): %s", skill, exc)
     return result
+
+
+# ------------------------------------------------- derleme hattı (Karpathy L2)
+#
+# Karpathy'nin deseni: "Bilgi bir kez derlenir ve güncel tutulur, her sorguda
+# yeniden türetilmez." Bugün bağlamın %25,3'ü HAM rapor alıntısı, %0,8'i
+# derlenmiş wiki (denetim §3.5). `compile_skill` bu oranı tersine çevirmek için
+# raporları **bir kez** sayfaya derler.
+#
+# Kritik uyarı (yine Karpathy): "ajana hangi sayfaların güncelleneceğini
+# kapsamlandırmadan asla 'wiki'yi güncelle' deme." Bu yüzden hat artımlıdır:
+# işlenen rapor kümesi `WIKI.state.json`da tutulur, ikinci çağrı 0 tur harcar.
+
+WIKI_STATE_FILENAME = "WIKI.state.json"
+# Rapor başına isteme konan gövde tavanı (karakter). Bir tur = bir rapor.
+COMPILE_REPORT_CHARS = 6000
+# Varsayılan tur tavanı. 50 raporluk bir arşiv tek komutta değil, birkaç
+# çağrıda derlenir; kota kullanıcının kontrolünde kalır.
+DEFAULT_COMPILE_BUDGET_TURNS = 8
+REPORT_CONCEPT_CATEGORY = CONCEPT_CATEGORY
+
+
+def wiki_state_path(skill: str, vault_path: Optional[Path] = None) -> Path:
+    """İşlenmiş rapor kümesi; `PLAYBOOK.state.json` ile aynı desen."""
+    return wiki_dir(skill, vault_path) / WIKI_STATE_FILENAME
+
+
+def load_wiki_state(skill: str, vault_path: Optional[Path] = None) -> Dict[str, Any]:
+    path = wiki_state_path(skill, vault_path)
+    if not path.exists():
+        return {"processed": [], "version": 1}
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data.setdefault("processed", [])
+            return data
+    except Exception as exc:
+        logger.warning("WIKI.state.json okunamadı (%s): %s", skill, exc)
+    return {"processed": [], "version": 1}
+
+
+def save_wiki_state(skill: str, state: Dict[str, Any], vault_path: Optional[Path] = None) -> Optional[Path]:
+    path = wiki_state_path(skill, vault_path)
+    try:
+        import json
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+    except OSError as exc:  # pragma: no cover
+        logger.warning("WIKI.state.json yazılamadı (%s): %s", skill, exc)
+        return None
+
+
+def build_report_page_prompt(skill: str, title: str, body: str) -> str:
+    """Tek rapordan kavram sayfası gövdesi isteyen istem (rapor başına BİR tur)."""
+    return (
+        "[GÖREV: WİKİ KAVRAM SAYFASI DERLEME]\n\n"
+        f"Yetenek: {skill}\nKaynak rapor: {title}\n\n"
+        "Aşağıdaki raporu, yeniden kullanılabilir bir wiki kavram sayfasına derle. "
+        "Rapordaki tek seferlik ayrıntıyı, tarih/dosya adı gürültüsünü ve süreç "
+        "anlatımını ALMA; kalıcı bilgiyi al: tanımlar, ölçütler, sayısal bulgular "
+        "(kaynağıyla), tuzaklar, tekrar eden yordam.\n"
+        "Markdown gövde yaz (başlık satırı EKLEME, ön bilgi EKLEME), en fazla "
+        "1800 karakter, maddeler hâlinde. Çelişkili iki bilgi varsa ikisini de "
+        "yaz ve hangisinin daha yeni olduğunu belirt.\n\n"
+        "--- RAPOR ---\n"
+        f"{body[:COMPILE_REPORT_CHARS]}\n"
+    )
+
+
+def compile_skill(
+    skill: str,
+    bridge: Optional[Any] = None,
+    budget_turns: int = DEFAULT_COMPILE_BUDGET_TURNS,
+    vault_path: Optional[Path] = None,
+    store: Any = None,
+    run_lint: bool = True,
+    cancel: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Yeteneğin wiki'sini derler: playbook sayfaları (LLM'siz) + rapor sayfaları (CLI).
+
+    `bridge` = `send_prompt(prompt) -> str` biçiminde eşzamanlı çağrılabilir
+    (`distiller.run_with_bridge` sözleşmesinin aynısı). `None` ise **hiçbir
+    model çağrılmaz**: yalnızca playbook tabanlı sayfalar üretilir, indeks ve
+    lint koşar, `turns = 0` döner.
+
+    Artımlı: işlenmiş rapor adları `WIKI.state.json`da tutulur; aynı yetenek
+    ikinci kez derlenirse yeni rapor yoksa **0 tur** harcanır.
+
+    `budget_turns` bu çağrının tavanıdır (rapor başına bir tur).
+    `cancel()` True dönerse tur döngüsü kesilir; o ana kadar yazılanlar kalır.
+
+    Dönen: `{"skill", "turns", "pages", "new_pages", "processed", "remaining",
+             "base", "index", "log", "lint", "reason"}`
+    """
+    from entropy.memory.playbook import PlaybookStore
+
+    store = store or PlaybookStore(vault_path=vault_path)
+    vault_path = vault_path if vault_path is not None else store.vault_path
+
+    result: Dict[str, Any] = {
+        "skill": skill, "turns": 0, "pages": [], "new_pages": [],
+        "processed": 0, "remaining": 0, "base": None,
+        "index": None, "log": None, "lint": None, "reason": "",
+    }
+
+    # 1. Playbook tabanlı kavram/varlık sayfaları — kotasız, her çağrıda tazelenir.
+    try:
+        result["base"] = ingest_playbook_to_wiki(skill, vault_path=vault_path, store=store)
+    except Exception as exc:
+        logger.warning("Playbook wiki üretimi başarısız (%s): %s", skill, exc)
+        result["base"] = {"written": 0, "reason": str(exc)}
+
+    # 2. Rapor sayfaları — rapor başına bir CLI turu, artımlı.
+    state = load_wiki_state(skill, vault_path)
+    processed: List[str] = list(state.get("processed") or [])
+    processed_set = set(processed)
+    try:
+        reports = list(store.source_reports(skill))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Rapor listesi alınamadı (%s): %s", skill, exc)
+        reports = []
+    pending = [p for p in reports if p.stem not in processed_set]
+    result["processed"] = len(processed_set)
+    result["remaining"] = len(pending)
+
+    if bridge is None:
+        result["reason"] = "köprü yok: yalnızca playbook sayfaları üretildi"
+    elif not pending:
+        result["reason"] = "yeni rapor yok (artımlı): 0 tur"
+    else:
+        c_dir = concepts_dir(skill, vault_path)
+        c_dir.mkdir(parents=True, exist_ok=True)
+        prefix = _slugify(skill, 24)
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        pb = store.load(skill)
+        playbook_link = store.playbook_path(skill).stem
+        budget = max(0, int(budget_turns))
+        for report_path in pending[:budget]:
+            if cancel is not None:
+                try:
+                    if cancel():
+                        result["reason"] = "iptal edildi"
+                        break
+                except Exception:  # pragma: no cover
+                    pass
+            try:
+                raw = report_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError as exc:  # pragma: no cover
+                logger.warning("Rapor okunamadı (%s): %s", report_path, exc)
+                continue
+            body_in = _strip_report_frontmatter(raw)
+            prompt = build_report_page_prompt(skill, report_path.stem, body_in)
+            try:
+                out = bridge(prompt)
+                result["turns"] += 1
+            except Exception as exc:
+                logger.warning("Wiki derleme turu başarısız (%s): %s", report_path.stem, exc)
+                break
+            body = (out or "").strip()
+            if len(body) < 40:
+                # Boş/çok kısa yanıt rapor "işlendi" saydırmaz: bir sonraki
+                # çağrıda yeniden denenir.
+                continue
+            page = c_dir / f"{prefix}-rapor-{_slugify(report_path.stem)}.md"
+            text = _render_generated_page(
+                "concept", skill, report_path.stem, REPORT_CONCEPT_CATEGORY,
+                body[:WIKI_PAGE_MAX_CHARS],
+                sources=[report_path.stem, playbook_link],
+                links=[playbook_link],
+                created=_existing_created(page) or now,
+                source_version=int(getattr(pb, "version", 0) or 0) if pb else 0,
+            )
+            page.write_text(text, encoding="utf-8")
+            result["new_pages"].append(str(page))
+            processed.append(report_path.stem)
+            processed_set.add(report_path.stem)
+
+        state["processed"] = processed
+        state["updated"] = now
+        save_wiki_state(skill, state, vault_path)
+        result["processed"] = len(processed_set)
+        result["remaining"] = len([p for p in reports if p.stem not in processed_set])
+
+    # 3. İndeks + günlük + çelişki denetimi.
+    try:
+        result["index"] = str(rebuild_wiki_index(skill, vault_path=vault_path))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Wiki indeksi güncellenemedi (%s): %s", skill, exc)
+    try:
+        result["log"] = str(append_wiki_log(
+            skill,
+            f"derleme: {result['turns']} tur, {len(result['new_pages'])} yeni rapor sayfası, "
+            f"{result['processed']} rapor işlendi, {result['remaining']} kaldı",
+            agent="wiki-compile", vault_path=vault_path, kind="compile",
+        ))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Wiki günlüğü yazılamadı (%s): %s", skill, exc)
+    if run_lint:
+        try:
+            from entropy.memory.lint import lint_skill
+
+            lint = lint_skill(skill, vault_path=vault_path, store=store)
+            result["lint"] = {
+                "total": lint.total, "counts": lint.counts(), "stats": lint.stats,
+            }
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Wiki lint koşulamadı (%s): %s", skill, exc)
+
+    result["pages"] = [str(p) for p in _wiki_page_paths(skill, vault_path)]
+    return result
+
+
+def _wiki_page_paths(skill: str, vault_path: Optional[Path] = None) -> List[Path]:
+    out: List[Path] = []
+    for d in (concepts_dir(skill, vault_path), entities_dir(skill, vault_path)):
+        if d.is_dir():
+            out.extend(sorted(d.glob("*.md")))
+    return out
+
+
+_REPORT_FM_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+
+
+def _strip_report_frontmatter(text: str) -> str:
+    return _REPORT_FM_RE.sub("", text or "", count=1).strip()

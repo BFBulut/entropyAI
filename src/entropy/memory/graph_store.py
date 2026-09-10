@@ -388,15 +388,23 @@ class GraphStore:
         try:
             with self._connect() as conn:
                 conn.execute(
+                    # Faz 11-B QA (K12): `provenance` sütunu buraya YAZILMIYORDU.
+                    # Ölçüldü: göç sonrası konsolidasyonun ürettiği 42 küme/yansıma
+                    # düğümü `cognitive_nodes` tarafında kaynaksız görünüyordu
+                    # (graf tarafında `consolidate:label_propagation` yazılı olduğu
+                    # hâlde). Kaynak artık aynada da taşınır.
                     "INSERT INTO cognitive_nodes (id, category, content, importance,"
-                    " created_at, last_accessed, access_count, metadata_json)"
-                    " VALUES (?,?,?,?,?,?,?,?)"
+                    " created_at, last_accessed, access_count, metadata_json, provenance)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)"
                     " ON CONFLICT(id) DO UPDATE SET content=excluded.content,"
                     " importance=excluded.importance, last_accessed=excluded.last_accessed,"
-                    " access_count=excluded.access_count, metadata_json=excluded.metadata_json",
+                    " access_count=excluded.access_count, metadata_json=excluded.metadata_json,"
+                    " provenance=CASE WHEN TRIM(COALESCE(cognitive_nodes.provenance,'')) = ''"
+                    " THEN excluded.provenance ELSE cognitive_nodes.provenance END",
                     (node.id, category, content, float(node.importance),
                      node.created_at or time.time(), node.updated_at or time.time(),
-                     int(node.access_count or 1), json.dumps(meta, ensure_ascii=False)),
+                     int(node.access_count or 1), json.dumps(meta, ensure_ascii=False),
+                     str(node.provenance or "")),
                 )
                 conn.commit()
         except sqlite3.Error:

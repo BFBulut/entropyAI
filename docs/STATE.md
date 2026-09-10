@@ -9,7 +9,7 @@
 |---|---|
 | Sürüm | **v0.8.0** (Faz 11-A sonrası etiket adayı: v0.9.0) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, Faz 11-A kapanış QA (süit yeşil, exe yeniden derlendi) |
+| Son güncelleme | 2026-09-10, **Faz 11-B QA**: hafıza göçü `--apply` uygulandı (1.544 → 711 düğüm), K1–K12 ölçüm paketi kalıcılaştı (§2.2) · **Faz 11-C**: açılış kablolaması, 11.6 öz-amplifikasyon kilidi, yeni yerel komutlar, derleme hedefi ayrıldı |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -66,6 +66,74 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 
 ---
 
+## 2.2 Faz 11-B QA — hafıza göçü uygulandı (2026-09-10)
+
+`python scripts/memory_migrate_v2.py --apply --json` → **exit 0**.
+Uygulama kapalıydı; göç öncesi kuru koşum ve kör test, sonrasında kör test
+tekrarlandı (kabul kapısı: Hit@1 ≥ 8/10 **ve** gürültü ≤ %2 → **KABUL**).
+
+| Ölçüm | Göç öncesi | Göç sonrası |
+|---|---:|---:|
+| `cognitive_nodes` | **1.544** | **711** (669 taşındı + 42 konsolidasyon özeti) |
+| Dosya boyutu | 21.078.016 B | 7.385.088 B |
+| Kategori sayısı | 17 | **3** (`semantic 639`, `procedural 59`, `episodic 13`) |
+| Hit@1 / Hit@5 | 8/10 · 10/10 | **9/10 · 10/10** |
+| top-5 gürültü | %2,0 | **%0,0** |
+| Yineleme (cos ≥ 0,92) | %52,5 | **%4,8** (677 küme / 711 düğüm) |
+| Fikstür sızıntısı (K10) | 531 | **0** |
+| Kaynaksız L2 (K12) | 1.276 | **258** (açık iş, aşağıda) |
+| Graf `nodes / edges / communities` | — | **713 / 578 / 40** |
+| `PRAGMA integrity_check` | — | **ok** |
+
+Atılanlar (`dropped_by_reason`): fikstür 531, yakın kopya 262 (91 temsilci
+altında birleşti), uydurma mimari 33, kısa metin 49 → toplam 875.
+
+**Yedek:** `C:\Users\batu_\.entropy\backups\cognitive_memory.pre-v2.20260910061953.db`
+(21.078.016 B, 1.544 düğüm).
+**Geri alma:**
+`copy /Y "%USERPROFILE%\.entropy\backups\cognitive_memory.pre-v2.20260910061953.db" "%USERPROFILE%\.entropy\cognitive_memory.db"`
+(uygulama kapalıyken; kapı bayrağına dokunulmaz).
+
+### K1–K12 durumu (gerçek DB, `python scripts/brain_metrics.py --json`)
+
+| # | Ölçüt | Hedef | Ölçüm | Karar |
+|---|---|---|---:|---|
+| K1 | yineleme (cos ≥ 0,92) | ≤ %10 | **%4,78** | PASS |
+| K2 | Hit@1 / Hit@5 | ≥ 8/10 · ≥ 10/10 | **9/10 · 10/10** | PASS |
+| K3 | top-5 gürültü | ≤ %2 | **%0,0** | PASS |
+| K7 | kategori disiplini | kanonik dışı 0 | **0** (3 ad kullanımda) | PASS |
+| K9 | gri bant kuyruğu | — | **0 satır** | bilgi |
+| K10 | fikstür sızıntısı | 0 | **0** | PASS |
+| K11 | kapı gecikmesi | ≤ 400 ms | **medyan 82,2 ms** (ilk 186 ms) | PASS |
+| K12 | kaynaksız L2 | 0 | **258** | FAIL (açık iş) |
+
+K4/K5/K6/K8 bağlam derleyici ve tur harness'ında ölçülür; bu dilimin kapsamı değil.
+
+**K12 kök nedeni ikiye ayrıldı:**
+1. *Düzeltildi* — `GraphStore._mirror_to_cognitive` `provenance` sütununu hiç
+   yazmıyordu (`src/entropy/memory/graph_store.py:388-400`): konsolidasyonun
+   ürettiği 42 küme/yansıma düğümü graf tarafında
+   `consolidate:label_propagation` kaynağını taşıdığı hâlde `cognitive_nodes`
+   tarafında kaynaksız görünüyordu. Ayna artık kaynağı taşıyor (var olan
+   dolu kaynağın üzerine yazmaz). Konsolidasyon yeniden koşuldu: kaynaksız L2
+   **299 → 258**, düğüm sayısı değişmedi (idempotent). Regresyon testi:
+   `tests/contracts/test_phase11_brain_metrics.py::test_graph_mirror_carries_provenance_into_cognitive_nodes`.
+2. *Açık* — kalan **258** düğüm v2 öncesinden gelen eski bilgi; kaynak alanları
+   kaynakta da boştu. Göç bunları uydurma kaynakla damgalamadı (bilerek).
+   Karar bekliyor: geriye dönük kaynak çıkarımı mı, `confidence` düşürüp
+   arşivleme mi.
+
+**Duman testi (yeni şema ile):** `dist/EntropyAI/EntropyAI.exe --help` **exit 0**;
+20 sn canlı koşum (erken çıkış yok), günlüğe eklenen 4 satırda
+`Traceback`/`CRITICAL` **0**; `entropy_fault.log`'a düşen
+`0x8001010d` kaydı QA'nın `Stop-Process -Force` ile sonlandırmasının artığıdır
+(uygulama hatası değil). Bellek sayacının okuduğu sorgu (`zen_mode.py:748-758`
+→ `CognitiveMemorySystem().get_all_nodes()`) **711 düğüm, 90 ms**;
+`hybrid_recall(..., expand_graph=True)` yeni graf tablolarıyla çalışıyor.
+Exe koşumu veritabanına yazmadı (mtime değişmedi).
+
+---
+
 ## 3. Aktif sözleşmeler (değiştirirsen `ARCHITECTURE.md` ile birlikte güncelle)
 
 - **Olay veriyolu:** `entropy.core.event_bus` — sinyal adı ve imzası sözleşmedir.
@@ -114,7 +182,43 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
   event, agent, office, title}`; `task_report_ready(dict)` = `{card_id, title,
   agent, status, ok, summary, report_path, output_paths}`.
 - **Yeni ayarlar:** `board_auto_dispatch` (True), `board_dispatch_interval_s`
-  (3), `board_claim_timeout_s` (3600), `entropy_max_parallel` (2).
+  (3), `board_claim_timeout_s` (3600), `entropy_max_parallel` (2),
+  `amplification_lock` (True).
+- **Açılış kablolaması (Faz 11-C):** `agents/bootstrap.start_board_dispatch(app)`
+  → **önce `reconcile()`, sonra `start()`**; `app.aboutToQuit` kancasına
+  `dispatcher.stop` takılır. `main.py` bu tek çağrıyı yapar
+  (`main.py:160-163`), kapanış zinciri ayrıca `stop_board_dispatch()` çağırır.
+  Dönüş `DispatchStartResult(recovered, started, dispatcher, error)`; hata
+  YÜKSELMEZ, `summary()` metnine düşer.
+- **Öz-amplifikasyon kilidi (11.6, `agents/amplification.py`):** üç kapı.
+  (a) **Açık tespiti** — `TaskBoard._brain_shortcut` koşudan önce
+  `brain_lookup()` çağırır; `brain_has_answer` ise kart CLI'ya GİTMEZ,
+  `review`e düşer ve `run()` `"brain-<id>"` döndürür. (b) **Yenilik kotası** —
+  `_finish` → `apply_report_lock` → `admit_report` raporu `MemoryGate`ten
+  geçirir; `MIN_NOVELTY_RATIO = 0.30` altındaysa aynı konudaki **zamanlanmış**
+  görev `TaskScheduler.disable_task(id, reason)` ile kapatılır (silinmez) ve
+  `bus.task_notification(card_id, "Öz-amplifikasyon kilidi", <not>)` yayılır.
+  (c) **Kaynak zorunluluğu** — raporda URL/dosya yolu yoksa kapı hiç çağrılmaz
+  (`NoveltyReport.skipped_reason`). Kart notuna `[YENİLİK] …` satırı yazılır.
+  Ofis kartları kapsam dışı; `config.amplification_lock=False` kilidi kapatır.
+- **Kart alanı `kind`:** `"research"` (ya da boş). Boşsa başlık/hedef sezgisi
+  (`is_research_card`) kullanılır; sezgi dar tutulur (`_WRITE_HINTS` geri çeker).
+- **Yerel slash komutları (Faz 11-C):** `/board` (durum sayıları, sahiplenmeler,
+  son 6 olay, `TASKBOARD.md` yolu), `/board pick <kart> <ajan>`,
+  `/model [<ad>]` (**Entropy'nin KENDİ modeli**; yabancı model reddedilir),
+  `/agent effort <ad> <seviye>` · `/agent model <ad> <model>` (AGENT.md'ye
+  yazar → derler → `AgentSessionStore.forget(ad)` ile oturumu tazeler, çünkü
+  imza `sha1(istem|model|efor)`), `/memory merge` (`memory.gray_merge.run`,
+  guard) · `/memory dream`, `/wiki compile <yetenek> [--turns N]`
+  (`memory.wiki.compile_skill`, guard). Hafıza modülleri yoksa komut hata
+  vermez, "henüz kurulu değil" der.
+- **Derleme hedefi (Faz 11-C, DEĞİŞTİ):** `compile_agent` agy biçimini
+  `compile_roots()`'un hepsine, **claude biçimini YALNIZCA
+  `claude_compile_root()` = `~/.entropy/workspace` altına** yazar. Proje
+  kökünde `.claude/agents` OLUŞMAZ (derlenmiş ajanlar kullanıcının kendi Claude
+  Code oturumuna sızıyordu); saf kip kadroyu `--agents <json>` ile taşır.
+  Desk ofisleri `compile_agent_to` ile kendi çalışma dizinlerine iki biçimi de
+  yazmayı sürdürür.
 - **Kasa yolları:** Entropy `<kasa>/Entropy/{Agents,Tasks,Reports,Memory,Inbox,_archive}`;
   Desk `<kasa>/Desk/{Offices,Templates}` (`core/paths.py`: `DESK_ROOT_SUBDIR = "Desk"`,
   `DESK_SUBDIR = "Desk/Offices"`, `WORKTREE_ROOT_DIRNAME = ".entropy-worktrees"`).
@@ -156,12 +260,75 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 - **CRAG sinyali:** `AssembledContext.brain_confidence` (en iyi recall skoru) +
   `brain_has_answer` (`context_builder.CRAG_MIN_SCORE = 0.45`); `summary()`
   ikisini de döndürür.
+- **Gri bant birleştirme turu (Faz 11.3, `memory/gray_merge.py`):**
+  `run_merge_round(memory=None, send_prompt=None, limit=8, gate=None, graph=None)
+  -> MergeResult`. `send_prompt(prompt) -> str` **eşzamanlı çağrılabilir**
+  (`distiller.run_with_bridge` sözleşmesinin aynısı); sağlayıcı seçimi
+  çağıranındır (`config.provider`), modül köprüyü tanımaz. `None` ise **kuru
+  koşum** (kuyruk boşaltılmaz, model çağrılmaz). **N aday tek istemde** →
+  yanıt JSON `{"decisions":[{"id","action","content","reason"}]}`,
+  `action ∈ {merge, keep_both, supersede}`. Uygulama: `merge` → komşu kalır
+  (içerik birleşik metinle güncellenir), aday `archived=1`, grafta
+  `supersedes` kenarı; `supersede` → ters yön; `keep_both` → yazma yok.
+  Kuyruk satırı `status: "done"` + `resolution`. İptal: `cancel_merge()` /
+  `reset_cancel()`. Ayrıştırılamayan yanıt kuyruğu **boşaltmaz**.
+  K9 ölçümü: `gray_stats(memory) -> {pending, done, total_gray, nodes, ratio}`.
+  Tur günlüğü `<db klasörü>/memory/gray_merge_log.jsonl`.
+- **Rüya döngüsü v2 (Faz 11.7, `memory/dream.py`):**
+  `dream_and_consolidate(memory=None, send_prompt=None, vault_path=None, ...)
+  -> DreamReport`. **Epizodik-48s koşulu YOK.** Adımlar: (1) yeniden gömme →
+  (2) gri bant turu (`send_prompt` yoksa kuru koşum) → (3) cos ≥ 0,95 kopya
+  birleştirme (LLM'siz, `merge_duplicates`) → (4) ölçülü unutma
+  (`forget_stale`: önem < 0,35 **ve** `access_count ≤ 1` **ve** 30 gün →
+  `archived=1`, **silme yok**, `is_identity` muaf) → (5) wiki yükseltme adayı
+  (`wiki_promotion_candidates`: cos ≥ 0,75, ≥ 3 anlamsal düğüm; sayfayı
+  yazmaz) → (6) graf konsolidasyonu + ofis akışı + `reconcile_stores`.
+  Her adım sayaç döndürür, hatalar `DreamReport.errors`'a girer ve döngü
+  devam eder. Kasa çıktıları: `Entropy/Memory/dream_log.md` (tek satır),
+  `Entropy/Memory/wiki_candidates.md`. Zamanlanmış görev:
+  `ensure_daily_dreaming_task(scheduler=None, hour=4)` — `scheduler_tasks.json`
+  içine `daily-dreaming` kimliğiyle **idempotent** kayıt (varsa yeniden yazmaz).
+  Eski `CognitiveMemorySystem.dream_and_consolidate` geriye dönük uyum için
+  **yerinde duruyor**; yeni çağıranlar `memory.dream` modülünü kullanır.
+- **Wiki derleme hattı (Faz 11.8, Karpathy L2):**
+  `wiki.compile_skill(skill, bridge=None, budget_turns=8, vault_path=None,
+  store=None, run_lint=True, cancel=None) -> dict`. `bridge` =
+  `send_prompt(prompt) -> str`; `None` ise **model çağrılmaz** (yalnızca
+  playbook tabanlı kavram/varlık sayfaları + indeks + lint, `turns=0`).
+  **Rapor başına bir tur**, `budget_turns` bu çağrının tavanı. Artımlı:
+  işlenen rapor kümesi `<kasa>/Entropy/Skills/<yetenek>/wiki/WIKI.state.json`
+  (`{"processed": [...]}`), ikinci çağrıda yeni rapor yoksa **0 tur**.
+  Dönüş: `{skill, turns, pages, new_pages, processed, remaining, base, index,
+  log, lint, reason}`; `lint = {total, counts, stats}` (`lint.lint_skill`).
+  Gerçek koşu tavanı: `financial-auditor` 50 rapor ≈ 50 tur → QA'da
+  `budget_turns` ile bölünerek koşulur.
+- **Genel sohbet beyin paketi (Faz 11.9):** `context_builder.BUDGET_GENERAL_BRAIN
+  = 1500` (`BRAIN_IDENTITY_TOKENS=300`, `BRAIN_RULES_TOKENS=400`,
+  `BRAIN_WIKI_PAGES=4`). Yalnızca `skill_name` **boşken** ödenir; içerik =
+  kimlik düğümleri (`is_identity=1`) + onaylı kurallar (`promoted_rules`,
+  `ENTROPY_OFFICE`) + **yetenekler arası** en iyi wiki sayfaları. PPR
+  genişletmeli recall ve aktarım özeti kendi bölümlerinde kalır (aynı metin
+  iki kez ödenmez). `_wiki_page_files(None)` artık tüm yeteneklerin
+  sayfalarını döndürür; `_reports_section` yeteneksiz sohbette kasa geneli
+  en yeni `GENERAL_REPORT_CANDIDATES = 60` rapora düşer.
+- **Yerel komut sözleşmesi (agy bağlayacak):** `/memory merge` →
+  `gray_merge.run_merge_round`, `/memory dream` → `dream.dream_and_consolidate`,
+  `/wiki compile <yetenek>` → `wiki.compile_skill`. Üçü de köprü
+  çağrılabilirini **çağırandan** alır; hiçbiri kendi başına kota harcamaz.
 - **Bayraklar:** `ENTROPY_MEMORY_GATE=0` kapıyı tamamen atlar (geri alma);
   `ENTROPY_MEMORY_GATE_STRICT` katı kipi zorlar/kapatır (varsayılan: üretimde
   açık, pytest altında kapalı).
 - **Betikler:** `scripts/memory_migrate_v2.py` (`--dry-run` varsayılan,
   `--apply` yedek alır: `~/.entropy/backups/cognitive_memory.pre-v2.<zaman>.db`),
-  `scripts/memory_blind_test.py` (K2/K3 kör testi, 10 sorgu).
+  `scripts/memory_blind_test.py` (K2/K3 kör testi, 10 sorgu),
+  `scripts/brain_metrics.py` (**Faz 11-B QA, yeni**: K1/K2/K3/K7/K9/K10/K11/K12
+  raporu; **salt okunur**, `sqlite3 ... mode=ro` ile açar, `--json`,
+  `--skip-recall`, `--skip-latency`). Üçü de pytest içinden çağrılabilir
+  (`plan_migration`/`write_target`, `memory_blind_test.run`,
+  `brain_metrics.collect`) ve testte tmp DB ile koşulur.
+- **Ölçüm paketi (kalıcı):** `tests/contracts/test_phase11_brain_metrics.py`
+  (12 test, sentetik korpus) + `tests/contracts/test_phase11_memory_isolation.py`
+  (11 test, yazma yolu yalıtımı). Ölçüm mantığı tek kaynak: `scripts/brain_metrics.py`.
 - **Doğuş talimatı:** `office_workspace.SPAWN_INSTRUCTION_MAX_CHARS = 1200`.
 - **Test yalıtımı:** `tests/conftest.py` gerçek kasayı ve `~/.entropy`'yi izole eder
   (`isolate_obsidian_vault`). Yeni bir yazma noktası eklersen yalıtımı da ekle — bugünkü
@@ -201,12 +368,22 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 6. `docs/specifications/` altındaki 5 eski spec `ARCHITECTURE.md`'ye damıtılıp arşive
    taşınacak (Faz 11-A'da yalnızca prototip spec'i arşivlendi).
 7. ~~Beynin yazma tarafı: `MemoryGate` yok~~ → **Faz 11-B'de kuruldu** (§3). Kalanlar:
-   - **`--apply` koşulmadı.** Gerçek veritabanı hâlâ 1.544 düğüm; yalnızca kuru koşum
-     raporu alındı (669 kalır). `--apply` QA'da, Hit@1 kapısıyla (K2 düşerse geri al).
-   - **Gri bant kuyruğunu boşaltan toplu CLI turu yok** (11.3, agy-integration-engineer).
-   - **Öz-amplifikasyon kilidi (11.6)** yalnızca kaynak zorunluluğu tarafıyla var;
-     açık tespiti + yenilik kotası harness tarafında bekliyor.
-   - `dream_and_consolidate` hâlâ 48 saat + epizodik koşuluna bağlı (11.7).
+   - ~~`--apply` koşulmadı~~ → **2026-09-10 QA'da koşuldu ve kabul edildi** (§2.2).
+   - **K12 açık:** 258 eski L2 düğümü kaynaksız (§2.2).
+   - ~~Gri bant kuyruğunu boşaltan toplu CLI turu yok~~ → **Faz 11-D:
+     `memory/gray_merge.py`** (§3). Kalan: agy tarafında `/memory merge`
+     komutunun köprüye bağlanması ve **gerçek koşum** (QA).
+   - ~~**Öz-amplifikasyon kilidi (11.6)**~~ → **Faz 11-C'de tamamlandı**
+     (`agents/amplification.py`, §3). Kalan: gerçek kapıyla uçtan uca ölçüm
+     (ADD oranının gerçek korpusta ne çıktığı) yapılmadı.
+   - ~~`dream_and_consolidate` hâlâ 48 saat + epizodik koşuluna bağlı~~ →
+     **Faz 11-D: `memory/dream.py`** (§3). Eski metot geriye dönük uyum için
+     duruyor; `main.py` / `tasks_widget.py` çağrılarının yeni modüle
+     taşınması **ui/agy tarafında açık iş**.
+   - **K4 hedefin altında (%56,8 < %60, Faz 11-D ölçümü).** Neden: wiki
+     katmanı 7 yetenekten yalnızca birinde dolu; `wiki.compile_skill`in
+     gerçek koşumu (QA, 11.8) sayfaları üretince beyin paketi büyüyecek.
+     K5 **%38,2 ≥ %30** (kabul).
 
 ---
 
@@ -221,6 +398,18 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
   etkileşimli kart kipi, proje = depo + dal, kart başına worktree (Windows'ta güvenli
   temizlik), PR akışı (yerel dal + diff → onaylı push), ekip şablonları, makbuz = ofis raporu,
   Desk kökü `Desk/` altına taşındı, bilişsel bellek çift depo eşitlemesi.
+- **Faz 11-D (hafıza katmanı, konsolidasyon/wiki/genel beyin):** `memory/gray_merge.py`
+  (gri bant kuyruğu birleştirme turu, N aday tek istemde, iptal edilebilir,
+  idempotent), `memory/dream.py` (rüya döngüsü v2 — epizodik koşulu yok, altı
+  adım, adım başına sayaç, `dream_log.md`), `wiki.compile_skill` (Karpathy L2
+  derleme hattı, rapor başına bir tur, `WIKI.state.json` ile artımlı, lint
+  entegre), `context_builder` genel beyin paketi (`BUDGET_GENERAL_BRAIN=1500`,
+  yeteneksiz sohbette kimlik + onaylı kurallar + yetenekler arası wiki, rapor
+  bölümü kasa geneline düşüyor). **Ölçüm (gerçek kasa, DB kopyası, 5 genel
+  sorgu):** K4 %11,4 → **%56,8**; K5 %0 → **%38,2**. Sahte köprüyle: 5 gri
+  aday → 3 merge + 2 keep, 1 tur, kuyruk boşaldı; 5 rapor → 5 tur, ikinci
+  çağrı 0 tur, lint 0 çelişki. Testler: `tests/test_phase11_dream_wiki_brain.py`
+  (22 test).
 - **Faz 11-B (bu dilim, hafıza katmanı):** şema v2 (7 yeni sütun, idempotent ALTER),
   kategori kapalı kümesi (17 değer → 4 katman + `is_identity` bayrağı), `MemoryGate`
   (fikstür süzgeci, L2 kaynak zorunluluğu, üç bant, gri bant kuyruğu, `reconcile_facts`

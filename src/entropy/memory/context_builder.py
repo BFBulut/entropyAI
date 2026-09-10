@@ -63,6 +63,21 @@ BUDGET_AGENT_MEMORY = 300
 # değil. Yalnızca meta["office"] doluysa ödenir.
 BUDGET_OFFICE_MEMORY = 300
 
+# Genel sohbet beyin paketi (Faz 11.9). Denetimde ölçüldü: yetenek
+# eşleşmediğinde 4000 token bütçenin yalnızca %11,4'ü kullanılıyor ve
+# damıtılmış pay %0 — yani genel sohbetin beyni yok. Yetenek yoksa
+# playbook (1500) ve yetenek wiki'si (400) hiç ödenmediği için bu paket o
+# boşluğu doldurur: kimlik + onaylı kurallar + yetenekler arası en iyi wiki
+# sayfaları. PPR ile genişletilmiş recall ve aktarım özeti KENDİ
+# bölümlerinde kalır (aynı metni iki kez saymamak için).
+BUDGET_GENERAL_BRAIN = 1500
+# Paket içi paylar (token). Kimlik kısa tutulur: kim olduğunu bilmek karar
+# değiştirir ama 300 token'dan fazlası bilgi taşımaz.
+BRAIN_IDENTITY_TOKENS = 300
+BRAIN_RULES_TOKENS = 400
+# Yetenekler arası en iyi wiki sayfası sayısı (K5'in ana kaynağı).
+BRAIN_WIKI_PAGES = 4
+
 # CRAG esigi (Faz 11.10). Kor testte (denetim Ek A) isabetli sorgularin top-1
 # hibrit skoru 0,478-0,585 araligindaydi; tek kacirmanin top-1 skoru 0,398'di.
 # 0,45 bu iki kumeyi ayiriyor. Altinda kalan sorgu icin baglam kurucusu
@@ -442,6 +457,9 @@ class CognitiveContextBuilder:
     # Anlamsal yedek sıralamada gömülecek azami rapor sayısı.
     SEMANTIC_CANDIDATE_LIMIT = 20
     SEMANTIC_MIN_SIMILARITY = 0.30
+    # Yeteneksiz sohbette taranacak azami rapor sayısı (en yeniden eskiye).
+    # Maliyet arşivin boyutuna bağlanmasın diye sabit.
+    GENERAL_REPORT_CANDIDATES = 60
 
     def _semantic_rank(self, query: str, candidates: List[tuple]) -> List[tuple]:
         """
@@ -481,11 +499,24 @@ class CognitiveContextBuilder:
     def _reports_section(self, query: str, skill_name: Optional[str], budget: int) -> Optional[ContextSection]:
         """Yetenek raporlarından sorguya en yakın gövde parçalarını çıkarır."""
         if not skill_name:
-            return None
-        sources = list(self.playbooks.source_reports(skill_name))
-        # Sorgu sayfaları da havuza girer: damıtma onları kaynak saymaz ama bir
-        # sonraki tur "bunu daha önce sormuştuk" bilgisini görmelidir.
-        sources.extend(self._query_pages(skill_name))
+            # Faz 11.9: yetenek eşleşmediğinde bölüm eskiden boş dönüyordu ve
+            # 900 token hiç ödenmiyordu (bütçe kullanımı %11,4'ün nedenlerinden
+            # biri). Kasa geneli raporlar son çare olarak havuza girer; maliyet
+            # sabit kalsın diye yalnızca en yeni GENERAL_REPORT_CANDIDATES tanesi.
+            try:
+                from entropy.memory.playbook import discover_reports
+
+                sources = list(discover_reports(self.playbooks.vault_path))
+            except Exception as e:  # pragma: no cover - kasa okunamazsa bölüm boş
+                logger.warning("Kasa geneli raporlar okunamadı: %s", e)
+                return None
+            sources = sorted(sources, key=lambda p: p.name, reverse=True)
+            sources = sources[: self.GENERAL_REPORT_CANDIDATES]
+        else:
+            sources = list(self.playbooks.source_reports(skill_name))
+            # Sorgu sayfaları da havuza girer: damıtma onları kaynak saymaz ama
+            # bir sonraki tur "bunu daha önce sormuştuk" bilgisini görmelidir.
+            sources.extend(self._query_pages(skill_name))
         if not sources:
             return None
 
@@ -545,10 +576,28 @@ class CognitiveContextBuilder:
             tokens=used,
         )
 
-    def _wiki_page_files(self, skill_name: Optional[str]) -> List[Path]:
-        """Yeteneğin wiki kavram/varlık sayfaları."""
-        if not skill_name:
+    def _all_skill_names(self) -> List[str]:
+        """Kasadaki yetenek adları (`Entropy/Skills/<ad>`)."""
+        try:
+            root = Path(self.playbooks.vault_path) / "Entropy" / "Skills"
+            if not root.is_dir():
+                return []
+            return sorted(d.name for d in root.iterdir() if d.is_dir())
+        except Exception:  # pragma: no cover - kasa okunamıyorsa paket boş kalır
             return []
+
+    def _wiki_page_files(self, skill_name: Optional[str]) -> List[Path]:
+        """
+        Yeteneğin wiki kavram/varlık sayfaları.
+
+        `skill_name` boşsa **tüm yeteneklerin** sayfaları döner: genel sohbet
+        beyin paketi (11.9) yetenek eşleşmediğinde de wiki katmanını kullanır.
+        """
+        if not skill_name:
+            out: List[Path] = []
+            for name in self._all_skill_names():
+                out.extend(self._wiki_page_files(name))
+            return out
         try:
             from entropy.memory.wiki import concepts_dir, entities_dir
         except Exception:
@@ -567,7 +616,7 @@ class CognitiveContextBuilder:
 
     def _wiki_pages_section(
         self, query: str, skill_name: Optional[str], budget: int,
-        exclude_text: str = "",
+        exclude_text: str = "", max_pages: int = MAX_WIKI_PAGES,
     ) -> Optional[ContextSection]:
         """
         Sorguya en yakın en fazla MAX_WIKI_PAGES wiki sayfasını bağlama koyar.
@@ -606,7 +655,7 @@ class CognitiveContextBuilder:
         # ilk iki aday playbook'ta zaten varsa sıradaki sayfalara bakılmalı,
         # yoksa bölüm boş döner (ölçüldü: 3 sorguda da 0 sayfa geliyordu).
         for score, path, raw in scored:
-            if score <= 0 or len(blocks) >= MAX_WIKI_PAGES:
+            if score <= 0 or len(blocks) >= max_pages:
                 break
             body = _strip_frontmatter(raw)
             # Başlık satırı ve "## İlgili"/"## Kaynaklar" bölümleri bağ
@@ -809,6 +858,97 @@ class CognitiveContextBuilder:
             tokens=used,
         )
 
+    # -- genel sohbet beyin paketi (Faz 11.9) ---------------------------
+
+    def _identity_lines(self, budget: int, limit: int = 3) -> str:
+        """Kimlik/kural düğümleri (L4, `is_identity=1`). Kategori değil, bayrak."""
+        try:
+            nodes = [
+                n for n in self.memory.get_all_nodes()
+                if int(getattr(n, "is_identity", 0) or 0)
+                and not int(getattr(n, "archived", 0) or 0)
+            ]
+        except Exception as e:
+            logger.warning("Kimlik düğümleri okunamadı: %s", e)
+            return ""
+        nodes.sort(key=lambda n: float(getattr(n, "importance", 0.0) or 0.0), reverse=True)
+        lines: List[str] = []
+        used = 0
+        for node in nodes[:limit]:
+            text = " ".join((node.content or "").split())
+            if not text:
+                continue
+            entry = f"• {text}"
+            cost = estimate_tokens(entry)
+            if used + cost > budget:
+                break
+            lines.append(entry)
+            used += cost
+        return "\n".join(lines)
+
+    def _brain_rules(self, budget: int) -> str:
+        """Kullanıcının 'kalıcı yap' dediği kurallar; aday/reddedilen asla girmez."""
+        try:
+            from entropy.memory.promoted_rules import ENTROPY_OFFICE, rules_section
+
+            text = rules_section(
+                ENTROPY_OFFICE, vault_path=self.playbooks.vault_path,
+                max_chars=max(0, budget) * 4,
+            )
+        except Exception as e:
+            logger.warning("Onaylı kurallar okunamadı: %s", e)
+            return ""
+        return _truncate_to_tokens((text or "").strip(), budget)
+
+    def _general_brain_section(self, query: str, budget: int) -> Optional[ContextSection]:
+        """
+        Yetenek eşleşmediğinde ödenen beyin paketi.
+
+        İçerik: kimlik/ego + onaylı kurallar + yetenekler arası en iyi wiki
+        sayfaları. Geri çağırma (PPR genişletmeli) ve aktarım özeti kendi
+        bölümlerinde kalır: aynı metin iki bölümde ödenirse bütçe kullanımı
+        yükselir ama sinyal yükselmez.
+        """
+        if budget <= 0:
+            return None
+        parts: List[str] = []
+        used = 0
+
+        identity = self._identity_lines(min(BRAIN_IDENTITY_TOKENS, budget - used))
+        if identity:
+            block = f"[Kimlik]\n{identity}"
+            parts.append(block)
+            used += estimate_tokens(block)
+
+        rules = self._brain_rules(min(BRAIN_RULES_TOKENS, max(0, budget - used)))
+        if rules:
+            parts.append(rules)
+            used += estimate_tokens(rules)
+
+        remaining = max(0, budget - used)
+        if remaining >= self.MIN_WIKI_PAGE_TOKENS:
+            try:
+                wiki = self._wiki_pages_section(
+                    query, None, remaining, exclude_text="\n".join(parts),
+                    max_pages=BRAIN_WIKI_PAGES)
+            except Exception as e:
+                logger.warning("Genel wiki sayfaları alınamadı: %s", e)
+                wiki = None
+            if wiki and wiki.body.strip():
+                block = f"[Wiki]\n{wiki.body}"
+                parts.append(block)
+                used += estimate_tokens(block)
+
+        if not parts:
+            return None
+        body = "\n\n".join(parts)
+        return ContextSection(
+            title="🧠 Entropy Beyni (genel)",
+            body=body,
+            kind="general_brain",
+            tokens=estimate_tokens(body),
+        )
+
     def _global_memory_section(self, budget: int) -> Optional[ContextSection]:
         try:
             text = (self.vault.read_global_memory() or "").strip()
@@ -903,6 +1043,10 @@ class CognitiveContextBuilder:
              lambda b: self._handoff_section(b) if include_handoff else None),
             ("playbook", min(BUDGET_PLAYBOOK, remaining),
              lambda b: self._playbook_section(skill_name, b, query) if skill_name else None),
+            # Yetenek yoksa playbook + yetenek wiki'si (1900 token) hiç
+            # ödenmez; beyin paketi o boşluğu doldurur (Faz 11.9).
+            ("general_brain", min(BUDGET_GENERAL_BRAIN, remaining),
+             lambda b: None if skill_name else self._general_brain_section(query, b)),
             # Wiki sayfaları playbook'un hemen ardından: aynı yordamın sorguya
             # ait bölümünün genişletilmiş hâli, ham rapordan daha yoğun.
             ("wiki_pages", min(BUDGET_WIKI_PAGES, remaining),
