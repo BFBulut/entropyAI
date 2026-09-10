@@ -523,7 +523,9 @@ def test_context_pressure_signal_turns_badge_orange(qapp, mode):
         window = ChatModeWindow(bridge=bridge)
     try:
         bus.context_pressure.emit(0.82)
-        assert CONTEXT_WARN_COLOR.lower() in window.context_badge.styleSheet().lower()
+        # Faz 11-E adim 3: rozet rengi yerel `setStyleSheet` ile degil
+        # `tone` belirteciyle gelir (tek vurgu kurali, QSS tek kaynak).
+        assert window.context_badge.property("tone") == "warn"
         assert "/handoff" in window.context_badge.toolTip()
     finally:
         window.close()

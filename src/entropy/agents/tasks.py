@@ -1444,10 +1444,16 @@ class TaskBoard:
         # atanabiliyor (`--session-id <uuid>`), agy'de yalnızca akıştan
         # yakalanıyor; iki kol da `agent_session` sözleşmesinden beslenir.
         if card.agent and not card.worktree:
+            # İmza kaynağı ajanın KİMLİK istemidir, kartın istemi değil
+            # (QA 11-C/D): `build_prompt` her kartta farklı metin üretir, bu
+            # yüzden imza her koşuda düşüyor ve `--resume` HİÇ kullanılmıyordu
+            # ("kalıcı oturum" fiilen yoktu). Ajan tanımı/model/efor
+            # değişmedikçe imza sabit kalır.
+            session_prompt = (getattr(agent_spec, "prompt", "") or "") if agent_spec else prompt
             session_kwargs = agent_session_kwargs(
                 card.agent, provider,
                 model=run_model, effort=run_effort,
-                system_prompt=prompt, vault_path=self.vault_path,
+                system_prompt=session_prompt, vault_path=self.vault_path,
             )
             kwargs.update(session_kwargs)
 

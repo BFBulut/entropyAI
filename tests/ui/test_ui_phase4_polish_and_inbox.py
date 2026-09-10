@@ -75,9 +75,10 @@ def test_desk_window_title_and_button_text(qapp):
 
     chat_src = Path(chat_mod.__file__).read_text(encoding="utf-8")
     zen_src = Path(zen_mod.__file__).read_text(encoding="utf-8")
-    # Faz 8: etiket "🏢 Desk"e kisaltildi, tam metin setToolTip'te.
-    assert 'QPushButton("🏢 Desk")' in chat_src
-    assert 'QPushButton("🏢 Desk")' in zen_src
+    # Faz 11-E adim 2: emoji ikon yasagi (SKILL.md 0.5) -> etiket duz metin
+    # "Desk"; ikon `design.icon()` ile gelir, tam metin setToolTip'te kalir.
+    assert 'QPushButton("Desk")' in chat_src
+    assert 'QPushButton("Desk")' in zen_src
     assert 'setToolTip("Ofis masasını aç' in chat_src
     assert 'setToolTip("Ofis masasını aç' in zen_src
 

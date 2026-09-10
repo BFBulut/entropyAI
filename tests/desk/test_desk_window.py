@@ -526,10 +526,17 @@ def test_zen_and_chat_have_agent_desk_button(qapp):
             assert "Desk" in window.desk_btn.text()
             assert "Ofis masası" in window.desk_btn.toolTip()
             assert hasattr(window, "open_agent_desk")
-        # Düğme başlığın hemen sağında: üst çubuk düzeninde 2. sırada.
+        # Faz 11-E adım 2: üst çubuk 18 öğeden 4'e indi; Desk düğmesi
+        # çubuktan çıkıp komut paletine (ve Zen'de sol durum şeridine)
+        # taşındı. Sözleşme artık konum değil ERİŞİLEBİLİRLİK: her iki
+        # kipte de palet "desk" eylemini listeler ve eylem düğmeyle aynı
+        # yolu (open_agent_desk) çalıştırır.
         for window in (zen, chat):
-            bar = window.desk_btn.parentWidget().layout()
-            assert bar.indexOf(window.desk_btn) == 1
+            payloads = [
+                item["payload"] for item in window._collect_palette_items()
+                if item.get("kind") == "action"
+            ]
+            assert "desk" in payloads
     finally:
         chat.close()
         zen.close()

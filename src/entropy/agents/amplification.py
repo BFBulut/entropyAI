@@ -409,7 +409,19 @@ def apply_report_lock(
     report_path = str(getattr(card, "report_path", "") or "")
     if report_path:
         meta["report_path"] = report_path
-    novelty = admit_report(text, metadata=meta, gate=gate, memory=memory)
+    # KAYNAK (QA 11-C/D). `provenance` hiç geçilmiyordu: kapı her L2 adayını
+    # "L2 anlamsal yazımda kaynak (provenance) yok" ile REDDEDİYOR, böylece
+    # araştırma raporu hafızaya HİÇ girmiyor ve yenilik oranı her turda 0/N
+    # çıkıyordu (her araştırma kartı "DÜŞÜK YENİLİK" damgası yiyor, aynı
+    # konudaki zamanlanmış görev haksız yere kapatılıyordu). Kartın raporu
+    # kaynağın kendisidir.
+    outputs = list(getattr(card, "output_paths", None) or [])
+    provenance = report_path or (str(outputs[0]) if outputs else "")
+    if not provenance:
+        card_id = str(getattr(card, "id", "") or "")
+        provenance = f"card:{card_id}" if card_id else ""
+    novelty = admit_report(text, metadata=meta, provenance=provenance,
+                           gate=gate, memory=memory)
     outcome = LockOutcome(novelty=novelty)
     if novelty.low_novelty:
         outcome.stopped_tasks = stop_scheduled_research(f"{title} {goal}",

@@ -155,8 +155,10 @@ def test_zen_mode_skills_tab_and_pdf(qapp, tmp_path, monkeypatch):
     # Sol dock sekmeleri: Raporlar, Yetenekler, Görevler, MCP, Ajanlar
     # (Faz 5.5'te "Bugun" zaman çizelgesi ve "Bildirimler" merkezi eklendi.)
     tab_names = [zen.left_tabs.tabText(i) for i in range(zen.left_tabs.count())]
+    # Faz 11-E adım 2: sekme çubuğu dikey gezinme listesine döndü (7/7 görünür)
+    # ve etiketlerden emoji kaldırıldı; "Bugun" -> "Bugün" (cümle düzeni).
     for expected in ("Raporlar", "Yetenekler", "Görevler", "MCP", "Ajanlar",
-                     "Bugun", "Bildirimler"):
+                     "Bugün", "Bildirimler"):
         assert any(expected in t for t in tab_names), f"{expected} sekmesi yok: {tab_names}"
     assert zen.left_tabs.count() == 7
     assert hasattr(zen, "timeline_panel")

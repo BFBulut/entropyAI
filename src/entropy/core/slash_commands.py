@@ -1594,7 +1594,14 @@ def _handle_memory(args: str, bridge) -> str:
         from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 
         cog = CognitiveMemorySystem()
-        result = cog.dream_and_consolidate()
+        # Faz 11-D sözleşmesi: `/memory dream` → `memory.dream`. Eski metot
+        # yalnızca geriye dönük uyum için duruyor (48 saat + epizodik koşulu).
+        try:
+            from entropy.memory.dream import dream_and_consolidate
+
+            result = dream_and_consolidate(memory=cog, send_prompt=None)
+        except ImportError:
+            result = cog.dream_and_consolidate()
     except Exception as e:
         return f"<span style='color:#e06c75;'>Rüya döngüsü koşamadı: {_html_escape(e)}</span>"
     if isinstance(result, dict):

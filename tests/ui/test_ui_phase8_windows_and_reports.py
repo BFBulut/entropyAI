@@ -156,11 +156,13 @@ def test_chat_zen_button_exists_and_is_laid_out(app):
     win.setGeometry(0, 0, 1000, 720)
     win.show()
     app.processEvents()
-    zen_buttons = [
-        b for b in win.header_frame.findChildren(QPushButton) if "Zen" in b.text()
-    ]
-    assert zen_buttons, "Chat üst çubuğunda Zen düğmesi yok"
-    btn = zen_buttons[0]
+    # Faz 11-E adım 2: üst çubuk 15+ öğeden 4'e indi; ayrı "Zen" düğmesi
+    # yerine marka kümesindeki tek kip anahtarı var (menüsünde Zen/Chat/
+    # Floating). Kural aynı: denetim çubuğun sağ kenarını aşmamalı.
+    btn = win.brand.mode_btn
+    assert btn in win.header_frame.findChildren(QPushButton)
+    modes = [a.data() for a in btn.menu().actions()]
+    assert "zen" in modes and "chat" in modes and "floating" in modes
     assert btn.geometry().right() <= win.header_frame.width()
     win.close()
 

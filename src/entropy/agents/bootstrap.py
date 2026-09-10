@@ -109,6 +109,31 @@ def start_board_dispatch(app=None) -> DispatchStartResult:
     return result
 
 
+def ensure_memory_tasks(scheduler=None) -> Optional[str]:
+    """
+    Gece konsolidasyonunu (`daily-dreaming`) açılışta garanti eder (Faz 11-D).
+
+    `memory.dream.ensure_daily_dreaming_task` yazılmıştı ama ÜRÜNDE HİÇBİR
+    ÇAĞIRANI YOKTU (QA 11-C/D bulgusu): görev yalnızca eski kurulumlarda
+    `scheduler_tasks.json` içinde duruyordu, temiz kurulumda rüya döngüsü hiç
+    zamanlanmıyordu. Kayıt idempotenttir ve **model çağırmaz**; hata
+    önyüklemeyi durdurmaz.
+
+    Dönüş: kaydedilen görev kimliği ya da None.
+    """
+    try:
+        from entropy.memory.dream import DAILY_DREAM_TASK_ID, ensure_daily_dreaming_task
+    except Exception:
+        logger.debug("Rüya modülü yok; gece konsolidasyonu kaydedilmedi", exc_info=True)
+        return None
+    try:
+        task = ensure_daily_dreaming_task(scheduler)
+    except Exception:
+        logger.exception("Gece konsolidasyonu kaydedilemedi")
+        return None
+    return DAILY_DREAM_TASK_ID if task is not None else None
+
+
 def stop_board_dispatch() -> bool:
     """Kapanış: tetikleyiciyi durdurur (kanca takılamadıysa elle çağrılır)."""
     try:

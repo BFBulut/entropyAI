@@ -66,6 +66,105 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 
 ---
 
+## 2.3 QA 11-C/D — uçtan uca pano döngüsü + hafıza turları (2026-09-10)
+
+**Tam süit:** `QT_QPA_PLATFORM=offscreen python -m pytest -q -p no:cacheprovider`
+→ **2.320 test; 2.314 passed, 6 failed, 427 s**. Altı hatanın **hepsi** eşzamanlı
+süren Faz 11-E arayüz yeniden tasarımından (düğme adı/sekme sırası/rozet metni):
+`tests/desk/test_desk_window.py::test_zen_and_chat_have_agent_desk_button`,
+`tests/skills/test_skills.py::test_zen_mode_skills_tab_and_pdf`,
+`tests/test_agy_bridge.py::test_chat_mode_terminal_button_no_attribute_error`,
+`tests/ui/test_ui_parity_tasks_core.py::test_chat_mode_reacts_to_same_bus_signals_as_zen`,
+`tests/ui/test_ui_phase8_windows_and_reports.py::test_chat_zen_button_exists_and_is_laid_out`,
+`tests/ui/test_ui_phase9_stability.py::test_state_badge_never_shows_bare_emoji`.
+Çekirdek/hafıza/pano tarafında hata yok. **Yalıtım kanıtı (önce = sonra):**
+`tasks_ledger.db` 73.728 B / 1789012264, `skills_state.json` 112 B / 1788993407,
+`cognitive_memory.db` 7.569.408 B / 1789012552 — üçü de değişmedi.
+
+**Build:** `python -m PyInstaller EntropyAI.spec --noconfirm` → **exit 0, 191 s**,
+`dist/EntropyAI` **1.207 MB**, `EntropyAI.exe` 55.830.354 B. Smoke: `--help`
+**exit 0** (stderr 0 bayt); 20 sn canlı koşum, erken çıkış yok;
+`traceback`/`CRITICAL` **0**; yeni CrashDump **yok**.
+
+### Uçtan uca pano döngüsü (gerçek Claude, saf kip, GUI'siz)
+
+`bootstrap.start_board_dispatch(app)` + `TaskBoard` ile üç kart koşuldu.
+Zincirin tamamı ölçüldü: `assigned → taken` (claim `Entropy/Board/claims/<id>.lock`)
+`→ running` (`events.jsonl` seq 1-4, `TASKBOARD.md` projeksiyonu) `→ review`
+(`[PANO board_finish]`, kanıt zorunlu) + `task_report_ready` yükü +
+`Entropy/Board/agents/arastirmaci/session.json`. Argv kanıtı: `--session-id
+<uuid> … --effort low` (birinci koşu), `--resume <uuid>` (ikinci koşu),
+`--setting-sources "" --strict-mcp-config --system-prompt-file` (saf kip).
+Ledger: 23.886 + 38.818 + 66.542 = **129.246 token** (90k tavan **aşıldı**;
+bu yüzden 2. adımın köprü gerektiren turları KOŞULMADI — aşağı bak).
+
+**QA'da bulunup düzeltilen üç regresyon:**
+
+| # | Bulgu | Kök neden | Düzeltme |
+|---|---|---|---|
+| R1 | Bir ajanın **ikinci kartı her zaman `failed`** (canlı kanıt: kart `20260910-064500-kisa-teknik-not-2`, 1 sn'de öldü, çıktı boş) | `AgentSessionStore.run_kwargs` imza düşünce **aynı** `uuid5` kimliğini yeniden `--session-id` ile veriyordu; CLI reprodüksiyonu: `Error: Session ID … is already in use.` | imza düştüyse **taze uuid4** üretilir — `src/entropy/core/identity.py:719-736`; test `tests/contracts/test_phase11_board.py::test_new_session_id_is_minted_when_signature_drops` |
+| R2 | `--resume` **hiç kullanılmıyordu** (kalıcı ajan oturumu fiilen yoktu) | imza kaynağı `build_prompt(card)` idi; kart istemi her kartta değişince imza her koşuda düşüyordu | imza artık ajanın **kimlik istemine** bağlı — `src/entropy/agents/tasks.py:1447-1457`; 3. kart argv'sinde `--resume aa2ce1f2-…` doğrulandı |
+| R3 | **Her** araştırma kartı "DÜŞÜK YENİLİK" damgası yiyor, rapor hafızaya HİÇ girmiyordu (ölçüm: `0/12 yeni`, 12 adayın 12'si `reject`) | `apply_report_lock` kapıya `provenance` geçmiyordu → `MemoryGate`: "L2 anlamsal yazımda kaynak (provenance) yok"; yan etki: aynı konudaki **zamanlanmış görev haksız yere kapatılıyordu** | kaynak karttan türetiliyor (`report_path` → ilk `output_paths` → `card:<id>`) — `src/entropy/agents/amplification.py:409-423`; aynı raporla kuru ölçüm **10 add / 2 gray (%83 yenilik)**; test `…::test_amplification_lock_passes_provenance_to_gate` |
+
+**Öz-amplifikasyon kilidi (11.6) — canlı sonuç:** (b) yenilik kotası çalıştı
+(kart notuna `[YENİLİK] …`, `bus.task_notification` yayıldı). (a) **açık tespiti
+hiç tetiklenmedi**: aynı konudaki 3. kart da CLI'ya gitti, çünkü R3 yüzünden
+hafızaya hiçbir şey yazılmıyordu (kısır döngü). R3 düzeltildikten sonra
+kısayolun tetiklenip tetiklenmediği **ölçülmedi** (kota tavanı).
+
+### Hafıza turları (kotasız kol)
+
+Yedek: `~/.entropy/backups/cognitive_memory.qa11cd.20260910065640.db`.
+
+- `dream.dream_and_consolidate(memory, send_prompt=None)` → **0 hata**, 3,46 s;
+  20 yineleme kümesi / **23 birleştirme**, 0 unutma, 20 wiki adayı, 40 graf
+  topluluğu; düğüm 714 → **706 aktif**; `Entropy/Memory/dream_log.md` yazıldı.
+- `gray_merge`: kuyruk **boş** (`pending 0`) → birleştirme turu için aday yok
+  (K9 = 0).
+- `wiki.compile_skill("media-agency-soldier", bridge=None, budget_turns=8)` →
+  **turns 0** (kotasız kol), **18 sayfa** yazıldı, `remaining 20` rapor köprü
+  bekliyor, lint çalıştı.
+
+| Ölçüt | Önce | Sonra |
+|---|---:|---:|
+| düğüm | 714 | **729** |
+| K1 yineleme | %4,76 | **%4,76** |
+| K2 Hit@1 / Hit@5 | 9/10 · 10/10 | **9/10 · 10/10** |
+| K3 gürültü | %0,0 | **%0,0** |
+| K7 kategori | `sem 639 / proc 59 / epi 16` | **`sem 651 / proc 59 / epi 19`** |
+| K9 gri kuyruk | 0 | **0** |
+| K10 fikstür | 0 | **0** |
+| K11 kapı gecikmesi (medyan) | 72,4 ms | **133,8 ms** |
+| K12 kaynaksız L2 | 258 | **258** (açık iş) |
+
+**K4/K5/K6 ölçülemedi:** bu üçünü üreten kalıcı bir harness yok (Faz 11-D'de
+tek seferlik ölçüldü, betiğe dönüştürülmedi) — **açık iş**. Yerine genel
+sohbet beyin paketi 5 sorguyla ölçüldü: bağlam 1.802-3.414 token (bütçe 4.000),
+`brain_has_answer` 5 sorgunun **2**'sinde True.
+
+### Kalanlar (bu QA'da yapılan diğer bağlamalar)
+
+- `dream.ensure_daily_dreaming_task` **üründe çağrısızdı** → `bootstrap.ensure_memory_tasks()`
+  eklendi ve `main.py`'de zamanlayıcı kurulunca çağrılıyor (idempotent, model
+  çağırmaz); test `…::test_ensure_memory_tasks_registers_daily_dreaming_idempotently`.
+- Eski `CognitiveMemorySystem.dream_and_consolidate` çağıranları yeni modüle
+  yönlendirildi: `main.py` (`daily-dreaming` kancası) ve
+  `core/slash_commands.py` (`/memory dream`). `ui/widgets/tasks_widget.py:425`
+  **hâlâ eski metodu çağırıyor** (11-E hareketli hedef; dokunulmadı) — açık iş.
+- `config.amplification_lock` ayarının **arayüzde karşılığı yok**
+  (`src/entropy/core/config.py:363`; `src/entropy/ui` altında hiç geçmiyor) — açık iş.
+- Kartın `report_path` alanı **hiç dolmuyor**: köprü raporu
+  `Entropy/Skills/<yetenek>/Reports/Gorev_*.md` altına yazıp yolu yalnızca
+  `bus.task_notification` ile yayıyor, karta işlemiyor — açık iş.
+- **Marka taraması:** üreticinin adı → **0 dosya**. Ürünün adı kelime sınırlı
+  aramada 20 dosyada geçiyor; bunların çoğu "metin imleci" anlamında
+  (`slide_engine.py`, `terminal_pane.py`, `graph_store.py` …). Gerçek ürün
+  atfı yalnızca `docs/reports/2026-09-11_Faz9_Arastirma_B_Agent_Desk_Yol_Haritasi.md`
+  (rakip taraması, 6 satır) ve `docs/reports/2026-09-10_Faz11F_…` içinde —
+  **karar orkestratörde**, dokunulmadı.
+
+---
+
 ## 2.2 Faz 11-B QA — hafıza göçü uygulandı (2026-09-10)
 
 `python scripts/memory_migrate_v2.py --apply --json` → **exit 0**.

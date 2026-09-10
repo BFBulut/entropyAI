@@ -717,12 +717,22 @@ class AgentSessionStore:
         entry = self.get(agent, provider)
         same = str(entry.get("signature") or "") == signature and bool(entry.get("signature"))
         if provider == "claude":
-            session_id = str(entry.get("session_id") or "") or self.claude_session_id(agent)
-            if same and entry.get("session_id"):
-                self.record(agent, provider, session_id=session_id,
+            prior = str(entry.get("session_id") or "")
+            if same and prior:
+                self.record(agent, provider, session_id=prior,
                             signature=signature, model=model, effort=effort, cwd=cwd)
-                return {"conversation_id": session_id}
+                return {"conversation_id": prior}
             # Yeni oturum: kimliği ÖNCEDEN atıyoruz, sonraki koşu sürdürecek.
+            # QA 11-C/D kanıtı: aynı kimliği ikinci kez `--session-id` ile
+            # vermek CLI'ı "Session ID ... is already in use." ile öldürüyordu
+            # (ajanın İKİNCİ kartı her zaman `failed`). İmza düştüyse kimlik
+            # ZATEN harcanmıştır; taze bir uuid üretilir.
+            if prior:
+                import uuid as _uuid
+
+                session_id = str(_uuid.uuid4())
+            else:
+                session_id = self.claude_session_id(agent)
             self.record(agent, provider, session_id=session_id, signature=signature,
                         model=model, effort=effort, cwd=cwd)
             return {"session_id": session_id}

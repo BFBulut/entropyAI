@@ -677,3 +677,91 @@ def test_entropy_card_prompt_carries_board_tools_office_card_does_not(board):
     office_card = board.create(TaskCard(id="ofis-1", title="Ofis işi",
                                         office="bir-ofis", agent="isci", goal="h"))
     assert "[PANO board_next]" not in board.build_prompt(office_card)
+
+
+def test_new_session_id_is_minted_when_signature_drops(vault):
+    """
+    QA 11-C/D regresyonu: imza düşünce AYNI uuid ikinci kez `--session-id`
+    olarak veriliyordu; Claude CLI bunu
+    `Error: Session ID ... is already in use.` ile reddediyor ve ajanın İKİNCİ
+    kartı her zaman `failed` oluyordu (canlı kanıt: kart
+    `20260910-064500-kisa-teknik-not-2`).
+    """
+    from entropy.core.identity import AgentSessionStore
+
+    store = AgentSessionStore(vault)
+    first = store.run_kwargs("yazar", "claude", model="m1", effort="low",
+                             system_prompt="P")
+    # Efor değişti → yeni oturum, ama kimlik HARCANMIŞ olduğu için taze olmalı.
+    second = store.run_kwargs("yazar", "claude", model="m1", effort="high",
+                              system_prompt="P")
+    assert "session_id" in second
+    assert second["session_id"] != first["session_id"]
+
+
+def test_amplification_lock_passes_provenance_to_gate():
+    """
+    QA 11-C/D regresyonu: `apply_report_lock` kapıya `provenance` geçmiyordu;
+    kapı her L2 adayını "kaynak yok" ile reddediyor, yenilik oranı her turda
+    0/N çıkıyor ve HER araştırma kartı haksız yere "DÜŞÜK YENİLİK" damgası
+    yiyordu (canlı kanıt: 0/12 yeni, 12 reject).
+    """
+    from dataclasses import dataclass, field
+    from typing import List
+
+    from entropy.agents import amplification
+
+    seen = {}
+
+    class _Gate:
+        def admit(self, category, content, metadata=None, provenance="", **kw):
+            seen["provenance"] = provenance
+
+            class _D:
+                action = "add"
+
+            return _D()
+
+    @dataclass
+    class _Card:
+        id: str = "20260101-000000-x"
+        title: str = "Kısa teknik not"
+        goal: str = "Kaynak URL ver"
+        kind: str = "research"
+        skill: str = ""
+        report_path: str = ""
+        notes: str = ""
+        output_paths: List[str] = field(default_factory=lambda: ["/vault/Entropy/Wiki/queries/x.md"])
+
+    text = "- Bir iddia; kaynak: https://peps.python.org/pep-0703/ üzerinden doğrulandı.\n"
+    out = amplification.apply_report_lock(_Card(), text * 3, gate=_Gate(),
+                                          memory=None, notify=False)
+    assert out is not None
+    assert seen.get("provenance")
+    assert not out.novelty.low_novelty
+
+
+def test_ensure_memory_tasks_registers_daily_dreaming_idempotently():
+    """
+    QA 11-C/D: `ensure_daily_dreaming_task` üründe çağrısızdı; açılış
+    kablolaması `bootstrap.ensure_memory_tasks` ile kuruldu.
+    """
+    from entropy.agents.bootstrap import ensure_memory_tasks
+    from entropy.memory.dream import DAILY_DREAM_TASK_ID
+
+    class _Sched:
+        def __init__(self):
+            self.tasks = {}
+            self.calls = 0
+
+        def schedule_task(self, task_id, **kw):
+            self.calls += 1
+            self.tasks[task_id] = kw
+            return kw
+
+    sched = _Sched()
+    assert ensure_memory_tasks(sched) == DAILY_DREAM_TASK_ID
+    assert DAILY_DREAM_TASK_ID in sched.tasks
+    # İdempotent: ikinci açılışta yeniden yazmaz.
+    assert ensure_memory_tasks(sched) == DAILY_DREAM_TASK_ID
+    assert sched.calls == 1

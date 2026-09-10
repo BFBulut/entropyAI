@@ -170,14 +170,33 @@ def main():
 
     scheduler = TaskScheduler.get_instance()
 
+    # Faz 11-D: gece konsolidasyonu (`daily-dreaming`) idempotent kaydedilir.
+    from entropy.agents.bootstrap import ensure_memory_tasks
+
+    ensure_memory_tasks(scheduler)
+
     def handle_scheduled_task(task):
         from entropy.core.event_bus import bus
         if task.id == "daily-dreaming":
             try:
                 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
                 cog = CognitiveMemorySystem()
-                rules = cog.dream_and_consolidate()
-                bus.terminal_output_received.emit(f"[Otonom Görev] Hafıza konsolidasyonu tamamlandı ({len(rules)} özet).\n")
+                # Faz 11-D: rüya döngüsü v2 (`memory.dream`). Eski
+                # `CognitiveMemorySystem.dream_and_consolidate` 48 saat +
+                # epizodik koşuluna bağlıydı, zamanlanmış görev çoğu gece boş
+                # dönüyordu. `send_prompt=None` → bu adım KOTA HARCAMAZ;
+                # model sentezi aşağıdaki arka plan görevidir.
+                try:
+                    from entropy.memory.dream import dream_and_consolidate
+
+                    rules = dream_and_consolidate(memory=cog, send_prompt=None)
+                except Exception:
+                    rules = cog.dream_and_consolidate()
+                detail = getattr(rules, "summary", None)
+                detail = detail() if callable(detail) else (
+                    f"{len(rules)} özet" if hasattr(rules, "__len__") else str(rules))
+                bus.terminal_output_received.emit(
+                    f"[Otonom Görev] Hafıza konsolidasyonu tamamlandı ({' '.join(str(detail).split())[:300]}).\n")
 
                 # Gerçek sentez AGY ile, arka planda: ledger'a kaydolur, sohbeti kilitlemez.
                 # Çıktı rapor arşivine değil doğrudan bilişsel belleğe yazılır.

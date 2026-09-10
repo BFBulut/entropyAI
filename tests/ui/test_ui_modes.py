@@ -155,8 +155,10 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
     assert zen.notification_stack_layout.count() >= 1
 
     # Verify memory badge shows real non-zero count
-    assert "Düğüm" in zen.badge_memory.text()
-    assert ": 0 Düğüm" not in zen.badge_memory.text()
+    # Faz 11-E adım 3: panel/rozet metinleri cümle düzenine geçti
+    # ("1 düğüm / 1 not"); BÜYÜK HARF ve emoji kaldırıldı.
+    assert "düğüm" in zen.badge_memory.text().lower()
+    assert not zen.badge_memory.text().lower().startswith("0 düğüm")
 
     # Verify task notification creates a task pill and chat card
     bus.task_notification.emit("task-finans", "Finans Bilgisi Toplama", "c:/finans_raporu.md")

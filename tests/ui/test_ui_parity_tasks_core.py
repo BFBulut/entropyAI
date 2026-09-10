@@ -40,23 +40,28 @@ def test_chat_mode_reacts_to_same_bus_signals_as_zen(qapp):
     assert hasattr(chat, "state_badge")
     assert hasattr(chat, "panel_btn")
 
+    # Faz 11-E adım 2: durum artık metin rozetinde değil, üst çubuktaki
+    # tek çekirdek noktasında; anlam `tone` belirteci + ipucu metniyle gelir
+    # ("aynı bilgi ekranda bir kez" kuralı). Bağlanan bus sinyalleri aynı.
+    dot = chat.brand.status_dot
+
     bus.core_state_changed.emit("thinking")
-    assert "DÜŞÜNÜYOR" in chat.state_badge.text()
+    assert dot.property("tone") == "warn" and "Düşünüyor" in dot.toolTip()
 
     bus.core_state_changed.emit("executing")
-    assert "YÜRÜTÜLÜYOR" in chat.state_badge.text()
+    assert dot.property("tone") == "warn" and "Yürütülüyor" in dot.toolTip()
 
     bus.core_state_changed.emit("error")
-    assert "HATA" in chat.state_badge.text()
+    assert dot.property("tone") == "danger" and "Hata" in dot.toolTip()
 
     bus.task_triggered.emit("task-1", "Gece Analizi")
-    assert "GÖREV" in chat.state_badge.text()
+    assert "Gece Analizi" in chat.state_badge.toolTip()
 
     bus.distill_progress.emit("financial-auditor", 2, 5)
-    assert "DAMITMA 2/5" in chat.state_badge.text()
+    assert "2/5" in chat.state_badge.toolTip()
 
     bus.task_completed.emit("task-1", True)
-    assert "HAZIR" in chat.state_badge.text()
+    assert dot.property("tone") == "ok"
 
     chat.close()
 

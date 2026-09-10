@@ -314,29 +314,25 @@ def test_apply_emoji_font_fallback_sets_family_chain(qapp):
 
 
 def test_state_badge_never_shows_bare_emoji(qapp):
-    """Durum rozeti emoji dışında her zaman metin taşımalı."""
-    from entropy.ui.modes import chat_mode as cm
+    """Durum tek noktada; anlam metinle (ipucu) taşınır, emojiyle değil.
 
-    widget = cm.ChatModeWindow.__new__(cm.ChatModeWindow)
+    Faz 11-E adım 2/5: emoji ikon yasağı ve "aynı bilgi bir kez" kuralı
+    gereği durum rozeti metin taşıyan bir etiket olmaktan çıkıp üst çubuktaki
+    `role="statusDot"` noktasına indi. Sözleşme artık şu: her durumda
+    (a) ton belirteci ayarlanır, (b) ipucu HARFLİ bir açıklama taşır —
+    yani kullanıcı durumu asla yalnızca renkten/emojiden okumaz.
+    """
+    from entropy.ui.widgets.header_bar import BrandCluster
 
-    class _Lbl:
-        def __init__(self):
-            self.text = ""
-
-        def setText(self, t):
-            self.text = t
-
-        def setStyleSheet(self, _s):
-            pass
-
-        def setToolTip(self, _t):
-            pass
-
-    widget.state_badge = _Lbl()
-    for state in ("thinking", "executing", "error", "idle"):
-        cm.ChatModeWindow._update_state_badge(widget, state)
-        letters = [c for c in widget.state_badge.text if c.isalpha()]
-        assert letters, f"{state} rozeti yalnızca emoji taşıyor"
+    brand = BrandCluster()
+    for state, tone in (
+        ("thinking", "warn"), ("executing", "warn"),
+        ("error", "danger"), ("idle", "ok"),
+    ):
+        brand.set_state(state)
+        assert brand.status_dot.property("tone") == tone
+        tip = brand.status_dot.toolTip()
+        assert [c for c in tip if c.isalpha()], f"{state} ipucu metinsiz"
 
 
 # ------------------------------------------------- 7) QTextBrowser bağlantısı
