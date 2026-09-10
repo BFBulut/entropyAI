@@ -190,8 +190,19 @@ class MiniGraphCanvas(QWidget):
             painter.drawLine(a, b)
 
         # Düğümler
+        # Faz 12-D.1: tasarım sistemi fontları QSS'ten PİKSEL boyutlu gelir;
+        # böyle bir fontta `pointSizeF()` -1 döner. Nokta boyutu API'siyle
+        # karıştırmak hem etiketi 13 px'ten 7 pt'ye sıçratıyor hem de Qt'nin
+        # içinde `QFont::setPointSize: Point size <= 0 (-1)` uyarısına yol
+        # açıyordu (Faz 11 kapanış bulgusu 10). Ölçü birimi korunur.
         font = QFont(painter.font())
-        font.setPointSizeF(max(7.0, font.pointSizeF() - 1.5))
+        pixel = font.pixelSize()
+        if pixel > 0:
+            font.setPixelSize(max(7, pixel - 2))
+        elif font.pointSizeF() > 0:
+            font.setPointSizeF(max(7.0, font.pointSizeF() - 1.5))
+        else:
+            font.setPixelSize(11)
         painter.setFont(font)
         for node in self.nodes:
             nid = str(node.get("id"))

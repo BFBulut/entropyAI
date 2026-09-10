@@ -702,42 +702,34 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
    - ~~`amplification_lock` / `board_auto_dispatch` arayüzde yok~~ →
      **Faz 11 kapanışında palet eylemi eklendi** (§3).
    - ~~**K12 açık**~~ → **Faz 11 kapanışında 0** (§2.4).
-8. **Zen penceresi %200 DPI'lı 1920×1080 monitörde ekrana SIĞMIYOR** (Faz 11
-   kapanış QA, gerçek ölçüm — **Faz 6'dan beri var, 11-E regresyonu değil**).
-   `ZEN_MIN_SIZE = (1100, 680)` mantıksal (`ui/modes/zen_mode.py:65`), ama
-   `minimumSizeHint` **605×845**; LG ULTRAGEAR'da Qt `devicePixelRatio 2.0`
-   bildirdiği hâlde `availableGeometry` 1920×1032 **mantıksal** döndürüyor →
-   pencere 1920×1032 mantıksal açılıyor, bu da **3840×2064 fiziksel** piksel
-   demek; panel 1920×1080. Sonuç: arayüzün **yaklaşık yarısı ekran dışında**
-   kalıyor (exe görüntüsünde durum kümesi "Claude ✓ ma…" diye kesiliyor,
-   pencere denetimlerinden yalnızca "Küçült" görünüyor). Asgari yükseklik
-   845 mantıksal = 1690 fiziksel > 1080 olduğu için pencere bu monitörde
-   **hiçbir boyutta tam sığamaz**. Kanıt: `scratch/ui/phase11e/live_dpi.json`
-   (`physical_needed: [3840, 2064]`, `fits_on_screen: true` — Qt'nin kendi
-   kıyası yanıltıcı), `live_exe_zen.png`. Sahibi: ui-engineer (asgari
-   boyutların düşürülmesi + DPI'ya duyarlı yerleşim kararı).
-9. **Desk'in bildirilen asgari boyutları gerçek değil** (Faz 11 kapanış QA;
-   `tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900`
-   bu yüzden kırmızı — **HEAD'de de kırmızı**, ayrı worktree'de doğrulandı,
-   kapanış QA'sının değişikliklerinden bağımsız).
-   *Genişlik:* bildirilen `minimumWidth` toplamı 180 + 240 + 380 = **800**,
-   ama gerçek `minimumSizeHint` toplamı **314 + 511 + 380 = 1.205 px**.
-   Kök neden: `QTabWidget.setMinimumWidth(240)` (`desk/window.py:390`)
-   sayfaların kendi sert asgarilerini EZEMEZ; `minimumSizeHint` sayfaların
-   maksimumudur. Ölçüm: `Kartlar 364 · Terminaller 507 · Projeler 852 ·
-   Bellek 576` → en darboğaz **Projeler** (`desk/projects_panel.py:125`
-   `setMinimumWidth(460)` + `:337` `setMinimumWidth(220)`).
-   *Yükseklik:* bildirilen `minimumSize` 860×540, gerçek gereksinim
-   **900×620**: 960×540 → 7 taşma, 960×580 → 3, 960×600 → 3,
-   **960×620 → 0**; 860×620 → 4, **900×620 → 0**
-   (`src/entropy/desk/board_panel.py:52` `detail_tabs.setMinimumHeight(120)`).
-   Kanıt: `scratch/ui/phase11e/live_desk_min.py` çıktısı. Sahibi: ui-engineer
-   (ya sayfa asgarileri düşürülecek ya sekmeler kaydırılabilir yapılacak).
-10. **`QFont::setPointSize: Point size <= 0 (-1)` uyarısı** exe açılışında bir
-   kez düşüyor (`.entropy/logs/entropy.log`, 08:03:25). Hata değil, uyarı;
-   kaynağı bulunamadı (`setPointSize` yalnızca `reports_viewer.py:471`'de ve
-   orada 8 ile çağrılıyor) — muhtemelen piksel boyutlu bir fontun
-   `pointSize()`'ı kopyalanıyor. Açık iş.
+8. ~~**Zen penceresi %200 DPI'lı monitörde ekrana sığmıyor**~~ → **Faz 12-D.1'de
+   kapatıldı.** Gerçek `minimumSizeHint` **605×834 → 605×464**, `ZEN_MIN_SIZE`
+   **(1100, 680) → (860, 520)** (`ui/modes/zen_mode.py:71`). Kök nedenler:
+   (a) `NavList` yığınının asgarisi en büyük sayfanınkiydi (Raporlar 428 px) —
+   sayfalar artık kaydırma kabuğunda (`ui/widgets/nav_list.py:70-80`);
+   (b) durum şeridi `heightForWidth` ile pencereye 5 satır dayatıyordu — şerit
+   akan yerleşime alınıp `FlowStripHost` kabuğuna kondu
+   (`ui/widgets/flow_layout.py:144`, `zen_mode.py:523`);
+   (c) üst çubuk kompakt eşiği 620 → 1000 px (`zen_mode.py:506`), 960'ta durum
+   kümesi kırpılmıyor. Ayrıca `available_geometry()` artık `availableGeometry`
+   ile ekranın kendi `geometry()`'sini kesiştiriyor ve Zen `screenChanged`
+   sinyalinde yeniden kenetleniyor. Ölçüm: `scratch/ui/phase12/fit_measurements.json`,
+   `zen_960x540_scale2.png`, `zen_1920_scale2.png` (`QT_SCALE_FACTOR=2`, taşma 0).
+   Test: `tests/ui/test_phase11_design_gates.py::test_zen_fits_960x540_scaled`.
+9. ~~**Desk'in bildirilen asgari boyutları gerçek değil**~~ → **Faz 12-D.1'de
+   kapatıldı.** Gerçek `minimumSizeHint` **1.205×620 → 678×405**; `DESK_MIN_SIZE`
+   **(860, 540) → (760, 500)**, `ROSTER_MIN_WIDTH` **380 → 280**. Dört sekme
+   sayfası ve iki yan sütun `desk/window.py:scroll_host()` kabuğunda; panellerin
+   sert `setMinimumWidth(220)/Height(120)` çiftleri kaldırıldı. Test artık
+   bildirilen değil **gerçek** asgariyi ölçüyor
+   (`tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900`,
+   yeşil). Görüntü: `scratch/ui/phase12/desk_900x560.png` (taşma 0).
+10. **`QFont::setPointSize: Point size <= 0 (-1)`** — nokta/piksel birim
+   karışımı iki yerde kapatıldı: `desk/memory_panel.py:193` (QSS fontu piksel
+   boyutlu, `pointSizeF()` -1 dönüyor; artık birim korunuyor) ve
+   `ui/widgets/reports_viewer.py:469` (boş `QFont()` yerine liste fontu).
+   Uyarı günlükte açılıştan ~30 sn sonra, kullanıcı etkileşimiyle düşüyordu;
+   offscreen'de yeniden üretilemedi — **gerçek ekranda doğrulanmalı** (QA).
 
 ---
 

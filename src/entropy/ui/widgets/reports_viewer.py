@@ -466,9 +466,16 @@ class ReportsViewerWidget(QFrame):
         header.setData(Qt.ItemDataRole.UserRole + 1, "header")
         from PySide6.QtGui import QColor, QFont
         header.setForeground(QColor("#00F0FF"))
-        font = QFont()
+        # Faz 12-D.1: boş `QFont()` uygulama fontunu değil Qt varsayılanını
+        # taşır; QSS piksel boyutlu font uyguladığında nokta/piksel karışımı
+        # `setPointSize(-1)` uyarısını doğuruyordu. Font listeden türetilir.
+        font = QFont(self.list_widget.font())
         font.setBold(True)
-        font.setPointSize(8)
+        pixel = font.pixelSize()
+        if pixel > 0:
+            font.setPixelSize(max(8, pixel - 1))
+        else:
+            font.setPointSize(8)
         header.setFont(font)
         self.list_widget.addItem(header)
 

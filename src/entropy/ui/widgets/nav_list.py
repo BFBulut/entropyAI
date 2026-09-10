@@ -17,8 +17,8 @@ from typing import List, Optional
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QListWidget, QListWidgetItem, QSizePolicy,
-    QStackedWidget, QWidget,
+    QAbstractItemView, QHBoxLayout, QListWidget, QListWidgetItem, QScrollArea,
+    QSizePolicy, QStackedWidget, QWidget,
 )
 
 from entropy.ui.design import TOKENS, icon as design_icon
@@ -35,6 +35,12 @@ class NavList(QWidget):
         super().__init__(parent)
         self.setObjectName("navRegion")
         self._icons: List[str] = []
+        # Faz 12-D.1: her bölüm kendi kaydırma alanında durur. Sebep: yığının
+        # `minimumSizeHint`'i sayfaların en büyüğüydü (Raporlar 428 px) ve bu
+        # tek başına Zen penceresinin asgari yüksekliğini 834 px'e çıkarıyordu.
+        # Kaydırma alanı asgariyi ~50 px'e indirir, içerik kırpılmaz kaydırılır.
+        self._pages: List[QWidget] = []
+        self._hosts: List[QScrollArea] = []
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -62,7 +68,15 @@ class NavList(QWidget):
 
     def addTab(self, widget: QWidget, label: str, icon_name: str = "") -> int:
         """Bölüm ekler; `icon_name` verilirse `design.icon()` ile çizilir."""
-        index = self.stack.addWidget(widget)
+        host = QScrollArea()
+        host.setObjectName("navPage")
+        host.setWidgetResizable(True)
+        host.setFrameShape(QScrollArea.Shape.NoFrame)
+        host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        host.setWidget(widget)
+        self._pages.append(widget)
+        self._hosts.append(host)
+        index = self.stack.addWidget(host)
         item = QListWidgetItem(label)
         item.setToolTip(label)
         if icon_name:
@@ -89,16 +103,22 @@ class NavList(QWidget):
             item.setToolTip(text)
 
     def indexOf(self, widget: QWidget) -> int:
+        """Sayfa gövdesini de kaydırma kabuğunu da kabul eder."""
+        if widget in self._pages:
+            return self._pages.index(widget)
         return self.stack.indexOf(widget)
 
     def widget(self, index: int) -> Optional[QWidget]:
+        """Kaydırma kabuğunu değil, çağıranın eklediği gövdeyi döndürür."""
+        if 0 <= index < len(self._pages):
+            return self._pages[index]
         return self.stack.widget(index)
 
     def currentIndex(self) -> int:
         return self.stack.currentIndex()
 
     def currentWidget(self) -> Optional[QWidget]:
-        return self.stack.currentWidget()
+        return self.widget(self.currentIndex())
 
     def setCurrentIndex(self, index: int) -> None:
         if 0 <= index < self.count():

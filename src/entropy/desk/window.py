@@ -22,8 +22,8 @@ from typing import Any, Optional
 from PySide6.QtCore import QRect, Qt, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QSplitter,
-    QTabWidget, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from entropy.core.config import config
@@ -52,11 +52,37 @@ DEFAULT_SIZE = (1400, 880)
 DESK_SCREEN_RATIO = 0.5          # tek monitörde genişlik oranı
 DESK_HEIGHT_RATIO = 0.9          # tek monitörde yükseklik oranı
 DESK_SECONDARY_RATIO = 0.88      # ikinci monitörde kaplama oranı
-DESK_MIN_SIZE = (860, 540)
+# Faz 12-D.1: bildirilen asgari artık GERÇEK asgariye yakın (ölçülen
+# `minimumSizeHint` 678x405); eskiden 860x540 bildiriliyor ama düzen
+# 1.205x620 dayatıyordu.
+DESK_MIN_SIZE = (760, 500)
 
 # Kadro sütununun en küçük okunur genişliği: ajan kartındaki 3x2 ikon
 # düğme ızgarası artı kimlik metni bu genişlik altında kırpılıyordu.
-ROSTER_MIN_WIDTH = 380
+# Faz 12-D.1: 380 -> 280. Panel artık kaydırma kabuğunun içinde; ızgara
+# kırpılmaz, dar sütunda kaydırılır. Toplam asgari 180 + 200 + 280 = 660.
+ROSTER_MIN_WIDTH = 280
+
+
+def scroll_host(widget: QWidget, min_width: int = 0, min_height: int = 0) -> QScrollArea:
+    """Paneli, pencereye sert asgari dayatmayan kaydırma kabuğuna sarar.
+
+    Faz 12-D.1: Desk'in bildirilen asgari boyutu (860x540) gerçek değildi;
+    sayfaların örtük `minimumSizeHint`i (Projeler 852, Terminaller 507,
+    Bellek 576 px) `QTabWidget.setMinimumWidth` ile EZİLEMİYOR ve gerçek
+    asgari 1.205x620 px'e çıkıyordu. Kaydırma kabuğunun asgarisi çocuğundan
+    bağımsızdır: içerik kırpılmaz, kaydırılır.
+    """
+    host = QScrollArea()
+    host.setWidgetResizable(True)
+    host.setFrameShape(QFrame.Shape.NoFrame)
+    host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    host.setWidget(widget)
+    if min_width:
+        host.setMinimumWidth(min_width)
+    if min_height:
+        host.setMinimumHeight(min_height)
+    return host
 
 TAB_CARDS = 0
 # Faz 10-B: eski "Akış" sekmesi "Terminaller" oldu. Kart özeti (StreamPanel)
@@ -303,7 +329,8 @@ class AgentDeskWindow(QMainWindow):
             parent=self, registry=self.office_registry, agent_registry=self.agent_registry
         )
         self.offices_panel.office_selected.connect(self._on_office_selected)
-        self.splitter.addWidget(self.offices_panel)
+        self.offices_host = scroll_host(self.offices_panel, min_width=180)
+        self.splitter.addWidget(self.offices_host)
 
         # --- orta: sahne + sekmeler
         center = QWidget()
@@ -344,10 +371,11 @@ class AgentDeskWindow(QMainWindow):
         terminals_layout.addWidget(terminals_split)
         self.terminals_tab = terminals_tab
 
-        self.tabs.addTab(self.board_panel, "Kartlar")
-        self.tabs.addTab(terminals_tab, "Terminaller")
-        self.tabs.addTab(self.projects_panel, "Projeler")
-        self.tabs.addTab(self.memory_panel, "Bellek")
+        # Sayfalar kaydırma kabuğunda: sert asgari yok, içerik kırpılmaz.
+        self.tabs.addTab(scroll_host(self.board_panel), "Kartlar")
+        self.tabs.addTab(scroll_host(terminals_tab), "Terminaller")
+        self.tabs.addTab(scroll_host(self.projects_panel), "Projeler")
+        self.tabs.addTab(scroll_host(self.memory_panel), "Bellek")
         center_splitter.addWidget(self.tabs)
         center_splitter.setSizes([420, 380])
         center_layout.addWidget(center_splitter)
@@ -362,16 +390,17 @@ class AgentDeskWindow(QMainWindow):
             bridge=self.bridge,
             office="",
         )
-        self.splitter.addWidget(self.roster_panel)
+        self.roster_host = scroll_host(self.roster_panel, min_width=ROSTER_MIN_WIDTH)
+        self.splitter.addWidget(self.roster_host)
         # Kadro sütunu 320 px'te ofis kipindeki 3x2 ikon ızgarasını kırpıyordu
         # (üçüncü düğme yarım kalıyordu). Panelin alt sınırı ızgaraya göre
         # verilir ve başlangıç payı ona göre dağıtılır.
-        self.roster_panel.setMinimumWidth(ROSTER_MIN_WIDTH)
+        self.roster_panel.setMinimumWidth(0)
         # Faz 6: panellerin ortuk asgari genisligi toplamda ~2200 px istiyordu;
         # 1366 px'lik ekranda sag sutun kirpiliyordu. Acik ve kucuk minimumlarla
         # splitter oranlari serbest kalir, panel icerikleri kendi kaydirma
         # alanlarinda daralir.
-        self.offices_panel.setMinimumWidth(180)
+        self.offices_panel.setMinimumWidth(0)
         # Faz 7: yarım ekran Desk (≈900 px) için AÇIK asgari genişlikler.
         # Qt düzeni açık minimumu örtük `minimumSizeHint`in önüne alır; aksi
         # halde akış paneli 535 px, projeler 880 px isteyip orta sütunu
@@ -381,14 +410,16 @@ class AgentDeskWindow(QMainWindow):
         # istemeye zorluyor, sahne ile birlikte pencerenin mantıksal asgari
         # yüksekliği %200 ölçekte 712 px'e çıkıyordu. Panel içerikleri kendi
         # kaydırma alanlarında daralır.
+        # Faz 12-D.1: sert panel asgarileri kaldırıldı; sayfalar kaydırma
+        # kabuğunda daralır. Yalnızca sütun düzeyinde küçük asgariler kalır.
         for panel in (self.board_panel, self.stream_panel, self.terminals_panel,
                       self.projects_panel, self.memory_panel):
-            panel.setMinimumWidth(220)
-            panel.setMinimumHeight(120)
-        center.setMinimumWidth(320)
+            panel.setMinimumWidth(0)
+            panel.setMinimumHeight(0)
+        center.setMinimumWidth(200)
         center_splitter.setChildrenCollapsible(True)
-        self.tabs.setMinimumWidth(240)
-        self.tabs.setMinimumHeight(160)
+        self.tabs.setMinimumWidth(200)
+        self.tabs.setMinimumHeight(120)
         self.splitter.setSizes([250, 770, ROSTER_MIN_WIDTH])
         root.addWidget(self.splitter, 1)
 

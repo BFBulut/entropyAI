@@ -35,7 +35,9 @@ from entropy.ui.widgets.header_bar import (
 from entropy.ui.widgets.nav_list import NavList
 from entropy.ui.widgets.report_inbox import InboxBadge
 from entropy.ui.widgets.command_palette import install_command_palette
-from entropy.ui.widgets.flow_layout import FlowHeaderFrame, fit_combo_to_contents
+from entropy.ui.widgets.flow_layout import (
+    FlowHeaderFrame, FlowStripHost, fit_combo_to_contents,
+)
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
 from entropy.ui.widgets.provider_badge import ProviderStatusBadge
@@ -59,10 +61,16 @@ from entropy.ui.widgets.agents_widget import AgentsWidget
 from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
 from entropy.ui.widgets.frameless import FramelessWindowHelper
-from entropy.ui.window_sizing import fit_window_to_screen, maximize_window_to_screen
+from entropy.ui.window_sizing import (
+    clamp_window_into_screen, fit_window_to_screen, maximize_window_to_screen,
+)
 
-# Faz 6: 1366x768 ekranda da taşmayan asgari boyut ve ekran doluluk oranı.
-ZEN_MIN_SIZE = (1100, 680)
+# Faz 12-D.1: asgari boyut her ekrana sığacak biçimde düşürüldü.
+# Eskiden (1100, 680) mantıksal idi; %200 ölçeklenen bir monitörde bu
+# 2200x1360 fiziksel piksel demekti ve pencere hiçbir boyutta sığmıyordu.
+# Yeni sözleşme: asgari <= 960x540 mantıksal (yan paneller kaydırılır,
+# sohbet gövdesi önceliklidir).
+ZEN_MIN_SIZE = (860, 520)
 ZEN_SCREEN_RATIO = 0.92
 
 
@@ -100,6 +108,22 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.setMinimumSize(*ZEN_MIN_SIZE)
         fit_window_to_screen(self, ratio=ZEN_SCREEN_RATIO, min_size=ZEN_MIN_SIZE)
         maximize_window_to_screen(self, min_size=ZEN_MIN_SIZE)
+        # Faz 12-D.1: pencere başka bir ekrana taşınırsa (ya da Qt açılışta
+        # yanlış ekranı bildirirse) geometri yeni ekranın kullanılabilir
+        # alanına yeniden kenetlenir. Alıcı QObject metodu, lambda değil.
+        try:
+            handle = self.windowHandle()
+            if handle is None:
+                self.createWinId()
+                handle = self.windowHandle()
+            if handle is not None:
+                handle.screenChanged.connect(self._on_screen_changed)
+        except Exception:
+            pass
+
+    def _on_screen_changed(self, *_args) -> None:
+        """Ekran değişince pencereyi yeni ekranın alanına kenetler."""
+        clamp_window_into_screen(self)
 
     def toggle_maximize(self) -> None:
         """Maksimize <-> geri (ust cubuk dugmesi ve cift tiklama)."""
@@ -492,10 +516,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
     def _apply_header_density(self) -> None:
         """Pencere darsa üst çubuğu sıkıştırır (aşamalı açığa çıkarma).
 
-        Eşik 620 px: bunun altında token/bağlam rozetleri gizlenir ve model
-        kapsülü kısa ada döner; ikisi de ipucunda ve komut paletinde durur.
+        Eşik 1000 px (Faz 12-D.1; eskiden 620): 960 mantıksal genişlikte üst
+        çubuk öğeleri 1091 px istiyor ve durum kümesi kırpılıyordu. Kompakt
+        kipte token/bağlam rozetleri gizlenir ve model kapsülü kısa ada döner;
+        ikisi de ipucunda ve komut paletinde durur.
         """
-        compact = self.width() < 620
+        compact = self.width() < 1000
         cluster = getattr(self, "status_cluster", None)
         if cluster is not None:
             cluster.set_compact(compact)
@@ -517,15 +543,18 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         bir yüzeyde karşılığı vardı) burada tek satıra iner ve rozet/chip rolü
         alır; ayrıca Desk ve proje düğmeleri bu şeritte durur.
         """
-        strip = QFrame()
+        # Faz 12-D.1: sabit tek satır yerine akan yerleşim. Dar pencerede
+        # (960 mantıksal ve altı) rozetler kırpılmak yerine alt satıra kayar;
+        # böylece durum kümesi HER genişlikte görünür kalır.
+        strip = FlowHeaderFrame(
+            margins=(
+                TOKENS["space"]["2"], TOKENS["space"]["1"],
+                TOKENS["space"]["2"], TOKENS["space"]["1"],
+            )
+        )
         strip.setObjectName("statusStrip")
         strip.setProperty("role", "panel")
-        row = QHBoxLayout(strip)
-        row.setContentsMargins(
-            TOKENS["space"]["2"], TOKENS["space"]["1"],
-            TOKENS["space"]["2"], TOKENS["space"]["1"],
-        )
-        row.setSpacing(TOKENS["space"]["1"])
+        row = strip.flow()
 
         self.zen_telemetry_status = QLabel("Sistem hazır")
         self.zen_telemetry_status.setProperty("role", "statusDot")
@@ -556,7 +585,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.core_status_lbl.setProperty("role", "label")
         self.core_status_lbl.setVisible(False)
         row.addWidget(self.core_status_lbl)
-        return strip
+        # Kabuk: şerit pencereye asgari yükseklik dayatmaz (bkz. FlowStripHost).
+        self.status_strip = strip
+        self.status_strip_host = FlowStripHost(strip, max_rows=2)
+        return self.status_strip_host
 
     def _sync_model_capsule(self) -> None:
         """Kapsül metnini köprüden tazeler (tek kaynak)."""

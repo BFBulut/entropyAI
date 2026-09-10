@@ -14,7 +14,7 @@ Minimum genişlik en geniş tek öğe kadardır (kaydırma alanına gerek yok).
 """
 
 from PySide6.QtCore import QMargins, QPoint, QRect, QSize, Qt
-from PySide6.QtWidgets import QFrame, QLayout, QSizePolicy
+from PySide6.QtWidgets import QFrame, QLayout, QScrollArea, QSizePolicy
 
 
 class FlowLayout(QLayout):
@@ -139,6 +139,50 @@ class FlowHeaderFrame(QFrame):
 
     def heightForWidth(self, width: int) -> int:  # noqa: N802
         return self._flow.heightForWidth(width)
+
+
+class FlowStripHost(QScrollArea):
+    """Akan bir şeridi, asgari yükseklik dayatmadan taşıyan kaydırma kabuğu.
+
+    Neden (Faz 12-D.1): `FlowHeaderFrame` `heightForWidth` bildirir ve üst
+    `QVBoxLayout` pencerenin asgari yüksekliğini hesaplarken şeridin EN DAR
+    genişlikteki satır sayısını kullanır — Zen'in durum şeridinde bu 5 satır
+    (+109 px) demekti ve pencerenin 540 px'e inmesini engelliyordu. Şerit
+    ikincil kromdur: kabuk asgariyi tek satırda tutar, yer varsa `max_rows`
+    satıra kadar büyür, daha fazlası gerekirse dikey kaydırılır (kırpılmaz).
+    """
+
+    def __init__(self, strip: FlowHeaderFrame, max_rows: int = 2, parent=None):
+        super().__init__(parent)
+        self._strip = strip
+        self._max_rows = max(1, int(max_rows))
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setWidget(strip)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+    def strip(self) -> FlowHeaderFrame:
+        return self._strip
+
+    def _row_height(self) -> int:
+        return max(1, self._strip.flow().minimumSize().height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        width = self.viewport().width() or self.width()
+        wanted = self._strip.heightForWidth(width) if width > 0 else self._row_height()
+        return QSize(
+            self._strip.minimumSizeHint().width(),
+            min(max(wanted, self._row_height()), self._row_height() * self._max_rows),
+        )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, self._row_height())
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self.updateGeometry()
 
 
 def fit_combo_to_contents(combo, min_width: int = 60, extra: int = 0) -> int:

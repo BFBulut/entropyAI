@@ -18,12 +18,25 @@ from PySide6.QtGui import QGuiApplication, QScreen
 
 
 def available_geometry(screen: Optional[QScreen] = None) -> QRect:
-    """Hedef ekranın (yoksa birincil ekranın) kullanılabilir alanı."""
+    """Hedef ekranın (yoksa birincil ekranın) kullanılabilir alanı.
+
+    Faz 12-D.1: `availableGeometry()` çok monitörlü + karışık DPI'lı
+    kurulumlarda ekranın kendi `geometry()`'sinden taşan (ya da başka bir
+    ekranın kökenini taşıyan) bir dikdörtgen döndürebiliyor; pencere o zaman
+    fiziksel panelin dışına açılıyordu. İki dikdörtgeni kesiştirerek sonucun
+    her zaman ekranın İÇİNDE kalmasını garanti ediyoruz.
+    """
     target = screen or QGuiApplication.primaryScreen()
     if target is None:
         # Başsız/ekransız ortam: makul bir varsayılan; çağıranlar çökmesin.
         return QRect(0, 0, 1366, 768)
-    return target.availableGeometry()
+    area = target.availableGeometry()
+    full = target.geometry()
+    if full.isValid():
+        clipped = area.intersected(full)
+        if clipped.isValid() and clipped.width() > 0 and clipped.height() > 0:
+            area = clipped
+    return area
 
 
 def fitted_geometry(
