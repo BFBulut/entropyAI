@@ -73,41 +73,64 @@ def _fake_bridge(calls: list):
 # ------------------------------------------------- 1. pano araçları (bölüm 2)
 
 
-def test_board_tools_section_is_skipped_when_agy_symbol_missing(monkeypatch):
-    """12-B sembolü yoksa hafıza katmanı kopya metin tutmaz: bölüm boş kalır."""
+def test_board_tools_section_is_skipped_when_symbol_missing(monkeypatch):
+    """12-B sembolü hiçbir modülde yoksa kopya metin tutulmaz: bölüm boş kalır."""
     import entropy.agents.board_tools as bt
+    import entropy.core.response_hooks as rh
 
+    monkeypatch.delattr(rh, "entropy_tools_section", raising=False)
     monkeypatch.delattr(bt, "entropy_tools_section", raising=False)
     assert system_prompt.board_tools_section() == ""
 
 
-def test_board_tools_section_is_added_to_chat_prompt_within_budget(monkeypatch):
-    import entropy.agents.board_tools as bt
-
-    text = "[PANO board_create]\n{\"title\": \"<başlık>\"}\n[/PANO]"
-    monkeypatch.setattr(bt, "entropy_tools_section", lambda: text, raising=False)
-
+def test_board_tools_section_uses_the_real_12b_symbol_within_budget():
+    """Monkeypatch YOK: gerçek `response_hooks` metni istemde ve bütçede."""
     section = system_prompt.board_tools_section()
-    assert "board_create" in section
+    assert "[PANO board_create]" in section
+    assert "[/PANO]" in section, "blok bütünlüğü korunur (yarım JSON şablonu yok)"
     assert len(section) <= system_prompt.BUDGET_BOARD_TOOLS <= 600
 
     chat = system_prompt.build_system_prompt("chat", provider="claude")
-    assert "board_create" in chat
+    assert "[PANO board_create]" in chat
     # Araç sözleşmesinin EKİdir: sözleşme hâlâ yerinde.
     assert "[ARAÇ SÖZLEŞMESİ]" in chat
 
 
-def test_board_tools_section_is_clamped_to_budget(monkeypatch):
+def test_board_tools_section_falls_back_to_board_tools_module(monkeypatch):
+    """`response_hooks` yoksa geriye dönük `agents.board_tools` yolu çalışır."""
     import entropy.agents.board_tools as bt
+    import entropy.core.response_hooks as rh
 
-    monkeypatch.setattr(bt, "entropy_tools_section", lambda: "x" * 5000, raising=False)
+    monkeypatch.delattr(rh, "entropy_tools_section", raising=False)
+    monkeypatch.setattr(
+        bt, "entropy_tools_section",
+        lambda: '[PANO board_create]\n{"title": "<başlık>"}\n[/PANO]',
+        raising=False,
+    )
+    assert "board_create" in system_prompt.board_tools_section()
+
+
+def test_real_section_overflows_raw_budget_and_is_trimmed():
+    """Ham 12-B metni bütçeden uzun; kırpma bloklarla yapılır, board_create kalır."""
+    from entropy.core.response_hooks import entropy_tools_section
+
+    raw = entropy_tools_section()
+    assert len(raw) > system_prompt.BUDGET_BOARD_TOOLS, "ham metin zaten bütçede"
+    section = system_prompt.board_tools_section()
+    assert len(section) < len(raw)
+    assert "[PANO board_create]" in section
+    assert section.count("[PANO ") == section.count("[/PANO]")
+
+
+def test_board_tools_section_is_clamped_to_budget(monkeypatch):
+    import entropy.core.response_hooks as rh
+
+    monkeypatch.setattr(rh, "entropy_tools_section", lambda: "x" * 5000, raising=False)
     assert len(system_prompt.board_tools_section()) <= system_prompt.BUDGET_BOARD_TOOLS
 
 
-def test_board_tools_not_in_card_prompt_or_agy(monkeypatch):
-    import entropy.agents.board_tools as bt
-
-    monkeypatch.setattr(bt, "entropy_tools_section", lambda: "[PANO board_create]", raising=False)
+def test_board_tools_not_in_card_prompt_or_agy():
+    """Gerçek sembolle: kart kipinde ve agy yolunda pano aracı YOK."""
     card = system_prompt.build_system_prompt("card", provider="claude")
     assert "board_create" not in card
     agy = system_prompt.build_system_prompt("chat", provider="agy")

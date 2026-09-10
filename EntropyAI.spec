@@ -231,6 +231,8 @@ a = Analysis(
         'entropy.memory.dream',
         'entropy.memory.gate',
         'entropy.memory.gray_merge',
+        # Faz 12-C: beceri sentezi (slash komutu calisma aninda ice aktariyor).
+        'entropy.memory.skill_synthesis',
         'entropy.ui.widgets.agent_session_badge',
         'entropy.ui.widgets.header_bar',
         'entropy.ui.widgets.nav_list',

@@ -40,6 +40,9 @@ varlığını bilmezler (mimari kural 3, `tests/test_architecture_rules.py`).
 
 from __future__ import annotations
 
+import importlib
+import re
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -171,23 +174,90 @@ def tool_contract_section(commands: Optional[List[str]] = None) -> str:
     return "\n".join(lines)
 
 
+#: Entropy'nin SOHBET yolunda önceliği olan araç — bütçe taşarsa ilk bu kalır.
+PRIMARY_BOARD_TOOL = "[PANO board_create]"
+
+_PANO_BLOCK_RE = re.compile(r"^\[PANO ", re.MULTILINE)
+
+
+def _split_board_blocks(text: str) -> Tuple[str, List[str]]:
+    """Araç metnini (başlık, `[PANO ...]` blokları) olarak ayırır."""
+    marks = [m.start() for m in _PANO_BLOCK_RE.finditer(text)]
+    if not marks:
+        return text, []
+    header = text[: marks[0]].strip()
+    blocks: List[str] = []
+    for i, start in enumerate(marks):
+        stop = marks[i + 1] if i + 1 < len(marks) else len(text)
+        block = text[start:stop].strip()
+        if block:
+            blocks.append(block)
+    return header, blocks
+
+
+def _fit_board_tools(text: str, limit: int) -> str:
+    """
+    Araç metnini bütçeye blok bütünlüğünü bozmadan sığdırır.
+
+    Ham metin (12-B sözleşmesi) 600 karakterden uzun: körlemesine baştan
+    kırpmak `board_create` bloğunu — Entropy'nin sohbette gerçekten kullandığı
+    tek aracı — düşürüyordu. Bu yüzden bloklar bütün olarak seçilir ve
+    `board_create` en öne alınır; kalan bütçeye sığan diğer bloklar özgün
+    sıralarıyla eklenir. Yarım bir JSON şablonu isteme asla girmez.
+    """
+    if limit <= 0 or not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    header, blocks = _split_board_blocks(text)
+    if not blocks:
+        return _trim(text, limit)
+    ordered = sorted(blocks, key=lambda b: 0 if b.startswith(PRIMARY_BOARD_TOOL) else 1)
+    parts: List[str] = []
+    used = 0
+    if header and len(header) + 2 <= limit - min(len(b) for b in ordered[:1]):
+        parts.append(header)
+        used = len(header)
+    chosen: List[str] = []
+    for block in ordered:
+        extra = len(block) + (2 if (parts or chosen) else 0)
+        if used + extra > limit:
+            continue
+        chosen.append(block)
+        used += extra
+    if not chosen:  # başlık bile birinci bloğa yer bırakmıyorsa: blok öncelikli
+        return _trim(ordered[0], limit)
+    chosen.sort(key=blocks.index)
+    return "\n\n".join(parts + chosen)
+
+
 def board_tools_section(max_chars: int = BUDGET_BOARD_TOOLS) -> str:
     """
     Bölüm 2'nin eki: Entropy'nin pano araçları (`[PANO board_create]`).
 
-    Metnin tek kaynağı agy tarafındaki `agents.board_tools.entropy_tools_section`
-    (Faz 12-B). Sembol yoksa bölüm sessizce **atlanır**: hafıza katmanı pano
-    sözleşmesinin kopyasını tutmaz, tuttuğu anda iki metin ayrışır.
+    Metnin tek kaynağı 12-B'nin sunduğu semboldür; önce
+    `core.response_hooks.entropy_tools_section`, o yoksa geriye dönük olarak
+    `agents.board_tools.entropy_tools_section` denenir. Hiçbiri yoksa bölüm
+    sessizce **atlanır**: hafıza katmanı pano sözleşmesinin kopyasını tutmaz,
+    tuttuğu anda iki metin ayrışır.
     """
-    try:
-        from entropy.agents.board_tools import entropy_tools_section  # type: ignore
-    except Exception:
+    fn = None
+    for module_name in ("entropy.core.response_hooks", "entropy.agents.board_tools"):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        candidate = getattr(module, "entropy_tools_section", None)
+        if callable(candidate):
+            fn = candidate
+            break
+    if fn is None:
         return ""
     try:
-        text = entropy_tools_section() or ""
+        text = fn() or ""
     except Exception:  # pragma: no cover - araç metni istemi düşürmez
         return ""
-    return _trim(str(text).strip(), max(0, int(max_chars or 0)))
+    return _fit_board_tools(str(text).strip(), max(0, int(max_chars or 0)))
 
 
 def entropy_command_names(limit: int = 24) -> List[str]:
