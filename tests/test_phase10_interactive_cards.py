@@ -214,6 +214,21 @@ def _make_bridge(kind, tmp_path, monkeypatch, turns):
     return bridge, ledger
 
 
+def _proc_of(bridge, task_id="kart-1"):
+    """
+    Bu köprünün KENDİ etkileşimli sürecini döndürür.
+
+    Neden: `FakeProc.instances[0]` sınıf düzeyinde birikiyordu ve tam paket
+    koşusunda başka bir test dosyasından artakalan bir arka plan iş parçacığı
+    yamalı `subprocess.Popen`'i bu test sırasında çağırdığında listenin ilk
+    öğesi YABANCI bir süreç oluyordu (agy varyantı bu yüzden yalnızca tam
+    koşuda düşüyordu). Oturum defterinden okumak deterministik.
+    """
+    session = bridge._interactive_sessions.get(task_id)
+    proc = getattr(session, "proc", None) if session is not None else None
+    return proc if proc is not None else FakeProc.instances[0]
+
+
 def _start(bridge, task_id="kart-1", **kwargs):
     done = threading.Event()
     got = {}
@@ -264,7 +279,7 @@ def test_first_result_finalizes_card_but_keeps_process_alive(
     assert "birinci tur" in got["text"]
     # Kart defterde başarıyla kapandı ama terminal canlı.
     assert ledger.get_task("kart-1")["status"] == TaskStatus.SUCCESS.value
-    proc = FakeProc.instances[0]
+    proc = _proc_of(bridge)
     assert proc.poll() is None, "etkileşimli kipte süreç ilk sonuçta ölmemeli"
     assert proc.stdin is not None and not proc.stdin.closed
 
@@ -309,7 +324,7 @@ def test_followup_starts_new_turn_and_emits_signal(
     assert payload["usage"].get("total_tokens", 0) > 0
 
     # Takip mesajı gerçekten sürecin stdin'ine NDJSON olarak yazıldı.
-    proc = FakeProc.instances[0]
+    proc = _proc_of(bridge)
     last = json.loads(proc.stdin.written[-1])
     assert last.get("event") == "user" or last.get("type") == "user"
     assert last["message"]["content"] == "ikinci soru"
@@ -338,7 +353,7 @@ def test_followup_rejects_empty_and_overlong_text(kind, tmp_path, monkeypatch, s
     assert bridge.send_followup("kart-1", "x" * 4001) is False
     assert any(e["kind"] == "error" for e in stream_events)
     # Reddedilen mesaj sürece HİÇ yazılmadı (ilk istem dışında yazım yok).
-    assert len(FakeProc.instances[0].stdin.written) == 1
+    assert len(_proc_of(bridge).stdin.written) == 1
 
     bridge.close_interactive("kart-1")
     assert bridge.send_followup("kart-1", "artık kapalı") is False
@@ -358,7 +373,7 @@ def test_idle_timeout_closes_terminal(kind, turns, tmp_path, monkeypatch, stream
     bridge, _ = _make_bridge(kind, tmp_path, monkeypatch, turns)
     _start(bridge)
 
-    proc = FakeProc.instances[0]
+    proc = _proc_of(bridge)
     for _ in range(100):
         if proc.poll() is not None:
             break
@@ -381,7 +396,7 @@ def test_idle_timeout_closes_terminal(kind, turns, tmp_path, monkeypatch, stream
 def test_close_interactive_and_shutdown_close_terminals(kind, turns, tmp_path, monkeypatch):
     bridge, _ = _make_bridge(kind, tmp_path, monkeypatch, turns)
     _start(bridge)
-    proc = FakeProc.instances[0]
+    proc = _proc_of(bridge)
 
     assert bridge.close_interactive("kart-1") is True
     assert proc.stdin.closed
@@ -391,7 +406,7 @@ def test_close_interactive_and_shutdown_close_terminals(kind, turns, tmp_path, m
     # Aynı köprüde ikinci bir kart açıp kapanışı sürelim.
     bridge2, _ = _make_bridge(kind, tmp_path, monkeypatch, turns)
     _start(bridge2, task_id="kart-2")
-    proc2 = FakeProc.instances[0]
+    proc2 = _proc_of(bridge2, "kart-2")
     assert proc2.poll() is None
     bridge2.shutdown(timeout=3.0)
     assert proc2.stdin.closed, "kapanışta etkileşimli terminal kapatılmalı"
@@ -448,7 +463,7 @@ def test_followup_refused_when_lock_hook_returns_false(kind, turns, tmp_path, mo
     bridge, _ = _make_bridge(kind, tmp_path, monkeypatch, turns)
     _start(bridge, on_followup_start=lambda tid: False)
     assert bridge.send_followup("kart-1", "devam") is False
-    assert len(FakeProc.instances[0].stdin.written) == 1
+    assert len(_proc_of(bridge).stdin.written) == 1
     bridge.close_interactive("kart-1")
 
 
