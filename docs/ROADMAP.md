@@ -48,13 +48,18 @@ tasarım öne alınabilir.
 
 ---
 
-## 3. Faz 12 ve sonrası
+## 3. Faz 12 (tamamlandı, v0.10.0) ve Faz 13 (yürürlükte)
 
-| İş | Ön koşul | Not |
+Faz 12: beynin kapanışı, otonom pano, tasarım köprüsü, depo bakımı — `docs/reports/2026-09-10_Faz12_Ilerleme_Raporu_v0.10.0.md`.
+
+Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştırma: `…_Faz13_Arastirma_Notu.md`).
+
+| Dilim | Durum | Not |
 |---|---|---|
-| `entropy.memory` → `entropy.brain` paket taşıması | Faz 11 kapanış ölçümü yeşil, `.exe` bir kez sorunsuz derlenmiş | ~104 dosya; tek commit; spec hiddenimports riski ([ADR-0004](adr/ADR-0004-faz11-paket-tasima-yok.md)) |
-| Agent Desk geliştirmesine dönüş | aynı | Faz 10 kalanları: canlı kanıt/makbuz doğrulaması, `gh` ile PR, efor uçtan uca |
-| Sürüm | — | v1.0.0 |
+| 13-A UX ve çekirdek + onaylı canlı koşular | **tamamlandı, v0.10.1** | `docs/reports/2026-09-10_Faz13_Ilerleme_Raporu_v0.10.1.md` |
+| 13-B `entropy.memory` → `entropy.brain` taşıması | onay bekliyor | kota 0; tek başına koşar; uyumluluk shim'i bir sürüm; ADR-0004 ön koşulları 5/5 (yüzey 113 dosya) |
+| 13-C Desk kanıt zinciri ve temizlik | onay bekliyor | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı), `claude_bg` arşivi |
+| 13-D Kapanış | 13-B/C sonrası | v0.11.0 |
 
 ---
 
