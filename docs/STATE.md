@@ -66,6 +66,64 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 
 ---
 
+## 2.7 CANLI KOŞU QA (2026-09-10, qa-build-engineer) — kotalı kol
+
+Uygulama **kapalıydı** (`tasklist` → EntropyAI.exe yok), `config.board_auto_dispatch
+= True` ama dispatcher/rüya döngüsü koşmadığı için yazan adımlarla çakışma
+olmadı. Yedek: `~/.entropy/backups/live-20260910-195802/` (cognitive_memory.db,
+tasks_ledger.db, `~/.entropy/memory`, kasadan Memory/Skills/Board — 8,1 MB).
+Sağlayıcı `claude` (saf kip), köprü `bridge_prompt.make_send_prompt`.
+
+**R-CANLI-1 (düzeltildi):** `core/bridge_prompt.py:55` `ClaudeProcessBridge`
+adını içe aktarıyordu; gerçek sınıf `ClaudeCodeBridge` → `active_bridge()`
+claude yolunda **ImportError** veriyordu, yani kotalı hafıza turlarının hiçbiri
+(wiki derleme, gri tur, beceri sentezi) claude sağlayıcısında koşamıyordu.
+Hiçbir test bu dalı örtmüyordu. Düzeltme + regresyon testi:
+`tests/contracts/test_phase12_bridge_wiring.py::test_active_bridge_instantiates_real_provider_classes`.
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| Wiki derleme `financial-auditor` (`budget_turns=25` istendi, kota nedeniyle **2 tur** koşuldu) | `turns 2`, `processed 2`, `remaining 56`, 17 sayfa (5 kavram + 12 varlık), lint `total 13` (orphan 2, contradiction 2, unread_report 1, open_task 8) | `WIKI.state.json` `processed=2`, `wiki/log.md` "compile: 2 tur", `scratch/_live_wiki1.json`; 28.549 token / 52,1 sn |
+| Gri tur `run_merge_round(limit=8)` | `candidates 2`, `turns 1`, `merged 1`, `kept 1`, `errors []`; K9 pending 2 → 0 | `<kasa>/Entropy/Memory/merge_log.md`: "2026-09-10 20:01 - 2 aday - 1 tur - birlestirildi 1 - ikisi de kaldi 1"; 12.110 token / 13,9 sn |
+| Beceri sentezi `media-agency-soldier` (tek tur) | **`status: validated`**, 6 denetimin 6'sı true, `findings []` | `Entropy/Skills/_candidates/media-agency-soldier/CANDIDATE.json`; 16.173 token / 46,5 sn |
+| `promote_skill` (onay **betikle** verildi; arayüzdeki "Onayla" düğmesi kullanılmadı) | `ok: true`, `status approved`; `<kasa>/Skills/media-agency-soldier/SKILL.md` **5.209 B**; `SkillManager(root_skills_dir=<kasa>/Skills)` beceriyi **keşfediyor** | `scratch/_live_promote.py` çıktısı |
+| Oturum devri (4. kart, `arastirmaci`, claude) | Kart `20260910-200343-devir-karti-d` → **review**, `report_path` dolu; oturum 3 kart/92.978 → **1 kart/18.457**, kimlik `aa2ce1f2…` → **`7270d3cc…`**; argv'de `--resume` **yok**, `--session-id 7270d3cc…` **var**; `handoff.md` **2.482 B** yazıldı; kart maliyeti **18.457 token (≤ 30k)** | `scratch/_live_card.json`, `Entropy/Board/agents/arastirmaci/{session.json,handoff.md}` |
+
+12-F'nin üç açık işi (wiki derlemesi, gri birleştirme turu, beceri onayı) ve
+oturum devri kanıtı bu koşuda **kapandı**; wiki yalnızca 2/58 raporla koşuldu,
+kalan 56 rapor **açık iş**.
+
+### K tablosu (`scripts/brain_metrics.py --context --json`, önce → sonra)
+
+| Ölçüt | Önce | Sonra |
+|---|---:|---:|
+| düğüm | 735 | **736** |
+| K1 yineleme | %5,58 | **%5,57** |
+| K2 Hit@1 / Hit@5 | 9/10 · 10/10 | **8/10 · 10/10** |
+| K3 gürültü | %0,0 | **%0,0** |
+| K4 bağlam bütçe payı | %70,19 | **%76,45** |
+| K5 damıtılmış pay | %37,21 | **%43,45** |
+| K6 wiki payı | %29,00 | **%36,17** |
+| K7 kategori | sem 652 / proc 59 / epi 24 | **sem 652 / proc 59 / epi 25** |
+| K9 gri kuyruk (pending/done) | 2 / 0 | **1 / 2** |
+| K10 fikstür | 0 | **0** |
+| K11 kapı gecikmesi (medyan) | 85,3 ms | **109,8 ms** |
+| K12 kaynaksız L2 | 0 | **0** |
+
+Tüm K hükümleri **PASS**. K6 wiki derlemesiyle +7,17 puan arttı (12-F'de
+değişmemişti). **K2 Hit@1 9/10 → 8/10 düştü** — yeni wiki/kart düğümleri bir
+sorguda ilk sırayı kaptı; eşik altı değil ama izlenmeli (**açık iş**).
+K9 pending 1 = D kartının raporu gri banda düştü.
+
+### Kota
+
+Ledger farkı (`tasks_ledger.db`, `sum(total_tokens)`): 28.549 + 12.110 +
+16.173 + 18.457 = **75.289 token**, tavan 70.000 → **%7,6 aşıldı**; aşımı
+gördüğüm anda canlı turlar durduruldu (ikinci 25 turluk wiki partisi
+KOŞULMADI).
+
+---
+
 ## 2.6 Faz 12 KAPANIŞ QA (2026-09-10, qa-build-engineer)
 
 **Tam süit:** `QT_QPA_PLATFORM=offscreen python -m pytest tests -q -p no:cacheprovider`

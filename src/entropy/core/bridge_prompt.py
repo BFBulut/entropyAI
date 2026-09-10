@@ -52,9 +52,9 @@ def active_bridge(bridge: Any = None) -> Any:
         except Exception:  # pragma: no cover - ayar okunamazsa agy varsayılan
             provider = "agy"
     if provider == "claude":
-        from entropy.core.claude_bridge import ClaudeProcessBridge
+        from entropy.core.claude_bridge import ClaudeCodeBridge
 
-        return ClaudeProcessBridge()
+        return ClaudeCodeBridge()
     from entropy.core.agy_bridge import AgyProcessBridge
 
     return AgyProcessBridge()

@@ -283,3 +283,24 @@ def test_send_prompt_is_thread_safe_enough_for_worker_delivery():
 
     send = make_send_prompt(Gecikmeli(), timeout=5)
     assert send("soru") == "geç cevap"
+
+
+def test_active_bridge_instantiates_real_provider_classes(monkeypatch):
+    """R-CANLI-1: active_bridge var olmayan sınıf adını içe aktarmamalı.
+
+    Canlı koşuda `ClaudeProcessBridge` ImportError veriyordu; gerçek sınıf
+    adları `ClaudeCodeBridge` / `AgyProcessBridge`.
+    """
+    import importlib
+
+    from entropy.core import bridge_prompt
+    from entropy.core.config import config
+
+    for provider, module_name, cls_name in (
+        ("claude", "entropy.core.claude_bridge", "ClaudeCodeBridge"),
+        ("agy", "entropy.core.agy_bridge", "AgyProcessBridge"),
+    ):
+        module = importlib.import_module(module_name)
+        cls = getattr(module, cls_name)
+        monkeypatch.setattr(config, "provider", provider, raising=False)
+        assert isinstance(bridge_prompt.active_bridge(), cls)
