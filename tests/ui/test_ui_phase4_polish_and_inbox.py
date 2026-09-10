@@ -214,7 +214,10 @@ def test_kanban_columns_have_minimum_width(qapp):
 
     board = TaskBoardWidget(board=None)
     try:
-        assert COLUMN_MIN_WIDTH >= 180
+        # Faz 11-C: sütun sayısı 4 → 7 oldu; alt sınır 168 px'e indi ki yedi
+        # sütun (7x168 = 1.176 px) tek ekrana sığsın. Kart başlığı 168 px'te
+        # hâlâ iki kelime gösteriyor, kırpılmıyor.
+        assert COLUMN_MIN_WIDTH >= 160
         columns = [
             head.parentWidget() for head in board.column_headers.values()
         ]

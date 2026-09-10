@@ -811,6 +811,30 @@ class AgentCard(QFrame):
 
         self.status_label = QLabel(self._status_html())
         text_col.addWidget(self.status_label)
+
+        # Faz 11-C: kalıcı oturum rozeti + "Oturumu yenile".
+        # Kullanıcı ajanın oturumunun sürüp sürmediğini hiçbir yerden
+        # göremiyordu; imza değişince oturum sessizce sıfırlanıyordu.
+        session_row = QHBoxLayout()
+        session_row.setSpacing(4)
+        self.session_icon = QLabel("")
+        self.session_icon.setProperty("role", "badge")
+        self.session_label = QLabel("")
+        self.session_label.setProperty("role", "badge")
+        session_row.addWidget(self.session_icon)
+        session_row.addWidget(self.session_label)
+        self.session_reset_btn = QPushButton("Oturumu yenile")
+        self.session_reset_btn.setProperty("variant", "ghost")
+        self.session_reset_btn.setToolTip(
+            "Kalıcı oturum kaydını siler; ajan bir sonraki koşuda temiz oturum açar."
+        )
+        self.session_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.session_reset_btn.clicked.connect(self._reset_session)
+        session_row.addWidget(self.session_reset_btn)
+        session_row.addStretch()
+        text_col.addLayout(session_row)
+        self.refresh_session_badge()
+
         layout.addLayout(text_col, 1)
 
         buttons = [
@@ -864,6 +888,45 @@ class AgentCard(QFrame):
                 layout.addWidget(btn)
             setattr(self, attr, btn)
 
+    # ------------------------------------------------------- oturum rozeti
+
+    def session_info(self) -> Optional[Dict[str, Any]]:
+        """Ajanın kalıcı oturum kaydı (yoksa None). Test bunu ezebilir."""
+        from entropy.ui.widgets.agent_session_badge import read_session
+
+        return read_session(self.agent_name)
+
+    def refresh_session_badge(self) -> None:
+        """Rozeti diskteki tek kaynaktan tazeler; uydurma değer basmaz."""
+        from entropy.ui.design import TOKENS, icon
+        from entropy.ui.widgets.agent_session_badge import (
+            session_badge_text, session_tooltip,
+        )
+
+        info = None
+        try:
+            info = self.session_info()
+        except Exception:
+            info = None
+        text = session_badge_text(info)
+        tone = "ok" if info else "warn"
+        self.session_label.setText(text)
+        self.session_label.setProperty("tone", tone)
+        self.session_label.setToolTip(session_tooltip(info))
+        color = TOKENS["color"]["ok" if info else "text.muted"]
+        pixmap = icon("link" if info else "debug-disconnect", color=color).pixmap(12, 12)
+        self.session_icon.setPixmap(pixmap)
+        self.session_reset_btn.setEnabled(bool(info))
+        # Özellik değişince QSS yeniden değerlendirilmeli (Qt kuralı).
+        style = self.session_label.style()
+        style.unpolish(self.session_label)
+        style.polish(self.session_label)
+
+    @Slot()
+    def _reset_session(self):
+        self.panel.reset_agent_session(self.agent_name)
+        self.refresh_session_badge()
+
     def _status_html(self) -> str:
         card = self.panel.latest_card_for(self.agent_name)
         if card is None:
@@ -902,20 +965,27 @@ class AgentCard(QFrame):
         self.panel.assign_office_role(self.agent_name, "evaluator")
 
 
+# Faz 11-C: pano durum makinesinin 8 durumu (`agents/board_fsm.STATUSES`).
 STATUS_LABELS = {
     "backlog": "Bekliyor",
+    "assigned": "Atandı",
+    "taken": "Sahiplenildi",
     "running": "Çalışıyor",
     "review": "İnceleme",
     "done": "Bitti",
     "failed": "Başarısız",
+    "canceled": "İptal",
 }
 
 STATUS_COLORS = {
     "backlog": RT["text_dim"],
+    "assigned": RT["accent_alt"],
+    "taken": RT["accent"],
     "running": RT["accent"],
     "review": RT["accent_warn"],
     "done": RT["accent_alt"],
     "failed": "#FF6B6B",
+    "canceled": RT["text_dim"],
 }
 
 
@@ -1342,6 +1412,22 @@ class AgentsWidget(QFrame):
         if signal is not None:
             signal.emit(data.get("name", ""))
         return True
+
+    def reset_agent_session(self, name: str) -> bool:
+        """
+        Ajanın kalıcı oturum dosyasını siler ("Oturumu yenile").
+
+        Sözleşme dosyası `Entropy/Board/agents/<ad>/session.json`; silinince
+        ajan bir sonraki koşuda yeni oturum açar. Dosya zaten yoksa False.
+        """
+        from entropy.ui.widgets.agent_session_badge import clear_session
+
+        removed = clear_session(name)
+        if removed:
+            bus.terminal_output_received.emit(
+                f"[Ajanlar] '{name}' kalıcı oturumu silindi; sonraki koşu temiz başlar.\n"
+            )
+        return removed
 
     def delete_agent(self, name: str, confirm: bool = True) -> bool:
         if self.registry is None:

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
     QVBoxLayout,
@@ -37,6 +37,7 @@ KIND_ICONS = {
     "report": "📄",
     "handoff": "🪢",
     "office": "🏢",
+    "board": "🗂",
 }
 
 KIND_LABELS = {
@@ -44,7 +45,11 @@ KIND_LABELS = {
     "report": "Rapor",
     "handoff": "Aktarım",
     "office": "Ofis",
+    "board": "Pano",
 }
+
+#: Zaman çizelgesine alınan pano olayı sayısı (Faz 11-C sözleşmesi: son 50).
+BOARD_EVENT_LIMIT = 50
 
 
 def _parse_ts(value: Any) -> float:
@@ -138,6 +143,59 @@ def _office_events() -> List[Dict[str, Any]]:
     return events
 
 
+def _board_events(limit: int = BOARD_EVENT_LIMIT) -> List[Dict[str, Any]]:
+    """
+    `Entropy/Board/events.jsonl` son N olayı (Faz 11-C).
+
+    Satır şeması `{schema_version, seq, ts, correlation_id, task_id,
+    attempt_id, actor, action, idempotency_key, payload}`. Dosya yoksa ya da
+    satır bozuksa o satır atlanır — uydurma olay üretilmez.
+    """
+    try:
+        from entropy.core.paths import board_events_path
+
+        path = Path(board_events_path())
+    except Exception:
+        return []
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    import json
+
+    events: List[Dict[str, Any]] = []
+    for line in lines[-max(1, int(limit)):]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        title = str(payload.get("title") or row.get("task_id") or "Pano olayı")
+        detail_bits = [str(row.get("action") or "")]
+        for key in ("status", "agent"):
+            value = str(payload.get(key) or "")
+            if value:
+                detail_bits.append(value)
+        events.append({
+            "kind": "board",
+            "ts": _parse_ts(row.get("ts")),
+            "title": title,
+            "detail": " · ".join(b for b in detail_bits if b),
+            "status": str(payload.get("status") or ""),
+            "target": str(row.get("task_id") or ""),
+            "seq": row.get("seq"),
+            "actor": str(row.get("actor") or ""),
+        })
+    return events
+
+
 def collect_timeline(
     now: Optional[float] = None,
     events: Optional[Sequence[Dict[str, Any]]] = None,
@@ -150,7 +208,7 @@ def collect_timeline(
     "bugün" iddiası doğrulanamaz.
     """
     raw = list(events) if events is not None else (
-        _task_events() + _report_events() + _office_events()
+        _task_events() + _report_events() + _office_events() + _board_events()
     )
     start, end = day_bounds(now)
     today = [e for e in raw if start <= float(e.get("ts") or 0.0) < end]
@@ -228,6 +286,15 @@ class TimelinePanel(QFrame):
 
         bus.report_created.connect(self._on_bus_event)
         bus.task_completed.connect(self._on_task_completed)
+        # Faz 11-C: pano geçişleri de "bugün" listesine düşer; salvo hâlinde
+        # gelebildikleri için yenileme debounce edilir.
+        self._board_debounce = QTimer(self)
+        self._board_debounce.setSingleShot(True)
+        self._board_debounce.setInterval(200)
+        self._board_debounce.timeout.connect(self.refresh)
+        board_signal = getattr(bus, "board_state_changed", None)
+        if board_signal is not None:
+            board_signal.connect(self._on_board_state_changed)
         self.refresh()
 
     def events(self) -> List[Dict[str, Any]]:
@@ -258,6 +325,17 @@ class TimelinePanel(QFrame):
     @Slot(str)
     def _on_bus_event(self, _payload: str) -> None:
         self.refresh()
+
+    @Slot(dict)
+    def _on_board_state_changed(self, _payload: dict) -> None:
+        """Pano durumu değişti (QObject slotu, lambda değil) — gecikmeli yenile."""
+        self._board_debounce.start()
+
+    def flush_board_events(self) -> None:
+        """Bekleyen debounce'u hemen uygular (test ve pencere odaklanması)."""
+        if self._board_debounce.isActive():
+            self._board_debounce.stop()
+            self.refresh()
 
     @Slot(str, bool)
     def _on_task_completed(self, _task_id: str, _ok: bool) -> None:

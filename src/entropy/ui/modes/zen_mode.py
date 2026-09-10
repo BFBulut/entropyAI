@@ -20,6 +20,7 @@ import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
 config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config
 from entropy.core.event_bus import bus
+from entropy.ui.widgets.report_card_bridge import ReportCardMixin
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.core.slash_commands import SlashCommandRegistry
@@ -59,7 +60,7 @@ ZEN_MIN_SIZE = (1100, 680)
 ZEN_SCREEN_RATIO = 0.92
 
 
-class ZenModeWindow(QMainWindow):
+class ZenModeWindow(ReportCardMixin, QMainWindow):
     """Zen Mode: Borderless fullscreen immersive AI engineering environment."""
 
     def __init__(self, bridge: AgyProcessBridge, parent=None):
@@ -507,6 +508,8 @@ class ZenModeWindow(QMainWindow):
         # görünümünü boşaltabiliyordu. Bağlantıyı yalnızca biz açıyoruz.
         self.chat_browser.setOpenLinks(False)
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
+        # Faz 11-C: `task_report_ready` -> sohbette rapor karti + "Sohbete al".
+        self.install_report_cards()
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {RT['surface_base']};
@@ -730,6 +733,8 @@ class ZenModeWindow(QMainWindow):
     def _on_anchor_clicked(self, url):
         """Intercept entropy-report:// links to open the standalone viewer."""
         url_str = url.toString()
+        if self.handle_context_anchor(url_str):
+            return
         if "entropy-report://" in url_str:
             target = url_str.split("entropy-report://")[-1]
             self._open_report_path(target)
@@ -825,6 +830,27 @@ class ZenModeWindow(QMainWindow):
         # efor kutusu yeni modelin son eklerine göre yeniden dolar.
         self._refresh_effort_combo()
 
+    def sync_model_effort_ui(self) -> None:
+        """
+        Ust cubuk model/efor kutularini kopruden tazeler (Faz 11-C, is 4).
+
+        `/model` ve `/effort` komutlari kopruye yaziyor ve ayari `config`e
+        kaliciyor; ama Claude tarafinda `set_effort` sinyal yaymadigi icin ust
+        cubuktaki kutu bayat kaliyordu. Yerel komut isledikten sonra kutular
+        tek kaynaktan (koprunun secili degerleri) yeniden okunur.
+        """
+        combo = getattr(self, "model_combo", None)
+        model = str(getattr(self.bridge, "selected_model", "") or "")
+        if combo is not None and model:
+            combo.blockSignals(True)
+            try:
+                if combo.findText(model) < 0:
+                    combo.addItem(model)
+                combo.setCurrentText(model)
+            finally:
+                combo.blockSignals(False)
+        self._refresh_effort_combo()
+
     def _refresh_effort_combo(self):
         """Efor kutusunu (varsa) sağlayıcı+model değişiminden sonra tazeler."""
         combo = getattr(self, "effort_combo", None)
@@ -912,9 +938,30 @@ class ZenModeWindow(QMainWindow):
 
     @Slot(str, str)
     def _on_timeline_activated(self, kind: str, target: str):
-        """Zaman cizelgesi satiri: rapor/aktarim okuyucuda acilir."""
+        """Zaman cizelgesi satiri: rapor/aktarim okuyucuda, pano olayi kartta acilir."""
         if kind in ("report", "handoff") and target:
             self._open_report_path(target)
+            return
+        # Faz 11-C: pano olayina tiklaninca Gorevler sekmesi acilir ve olayin
+        # karti secilir (detay panelinde hedef/olcut/kanit gorunur).
+        if kind == "board" and target:
+            self.open_task_card(target)
+
+    def open_task_card(self, card_id: str) -> bool:
+        """Gorevler sekmesine gecer ve karti secer; kart yoksa False."""
+        board = getattr(self, "task_board_widget", None)
+        if board is None or not card_id:
+            return False
+        index = self.left_tabs.indexOf(self.tasks_tab)
+        if index >= 0:
+            self.left_tabs.setCurrentIndex(index)
+        board.flush_board_events()
+        if board.get_card(card_id) is None:
+            board.refresh_cards()
+        if board.get_card(card_id) is None:
+            return False
+        board.select_card(card_id)
+        return True
 
     @Slot(str, str)
     def _on_notification_activated(self, target_kind: str, target: str):
@@ -1123,6 +1170,8 @@ class ZenModeWindow(QMainWindow):
                 from entropy.ui.widgets.markdown_renderer import build_command_card_html
 
                 self.chat_browser.append(build_command_card_html(local_html))
+                # Model/efor degistiren komutlardan sonra ust cubuk tazelenir.
+                self.sync_model_effort_ui()
                 self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
                 self.chat_input.clear()
                 return
@@ -1259,6 +1308,9 @@ class ZenModeWindow(QMainWindow):
         self.submit_btn.setText("İşleniyor...")
 
         has_plan = any(c.name == "/plan" for c in matched_cmds) or bool(re.search(r'(?:^|\s)/plan\b', prompt, re.IGNORECASE))
+        # Faz 11-C: "Sohbete al" ile alinan rapor bloklari istemin basina
+        # eklenir ve kuyruk bosaltilir (ayni rapor iki kez gitmez).
+        actual_prompt = self.apply_report_context(actual_prompt)
         exec_mode = "plan" if has_plan else "accept-edits"
         self.bridge.send_prompt_async(
             prompt=actual_prompt,
@@ -1393,6 +1445,8 @@ class ZenModeWindow(QMainWindow):
             (bus.project_changed, self._on_project_changed),
             (bus.chat_history_updated, self._on_chat_history_updated),
             (bus.chat_history_cleared, self._on_chat_history_cleared),
+            # Faz 11-C: rapor kartı köprüsü de çözülür (sızıntı olmasın).
+            (bus.task_report_ready, self._on_task_report_ready),
         ]
         for sig, slot in signals:
             try:

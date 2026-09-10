@@ -19,6 +19,7 @@ import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
 config_module = _sys.modules["entropy.core.config"]
 from entropy.core.config import config
 from entropy.core.event_bus import bus
+from entropy.ui.widgets.report_card_bridge import ReportCardMixin
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.skills.manager import SkillManager
@@ -221,7 +222,7 @@ CHAT_PREFERRED_SIZE = (620, 820)
 CHAT_SCREEN_RATIO = 0.92
 
 
-class ChatModeWindow(QMainWindow):
+class ChatModeWindow(ReportCardMixin, QMainWindow):
     """Floating Chat Mode with real-time streaming, terminal drawer, and Ctrl+V images."""
 
     def __init__(self, bridge: AgyProcessBridge, parent=None):
@@ -516,6 +517,8 @@ class ChatModeWindow(QMainWindow):
         # görünümünü boşaltabiliyordu. Bağlantıyı yalnızca biz açıyoruz.
         self.chat_browser.setOpenLinks(False)
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
+        # Faz 11-C: `task_report_ready` → sohbette rapor kartı + "Sohbete al".
+        self.install_report_cards()
         self.chat_browser.setStyleSheet(f"""
             QTextBrowser {{
                 background-color: {RT['surface_base']};
@@ -893,6 +896,8 @@ class ChatModeWindow(QMainWindow):
     def _on_anchor_clicked(self, url):
         """Intercept entropy-report:// links to open the standalone viewer."""
         url_str = url.toString()
+        if self.handle_context_anchor(url_str):
+            return
         if "entropy-report://" in url_str:
             target = url_str.split("entropy-report://")[-1]
             self._open_report_path(target)
@@ -1164,6 +1169,27 @@ class ChatModeWindow(QMainWindow):
         # efor kutusu yeni modelin son eklerine göre yeniden dolar.
         self._refresh_effort_combo()
 
+    def sync_model_effort_ui(self) -> None:
+        """
+        Ust cubuk model/efor kutularini kopruden tazeler (Faz 11-C, is 4).
+
+        `/model` ve `/effort` komutlari kopruye yaziyor ve ayari `config`e
+        kaliciyor; ama Claude tarafinda `set_effort` sinyal yaymadigi icin ust
+        cubuktaki kutu bayat kaliyordu. Yerel komut isledikten sonra kutular
+        tek kaynaktan (koprunun secili degerleri) yeniden okunur.
+        """
+        combo = getattr(self, "model_combo", None)
+        model = str(getattr(self.bridge, "selected_model", "") or "")
+        if combo is not None and model:
+            combo.blockSignals(True)
+            try:
+                if combo.findText(model) < 0:
+                    combo.addItem(model)
+                combo.setCurrentText(model)
+            finally:
+                combo.blockSignals(False)
+        self._refresh_effort_combo()
+
     def _refresh_effort_combo(self):
         """Efor kutusunu (varsa) sağlayıcı+model değişiminden sonra tazeler."""
         combo = getattr(self, "effort_combo", None)
@@ -1282,6 +1308,8 @@ class ChatModeWindow(QMainWindow):
                 from entropy.ui.widgets.markdown_renderer import build_command_card_html
 
                 self.chat_browser.append(build_command_card_html(local_html))
+                # Model/efor degistiren komutlardan sonra ust cubuk tazelenir.
+                self.sync_model_effort_ui()
                 self.input_field.clear()
                 return
 
@@ -1395,6 +1423,10 @@ class ChatModeWindow(QMainWindow):
         if self.bridge.is_running:
             self._append_message("Entropy AI", "⏳ <i>Önceki işlem tamamlanıyor, mesajınız sıraya alındı ve hemen ardından yanıtlanacak...</i>", is_system=True)
 
+        # Faz 11-C: "Sohbete al" ile alınan rapor blokları istemin başına
+        # eklenir ve kuyruk boşaltılır (aynı rapor iki kez gitmez).
+        actual_prompt = self.apply_report_context(actual_prompt)
+
         has_plan = any(c.name == "/plan" for c in matched_cmds) or bool(re.search(r'(?:^|\s)/plan\b', prompt, re.IGNORECASE))
         exec_mode = "plan" if has_plan else "accept-edits"
         self.bridge.send_prompt_async(
@@ -1457,6 +1489,8 @@ class ChatModeWindow(QMainWindow):
             (bus.distill_progress, self._on_distill_progress),
             (bus.chat_history_updated, self._on_chat_history_updated),
             (bus.chat_history_cleared, self._on_chat_history_cleared),
+            # Faz 11-C: rapor kartı köprüsü de çözülür (sızıntı olmasın).
+            (bus.task_report_ready, self._on_task_report_ready),
             # Faz 8: bagliydi ama cozulmuyordu (sizinti).
             (bus.context_pressure, self._on_context_pressure),
         ]

@@ -312,15 +312,18 @@ def test_kanban_columns_group_cards_by_status(qapp):
     widget = TaskBoardWidget(board=board)
     assert [c["id"] for c in widget.cards_in_column("backlog")] == ["t1"]
     assert [c["id"] for c in widget.cards_in_column("running")] == ["t2"]
-    # Başarısız kart İnceleme sütununda kırmızı rozetle durur.
-    assert {c["id"] for c in widget.cards_in_column("review")} == {"t3", "t5"}
+    assert [c["id"] for c in widget.cards_in_column("review")] == ["t3"]
     assert [c["id"] for c in widget.cards_in_column("done")] == ["t4"]
+    # Faz 11-C: `failed` artık kendi sütununda (8 durum, 7 sütun).
+    assert [c["id"] for c in widget.cards_in_column("failed")] == ["t5"]
     failed_widget = [w for w in widget.card_widgets if w.card_id == "t5"][0]
     assert "BAŞARISIZ" in failed_widget.title_label.text()
 
 
 def test_column_for_status_maps_unknown_to_backlog():
-    assert column_for_status("failed") == "review"
+    assert column_for_status("failed") == "failed"
+    # `taken` ayrı sütun değil: Çalışıyor sütununda rozetle durur.
+    assert column_for_status("taken") == "running"
     assert column_for_status("running") == "running"
     assert column_for_status("saçma") == "backlog"
 

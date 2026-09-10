@@ -1,9 +1,12 @@
 """
 Ajan görev panosu — kanban görünümü.
 
-Sütunlar: Bekliyor / Çalışıyor / İnceleme / Bitti. `failed` durumundaki kartlar
-kırmızı rozetle İnceleme sütununda durur; başarısızlık gizlenmez, ele alınması
-gereken bir iş olarak kalır. Kart seçilince sağda detay paneli açılır.
+Faz 11-C: sütunlar pano durum makinesinin 8 durumuna göre (`board_fsm`):
+Bekliyor / Atandı / Çalışıyor / İnceleme / Bitti / Başarısız / İptal.
+`taken` ayrı sütun değil — Çalışıyor sütununda "sahiplenildi" rozetiyle durur
+(iki durum arasındaki fark kart üzerinde okunur, sütun sayısı şişmez).
+`failed` ve `canceled` sütunları boşken gizlenir ki pano tek ekrana sığsın.
+Kart seçilince sağda detay paneli açılır.
 
 Veri kaynağı `entropy.agents.tasks.TaskBoard`; modül henüz yoksa pano boş
 görünür (import guard). Testler yapıcıya sahte pano verebilir.
@@ -14,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QScrollArea, QSplitter, QVBoxLayout, QWidget
@@ -25,19 +28,48 @@ from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
 
 # Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
-COLUMN_MIN_WIDTH = 190
+# Faz 11-C: yedi sütun olunca 190 px pano genişliğini 1.400 px'e zorluyordu.
+COLUMN_MIN_WIDTH = 168
+
+#: `board_state_changed` yenileme gecikmesi (ms) — olay salvosu tek turda toplanır.
+BOARD_DEBOUNCE_MS = 150
 from entropy.ui.widgets.agents_widget import (
     STATUS_COLORS, STATUS_LABELS, call_flex, list_cards_for, load_board,
     model_belongs_to, models_for_provider, spec_field
 )
 
-# Kanban sütunları: (anahtar, başlık). `failed` ayrı sütun değil, İnceleme'de rozet.
+# Kanban sütunları: (anahtar, başlık). `taken` ayrı sütun değil, Çalışıyor'da rozet.
 COLUMNS = [
     ("backlog", "Bekliyor"),
+    ("assigned", "Atandı"),
     ("running", "Çalışıyor"),
     ("review", "İnceleme"),
     ("done", "Bitti"),
+    ("failed", "Başarısız"),
+    ("canceled", "İptal"),
 ]
+
+#: Boşken gizlenen sütunlar — uç durumlar panoyu sürekli işgal etmesin.
+COLLAPSIBLE_COLUMNS = {"failed", "canceled"}
+
+#: Durum → sütun anahtarı (8 durum, 7 sütun). Tek kaynak: `agents/board_fsm`.
+STATUS_TO_COLUMN = {
+    "backlog": "backlog",
+    "assigned": "assigned",
+    "taken": "running",
+    "running": "running",
+    "review": "review",
+    "done": "done",
+    "failed": "failed",
+    "canceled": "canceled",
+}
+
+#: Kart ayarlarının (efor/model/sağlayıcı) düzenlenebildiği durumlar.
+#: Koşan/biten kartın modelini değiştirmek yalanı diske yazmak olurdu.
+EDITABLE_STATUSES = {"backlog", "assigned"}
+
+#: Öncelik rozeti tonları (belirteç sistemi `tone` özelliği).
+PRIORITY_TONES = {"P0": "danger", "P1": "warn", "P2": "accent"}
 
 
 def card_proof(card: Any) -> Optional[Dict[str, Any]]:
@@ -94,12 +126,52 @@ def proof_is_missing(card: Any) -> bool:
 
 def column_for_status(status: str) -> str:
     """Durumu sütun anahtarına eşler; bilinmeyen durumlar Bekliyor'a düşer."""
-    status = (status or "").strip()
-    if status == "failed":
-        return "review"
-    if status in {key for key, _ in COLUMNS}:
-        return status
-    return "backlog"
+    return STATUS_TO_COLUMN.get((status or "").strip(), "backlog")
+
+
+def card_badges(card: Any) -> List[tuple]:
+    """
+    Kart rozetleri: `[(metin, ton)]` — öncelik, sahiplenme, efor, ajan.
+
+    Ton adları belirteç sistemindeki `tone` değerleridir (`accent/ok/warn/
+    danger/muted`); renk burada değil, `_tone_color` üzerinden belirteçten
+    çözülür. Boş alan rozet üretmez — uydurma etiket basılmaz.
+    """
+    badges: List[tuple] = []
+    priority = str(spec_field(card, "priority", "") or "").strip().upper()
+    if priority:
+        badges.append((priority, PRIORITY_TONES.get(priority, "muted")))
+    status = str(spec_field(card, "status", "") or "").strip()
+    if status == "taken":
+        badges.append(("sahiplenildi", "accent"))
+    claimed_by = str(spec_field(card, "claimed_by", "") or "").strip()
+    if claimed_by:
+        badges.append((f"sahip: {claimed_by}", "accent"))
+    effort = str(spec_field(card, "effort", "") or "").strip()
+    if effort:
+        badges.append((f"efor {effort}", "muted"))
+    agent = str(spec_field(card, "agent", "") or "").strip()
+    if agent:
+        badges.append((agent, "ok"))
+    return badges
+
+
+def _tone_color(tone: str) -> str:
+    """Ton adını tasarım belirtecine çevirir (yerel onaltılık renk yazılmaz)."""
+    from entropy.ui.design import TOKENS
+
+    colors = TOKENS["color"]
+    return {
+        "accent": colors["accent"],
+        "ok": colors["ok"],
+        "warn": colors["warn"],
+        "danger": colors["danger"],
+    }.get(tone, colors["text.muted"])
+
+
+def card_is_editable(card: Any) -> bool:
+    """Koşum ayarları yalnızca `backlog`/`assigned` kartlarda değiştirilebilir."""
+    return str(spec_field(card, "status", "")).strip() in EDITABLE_STATUSES
 
 
 def format_duration(card: Any) -> str:
@@ -171,6 +243,18 @@ class TaskCardWidget(QFrame):
         self.title_label.setWordWrap(True)
         self.title_label.setToolTip(title_text)
         layout.addWidget(self.title_label)
+
+        # Faz 11-C: kart üzerinde ajan, öncelik, sahiplenen, efor rozetleri.
+        self.badges = card_badges(card)
+        if self.badges:
+            badge_row = QLabel(" ".join(
+                f"<span style='background:{RT['surface_soft']}; color:{_tone_color(tone)};"
+                f" font-size:{LABEL_PX}px; padding:1px 5px; border-radius:3px;'>{text}</span>"
+                for text, tone in self.badges
+            ))
+            badge_row.setWordWrap(True)
+            badge_row.setToolTip(" · ".join(text for text, _ in self.badges))
+            layout.addWidget(badge_row)
 
         meta_bits = [str(spec_field(card, "agent", "")) or "—"]
         provider = str(spec_field(card, "provider", ""))
@@ -353,16 +437,23 @@ class TaskDetailPanel(QFrame):
             self.provider_combo.setCurrentText(str(spec_field(card, "provider", "") or ""))
             self._on_provider_changed(self.provider_combo.currentText())
             self.model_combo.setCurrentText(str(spec_field(card, "model", "") or ""))
-            notes = str(spec_field(card, "notes", "") or "")
+            # Faz 11-C: `effort` artık gerçek kart alanı. Eski kartlarda
+            # `notes: "effort: X"` hilesi kalmış olabilir; okurken hâlâ
+            # anlaşılır, ama yazarken ARTIK KULLANILMAZ.
             effort = str(spec_field(card, "effort", "") or "")
-            if not effort and "effort:" in notes:
-                effort = notes.split("effort:", 1)[1].strip().split()[0] if notes.split("effort:", 1)[1].strip() else ""
+            if not effort:
+                notes = str(spec_field(card, "notes", "") or "")
+                if "effort:" in notes:
+                    tail = notes.split("effort:", 1)[1].strip()
+                    effort = tail.split()[0] if tail else ""
             # Kartta kayıtlı efor, yeni sağlayıcı/model kümesinde olmasa bile
             # kaybolmaz: kutuya eklenip seçilir.
             if effort and self.effort_combo.findText(effort) < 0:
                 self.effort_combo.addItem(effort)
             self.effort_combo.setCurrentText(effort)
             self.budget_input.setText(str(int(spec_field(card, "budget_tokens", 0) or 0)))
+            # Koşum ayarları yalnızca iş başlamadan değiştirilebilir.
+            self._apply_editability(card)
         while self.outputs_layout.count():
             item = self.outputs_layout.takeAt(0)
             widget = item.widget() if item else None
@@ -407,6 +498,35 @@ class TaskDetailPanel(QFrame):
             btn.setProperty("output_path", str(out))
             btn.clicked.connect(self._on_open_output)
             self.outputs_layout.addWidget(btn)
+
+    def _apply_editability(self, card: Any) -> None:
+        """
+        Ayar formunu kartın durumuna göre kilitler.
+
+        Koşan/inceleme/bitmiş kartın sağlayıcısını değiştirmek diske yalan
+        yazmak olurdu: koşu zaten başka modelle yapıldı. Kilit sebebi ipucunda.
+        """
+        editable = card_is_editable(card)
+        for widget in (self.provider_combo, self.model_combo, self.effort_combo,
+                       self.budget_input, self.apply_btn):
+            widget.setEnabled(editable and widget is not self.effort_combo)
+        if editable:
+            self._refresh_effort()
+        else:
+            self.effort_combo.setEnabled(False)
+        if not editable:
+            status = str(spec_field(card, "status", ""))
+            tip = (
+                f"Kart '{STATUS_LABELS.get(status, status)}' durumunda; koşum "
+                "ayarları yalnızca Bekliyor/Atandı kartlarda değiştirilebilir."
+            )
+            for widget in (self.provider_combo, self.model_combo, self.effort_combo,
+                           self.budget_input, self.apply_btn):
+                widget.setToolTip(tip)
+
+    def settings_editable(self) -> bool:
+        """Test için: form şu an düzenlenebilir mi?"""
+        return bool(self.apply_btn.isEnabled())
 
     # ------------------------------------------------ kontrol noktası / kanıt
 
@@ -594,6 +714,7 @@ class TaskBoardWidget(QFrame):
         self.project_filter: str = ""
         self.column_layouts: Dict[str, QVBoxLayout] = {}
         self.column_headers: Dict[str, QLabel] = {}
+        self.column_frames: Dict[str, QFrame] = {}
         self.card_widgets: List[TaskCardWidget] = []
         self._cards: List[Any] = []
 
@@ -610,6 +731,16 @@ class TaskBoardWidget(QFrame):
         self.title_label.setStyleSheet("background: transparent; border: none;")
         header.addWidget(self.title_label)
         header.addStretch()
+        # Faz 11-C: `TASKBOARD.md` türetilmiş panonun kendisi; kullanıcı
+        # ajanların gördüğü metni doğrudan okuyabilmeli.
+        self.taskboard_btn = QPushButton("Pano dosyası")
+        self.taskboard_btn.setProperty("variant", "ghost")
+        self.taskboard_btn.setFixedHeight(22)
+        self.taskboard_btn.setToolTip(
+            "Entropy/Board/TASKBOARD.md — ajanların okuduğu türetilmiş pano"
+        )
+        self.taskboard_btn.clicked.connect(self.open_taskboard_file)
+        header.addWidget(self.taskboard_btn)
         self.refresh_btn = QPushButton("Yenile")
         self.refresh_btn.setFixedHeight(22)
         self.refresh_btn.clicked.connect(self.refresh_cards)
@@ -661,6 +792,7 @@ class TaskBoardWidget(QFrame):
             # üzerinden yeniden boyutlanır.
             column.setMinimumWidth(COLUMN_MIN_WIDTH)
             columns_layout.addWidget(column, 1)
+            self.column_frames[key] = column
 
         # Faz 7: dört sütunun örtük asgarisi (4x190 + detay) panoyu 1400 px'e
         # zorluyordu; yarım ekran Desk'te (≈900 px) orta sütun kırpılıyordu.
@@ -689,6 +821,18 @@ class TaskBoardWidget(QFrame):
         if signal is not None:
             signal.connect(self._on_cards_updated)
 
+        # Faz 11-C: pano durum makinesi her geçişte `board_state_changed`
+        # yayar. Bir tetikleme turunda onlarca olay gelebilir; her birinde
+        # tüm kartları yeniden kurmak arayüzü kilitliyordu → debounce.
+        self._board_debounce = QTimer(self)
+        self._board_debounce.setSingleShot(True)
+        self._board_debounce.setInterval(BOARD_DEBOUNCE_MS)
+        self._board_debounce.timeout.connect(self.refresh_cards)
+        self.last_board_event: Dict[str, Any] = {}
+        board_signal = getattr(bus, "board_state_changed", None)
+        if board_signal is not None:
+            board_signal.connect(self._on_board_state_changed)
+
         self.refresh_cards()
 
     # ------------------------------------------------------------ veri
@@ -696,6 +840,43 @@ class TaskBoardWidget(QFrame):
     def _on_cards_updated(self, _payload: str = "") -> None:
         """Sözleşme sinyali alıcısı (QObject metodu, lambda değil)."""
         self.refresh_cards()
+
+    def _on_board_state_changed(self, payload: dict) -> None:
+        """
+        `bus.board_state_changed` alıcısı (QObject metodu, lambda değil).
+
+        Yük `{card_id, status, event, agent, office, title}`. Ofisli pano
+        yalnızca kendi ofisinin olaylarını dinler. Yenileme debounce ile
+        toplanır; `flush_board_events()` testte beklemeyi gereksiz kılar.
+        """
+        data = payload if isinstance(payload, dict) else {}
+        office = str(data.get("office") or "")
+        if self.office and office and office != self.office:
+            return
+        self.last_board_event = dict(data)
+        self._board_debounce.start()
+
+    def flush_board_events(self) -> None:
+        """Bekleyen debounce'u hemen uygular (test ve pencere odaklanması)."""
+        if self._board_debounce.isActive():
+            self._board_debounce.stop()
+            self.refresh_cards()
+
+    def open_taskboard_file(self) -> str:
+        """`TASKBOARD.md` dosyasını rapor okuyucuda açar; yolu döner ('' = yok)."""
+        try:
+            from entropy.core.paths import board_taskboard_path
+
+            path = Path(board_taskboard_path())
+        except Exception:
+            return ""
+        if not path.exists():
+            bus.terminal_output_received.emit(
+                "[Pano] TASKBOARD.md henüz üretilmedi (pano olayı yok).\n"
+            )
+            return ""
+        bus.report_created.emit(str(path))
+        return str(path)
 
     def list_cards(self) -> List[Any]:
         # Faz 9: kartlar iki kökte. Ofissiz pano = Entropy kapsamı (Zen
@@ -794,6 +975,11 @@ class TaskBoardWidget(QFrame):
                     widget.deleteLater()
             column_cards = self.cards_in_column(key)
             label = dict(COLUMNS)[key]
+            # Uç durum sütunları (Başarısız/İptal) boşken gizlenir: pano tek
+            # ekrana sığsın, ama bir kart düştüğü an sütun geri gelsin.
+            frame = self.column_frames.get(key)
+            if frame is not None and key in COLLAPSIBLE_COLUMNS:
+                frame.setVisible(bool(column_cards))
             self.column_headers[key].setText(
                 f"<span style='color:{RT['text_dim']}; font-size:11px; font-weight:600; "
                 f"letter-spacing:0.4px;'>{label.upper()}</span>"
@@ -847,21 +1033,28 @@ class TaskBoardWidget(QFrame):
         """
         Kartın koşum ayarlarını (sağlayıcı/model/efor/bütçe) yazar.
 
-        `effort` TaskCard'da alan değil: `notes` içine `effort: <düzey>` satırı
-        olarak taşınır. Dataclass'ta olmayan anahtarlar sessizce atılır ki
-        sözleşme değişince arayüz kırılmasın.
+        Faz 11-C: `effort` GERÇEK kart alanı (`TaskCard.effort`); eski
+        `notes: "effort: X"` hilesi kaldırıldı — o satırı hiçbir koşum yolu
+        okumuyordu, seçim sessizce kayboluyordu. Dataclass'ta olmayan
+        anahtarlar yine sessizce atılır ki sözleşme değişince arayüz kırılmasın.
+
+        Yalnızca `backlog`/`assigned` kartlar yazılabilir; başlamış bir kartın
+        modelini değiştirmek diske yalan yazmak olurdu.
         """
         if self.board is None or not card_id:
             return False
-        payload = {k: v for k, v in (settings or {}).items() if v not in ("", None)}
-        effort = str(payload.pop("effort", "") or "")
-        if effort:
-            payload["notes"] = f"effort: {effort}"
-        payload["budget_tokens"] = int((settings or {}).get("budget_tokens", 0) or 0)
         try:
             current = self.board.get(card_id)
         except Exception:
             current = self.get_card(card_id)
+        target = current if current is not None else self.get_card(card_id)
+        if target is not None and not card_is_editable(target):
+            bus.terminal_output_received.emit(
+                f"[Pano] '{card_id}' başlamış bir kart; koşum ayarları değiştirilmedi.\n"
+            )
+            return False
+        payload = {k: v for k, v in (settings or {}).items() if v not in ("", None)}
+        payload["budget_tokens"] = int((settings or {}).get("budget_tokens", 0) or 0)
         try:
             if current is not None and hasattr(current, "__dataclass_fields__"):
                 from dataclasses import replace
@@ -988,7 +1181,10 @@ class CompactTaskListWidget(QFrame):
         cards = self.list_cards()
         return sum(
             1 for c in cards
-            if str(spec_field(c, "status", "")) in {"backlog", "running", "review", "failed"}
+            # Faz 11-C: "açık" = kapanmamış her durum (`done`/`canceled` hariç).
+            if str(spec_field(c, "status", "")) in {
+                "backlog", "assigned", "taken", "running", "review", "failed"
+            }
         )
 
     def refresh_cards(self) -> None:
