@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 from typing import List, Optional
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QEvent, Qt, Slot
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -34,7 +34,7 @@ from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, reading_css
 from entropy.ui.design import TOKENS, icon as design_icon
-from entropy.ui.design.prefs import install_splitter_persistence
+from entropy.ui.design.prefs import install_splitter_persistence, zen_core_visible
 from entropy.ui.widgets.header_bar import (
     BrandCluster, ModelCapsule, PaletteButton, StatusCluster, WindowControls,
     context_badge_tone, repolish as _repolish,
@@ -152,14 +152,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         header = FlowHeaderFrame(margins=(16, 8, 16, 8))
         h_layout = header.flow()
 
-        # (1) Marka + küçük çekirdek + durum noktası + mod anahtarı.
-        # Denetim D-11: çekirdek görselleştirici merkez sütunda 160×160 px yer
-        # kaplıyor ve sütunun %93'ünü boş bırakıyordu; buraya 22 px olarak iner.
+        # (1) Marka + durum noktası + mod anahtarı.
+        # Faz 13 (kullanıcı geri bildirimi): 11-E'de çekirdek buraya 24 px'lik
+        # bir nokta olarak inmişti; kullanıcı "çekirdek görseli gitmiş" dedi.
+        # Gerçek çekirdek sohbet bölgesinin sağ üstüne döndü (aşağıda,
+        # `_install_core_overlay`); üst çubukta yalnızca marka kümesinin
+        # kendi durum noktası kalır — aynı bilgi ekranda iki kez görünmez.
         self.brand = BrandCluster(current_mode="zen")
-        self.core_visualizer = CoreVisualizerWidget(base_radius=9, mode_menu_enabled=True)
-        self.core_visualizer.setFixedSize(24, 24)
-        self.core_visualizer.setToolTip("Entropy çekirdeği — tıklayınca kip menüsü")
-        self.brand.insert_core(self.core_visualizer)
         h_layout.addWidget(self.brand)
 
         h_layout.addStretch()
@@ -471,6 +470,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.chat_browser.document().setDefaultStyleSheet(reading_css())
         chat_layout.addWidget(self.chat_browser)
 
+        # Faz 13: çekirdek görselleştirici (durum animasyonu) sohbet akışının
+        # sağ üst köşesinde bindirme olarak durur. Yerleşimden yer ALMAZ, fare
+        # olaylarını geçirir ve odak almaz; bu yüzden yoğunluk kapısındaki
+        # `interactive_count` değişmez.
+        self._install_core_overlay()
+
         # Staged image preview bar
         self.attachment_bar = QFrame()
         self.attachment_bar.setVisible(False)
@@ -568,6 +573,94 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             self._apply_header_density()
         except Exception:
             pass
+
+    # ------------------------------------------------------------ çekirdek
+
+    #: Sohbet bindirmesindeki çekirdeğin kenar uzunluğu (px) ve çizim yarıçapı.
+    CORE_OVERLAY_SIZE = 136
+    CORE_OVERLAY_RADIUS = 46
+
+    def _install_core_overlay(self) -> None:
+        """Çekirdeği sohbet akışının üstüne bindirir (etkileşimsiz)."""
+        self.core_visualizer = CoreVisualizerWidget(
+            parent=self.chat_browser, base_radius=self.CORE_OVERLAY_RADIUS,
+        )
+        self.core_visualizer.setObjectName("zenCoreOverlay")
+        self.core_visualizer.setFixedSize(self.CORE_OVERLAY_SIZE, self.CORE_OVERLAY_SIZE)
+        self.core_visualizer.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self.core_visualizer.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.core_visualizer.setAccessibleName("Entropy çekirdeği — durum göstergesi")
+        self.core_visualizer.setToolTip(
+            "Entropy çekirdeği: boşta / düşünüyor / yürütülüyor / hata"
+        )
+        self.chat_browser.installEventFilter(self)
+        self.apply_core_preference()
+        self._position_core_overlay()
+
+    def _position_core_overlay(self) -> None:
+        """Bindirmeyi sohbet akışının REZERVE üst şeridine yerleştirir.
+
+        Faz 13 (ikinci geçiş): bindirme eskiden metnin ve dikey kaydırma
+        çubuğunun üstüne biniyordu (136 px'lik kare ilk satırları ve çubuğun
+        başını örtüyordu). Artık `setViewportMargins` ile üstte bir şerit
+        rezerve edilir: çekirdek o şeritte yaşar, metin şeridin ALTINDA başlar,
+        kaydırma çubuğu da şeridin altından çizilir.
+        """
+        core = getattr(self, "core_visualizer", None)
+        browser = getattr(self, "chat_browser", None)
+        if core is None or browser is None:
+            return
+        margin = TOKENS["space"]["2"]
+        # Görünüm alanı (viewport) çerçeveyi ve dikey kaydırma çubuğunu zaten
+        # dışarıda bırakır; sağ kenarı ondan almak çubuğun örtülmesini
+        # matematiksel olarak imkânsız kılar.
+        viewport = browser.viewport().geometry()
+        right = viewport.right() if viewport.width() > 0 else browser.width()
+        x = max(0, right - core.width() - margin)
+        core.move(x, margin)
+        core.raise_()
+
+    def _core_reserved_height(self) -> int:
+        """Çekirdek görünürken sohbet gövdesinin üstünde bırakılan şerit (px)."""
+        core = getattr(self, "core_visualizer", None)
+        browser = getattr(self, "chat_browser", None)
+        if core is None or browser is None or not core.isVisible():
+            return 0
+        strip = self.CORE_OVERLAY_SIZE + 2 * TOKENS["space"]["2"]
+        # Şerit gövdeyi yutmamalı: en az 120 px'lik okunur metin alanı kalmalı.
+        # Kalmıyorsa şerit rezerve edilmez (çok kısa sohbet gövdesi).
+        if browser.height() and browser.height() < strip + 120:
+            return 0
+        return strip
+
+    def _apply_core_reserved_strip(self) -> None:
+        browser = getattr(self, "chat_browser", None)
+        if browser is None:
+            return
+        try:
+            browser.setViewportMargins(0, self._core_reserved_height(), 0, 0)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def apply_core_preference(self) -> None:
+        """Ayarlardaki "çekirdeği göster" tercihini uygular (varsayılan açık)."""
+        core = getattr(self, "core_visualizer", None)
+        if core is None:
+            return
+        core.setVisible(zen_core_visible())
+        # Gizlenince şerit kalkar: sohbet gövdesi bütün yüksekliği kullanır.
+        self._apply_core_reserved_strip()
+        self._position_core_overlay()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is getattr(self, "chat_browser", None) and event.type() in (
+            QEvent.Type.Resize, QEvent.Type.Show,
+        ):
+            self._apply_core_reserved_strip()
+            self._position_core_overlay()
+        return super().eventFilter(obj, event)
 
     def _build_status_strip(self) -> QWidget:
         """Sol bölgenin altındaki tek satırlık durum şeridi.

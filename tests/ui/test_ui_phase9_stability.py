@@ -114,6 +114,9 @@ def test_mark_all_read_writes_state_file_once(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "save", counting_save)
     paths = [str(tmp_path / f"r{i}.md") for i in range(50)]
     assert store.set_many(paths, read=True) == 50
+    # Faz 13-A3: yazım ertelenir; flush sonrası TOPLAM yazım sayısı yine 1'dir
+    # (asıl sözleşme "girdi başına bir yazım YOK" idi).
+    store.flush()
     assert writes["n"] == 1, "toplu işlem tek yazım yapmalı"
     assert all(store.is_read(p) for p in paths)
 

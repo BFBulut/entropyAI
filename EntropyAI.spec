@@ -72,6 +72,7 @@ a = Analysis(
         'entropy.core.project_lock',
         'entropy.core.slash_commands',
         'entropy.core.provider',
+        'entropy.core.report_title',
         'entropy.core.claude_bridge',
         'entropy.core.masking',
         'entropy.core.perf_history',

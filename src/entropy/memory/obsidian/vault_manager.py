@@ -92,6 +92,42 @@ _REPORT_SCAN_CACHE: Dict[str, Dict[str, Any]] = {}
 _REPORT_CACHE_LOCK = threading.Lock()
 
 
+#: Faz 13 — rapor başlığı sözleşmesi (kullanıcı: "rapor başlıkları garip").
+#: Arka plan görevinin adı çoğu zaman kullanıcının sohbet cümlesinden gelir ve
+#: bu cümle olduğu gibi hem dosya adına hem frontmatter `title` alanına
+#: yazılıyordu ("Tamamdır, şimdi senden yeni bir yetenek (+2)"). Kaydederken
+#: başlık burada kısaltılır; okuma tarafındaki türetme
+#: `ui/widgets/report_center.derive_report_title` ile aynı kuralları izler.
+#: Tek kaynak: `entropy.core.report_title`. Liste burada yeniden yazılmaz.
+from entropy.core.report_title import (  # noqa: E402
+    TITLE_MAX_CHARS as _CORE_TITLE_MAX,
+    _CHAT_OPENERS as _TITLE_OPENERS,
+)
+
+#: Başlık üst sınırı (karakter) — çekirdekle aynı.
+REPORT_TITLE_MAX = _CORE_TITLE_MAX
+
+
+def sanitize_report_title(title: str) -> str:
+    """Sohbetten kopmuş cümleyi okunur bir *dosya adı* başlığına indirger.
+
+    Faz 13 (ikinci geçiş): kırpma ve yasak karakter temizliği **tek kaynaktan**
+    gelir — `core.report_title.safe_filename_title`. Buradaki tek ek kural,
+    kasaya özgü olan "açılış cümleciğini at" adımıdır.
+    """
+    from entropy.core.report_title import safe_filename_title
+
+    text = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not text:
+        return ""
+    # "Tamamdır, şimdi senden ..." → açılış cümleciği atılır.
+    first = re.split(r"[\s,.:;!?]+", text.lower(), maxsplit=1)[0]
+    if first in _TITLE_OPENERS and "," in text:
+        text = text.split(",", 1)[1].strip() or text
+    cleaned = safe_filename_title(text, max_len=REPORT_TITLE_MAX)
+    return "" if cleaned == "Arastirma_Raporu" and not text else cleaned
+
+
 def _walk_markdown(root: Path):
     """
     Kasadaki `.md` dosyaları + `stat` sonucu, atlanan alt ağaçlara HİÇ girmeden.
@@ -459,6 +495,8 @@ class ObsidianVaultManager:
         elif tags is not None and not isinstance(tags, (list, tuple, set)):
             actual_tags = [str(tags)]
 
+        # Faz 13: başlık hem dosya adında hem frontmatter'da kısaltılmış hâliyle durur.
+        title = sanitize_report_title(title) or str(title or "")
         safe_title = "".join([c if c.isalnum() or c in " -_" else "_" for c in title]).strip()
         if not safe_title:
             safe_title = "Arastirma_Raporu"

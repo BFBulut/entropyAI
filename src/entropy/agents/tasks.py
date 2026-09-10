@@ -1470,6 +1470,12 @@ class TaskBoard:
             on_result=_on_result,
             save_report=True,
             agent=card.agent or None,
+            # Faz 13-A: raporun kasadaki yeri KARTIN yetenek alanına bağlıdır.
+            # Boş dizge "yetenek yok" demektir ve köprünün istem sezgisini
+            # kapatır; yeteneksiz bir kartın raporu artık yabancı bir yeteneğin
+            # `Skills/<ad>/Reports/` klasörüne düşmez (QA bulgusu, kart
+            # `…-devir-karti-d` → `Skills/financial-auditor/Reports`).
+            skill=card.skill or "",
             # Okuma niyetli kart paylaşımlı kilitle koşar; aksi hâlde aynı
             # proje dizinindeki ikinci alt kart 60 sn bekleyip ölüyordu.
             needs_write=needs_write,
@@ -1534,7 +1540,7 @@ class TaskBoard:
         for optional in ("needs_write", "project_path", "max_steps", "model",
                          "agent_spec", "stream_meta", "interactive",
                          "on_followup_start", "on_followup_end", "effort",
-                         "session_id", "conversation_id", "agent_name"):
+                         "session_id", "conversation_id", "agent_name", "skill"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):

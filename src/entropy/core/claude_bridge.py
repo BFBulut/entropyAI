@@ -53,6 +53,15 @@ from entropy.core.config import config
 # yardımcıları için gerçek modül gerekiyor (agy_bridge ile aynı tuzak).
 config_module = _sys.modules["entropy.core.config"]
 from entropy.core.event_bus import bus
+#: `[OTONOM PLANLI GÖREV: <ad>]` etiketi. `.lower()` kullanılmaz: Türkçe
+#: "I" harfi "i"ye düşüp kalıbı kaçırıyor (Faz 13-A).
+TASK_PROMPT_RE = re.compile(r"\[OTONOM\s+PLANLI\s+GÖREV:\s*([^\]]+)\]", re.IGNORECASE)
+
+from entropy.core.report_title import (
+    derive_report_title,
+    safe_filename_title,
+    save_session_note,
+)
 from entropy.core.masking import mask_tool_output
 from entropy.core.project_lock import LOCK_TIMEOUT_MARKER, project_lock_manager
 
@@ -1834,6 +1843,23 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
 
         if full_text:
             self._save_chat_turn(prompt, full_text)
+            # Faz 13-A (§1.5): serbest sohbet turu RAPOR DEĞİLDİR; kullanıcı
+            # verisi kaybolmasın diye `Entropy/Sessions/` altına `type: session`
+            # künyesiyle yazılır. Rapor üreten tek yollar: pano kartı çıktısı,
+            # `[OTONOM PLANLI GÖREV]` ve açık `/learn`.
+            try:
+                if not re.search(r'(?:^|\s)/learn\b', prompt or "", re.IGNORECASE) \
+                        and not TASK_PROMPT_RE.search(prompt or ""):
+                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    save_session_note(
+                        ObsidianVaultManager().entropy_dir,
+                        full_text,
+                        provider="claude",
+                        model=getattr(self, "current_model", "") or "",
+                        skill=str(active_skill or ""),
+                    )
+            except Exception:
+                pass
             try:
                 bus.agent_turn_completed.emit(full_text)
             except Exception:
@@ -1892,6 +1918,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         tools: Optional[List[str]] = None,
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
+        skill: Optional[str] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
@@ -1936,7 +1963,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
                   model, agent_spec, stream_meta, interactive,
-                  on_followup_start, on_followup_end, tools, effort, session_id),
+                  on_followup_start, on_followup_end, tools, effort, session_id,
+                  skill),
             daemon=True,
         ).start()
 
@@ -2057,6 +2085,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         tools: Optional[List[str]] = None,
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
+        skill: Optional[str] = None,
     ) -> None:
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         # Kip bayrağı ayardan; kapalıysa hiçbir çağıran değişmeden Faz 10-B
@@ -2339,13 +2368,24 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     # Rapor, görevin hangi yeteneğin işi olduğuna atfedilir: atıfsız
                     # rapor hiçbir yetenek için damıtma kaynağı sayılmıyor (AGY
                     # köprüsündeki davranışla aynı).
-                    try:
-                        detected = self.detect_skill_for_prompt(prompt)
-                        task_skill = detected.name if detected else None
-                    except Exception:
-                        task_skill = None
+                    # Faz 13-A: kartın yetenek alanı sezgiyi ezer (AGY köprüsüyle
+                    # aynı kural); yeteneksiz kartın raporu yabancı bir yeteneğin
+                    # klasörüne düşmez.
+                    if skill is not None:
+                        task_skill = str(skill).strip() or None
+                    else:
+                        try:
+                            detected = self.detect_skill_for_prompt(prompt)
+                            task_skill = detected.name if detected else None
+                        except Exception:
+                            task_skill = None
+                    # Faz 13-A: başlık gövdeden türetilir (AGY köprüsüyle aynı
+                    # kural); `Gorev_` öneki + zaman damgası korunur.
+                    derived_name = safe_filename_title(
+                        derive_report_title(full_text, fallback=clean_name), max_len=60
+                    )
                     rep_path = vm.save_research_report(
-                        f"Gorev_{clean_name}_{time_tag}",
+                        f"Gorev_{derived_name}_{time_tag}",
                         report,
                         tags=["otonom_gorev", task_id],
                         project_name=self.active_project_dir.name if self.active_project_dir else None,

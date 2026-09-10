@@ -30,12 +30,14 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from entropy.core.config import STATE_DIR
+from entropy.ui.design import TOKENS as DS_TOKENS, icon as design_icon
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
 
@@ -47,9 +49,101 @@ DEFAULT_STATE_FILENAME = "report_inbox.json"
 # Şeritte aynı anda gösterilen en fazla girdi (kalanı listede zaten var).
 MAX_STRIP_ITEMS = 12
 
+#: Faz 13-A3 — okundu/pin yazımının erteleme penceresi (ms).
+#: Ölçüm (araştırma notu §1.2): her tıklama 143 KB'lık JSON'u ana iş
+#: parçacığında yeniden yazıyordu. Yazım artık toplanır; kaybolmaması için
+#: `aboutToQuit` ve widget `hideEvent/closeEvent` kancaları flush eder.
+SAVE_DEBOUNCE_MS = 1000
+
+#: Kasada oturum notlarının yaşadığı klasör adı. İki biçim de bunun altında:
+#: `Entropy/Sessions/2026-09-10-konu.md` (eski) ve `Sessions/<gün>/<saat>-<konu>.md`.
+SESSIONS_DIR_NAME = "Sessions"
+
+
+def _is_session_path(path: Any) -> bool:
+    """Yol `Entropy/Sessions/...` altında mı? (iki biçim de kapsanır)"""
+    try:
+        parts = Path(str(path or "")).parts
+    except (OSError, ValueError):
+        return False
+    return SESSIONS_DIR_NAME in parts
+
+
+def _has_session_frontmatter(path: Any) -> bool:
+    """Dosyanın ön bilgisinde `type: session` var mı? (yalnız baş 512 bayt)"""
+    try:
+        with open(str(path), "r", encoding="utf-8", errors="ignore") as handle:
+            head = handle.read(512)
+    except OSError:
+        return False
+    if not head.lstrip("﻿").startswith("---"):
+        return False
+    body = head.lstrip("﻿")
+    end = body.find("\n---", 3)
+    front = body[3:end] if end != -1 else body[3:]
+    for line in front.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip().lower() == "type" and value.strip().strip("\"'").lower() == "session":
+            return True
+    return False
+
+
+def is_session_entry(entry: Dict[str, Any]) -> bool:
+    """Künye bir *oturum notu* mu? (rapor değil — Faz 13, araştırma notu §1.5)
+
+    İki ölçüt: yolun `Sessions/` altında olması **veya** ön bilgide
+    `type: session` bulunması. Sayaç ve varsayılan liste bunları saymaz;
+    "Oturumlar" süzgeci açıkken görünür olurlar.
+    """
+    if not isinstance(entry, dict):
+        return False
+    kind = str(entry.get("type") or entry.get("kind") or "").strip().lower()
+    if kind == "session":
+        return True
+    path = entry.get("path", "")
+    if _is_session_path(path):
+        return True
+    return _has_session_frontmatter(path)
+
 
 def inbox_state_path() -> Path:
     return Path(STATE_DIR) / DEFAULT_STATE_FILENAME
+
+
+class _SaveScheduler(QObject):
+    """Ertelenmiş diske yazımın Qt tarafı (Faz 13-A3).
+
+    Depo saf Python kalır; zamanlayıcı burada yaşar. Alıcı lambda değil,
+    QObject slot'udur (kuyruğa alınabilir bağlantı).
+    """
+
+    def __init__(self, store: "ReportInboxStore"):
+        super().__init__()
+        self._store = store
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(SAVE_DEBOUNCE_MS)
+        self._timer.timeout.connect(self.flush)
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.aboutToQuit.connect(self.flush)
+            except (TypeError, RuntimeError):
+                pass
+
+    def schedule(self) -> None:
+        self._timer.start()
+
+    def is_pending(self) -> bool:
+        return self._timer.isActive()
+
+    @Slot()
+    def flush(self) -> None:
+        self._timer.stop()
+        try:
+            self._store.flush()
+        except RuntimeError:
+            pass
 
 
 class ReportInboxStore:
@@ -59,7 +153,39 @@ class ReportInboxStore:
         self.path = Path(path) if path is not None else inbox_state_path()
         self._items: Dict[str, Dict[str, Any]] = {}
         self._dirty = False
+        self._scheduler_obj: Optional[_SaveScheduler] = None
         self.load()
+
+    # ------------------------------------------------- ertelenmiş yazım
+
+    def _scheduler(self) -> Optional[_SaveScheduler]:
+        """Ana iş parçacığında ve QApplication varsa erteleyiciyi verir."""
+        if self._scheduler_obj is not None:
+            return self._scheduler_obj
+        app = QApplication.instance()
+        if app is None:
+            return None
+        if QThread.currentThread() is not app.thread():
+            # İşçi iş parçacığı: Qt nesnesi kurulmaz, yazım hemen yapılır.
+            return None
+        self._scheduler_obj = _SaveScheduler(self)
+        return self._scheduler_obj
+
+    def schedule_save(self) -> bool:
+        """Yazımı `SAVE_DEBOUNCE_MS` kadar erteler (tıklama yolu disksizdir).
+
+        Erteleyici kurulamıyorsa (Qt yok / işçi iş parçacığı) eski davranışa,
+        yani anında yazıma düşer — veri kaybı riski yok.
+        """
+        self._dirty = True
+        scheduler = self._scheduler()
+        if scheduler is None:
+            return self.save()
+        scheduler.schedule()
+        return False
+
+    def has_pending_writes(self) -> bool:
+        return bool(self._dirty)
 
     # ------------------------------------------------------------ kalıcılık
 
@@ -112,7 +238,8 @@ class ReportInboxStore:
         item = self._items.setdefault(key, {"first_seen": time.time()})
         item.update(changes)
         if autosave:
-            self.save()
+            # Faz 13-A3: tıklama yolunda `write_text` YOK; yazım toplanır.
+            self.schedule_save()
         else:
             self._dirty = True
         return dict(item)
@@ -132,14 +259,20 @@ class ReportInboxStore:
             self._set(path, autosave=False, **changes)
             count += 1
         if count:
-            self.save()
+            self.schedule_save()
         return count
 
     def mark_paths_read(self, paths: Any, read: bool = True) -> int:
         return self.set_many(paths, read=bool(read))
 
     def flush(self) -> bool:
-        """Bekleyen (autosave=False) değişiklikleri diske yazar."""
+        """Bekleyen (ertelenmiş) değişiklikleri diske yazar."""
+        scheduler = self._scheduler_obj
+        if scheduler is not None:
+            try:
+                scheduler._timer.stop()
+            except RuntimeError:
+                pass
         if not getattr(self, "_dirty", False):
             return True
         return self.save()
@@ -256,7 +389,9 @@ _META_CACHE: Dict[tuple, Dict[str, Any]] = {}
 _META_CACHE_MAX = 4000
 
 
-def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
+def collect_recent_entries(
+    limit: int = 60, include_sessions: bool = False
+) -> List[Dict[str, Any]]:
     """
     Kasadan rapor künyelerini toplar (Chat kipi gibi rapor okuyucusu olmayan
     yüzeyler için).
@@ -264,6 +399,10 @@ def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
     Raporlar sekmesi zaten kendi listesini kuruyor; burada aynı iş ikinci kez
     yapılmaz, yalnızca kasadaki rapor dosyaları taranır. Kasa okunamazsa boş
     liste döner (Chat üst çubuğu rozeti göstermez, çökmez).
+
+    Faz 13: **oturum notları rapor değildir.** `Entropy/Sessions/` altındaki
+    dosyalar ve ön bilgisinde `type: session` bulunanlar varsayılan olarak
+    listeye ve sayaca girmez; `include_sessions=True` ile görünür olurlar.
     """
     try:
         from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
@@ -276,6 +415,8 @@ def collect_recent_entries(limit: int = 60) -> List[Dict[str, Any]]:
             try:
                 st = path.stat()
             except OSError:
+                continue
+            if not include_sessions and is_session_entry({**report, "path": path}):
                 continue
             # Faz 9 - artimli tazeleme: imzasi (mtime, boyut) degismeyen kunye
             # yeniden okunmaz. Eskiden her `reports_updated` sinyalinde 703
@@ -375,6 +516,12 @@ class InboxItemWidget(QFrame):
         layout.addWidget(self.title_label, 1)
 
         self.pin_btn = QPushButton("")
+        # G13-1 (boş etkileşimli öğe): metni olmayan düğmede ikon + erişilebilir
+        # ad zorunludur; ikisi de yoksa öğe görünmez bir dikdörtgene döner.
+        self.pin_btn.setIcon(design_icon("pin", color=DS_TOKENS["color"]["text"]))
+        self.pin_btn.setAccessibleName(
+            "Sabitlemeyi kaldır" if entry.get("pinned") else "Sabitle"
+        )
         self.pin_btn.setProperty("role", "icon")
         self.pin_btn.setToolTip(
             "Sabitlemeyi kaldır" if entry.get("pinned") else "Sabitle (24 saat dolsa da listede kalsın)"
@@ -383,6 +530,7 @@ class InboxItemWidget(QFrame):
         layout.addWidget(self.pin_btn)
 
         self.archive_btn = QPushButton("")
+        self.archive_btn.setIcon(design_icon("archive", color=DS_TOKENS["color"]["text"]))
         self.archive_btn.setAccessibleName("Arşivle (şeritten kaldır; rapor listesinde kalır)")
         self.archive_btn.setProperty("role", "icon")
         self.archive_btn.setToolTip("Arşivle (şeritten kaldır; rapor listesinde kalır)")
@@ -546,6 +694,16 @@ class ReportInboxStrip(QFrame):
         self.refresh()
 
     def mark_all_read(self) -> None:
-        for entry in self.visible_entries():
-            self.store.mark_read(entry["path"], True)
+        self.store.set_many([e["path"] for e in self.visible_entries()], read=True)
         self.refresh()
+
+    # --------------------------------------------------- kapanış kancaları
+
+    def hideEvent(self, event):  # noqa: N802
+        # Faz 13-A3: ertelenmiş okundu/pin yazımı burada diske iner.
+        self.store.flush()
+        super().hideEvent(event)
+
+    def closeEvent(self, event):  # noqa: N802
+        self.store.flush()
+        super().closeEvent(event)

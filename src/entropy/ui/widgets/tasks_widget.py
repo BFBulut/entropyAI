@@ -20,6 +20,7 @@ from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design import TOKENS, icon as design_icon
 from entropy.ui.design.embedded import live_palette as _live_palette
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
@@ -55,15 +56,18 @@ class TasksWidget(QFrame):
         header.addWidget(title_label)
         header.addStretch()
 
-        add_btn = QPushButton("+ Görev Ekle")
-        add_btn.setAccessibleName("+ Görev Ekle")
+        # Faz 13: birincil eylem ikonlu ve belirgin (kullanıcı: "düğmeler görünmüyor").
+        add_btn = QPushButton("Görev ekle")
+        add_btn.setAccessibleName("Görev ekle")
         add_btn.setProperty("variant", "primary")
+        add_btn.setIcon(design_icon("add", color=TOKENS["color"]["accent.ink"]))
         add_btn.clicked.connect(self._show_add_dialog)
         header.addWidget(add_btn)
 
         # Kayıt defteri (tasks_ledger.db) temizliği: bitmiş görev satırlarını siler.
         self.clear_ledger_btn = QPushButton("Kayıt Defteri")
         self.clear_ledger_btn.setAccessibleName("Kayıt Defteri")
+        self.clear_ledger_btn.setProperty("variant", "ghost")
         self.clear_ledger_btn.setToolTip("Kayıt defterindeki bitmiş görev kayıtlarını (başarılı/hatalı/iptal) temizle")
         self.clear_ledger_btn.clicked.connect(self._on_clear_ledger)
         header.addWidget(self.clear_ledger_btn)
@@ -173,6 +177,7 @@ class TasksWidget(QFrame):
 
             # Edit button: ad / periyot / talimat düzenleme
             edit_btn = QPushButton("")
+            edit_btn.setIcon(design_icon("edit", color=TOKENS["color"]["text"]))
             edit_btn.setAccessibleName("Zamanlanmış görevi düzenle (ad, periyot, talimat)")
             edit_btn.setObjectName(f"task_edit_{t_id}")
             edit_btn.setProperty("role", "icon")

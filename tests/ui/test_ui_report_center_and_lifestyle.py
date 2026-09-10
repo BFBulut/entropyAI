@@ -328,10 +328,13 @@ def test_report_center_live_on_reports_updated(center, tmp_path, monkeypatch):
     from entropy.ui.widgets import report_center as rc
 
     path = write_report(tmp_path, "canli", "Canlı Rapor")
-    monkeypatch.setattr(rc, "collect_recent_entries", lambda limit=60: [meta(path)], raising=False)
+    # Faz 13: `collect_recent_entries` imzasına `include_sessions` eklendi.
+    monkeypatch.setattr(
+        rc, "collect_recent_entries", lambda limit=60, **kw: [meta(path)], raising=False
+    )
     monkeypatch.setattr(
         "entropy.ui.widgets.report_inbox.collect_recent_entries",
-        lambda limit=60: [meta(path)],
+        lambda limit=60, **kw: [meta(path)],
     )
     bus.reports_updated.emit("")
     # Faz 9: sinyal artık 1,5 sn birleştirilir ve tarama işçi iş parçacığında
@@ -689,6 +692,16 @@ def test_zen_report_toolbar_buttons_are_icon_only_with_tooltips(qapp):
 
     widget = ReportsViewerWidget()
     try:
+        # Faz 13-A4: okuma araç çubuğu "okuma kipi"nde yaşar; gözden geçirme
+        # kipinde okuyucu bölgesi sıfıra katlıdır. İkon düğmesinin 30 px
+        # sınırını QSS dayatır (role="icon"), o yüzden sistem uygulanır.
+        from entropy.ui.design import apply_design_system
+
+        apply_design_system(qapp)
+        widget.resize(1000, 700)
+        widget.show()
+        widget.enter_reading_mode()
+        qapp.processEvents()
         for btn in (widget.btn_open_obsidian, widget.btn_open_folder):
             assert len(btn.text()) <= 2, f"etiket hâlâ uzun: {btn.text()!r}"
             assert btn.toolTip(), "ikon düğmesinin ipucu zorunlu"

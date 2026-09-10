@@ -14,13 +14,16 @@ görünür (import guard). Testler yapıcıya sahte pano verebilir.
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QScrollArea, QSplitter, QVBoxLayout, QWidget
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSplitter,
+    QStackedWidget, QVBoxLayout, QWidget
 )
 
 from entropy.core.event_bus import bus
@@ -28,18 +31,60 @@ from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design import TOKENS, icon as design_icon
+from entropy.ui.widgets.flow_layout import FlowLayout
 from entropy.ui.design.embedded import live_palette as _live_palette
 from entropy.ui.design.prefs import install_splitter_persistence
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
 
+_FENCE_RE = re.compile(r"```.*?```", re.S)
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*", re.M)
+_QUOTE_RE = re.compile(r"^\s{0,3}>\s?", re.M)
+_BULLET_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d+[.)])\s+", re.M)
+_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_EMPHASIS_RE = re.compile(r"[`*~]+")
+
+
+def plain_preview(text: Any, limit: int = 110) -> str:
+    """Kart önizlemesi için ham markdown'ı düz metne indirir.
+
+    Faz 13-A kapanış: pano kartının özet satırı `##` başlıklarını, kod
+    çitlerini ve backtick'leri **olduğu gibi** gösteriyordu (ekran görüntüsü
+    kanıtı). Makine blokları (`[PANO …]`, `[KANIT]` …) `report_title`
+    sözleşmesiyle, markdown işaretleri burada temizlenir.
+    """
+    from entropy.core.report_title import strip_frontmatter, strip_machine_blocks
+
+    raw = strip_machine_blocks(strip_frontmatter(str(text or "")))
+    raw = _FENCE_RE.sub(" ", raw)
+    raw = _HEADING_RE.sub("", raw)
+    raw = _QUOTE_RE.sub("", raw)
+    raw = _BULLET_RE.sub("", raw)
+    raw = _LINK_RE.sub(r"\1", raw)
+    raw = _EMPHASIS_RE.sub("", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if limit and len(raw) > limit:
+        raw = raw[: limit - 1].rstrip(" ,;:-–—") + "…"
+    return raw
+
 # Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
 # Faz 11-C: yedi sütun olunca 190 px pano genişliğini 1.400 px'e zorluyordu.
-COLUMN_MIN_WIDTH = 168
+#: Faz 13 (kullanıcı: "görevler sıkışık"): kart okunur genişliği 168 → 220 px.
+COLUMN_MIN_WIDTH = 220
+
+#: Sütunlar arası boşluk ve pano kenar boşluğu (yerleşimle aynı sayı).
+COLUMN_SPACING = 6
+BOARD_MARGIN = 8
+#: Detay panelinin asgarisi.
+DETAIL_MIN_WIDTH = 180
+#: Liste görünümünün asgarisi (durum etiketi + kart başlığı okunur kalsın).
+LIST_VIEW_MIN_WIDTH = 240
 
 #: `board_state_changed` yenileme gecikmesi (ms) — olay salvosu tek turda toplanır.
 BOARD_DEBOUNCE_MS = 150
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame
 from entropy.ui.widgets.agents_widget import (
     STATUS_COLORS, STATUS_LABELS, call_flex, list_cards_for, load_board,
     model_belongs_to, models_for_provider, spec_field
@@ -56,8 +101,14 @@ COLUMNS = [
     ("canceled", "İptal"),
 ]
 
-#: Boşken gizlenen sütunlar — uç durumlar panoyu sürekli işgal etmesin.
-COLLAPSIBLE_COLUMNS = {"failed", "canceled"}
+#: Boşken gizlenen sütunlar. Faz 13 (kullanıcı: "görevler bölümü sıkışık"):
+#: 1920 px'te bile 7 sütun + detay paneli yatay kaydırma üretiyordu. Artık
+#: **boş olan her sütun** katlanır; kart düştüğü an geri gelir.
+COLLAPSIBLE_COLUMNS = {"backlog", "assigned", "running", "review", "done",
+                       "failed", "canceled"}
+
+#: Pano bütünüyle boşken görünen sütunlar (boş durum yine bir davettir).
+DEFAULT_VISIBLE_COLUMNS = ("backlog", "running", "review")
 
 #: Durum → sütun anahtarı (8 durum, 7 sütun). Tek kaynak: `agents/board_fsm`.
 STATUS_TO_COLUMN = {
@@ -248,7 +299,9 @@ class TaskCardWidget(QFrame):
                 f" font-size:{LABEL_PX}px; padding:1px 5px; border-radius:3px;'>{text}</span>"
                 for text, tone in self.badges
             ))
-            badge_row.setWordWrap(True)
+            # Faz 13: rozetler tek satırda kalır (sarınca kart üç satıra
+            # çıkıp sütunu şişiriyordu); tamamı ipucunda.
+            badge_row.setWordWrap(False)
             badge_row.setToolTip(" · ".join(text for text, _ in self.badges))
             layout.addWidget(badge_row)
 
@@ -284,10 +337,11 @@ class TaskCardWidget(QFrame):
             layout.addWidget(proof_label)
 
         summary = str(spec_field(card, "summary", ""))
-        if summary:
-            short = summary if len(summary) <= 110 else summary[:107] + "…"
+        short = plain_preview(summary, 110)
+        if short:
             summary_label = QLabel(
-                f"<span style='color:{RT['text_body']}; font-size:{LABEL_PX}px;'>{short}</span>"
+                f"<span style='color:{RT['text_body']}; font-size:{LABEL_PX}px;'>"
+                f"{html.escape(short)}</span>"
             )
             summary_label.setWordWrap(True)
             # Kısaltılan özetin tamamı ipucunda kalır (bilgi kaybı olmasın).
@@ -351,8 +405,10 @@ class TaskDetailPanel(QFrame):
         # Faz 7: kart detayında koşum ayarları (sağlayıcı/model/efor/bütçe).
         # Kart panoda dururken bunlar değiştirilemiyordu; kullanıcı pahalı bir
         # kartı ucuz modelle yeniden koşmak için kartı silip yeniden yaratıyordu.
-        settings = QHBoxLayout()
-        settings.setSpacing(4)
+        # Faz 13: dar detay panelinde (320 px) tek satır düğmeler kırpılıyordu
+        # ("...LIŞ", "OURC"). Akan yerleşim sığmayanı alt satıra indirir.
+        settings = FlowLayout(margin=0, h_spacing=TOKENS["space"]["1"],
+                              v_spacing=TOKENS["space"]["1"])
         self.provider_combo = QComboBox()
         self.provider_combo.setAccessibleName("Sağlayıcı (boş = ajanın varsayılanı)")
         self.provider_combo.addItems(["", "agy", "claude"])
@@ -374,23 +430,43 @@ class TaskDetailPanel(QFrame):
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.budget_input = QLineEdit()
         self.budget_input.setAccessibleName("Kart token bütçesi (0 = ofis bütçesi)")
-        self.budget_input.setPlaceholderText("bütçe")
-        self.budget_input.setFixedWidth(72)
+        # Faz 13-A kapanış: 320 px'te "bütçe" yer tutucusu "Bü t…" diye
+        # kırpılıyordu (sabit 72 px). Etiket görünür QLabel'a taşındı,
+        # kutunun yer tutucusu kırpılmayacak kadar kısa.
+        self.budget_input.setPlaceholderText("0")
+        self.budget_input.setMinimumWidth(56)
+        self.budget_input.setMaximumWidth(96)
         self.budget_input.setToolTip("Kart token bütçesi (0 = ofis bütçesi)")
         self.apply_btn = QPushButton("Uygula")
         self.apply_btn.setAccessibleName("Uygula")
         self.apply_btn.setToolTip("Koşum ayarlarını karta yaz")
         self.apply_btn.clicked.connect(self._on_apply_settings)
-        for widget in (self.provider_combo, self.model_combo, self.effort_combo,
-                       self.budget_input, self.apply_btn):
+        # Faz 13-A kapanış: dört giriş kutusunun hiçbirinde görünür etiket
+        # yoktu (boş seçili kombolar bomboş dikdörtgen görünüyordu). Her
+        # kutunun önüne kırpılmayan kısa bir etiket konur.
+        def _caption(text: str) -> QLabel:
+            label = QLabel(text)
+            # Renk/boyut uygulama QSS'inden gelir (`role="label"`); yerel
+            # stil sayfası kullanılmaz — `ui_audit` local_stylesheets kapısı.
+            label.setProperty("role", "label")
+            return label
+
+        for caption, widget in (
+            ("Sağlayıcı", self.provider_combo),
+            ("Model", self.model_combo),
+            ("Efor", self.effort_combo),
+            ("Bütçe", self.budget_input),
+        ):
+            settings.addWidget(_caption(caption))
             settings.addWidget(widget)
+        settings.addWidget(self.apply_btn)
         settings.addStretch()
         layout.addLayout(settings)
 
         layout.addStretch()
 
-        actions = QHBoxLayout()
-        actions.setSpacing(6)
+        actions = FlowLayout(margin=0, h_spacing=TOKENS["space"]["1"],
+                             v_spacing=TOKENS["space"]["1"])
         self.run_btn = QPushButton("▶ Çalıştır")
         self.run_btn.setAccessibleName("▶ Çalıştır")
         self.run_btn.setToolTip("Kartı ajana gönder")
@@ -722,20 +798,25 @@ class TaskBoardWidget(QFrame):
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(6)
 
-        header = QHBoxLayout()
+        # Faz 13-A5: başlık satırı akan yerleşimde — dar panelde alt satıra
+        # iner, panelin GERÇEK asgarisini şişirmez (beyan = hesaplanan).
+        header_frame = FlowHeaderFrame(margins=(0, 0, 0, 0))
+        header = header_frame.flow()
+        self.header_frame = header_frame
         self.title_label = QLabel(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>AJAN GÖREV PANOSU</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>Ajan görev panosu</b>"
             + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
                if self.office else "")
         )
         self.title_label.setProperty("role", "label")
+        self.title_label.setMaximumWidth(320)
         header.addWidget(self.title_label)
-        header.addStretch()
         # Faz 11-C: `TASKBOARD.md` türetilmiş panonun kendisi; kullanıcı
         # ajanların gördüğü metni doğrudan okuyabilmeli.
         self.taskboard_btn = QPushButton("Pano dosyası")
         self.taskboard_btn.setAccessibleName("Pano dosyası")
         self.taskboard_btn.setProperty("variant", "ghost")
+        self.taskboard_btn.setIcon(design_icon("file", color=TOKENS["color"]["text"]))
         self.taskboard_btn.setToolTip(
             "Entropy/Board/TASKBOARD.md — ajanların okuduğu türetilmiş pano"
         )
@@ -743,15 +824,14 @@ class TaskBoardWidget(QFrame):
         header.addWidget(self.taskboard_btn)
         self.refresh_btn = QPushButton("Yenile")
         self.refresh_btn.setAccessibleName("Yenile")
+        self.refresh_btn.setProperty("variant", "ghost")
+        self.refresh_btn.setIcon(design_icon("refresh", color=TOKENS["color"]["text"]))
         self.refresh_btn.clicked.connect(self.refresh_cards)
         header.addWidget(self.refresh_btn)
-        root.addLayout(header)
+        root.addWidget(header_frame)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
-
-        install_splitter_persistence("board.detail", splitter)
 
         columns_host = QWidget()
         columns_layout = QHBoxLayout(columns_host)
@@ -799,18 +879,40 @@ class TaskBoardWidget(QFrame):
         self.columns_scroll.setWidgetResizable(True)
         self.columns_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.columns_scroll.setWidget(columns_host)
-        self.columns_scroll.setMinimumWidth(200)
-        splitter.addWidget(self.columns_scroll)
+        self.columns_scroll.setMinimumWidth(COLUMN_MIN_WIDTH)
+
+        # Faz 13-A5 (araştırma notu §1.4): kanban gerçekte
+        # `görünür sütun x 220 + detay` istiyor; kullanılabilir genişlik bunun
+        # altındaysa aynı veri **liste + detay** olarak gösterilir (WCAG 1.4.10
+        # Reflow ruhu: içerik iki eksende kaydırmaya zorlanmaz). İki görünüm
+        # aynı kartları, aynı seçimi ve aynı sinyalleri kullanır.
+        self.list_view = QListWidget()
+        self.list_view.setAccessibleName("Görev listesi (dar ekran görünümü)")
+        self.list_view.setToolTip(
+            "Dar pencerede kanban yerine liste: kart seçilince sağdaki detay açılır"
+        )
+        self.list_view.currentItemChanged.connect(self._on_list_selection)
+        self.board_stack = QStackedWidget()
+        self.board_stack.addWidget(self.columns_scroll)
+        self.board_stack.addWidget(self.list_view)
+        splitter.addWidget(self.board_stack)
 
         self.detail_panel = TaskDetailPanel(self)
-        self.detail_panel.setMinimumWidth(180)
-        # Pano da dar sütunda yaşayabilsin: örtük asgari yerine açık asgari.
-        self.setMinimumWidth(220)
+        self.detail_panel.setMinimumWidth(DETAIL_MIN_WIDTH)
         if not compact:
             splitter.addWidget(self.detail_panel)
+            # Faz 13: detay paneli sağda sabit genişlikte kalır; pencere
+            # büyüyünce fazlalık sütunlara gider.
+            splitter.setStretchFactor(0, 1)
+            splitter.setStretchFactor(1, 0)
+            splitter.setCollapsible(1, False)
             splitter.setSizes([700, 320])
         else:
             self.detail_panel.setVisible(False)
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+        # Faz 13: çağrı çocuklar eklendikten SONRA — boş bölücüde geri yükleme
+        # sessizce başarısız oluyordu.
+        install_splitter_persistence("board.detail", splitter)
         root.addWidget(splitter, 1)
 
         signal = getattr(bus, "task_cards_updated", None)
@@ -829,7 +931,80 @@ class TaskBoardWidget(QFrame):
         if board_signal is not None:
             board_signal.connect(self._on_board_state_changed)
 
+        # Faz 13-A5: beyan artık sabit 220 değil, **hesaplanan** liste kipi
+        # asgarisidir (`setMinimumWidth(220)` sabiti kaldırıldı).
+        self._view_mode = "kanban"
         self.refresh_cards()
+        self.apply_view_mode()
+
+    # -------------------------------------------- Faz 13-A5: görünüm kipi
+
+    def visible_column_keys(self) -> List[str]:
+        # `isVisible()` DEĞİL `isHidden()`: liste kipinde sütunlar yığının
+        # görünmeyen sayfasındadır ama hâlâ "gösterilecek sütun" sayılırlar;
+        # aksi hâlde kanban asgarisi liste kipinde çöker ve kip zıplar.
+        return [k for k, frame in self.column_frames.items() if not frame.isHidden()]
+
+    def kanban_min_width(self) -> int:
+        """Kanbanın GERÇEK asgarisi: görünür sütunlar + boşluk + detay."""
+        count = max(1, len(self.visible_column_keys()))
+        width = count * COLUMN_MIN_WIDTH + (count - 1) * COLUMN_SPACING
+        if not self.compact:
+            width += DETAIL_MIN_WIDTH + COLUMN_SPACING
+        return width + 2 * BOARD_MARGIN
+
+    def list_min_width(self) -> int:
+        """Liste kipinin asgarisi (liste + detay)."""
+        width = LIST_VIEW_MIN_WIDTH
+        if not self.compact:
+            width += DETAIL_MIN_WIDTH + COLUMN_SPACING
+        return width + 2 * BOARD_MARGIN
+
+    def view_mode(self) -> str:
+        return getattr(self, "_view_mode", "kanban")
+
+    def required_width(self) -> int:
+        """Şu anki görünümün gerektirdiği genişlik (beyanla karşılaştırılır)."""
+        return self.kanban_min_width() if self.view_mode() == "kanban" else self.list_min_width()
+
+    def apply_view_mode(self, width: Optional[int] = None) -> str:
+        """Kullanılabilir genişliğe göre kanban / liste görünümünü seçer."""
+        available = int(self.width() if width is None else width)
+        kanban_min = self.kanban_min_width()
+        use_list = 0 < available < kanban_min
+        self._view_mode = "list" if use_list else "kanban"
+        stack = getattr(self, "board_stack", None)
+        if stack is not None:
+            stack.setCurrentWidget(self.list_view if use_list else self.columns_scroll)
+        # Beyan = hesaplanan (G13-4). Liste kipi her zaman geçerli bir taban
+        # olduğu için pencere asgarisi büyümez.
+        self.setMinimumWidth(self.list_min_width())
+        return self._view_mode
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self.apply_view_mode(event.size().width())
+
+    def _on_list_selection(self, current, _previous=None) -> None:
+        """Liste görünümünde seçim (QObject metodu — lambda değil)."""
+        if current is None:
+            return
+        card_id = str(current.data(Qt.ItemDataRole.UserRole) or "")
+        if card_id and card_id != self.selected_id:
+            self.select_card(card_id)
+
+    def _rebuild_list_view(self) -> None:
+        """Liste görünümünü kanbanla AYNI karttan kurar (tek veri kaynağı)."""
+        self.list_view.blockSignals(True)
+        self.list_view.clear()
+        for key, label in COLUMNS:
+            for card in self.ordered_cards(self.cards_in_column(key)):
+                title = str(spec_field(card, "title", "") or getattr(card, "id", ""))
+                item = QListWidgetItem(f"{label} · {title}")
+                item.setData(Qt.ItemDataRole.UserRole, str(getattr(card, "id", "")))
+                item.setToolTip(f"{label} — {title}")
+                self.list_view.addItem(item)
+        self.list_view.blockSignals(False)
 
     # ------------------------------------------------------------ veri
 
@@ -975,10 +1150,13 @@ class TaskBoardWidget(QFrame):
             # ekrana sığsın, ama bir kart düştüğü an sütun geri gelsin.
             frame = self.column_frames.get(key)
             if frame is not None and key in COLLAPSIBLE_COLUMNS:
-                frame.setVisible(bool(column_cards))
+                frame.setVisible(
+                    bool(column_cards)
+                    or (not self._cards and key in DEFAULT_VISIBLE_COLUMNS)
+                )
             self.column_headers[key].setText(
-                f"<span style='color:{RT['text_dim']}; font-size:11px; font-weight:600; "
-                f"letter-spacing:0.4px;'>{label.upper()}</span>"
+                f"<span style='color:{RT['text_dim']}; font-size:11px; font-weight:600;'>"
+                f"{label}</span>"
                 f" <span style='color:{RT['text_dim']}; font-size:11px;'>({len(column_cards)})</span>"
             )
             for card in self.ordered_cards(column_cards):
@@ -989,6 +1167,8 @@ class TaskBoardWidget(QFrame):
                     widget.setContentsMargins(min(depth, 3) * 12, 0, 0, 0)
                 self.card_widgets.append(widget)
                 layout.insertWidget(layout.count() - 1, widget)
+        self._rebuild_list_view()
+        self.apply_view_mode()
         current = self.get_card(self.selected_id) if self.selected_id else None
         self.detail_panel.set_card(current)
 

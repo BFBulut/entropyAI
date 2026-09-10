@@ -80,8 +80,12 @@ def test_reports_viewer_flexible_resizing_and_buttons(qapp):
     # Faz 12-D.2: yasaklı desen "↗" düğme metninden kaldırıldı (D12-11).
     assert viewer.btn_open_standalone.text() == "Ayrı pencerede aç"
     
-    # Splitter is non-collapsible for both sides
+    # Liste bölmesi hiçbir kipte katlanmaz. Faz 13-A4: okuyucu bölmesi
+    # "gözden geçirme" kipinde bilerek sıfıra katlanır (ekranda aynı anda en
+    # çok iki bölge), okuma kipinde yeniden katlanamaz olur.
     assert viewer.splitter.isCollapsible(0) is False
+    assert viewer.splitter.isCollapsible(1) is True
+    viewer.enter_reading_mode()
     assert viewer.splitter.isCollapsible(1) is False
     viewer.close()
     qapp.processEvents()

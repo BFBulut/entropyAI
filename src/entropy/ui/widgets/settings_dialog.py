@@ -39,11 +39,13 @@ from entropy.ui.design.prefs import (
     THEMES,
     set_ui_density,
     set_ui_theme,
+    set_zen_core_visible,
     ui_density,
     ui_theme,
+    zen_core_visible,
 )
 
-__all__ = ["SettingsDialog", "open_settings_dialog"]
+__all__ = ["SettingsDialog", "open_settings_dialog", "apply_core_preference_to_windows"]
 
 _THEME_LABELS = {"dark": "Koyu", "light": "Açık"}
 _DENSITY_LABELS = {"compact": "Yoğun", "comfortable": "Rahat"}
@@ -89,6 +91,17 @@ class SettingsDialog(QDialog):
             self.density_combo.addItem(_DENSITY_LABELS.get(key, key), key)
         self.density_combo.setCurrentIndex(max(0, list(DENSITIES).index(ui_density())))
         form.addRow(QLabel("Yoğunluk"), self.density_combo)
+
+        # Faz 13: çekirdek görselleştirici Zen sohbetinin sağ üstünde durur.
+        # Varsayılan görünür; isteyen buradan gizler.
+        self.core_check = QCheckBox("Çekirdeği göster")
+        self.core_check.setAccessibleName("Çekirdek görselleştirici")
+        self.core_check.setToolTip(
+            "Zen sohbetinin sağ üstündeki animasyonlu durum çekirdeği"
+            " (boşta / düşünüyor / yürütülüyor / hata)."
+        )
+        self.core_check.setChecked(zen_core_visible())
+        form.addRow(QLabel("Çekirdek"), self.core_check)
 
         # --- Beyin ---------------------------------------------------------
         self.confidence_slider: Optional[QSlider] = None
@@ -178,6 +191,7 @@ class SettingsDialog(QDialog):
         data: Dict[str, Any] = {
             "ui_theme": self.theme_combo.currentData(),
             "ui_density": self.density_combo.currentData(),
+            "ui_zen_core_visible": self.core_check.isChecked(),
         }
         if self.confidence_slider is not None:
             data["brain_confidence_threshold"] = self.confidence_slider.value() / 100.0
@@ -201,6 +215,7 @@ class SettingsDialog(QDialog):
         data = self.values()
         set_ui_theme(str(data["ui_theme"]))
         set_ui_density(str(data["ui_density"]))
+        set_zen_core_visible(bool(data["ui_zen_core_visible"]))
         for key, value in data.items():
             if key.startswith("ui_"):
                 continue
@@ -216,6 +231,7 @@ class SettingsDialog(QDialog):
             except Exception:
                 pass
         reapply_design(str(data["ui_theme"]), str(data["ui_density"]))
+        apply_core_preference_to_windows()
         return data
 
 
@@ -228,6 +244,30 @@ def reapply_design(theme: str, density: str) -> bool:
         return False
     apply_design_system(app, theme=theme, density=density)
     return True
+
+
+def apply_core_preference_to_windows() -> int:
+    """Açık pencerelerde çekirdek tercihini yeniden uygular (yeniden başlatmasız).
+
+    Sinyal eklemek `core/event_bus` sözleşmesine dokunmayı gerektirirdi; bunun
+    yerine üst düzey pencerelerden `apply_core_preference` metodu olanlar
+    doğrudan çağrılır.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return 0
+    applied = 0
+    for window in app.topLevelWidgets():
+        hook = getattr(window, "apply_core_preference", None)
+        if callable(hook):
+            try:
+                hook()
+                applied += 1
+            except Exception:
+                pass
+    return applied
 
 
 def open_settings_dialog(parent: Optional[QWidget] = None, config: Any = None) -> SettingsDialog:

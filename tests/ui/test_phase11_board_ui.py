@@ -119,12 +119,15 @@ def test_terminal_columns_hidden_when_empty(qapp):
     """Başarısız/İptal sütunları boşken gizlenir (pano tek ekrana sığsın)."""
     board = FakeBoard([make_card("t1", status="backlog")])
     widget = TaskBoardWidget(board=board)
-    assert widget.column_frames["failed"].isVisibleTo(widget) is False
-    assert widget.column_frames["canceled"].isVisibleTo(widget) is False
-    assert widget.column_frames["backlog"].isVisibleTo(widget) is True
+    # Faz 13-A5: sütun katlanması `isHidden()` ile ölçülür. `isVisibleTo` artık
+    # görünüm kipini de yansıtıyor (dar pencerede kanban sayfası yığında
+    # arkada kalır); sütun sözleşmesi kipten bağımsızdır.
+    assert widget.column_frames["failed"].isHidden() is True
+    assert widget.column_frames["canceled"].isHidden() is True
+    assert widget.column_frames["backlog"].isHidden() is False
     board._cards.append(make_card("t2", status="failed"))
     widget.refresh_cards()
-    assert widget.column_frames["failed"].isVisibleTo(widget) is True
+    assert widget.column_frames["failed"].isHidden() is False
 
 
 def test_card_badges_show_priority_claim_effort_and_agent():

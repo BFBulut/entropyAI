@@ -36,6 +36,14 @@ BACKGROUND_LOCK_TIMEOUT = 60.0
 DEFAULT_MAX_TOOL_STEPS = 20
 MAX_STEPS_MARKER = "[ADIM SINIRI]"
 from entropy.core.masking import mask_tool_output
+#: `[OTONOM PLANLI GÖREV: <ad>]` etiketi (büyük/küçük harf duyarsız).
+TASK_PROMPT_RE = re.compile(r"\[OTONOM\s+PLANLI\s+GÖREV:\s*([^\]]+)\]", re.IGNORECASE)
+
+from entropy.core.report_title import (
+    derive_report_title,
+    safe_filename_title,
+    save_session_note,
+)
 import entropy.core.provider as provider_mod
 from entropy.core.provider import (
     INTERACTIVE_IDLE_TIMEOUT_S,
@@ -790,6 +798,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
         effort: Optional[str] = None,
+        skill: Optional[str] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
@@ -856,7 +865,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
                   model, agent_spec, stream_meta, interactive,
-                  on_followup_start, on_followup_end, effort),
+                  on_followup_start, on_followup_end, effort, skill),
             daemon=True
         )
         thread.start()
@@ -1004,6 +1013,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
         effort: Optional[str] = None,
+        skill: Optional[str] = None,
     ):
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         # Kip bayrağı köprüde değil ayarda: kullanıcı etkileşimli kartları
@@ -1313,7 +1323,13 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 # Generate and save research report for completed background task
                 clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
                 time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-                report_title = f"Gorev_{clean_name}_{time_tag}"
+                # Faz 13-A: kartın adı çoğu zaman kullanıcının cümlesidir; başlık
+                # gövdeden (ilk H1 → ilk cümle) türetilir. `Gorev_` öneki ve zaman
+                # damgası kalır (graf etiketi ve rapor merkezi bu kalıba bakıyor).
+                derived_name = safe_filename_title(
+                    derive_report_title(full_text, fallback=clean_name), max_len=60
+                )
+                report_title = f"Gorev_{derived_name}_{time_tag}"
 
                 try:
                     from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
@@ -1330,12 +1346,21 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     # Arka plan görevi hangi yeteneğin işiyse rapor o yeteneğe atfedilir;
                     # zamanlanmış araştırma görevleri yordam damıtmanın ana kaynağıdır ve
                     # atıfsız rapor hiçbir yetenek için kaynak sayılmaz.
-                    task_skill = None
-                    try:
-                        detected = self.detect_skill_for_prompt(prompt)
-                        task_skill = detected.name if detected else None
-                    except Exception:
+                    # Faz 13-A (QA bulgusu): rapor yolu KARTIN yetenek alanına
+                    # bağlıdır. Eskiden yalnızca istem metninden sezgi yapılıyordu
+                    # ve yeteneksiz bir pano kartının raporu yabancı bir yeteneğin
+                    # `Skills/<ad>/Reports/` klasörüne düşüyordu. Çağıran `skill`
+                    # verdiyse (boş dizge dahil) o kazanır; sezgi yalnızca
+                    # `skill=None` (bilgi yok) durumunda çalışır.
+                    if skill is not None:
+                        task_skill = str(skill).strip() or None
+                    else:
                         task_skill = None
+                        try:
+                            detected = self.detect_skill_for_prompt(prompt)
+                            task_skill = detected.name if detected else None
+                        except Exception:
+                            task_skill = None
                     rep_path = vm.save_research_report(
                         report_title,
                         report_content,
@@ -2358,29 +2383,40 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
             # Auto-save research reports and technical dossiers (including autonomous scheduled tasks)
             is_err = "jetski: no output produced" in full_text or "auto-denied" in full_text or "Traceback" in full_text
-            is_task_prompt = "[otonom planlı görev:" in raw_user_prompt.lower()
+            # Faz 13-A: `.lower()` Türkçe "I"yı "i" yapıyor ("PLANLI" → "planli"),
+            # bu yüzden üretici tarafın BÜYÜK harfli `[OTONOM PLANLI GÖREV: …]`
+            # etiketi (`ui/widgets/tasks_widget.py`) bu koşula HİÇ uymuyordu:
+            # zamanlanmış görev raporu yolu fiilen ölüydü. Kalıp artık
+            # büyük/küçük harf duyarsız düzenli ifadeyle aranıyor.
+            is_task_prompt = bool(TASK_PROMPT_RE.search(raw_user_prompt))
             is_explicit_learn = bool(re.search(r'(?:^|\s)/learn\b', raw_user_prompt, re.IGNORECASE))
-            is_explicit_research = is_explicit_learn or any(w in raw_user_prompt.lower() for w in [
-                "araştır", "araştırma yap", "rapor hazırla", "raporla", "analiz et", "derinlemesine incele", "dossier", "dokümantasyon oluştur"
-            ])
-            has_markdown_structure = ("# " in full_text or "## " in full_text) and len(full_text) > 250
+            # Faz 13-A (§1.5): SOHBET TURU RAPOR DEĞİLDİR. Eski 8 anahtar kelime
+            # sezgisi ("araştır/raporla/analiz et"…) + `has_markdown_structure`
+            # koşulu, kullanıcının serbest sohbet turlarını rapora çeviriyordu
+            # (kasadaki 713 "rapor"un önemli kısmı bundan). Rapor üreten yalnız
+            # üç yol kaldı: pano kartı çıktısı, `[OTONOM PLANLI GÖREV]` ve açık
+            # `/learn`. Serbest sohbet çıktısı `Entropy/Sessions/` altına
+            # `type: session` künyesiyle yazılır (veri kaybolmaz).
+            is_explicit_research = is_explicit_learn
 
-            if not is_err and (is_task_prompt or (is_explicit_research and has_markdown_structure)):
+            if not is_err and (is_task_prompt or is_explicit_research):
                 try:
                     from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                     from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
                     vm = ObsidianVaultManager()
 
                     if is_task_prompt:
-                        match = re.search(r"\[OTONOM PLANLI GÖREV:\s*([^\]]+)\]", raw_user_prompt, re.IGNORECASE)
+                        match = TASK_PROMPT_RE.search(raw_user_prompt)
                         task_name = match.group(1).strip() if match else "Otonom Görev"
                         time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
                         clean_title = f"Gorev_{task_name.replace(' ', '_')}_{time_tag}"
                     else:
-                        clean_prompt = re.sub(r'^(?:\[SİZ\]:\s*)?', '', raw_user_prompt.strip(), flags=re.IGNORECASE)
-                        clean_prompt = re.sub(r'^(?:/[a-zA-Z0-9_\-:]+\s*)+', '', clean_prompt.strip())
-                        first_line = clean_prompt.strip().split("\n")[0][:40]
-                        clean_title = re.sub(r'[\\/*?:"<>|]', "", first_line).strip() or "Araştırma Raporu"
+                        # Faz 13-A: başlık GÖVDEDEN türetilir (ilk H1 → ilk
+                        # cümle → yedek). Kullanıcının istem satırı ARTIK
+                        # başlık kaynağı değil (§1.5).
+                        clean_title = safe_filename_title(
+                            derive_report_title(full_text, fallback="Araştırma Raporu")
+                        )
 
                     proj_name = self.active_project_dir.name if self.active_project_dir else None
                     # Rapor, üreten yeteneğe atfedilir: Skills/<yetenek>/Reports/ altına
@@ -2422,6 +2458,22 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
                     bus.terminal_output_received.emit(
                         f"\n[📚 Araştırma Raporu & Hafıza Kaydedildi]: '{clean_title}.md' bilişsel hafızaya işlendi ve Obsidian kasanıza kaydedildi.\n"
+                    )
+                except Exception:
+                    pass
+            elif not is_err and full_text.strip():
+                # Faz 13-A: serbest sohbet turu — RAPOR DEĞİL. Kullanıcı verisi
+                # kaybolmasın diye `Entropy/Sessions/<gün>/<saat>-<konu>.md`
+                # altına `type: session` künyesiyle yazılır.
+                try:
+                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    vm_s = ObsidianVaultManager()
+                    save_session_note(
+                        vm_s.entropy_dir,
+                        full_text,
+                        provider="agy",
+                        model=getattr(self, "current_model", "") or "",
+                        skill=(target_skill.name if target_skill else ""),
                     )
                 except Exception:
                     pass

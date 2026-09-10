@@ -21,12 +21,15 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
-from entropy.ui.widgets.report_center import ReportCenterWidget
-from entropy.ui.widgets.report_inbox import ReportInboxStrip
+from entropy.ui.widgets.report_center import (
+    ReportCenterWidget, derive_report_title, title_from_filename,
+)
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame
+from entropy.ui.widgets.report_inbox import ReportInboxStrip, is_session_entry
 from entropy.ui.widgets.ui_polish import apply_list_polish
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design import icon as design_icon
+from entropy.ui.design import TOKENS, icon as design_icon
 from entropy.ui.design.embedded import live_palette as _live_palette
 from entropy.ui.design.prefs import install_splitter_persistence
 
@@ -34,6 +37,20 @@ from entropy.ui.design.prefs import install_splitter_persistence
 _P = _live_palette()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+#: Faz 13: liste / okuyucu oranı 35/65 (kullanıcı: "bölünme dar, okuyucu
+#: sıkışık"). Kayıtlı bölücü konumu varsa o kazanır (`install_splitter_persistence`).
+READER_SPLIT = [350, 650]
+
+#: Faz 13-A4 — bilgi mimarisi: ekranda **aynı anda en çok iki bölge**.
+#: "Gözden geçirme" = Rapor Merkezi (digest) + liste; "okuma" = liste (dar
+#: kenar çubuğu) + okuyucu. Okuyucu açılınca digest katlanır, kapanınca döner.
+#: Ölçüler araştırma notu §1.3'ten: 560 px ≈ 65-72 karakter/satır (Baymard).
+READER_MIN_WIDTH = 560
+#: Okuma kipinde listenin indiği dar kenar çubuğu genişliği.
+LIST_SIDEBAR_WIDTH = 260
+#: Gözden geçirme kipinde digest kartının okunur asgarisi.
+REVIEW_CARD_MIN_WIDTH = 520
 
 
 def read_report_meta(path: Path) -> Dict[str, Any]:
@@ -71,7 +88,9 @@ def read_report_meta(path: Path) -> Dict[str, Any]:
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            head = fh.read(4096)
+            # Faz 13-A: ön bilgi bloğu uzun olabilir; gövdenin ilk 4 KB'ı
+            # başlık türetimine mutlaka girsin diye 8 KB okunur.
+            head = fh.read(8192)
     except OSError:
         head = ""
     head = head.lstrip("﻿")
@@ -99,6 +118,13 @@ def read_report_meta(path: Path) -> Dict[str, Any]:
                         meta["project"] = t.split(":", 1)[1].strip()
     if not meta["date"]:
         meta["date"] = (meta["modified"] or "")[:10]
+    # Faz 13: başlık tek sözleşmeden türer (frontmatter → ilk `#` → dosya adı →
+    # ilk cümle). Liste, Rapor Merkezi ve okuyucu aynı adı gösterir.
+    meta["title"] = derive_report_title(
+        front_title=meta["title"], body=head, path=path,
+        # Yedek ham sohbet başlığı DEĞİL, temizlenmiş dosya adıdır.
+        fallback=title_from_filename(path),
+    )
     return meta
 
 
@@ -165,17 +191,20 @@ class ReportsViewerWidget(QFrame):
         self.layout.setContentsMargins(8, 8, 8, 8)
         self.layout.setSpacing(6)
 
-        # Header
-        header = QHBoxLayout()
+        # Header — Faz 13: akan yerleşim. Yeni "Oturumlar" anahtarı eklenince
+        # sabit satır panelin gerçek asgarisini 436 px'e çıkarıyordu (dar Zen
+        # panelinin sözleşmesi <= 400). Satır artık alta kayar.
+        header_frame = FlowHeaderFrame(margins=(0, 0, 0, 0))
+        header = header_frame.flow()
+        self.header_frame = header_frame
         title_label = QLabel("Raporlar ve notlar")
         title_label.setProperty("role", "heading")
         # Başlık dar panelde daralabilsin; yoksa üstteki araç çubuğu satırı
         # panelin minimumunu ~676 px'e çıkarıp Zen sol sekmesini kırpıyor.
         title_label.setMinimumWidth(100)
         title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        header.addWidget(title_label, 1)
-
-        header.addStretch()
+        title_label.setMaximumWidth(240)
+        header.addWidget(title_label)
 
         open_file_btn = QPushButton("Dosya Aç...")
         open_file_btn.setAccessibleName("Dosya Aç...")
@@ -183,13 +212,27 @@ class ReportsViewerWidget(QFrame):
         open_file_btn.clicked.connect(self._open_custom_file)
         header.addWidget(open_file_btn)
 
+        # Faz 13: oturum notları rapor değildir; varsayılan listede yokturlar.
+        # Bu anahtar onları geri getirir (araştırma notu §1.5).
+        self.sessions_btn = QPushButton("Oturumlar")
+        self.sessions_btn.setAccessibleName("Oturumlar")
+        self.sessions_btn.setCheckable(True)
+        self.sessions_btn.setChecked(False)
+        self.sessions_btn.setProperty("variant", "ghost")
+        self.sessions_btn.setToolTip(
+            "Sohbet oturumu notlarını (Entropy/Sessions) listeye ekle."
+            " Bunlar rapor sayılmaz; sayaç yalnızca raporları gösterir."
+        )
+        self.sessions_btn.toggled.connect(self._on_sessions_toggled)
+        header.addWidget(self.sessions_btn)
+
         self.refresh_btn = QPushButton("Yenile")
         self.refresh_btn.setAccessibleName("Yenile")
         self.refresh_btn.setProperty("variant", "primary")
         self.refresh_btn.clicked.connect(self.refresh_reports)
         header.addWidget(self.refresh_btn)
 
-        self.layout.addLayout(header)
+        self.layout.addWidget(header_frame)
 
         # Rapor Merkezi "Gelen" seridi (Faz 4): son 24 saatte uretilen raporlar,
         # /query sayfalari ve ofis raporlari okunmadi sayaciyla ustte durur.
@@ -214,8 +257,6 @@ class ReportsViewerWidget(QFrame):
 
         # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
-        install_splitter_persistence("reports.viewer", self.splitter)
 
         # Left Container: Search + Report List
         left_container = QWidget()
@@ -264,7 +305,7 @@ class ReportsViewerWidget(QFrame):
 
         # List Action Bar: Explicit "Raporu Oku / Aç" and "Ayrı Ekranda Aç"
         list_action_bar = QHBoxLayout()
-        list_action_bar.setSpacing(4)
+        list_action_bar.setSpacing(TOKENS["space"]["2"])
 
         self.btn_read_report = QPushButton("Raporu Oku")
         self.btn_read_report.setAccessibleName("Raporu Oku")
@@ -282,11 +323,14 @@ class ReportsViewerWidget(QFrame):
 
         # Dar Zen panelinde okuyucu bolunmesi de daralabilmeli (bkz. Faz 7).
         left_container.setMinimumWidth(120)
+        self.left_container = left_container
         self.splitter.addWidget(left_container)
 
         # Right container: RAG Status Bar + Markdown Text Browser
         right_container = QWidget()
+        # Faz 13-A4: okuma kipinde okuyucu baskın bölgedir (>= 560 px).
         right_container.setMinimumWidth(160)
+        self.right_container = right_container
         right_layout = QVBoxLayout(right_container)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
@@ -298,8 +342,21 @@ class ReportsViewerWidget(QFrame):
         self.rag_status_bar.setMinimumWidth(200)
         self.rag_status_bar.setProperty("role", "panel")
         bar_layout = QHBoxLayout(self.rag_status_bar)
-        bar_layout.setContentsMargins(6, 2, 6, 2)
-        bar_layout.setSpacing(6)
+        bar_layout.setContentsMargins(
+            TOKENS["space"]["2"], TOKENS["space"]["1"],
+            TOKENS["space"]["2"], TOKENS["space"]["1"],
+        )
+        bar_layout.setSpacing(TOKENS["space"]["2"])
+
+        self.back_to_digest_btn = QPushButton("Gözden geçirmeye dön")
+        self.back_to_digest_btn.setAccessibleName("Gözden geçirmeye dön")
+        self.back_to_digest_btn.setToolTip(
+            "Okumayı kapat: Rapor Merkezi kartları geri gelir"
+        )
+        self.back_to_digest_btn.setProperty("variant", "ghost")
+        self.back_to_digest_btn.setIcon(design_icon("arrow-left", color=TOKENS["color"]["text"]))
+        self.back_to_digest_btn.clicked.connect(self.enter_review_mode)
+        bar_layout.addWidget(self.back_to_digest_btn)
 
         self.reader_status_lbl = QLabel(f"<span style='color:{_P["accent"]}; font-weight:bold; font-size:11px;'>Bilişsel Okuyucu</span>")
         bar_layout.addWidget(self.reader_status_lbl)
@@ -310,7 +367,6 @@ class ReportsViewerWidget(QFrame):
         zoom_in_btn.setAccessibleName("A+")
         zoom_in_btn.setProperty("role", "icon")
         zoom_in_btn.setToolTip("Yazı Boyutunu Büyüt (A+)")
-        zoom_in_btn.setProperty("variant", "primary")
         zoom_in_btn.clicked.connect(self._zoom_in_text)
         bar_layout.addWidget(zoom_in_btn)
 
@@ -318,11 +374,11 @@ class ReportsViewerWidget(QFrame):
         zoom_out_btn.setAccessibleName("A-")
         zoom_out_btn.setProperty("role", "icon")
         zoom_out_btn.setToolTip("Yazı Boyutunu Küçült (A-)")
-        zoom_out_btn.setProperty("variant", "primary")
         zoom_out_btn.clicked.connect(self._zoom_out_text)
         bar_layout.addWidget(zoom_out_btn)
 
         self.btn_open_obsidian = QPushButton("")
+        self.btn_open_obsidian.setIcon(design_icon("book", color=TOKENS["color"]["text"]))
         self.btn_open_obsidian.setAccessibleName("Obsidian — seçili raporu Obsidian kasasında açar")
         self.btn_open_obsidian.setProperty("role", "icon")
         self.btn_open_obsidian.setToolTip("Obsidian — seçili raporu Obsidian kasasında açar")
@@ -330,6 +386,7 @@ class ReportsViewerWidget(QFrame):
         bar_layout.addWidget(self.btn_open_obsidian)
 
         self.btn_open_folder = QPushButton("")
+        self.btn_open_folder.setIcon(design_icon("folder-opened", color=TOKENS["color"]["text"]))
         self.btn_open_folder.setAccessibleName("Klasör — raporun bulunduğu klasörü dosya yöneticisinde açar")
         self.btn_open_folder.setProperty("role", "icon")
         self.btn_open_folder.setToolTip("Klasör — raporun bulunduğu klasörü dosya yöneticisinde açar")
@@ -337,33 +394,33 @@ class ReportsViewerWidget(QFrame):
         bar_layout.addWidget(self.btn_open_folder)
 
         copy_btn = QPushButton("")
+        copy_btn.setIcon(design_icon("copy", color=TOKENS["color"]["text"]))
         copy_btn.setAccessibleName("Kopyala — rapor metnini panoya alır")
         copy_btn.setProperty("role", "icon")
         copy_btn.setToolTip("Kopyala — rapor metnini panoya alır")
-        copy_btn.setProperty("variant", "primary")
         copy_btn.clicked.connect(self._copy_content)
         bar_layout.addWidget(copy_btn)
 
         expand_btn = QPushButton()
-        expand_btn.setIcon(design_icon("link-external"))
+        expand_btn.setIcon(design_icon("link-external", color=TOKENS["color"]["text"]))
         expand_btn.setAccessibleName("Raporu ayrı pencerede aç")
         expand_btn.setProperty("role", "icon")
         expand_btn.setToolTip("Tam ekran — raporu ayrı pencerede açar")
-        expand_btn.setProperty("variant", "primary")
         expand_btn.clicked.connect(self._open_current_standalone)
         bar_layout.addWidget(expand_btn)
 
         distill_btn = QPushButton("")
+        distill_btn.setIcon(design_icon("beaker", color=TOKENS["color"]["text"]))
         distill_btn.setProperty("role", "icon")
         distill_btn.setToolTip(
             "Bu araştırma raporu otomatik olarak bilişsel belleğe alınmıştır.\n"
             "Harici veya elle düzenlenmiş notları belleğe ve RAG indeksine yeniden sentezlemek için kullanabilirsiniz."
         )
-        distill_btn.setProperty("variant", "primary")
         distill_btn.clicked.connect(self._distill_current_report)
         bar_layout.addWidget(distill_btn)
 
         delete_btn = QPushButton("")
+        delete_btn.setIcon(design_icon("trash", color=TOKENS["color"]["text"]))
         delete_btn.setAccessibleName("Sil — seçili raporu diskten ve hafızadan kaldırır")
         delete_btn.setProperty("role", "icon")
         delete_btn.setToolTip("Sil — seçili raporu diskten ve hafızadan kaldırır")
@@ -393,9 +450,23 @@ class ReportsViewerWidget(QFrame):
         self.splitter.setCollapsible(1, False)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 2)
-        self.splitter.setSizes([200, 380])
+        self.splitter.setSizes(READER_SPLIT)
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+        # Faz 13 düzeltmesi: çağrı ÇOCUKLAR eklendikten SONRA yapılır; eskiden
+        # boş bölücüde koşuyordu (`count() == 0`) ve kayıtlı konum hiç geri
+        # yüklenmiyordu — kullanıcı "bölücü kalıcı değil" dedi.
+        install_splitter_persistence("reports.viewer", self.splitter)
 
         self.layout.addWidget(self.splitter, 1)
+
+        # Faz 13-A4: açılışta "gözden geçirme" kipi — digest + liste (iki bölge).
+        # Okuyucu bir rapor açılana kadar yer kaplamaz.
+        self._reading_mode = False
+        self._include_sessions = False
+        # Okuyucu bölgesi gözden geçirme kipinde gizlidir; gizlemeden ÖNCE
+        # yerleşimi bir kez etkinleştiriyoruz ki ikon düğmeleri gerçek
+        # (30 px) genişliklerini alsın — gizli widget'ta yerleşim koşmaz.
+        self.enter_review_mode()
 
         # Auto-refresh on signals
         self.active_project_dir = Path(config.default_project_path)
@@ -814,6 +885,7 @@ class ReportsViewerWidget(QFrame):
                 self.list_widget.setCurrentItem(item)
                 self.list_widget.scrollToItem(item)
                 self._on_item_clicked(item)
+                self.enter_reading_mode()
                 return True
         return False
 
@@ -859,6 +931,77 @@ class ReportsViewerWidget(QFrame):
         })
         return meta
 
+    # ------------------------------------------------- Faz 13-A4: okuma kipi
+
+    @Slot(bool)
+    def _on_sessions_toggled(self, checked: bool) -> None:
+        """"Oturumlar" süzgeci (QObject slot'u — lambda değil)."""
+        self._include_sessions = bool(checked)
+        try:
+            self.report_center.set_include_sessions(bool(checked))
+        except (AttributeError, RuntimeError):
+            pass
+        self.refresh_reports()
+
+    def include_sessions(self) -> bool:
+        return bool(getattr(self, "_include_sessions", False))
+
+    @Slot()
+    def enter_review_mode(self) -> None:
+        """Gözden geçirme kipi: digest + liste. Okuyucu bölgesi katlanır."""
+        self._reading_mode = False
+        self.report_center.setVisible(True)
+        # Okuyucu bölgesi GİZLENMEZ, bölücüde sıfıra katlanır: gizli widget'ta
+        # yerleşim koşmadığı için ikon düğmeleri varsayılan genişlikte kalıyordu
+        # (ölçüm sözleşmesi: ikon düğmesi <= 30 px).
+        self.content_browser.setMinimumWidth(0)
+        self.left_container.setMinimumWidth(120)
+        self.splitter.setCollapsible(1, True)
+        self.splitter.setSizes([max(1, self.splitter.width()), 0])
+        self.back_to_digest_btn.setVisible(False)
+        try:
+            self.report_center.apply_review_card_width()
+        except AttributeError:
+            pass
+
+    @Slot()
+    def enter_reading_mode(self) -> None:
+        """Okuma kipi: liste dar kenar çubuğuna iner, okuyucu baskın olur.
+
+        Aynı anda en çok iki bölge kuralı (araştırma notu §1.3): digest
+        katlanır; `enter_review_mode()` ya da "Gözden geçirmeye dön" ile döner.
+        """
+        self._reading_mode = True
+        self.report_center.setVisible(False)
+        self.right_container.setVisible(True)
+        self.splitter.setCollapsible(1, False)
+        self.back_to_digest_btn.setVisible(True)
+        self.content_browser.setMinimumWidth(READER_MIN_WIDTH)
+        self.apply_reading_split()
+
+    def apply_reading_split(self) -> None:
+        """Okuyucuya >= READER_MIN_WIDTH verir; kalanı listeye."""
+        total = max(0, self.splitter.width())
+        if total <= 0:
+            total = max(0, self.width())
+        if total <= 0:
+            self.splitter.setSizes(READER_SPLIT)
+            return
+        reader = max(READER_MIN_WIDTH, int(total * 0.65))
+        left = max(0, total - reader)
+        if left < LIST_SIDEBAR_WIDTH and total - LIST_SIDEBAR_WIDTH >= READER_MIN_WIDTH:
+            left = LIST_SIDEBAR_WIDTH
+            reader = total - left
+        self.splitter.setSizes([left, reader])
+
+    def reading_mode(self) -> bool:
+        return bool(getattr(self, "_reading_mode", False))
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if self.reading_mode():
+            self.apply_reading_split()
+
     @Slot()
     def show_all_reports(self) -> None:
         """Süzgeçleri sıfırlayıp tam rapor listesini gösterir (Faz 8).
@@ -888,9 +1031,14 @@ class ReportsViewerWidget(QFrame):
             entries.append(mem)
             seen.add(str(self.vault_manager.memory_file))
 
+        include_sessions = bool(getattr(self, "_include_sessions", False))
         for rep in self.vault_manager.list_reports():
             p = Path(rep["path"])
             if str(p) in seen or not p.exists():
+                continue
+            # Faz 13: `Entropy/Sessions/...` ve `type: session` künyeleri
+            # varsayılan listede ve sayaçta yer almaz.
+            if not include_sessions and is_session_entry({**rep, "path": p}):
                 continue
             seen.add(str(p))
             entries.append(self._make_entry(p, ""))
@@ -964,9 +1112,8 @@ class ReportsViewerWidget(QFrame):
                     break
         if current:
             self._on_item_clicked(current)
-            sizes = self.splitter.sizes()
-            if len(sizes) >= 2 and sizes[1] < 140:
-                self.splitter.setSizes([200, 380])
+            # Faz 13-A4: rapor okunuyorsa okuma kipine geç (digest katlanır).
+            self.enter_reading_mode()
 
     def _open_current_standalone(self):
         """Open the currently selected report in a standalone maximized window."""

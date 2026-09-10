@@ -113,8 +113,24 @@ QPushButton[variant="primary"] {{
     border-color: {c['accent']}; font-weight: 600;
 }}
 QPushButton[variant="primary"]:hover {{ background-color: {c['accent']}; }}
-QPushButton[variant="ghost"] {{ border-color: transparent; color: {c['text.muted']}; }}
-QPushButton[variant="ghost"]:hover {{ color: {c['text']}; }}
+/* Faz 13: "ghost" düğme kenarlıksız + sönük metinken düz yazı gibi görünüyordu
+   (kullanıcı: "düğmeler görünmüyor"). Artık ince kenarlığı ve tam kontrastlı
+   metni var; vurgu hâlâ yalnızca `primary`de. */
+/* Faz 13-A9/G13-2: `line` (#1,29:1) bir AYIRICI rengidir, denetim sınırı
+   değil. WCAG 1.4.11 denetim sınırında 3:1 ister; ghost kenarlığı bu yüzden
+   `line.strong` (3,02:1). Ölçüm kapısı: `ghost_button_contrast`. */
+QPushButton[variant="ghost"] {{ border-color: {c['line.strong']}; color: {c['text']}; }}
+/* Faz 13-A kapanış (QA ölçümü): `line.strong` yalnızca `surface`/`bg` üstünde
+   3:1 tutuyor; digest başlık şeridi gibi YÜKSELTİLMİŞ zeminlerde 2,35:1'e
+   düşüyordu ("Tümünü okundu say", "Temizle"). Yükseltilmiş yüzeydeki ghost
+   kenarlığı bu yüzden `line.onraised` belirtecini kullanır (sabit onaltılık
+   değil). İşaretleme: `surface="raised"` ya da `role="header"`. */
+QWidget[surface="raised"] QPushButton[variant="ghost"],
+QWidget[role="header"] QPushButton[variant="ghost"],
+QPushButton[variant="ghost"][surface="raised"] {{
+    border-color: {c['line.onraised']};
+}}
+QPushButton[variant="ghost"]:hover {{ border-color: {c['accent']}; color: {c['text']}; }}
 QPushButton[variant="danger"] {{ color: {c['danger']}; border-color: {c['danger']}; }}
 
 /* ===== IconButton (WCAG 2.5.8: {ct['min_target']}px tabanının üstünde) ===== */

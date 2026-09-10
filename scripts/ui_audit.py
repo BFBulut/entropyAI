@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import re
 import sys
 from pathlib import Path
@@ -122,12 +123,180 @@ FINAL_GATES_12D2: Dict[str, int] = {
     "interactive_count_zen_1366": 90,     # ara hedef (uzun vade ≤ 60)
     "header_leaf_widgets": 6,             # beyan değil canlı yaprak sayımı
     "embedded_h_overflow": 0,             # 1366 ve 460'ta yatay kaydırma yok
+    "button_contrast": 0,                 # Faz 13: metin >= 4,5:1, ikon >= 3:1
 }
+
+#: Faz 13 kapı seti (araştırma notu §1.7). Dördü de **canlı** ölçülür.
+FINAL_GATES_13: Dict[str, int] = {
+    "empty_interactive_count": 0,          # G13-1: metinsiz+ikonsuz+adsız düğme
+    "ghost_button_contrast": 0,            # G13-2: ghost kenarlık/zemin >= 3:1
+    "click_latency_ms": 50,                # G13-3: RAIL girdi bütçesi
+    "min_width_declaration_failures": 0,   # G13-4: beyan >= hesaplanan
+}
+
+#: G13-3 uyarı eşiği (kapı 50 ms; 100 ms üstü NN/g'ye göre "kesintisiz" değil).
+CLICK_LATENCY_WARN_MS = 100
 
 #: Alt sınır kapıları ("en az" — yukarıdakiler "en fazla").
 FINAL_MIN_GATES: Dict[str, int] = {
     "themes_reachable": 4,                # 2 tema × 2 yoğunluk
+    "min_button_height": 28,              # Faz 13: tıklanabilir düğme yüksekliği
+    "reader_min_width": 560,              # G13-4: okuma kipinde okuyucu gövdesi
 }
+
+
+# --------------------------------------------------------------- Faz 13 kapıları
+#
+# Kapılar **saf fonksiyon** olarak yazılır ki testler bilerek bozulmuş bir
+# widget/işlevle çağırıp kapının gerçekten kırmızıya döndüğünü kanıtlayabilsin
+# (SKILL §0/10: "kapı beyana dayanamaz").
+
+def empty_interactive_widgets(root) -> List[str]:
+    """G13-1 — metni, ikonu ve erişilebilir adı OLMAYAN görünür düğmeler.
+
+    WCAG 4.1.2 (Name, Role, Value): etkileşimli her öğenin erişilebilir bir
+    adı olmalıdır. Üçü de yoksa öğe kullanıcı için görünmez bir dikdörtgendir.
+    """
+    from PySide6.QtWidgets import QAbstractButton
+
+    offenders: List[str] = []
+    for btn in root.findChildren(QAbstractButton):
+        if not btn.isVisible() or btn.visibleRegion().isEmpty():
+            continue
+        if btn.text().strip():
+            continue
+        if not btn.icon().isNull():
+            continue
+        if btn.accessibleName().strip():
+            continue
+        offenders.append(btn.objectName() or type(btn).__name__)
+    return offenders
+
+
+_HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _stylesheet_color(text: str, prop: str) -> str:
+    """Bir stil sayfasındaki `prop: #rrggbb` değerini döndürür (yoksa "")."""
+    for match in re.finditer(prop + r"\s*:\s*([^;\n}]+)", str(text or "")):
+        hexes = _HEX_RE.findall(match.group(1))
+        if hexes:
+            return hexes[-1]
+    return ""
+
+
+def resolve_surface_color(widget) -> str:
+    """Düğmenin GERÇEK zemini: kendi/ebeveyn zincirinde ilk opak arka plan.
+
+    Faz 13-A kapanış: kapı eskiden zemini `surface` varsayıyordu; digest
+    başlık şeridi (`line`, #232E3D) gibi yükseltilmiş yüzeylerde ölçüm
+    gerçeğin üstünde çıkıyordu. Sıra: satır içi stil sayfası → `surface` /
+    `role` özelliği → dolduran paletin `Window` rengi → tema `surface`.
+    """
+    from PySide6.QtGui import QPalette
+
+    from entropy.ui.design import TOKENS as _T
+
+    colors = _T["color"]
+    node = widget
+    while node is not None:
+        found = _stylesheet_color(node.styleSheet(), "background(?:-color)?")
+        if found:
+            return found
+        surface = str(node.property("surface") or "")
+        if surface:
+            key = surface if surface in colors else f"surface.{surface}"
+            if key in colors:
+                return colors[key]
+        role = str(node.property("role") or "")
+        if role == "header":
+            return colors["surface.raised"]
+        if node.autoFillBackground():
+            color = node.palette().color(QPalette.ColorRole.Window)
+            if color.alpha() == 255:
+                return color.name()
+        node = node.parentWidget()
+    return colors["surface"]
+
+
+def resolve_border_color(widget) -> str:
+    """Ghost düğmenin gerçek kenarlık rengi (satır içi stil → yüzey belirteci)."""
+    from entropy.ui.design import TOKENS as _T
+
+    colors = _T["color"]
+    node = widget
+    while node is not None:
+        found = _stylesheet_color(node.styleSheet(), "border(?:-color)?")
+        if found:
+            return found
+        node = node.parentWidget()
+    # QSS sözleşmesi: yükseltilmiş yüzeyde `line.onraised`, aksi hâlde
+    # `line.strong` (bkz. `ui/design/qss.py` ghost kuralları).
+    node = widget
+    while node is not None:
+        if str(node.property("surface") or "") == "raised" or \
+                str(node.property("role") or "") == "header":
+            return colors["line.onraised"]
+        node = node.parentWidget()
+    return colors["line.strong"]
+
+
+def ghost_button_contrast_failures(root) -> List[str]:
+    """G13-2 — `variant="ghost"` düğmelerin kenarlık/zemin ayrımı (>= 3:1).
+
+    Ghost düğmenin zemini şeffaftır; ölçülen şey kenarlık renginin düğmenin
+    **gerçek** zeminine göre kontrastıdır (WCAG 1.4.11 non-text contrast).
+    Zemin yüzey başına çözümlenir: `resolve_surface_color`.
+    """
+    from PySide6.QtWidgets import QAbstractButton
+
+    from entropy.ui.design import TOKENS as _T, contrast_ratio as _cr
+
+    colors = _T["color"]
+    failures: List[str] = []
+    for btn in root.findChildren(QAbstractButton):
+        if not btn.isVisible() or btn.visibleRegion().isEmpty():
+            continue
+        if str(btn.property("variant") or "") != "ghost":
+            continue
+        name = btn.accessibleName() or btn.text() or type(btn).__name__
+        surface = resolve_surface_color(btn)
+        border = _cr(resolve_border_color(btn), surface)
+        text = _cr(colors["text"], surface)
+        if border < 3.0:
+            failures.append(f"{name}: kenarlık {border:.2f} ({surface})")
+        if btn.text().strip() and text < 4.5:
+            failures.append(f"{name}: metin {text:.2f} ({surface})")
+    return failures
+
+
+def measure_click_latency_ms(action) -> int:
+    """G13-3 — bir eylemin ana iş parçacığını blokladığı süre (ms)."""
+    from PySide6.QtCore import QElapsedTimer
+
+    timer = QElapsedTimer()
+    timer.start()
+    action()
+    return int(timer.elapsed())
+
+
+def min_width_declaration_failures(panels) -> List[str]:
+    """G13-4 — `minimumWidth()` beyanı, yerleşimin hesapladığından küçük mü?
+
+    `minimumSizeHint().width()` Qt'nin çocuk asgarilerinden hesapladığı gerçek
+    sayıdır; `setMinimumWidth` onu EZER. Beyan küçükse panel sıkışınca çocuklar
+    kırpılır — kullanıcının "sıkışık" dediği durum tam olarak budur.
+    """
+    failures: List[str] = []
+    for panel in panels:
+        try:
+            declared = int(panel.minimumWidth())
+            computed = int(panel.minimumSizeHint().width())
+        except (AttributeError, RuntimeError):
+            continue
+        if declared < computed:
+            failures.append(f"{type(panel).__name__}: beyan {declared} < hesaplanan {computed}")
+    return failures
 
 
 def _iter_files(paths: List[str]):
@@ -322,6 +491,94 @@ def persistence_metrics() -> Dict[str, Any]:
     }
 
 
+def _phase13_live_metrics(app) -> Dict[str, Any]:
+    """G13-3 (tıklama gecikmesi) ve G13-4 (okuyucu + beyan) canlı ölçümü."""
+    import time as _time
+
+    out: Dict[str, Any] = {}
+    try:
+        from entropy.ui.widgets.report_center import ReportCenterWidget
+        from entropy.ui.widgets.report_inbox import ReportInboxStore, reset_shared_store
+        from entropy.ui.widgets.reports_viewer import READER_MIN_WIDTH
+        from entropy.ui.widgets.task_board_widget import TaskBoardWidget
+
+        # Gerçek kasaya ve gerçek durum dosyasına DOKUNULMAZ: geçici depo.
+        tmp = Path(tempfile.mkdtemp(prefix="ui_audit_p13_"))
+        reset_shared_store(ReportInboxStore(tmp / "report_inbox.json"))
+        center = ReportCenterWidget(parent=None)
+        center.set_quiet_threshold(0.50, persist=False)
+        now = _time.time()
+        entries = []
+        # G13-3 sözleşmesi >= 150 KÜME ister; başlıklar birbirine benzerse
+        # TF-IDF kümelemesi onları tek kartta birleştirir. Bu yüzden her
+        # başlık ayrı bir konu sözcüğü taşır.
+        topics = [
+            "kasa", "kapi", "olcum", "yerlesim", "bellek", "ajan", "pano",
+            "rapor", "beceri", "wiki", "grafik", "terminal", "makbuz", "ofis",
+            "kart", "surum", "kota", "oturum", "diff", "kanit",
+        ]
+        for i in range(170):
+            report = tmp / f"Gorev_Sentetik_{i:03d}.md"
+            report.write_text(
+                "\n".join([
+                    f"# {topics[i % len(topics)].capitalize()}{i:03d}", "",
+                    f"Bulgu {i} {topics[(i * 7) % len(topics)]} uzerine.", "",
+                    "## Sonuc", "", f"Karar {i}.", "",
+                ]),
+                encoding="utf-8",
+            )
+            entries.append({
+                "path": str(report),
+                "title": f"{topics[i % len(topics)].capitalize()}{i:03d}",
+                "mtime": now - i,
+            })
+        center.set_entries(entries)
+        if not center._quiet_expanded:
+            center.toggle_quiet()          # G13-3: sessiz bölüm AÇIK ölçülür
+        app.processEvents()
+        out["click_latency_cards"] = len(center.card_widgets)
+        if center.card_widgets:
+            card = center.card_widgets[0]
+            out["click_latency_ms"] = measure_click_latency_ms(card._on_read)
+        else:
+            out["click_latency_ms"] = 0
+        out["click_latency_warn"] = bool(
+            out["click_latency_ms"] > CLICK_LATENCY_WARN_MS
+        )
+        # Tıklama yolunda diske yazım olmamalı (A3).
+        out["click_wrote_state_file"] = (tmp / "report_inbox.json").exists()
+
+        from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
+
+        viewer = ReportsViewerWidget()
+        viewer.resize(1366, 768)
+        viewer.show()
+        app.processEvents()
+        viewer.enter_reading_mode()
+        app.processEvents()
+        out["reader_min_width"] = int(viewer.content_browser.width())
+        out["reader_target_width"] = int(READER_MIN_WIDTH)
+
+        board = TaskBoardWidget()
+        board.resize(1366, 700)
+        board.show()
+        app.processEvents()
+        panels = [center, viewer, board, viewer.report_center]
+        failures = min_width_declaration_failures(panels)
+        out["min_width_declaration_failures"] = len(failures)
+        out["min_width_declaration_detail"] = failures
+        out["board_view_mode_1366"] = board.view_mode()
+        out["board_kanban_min_width"] = board.kanban_min_width()
+
+        for widget in (center, viewer, board):
+            widget.close()
+            widget.deleteLater()
+        reset_shared_store()
+    except Exception as exc:  # pragma: no cover - ölçüm kolu
+        out["phase13_error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 def live_metrics() -> Dict[str, Any]:
     """Offscreen Qt kolu — beyana değil **canlı widget ağacına** bakar.
 
@@ -389,6 +646,56 @@ def live_metrics() -> Dict[str, Any]:
             ]
             out["header_leaf_widgets"] = len(header_leaves)
             out["header_leaf_names"] = [type(w).__name__ for w in header_leaves]
+
+        # --- Faz 13: düğme görünürlüğü ------------------------------------
+        # Kullanıcı gerçek ekranda "düğmeler görünmüyor" dedi. Kök neden
+        # `variant="ghost"` düğmelerin kenarlıksız + sönük metin oluşuydu.
+        # Kapı: düğme metni/zemin >= 4,5:1, ikon/zemin >= 3:1, yükseklik >= 28.
+        from entropy.ui.design import TOKENS as _T, contrast_ratio as _cr
+
+        def _button_pair(btn) -> tuple:
+            """(ön plan, zemin) belirteç çifti — QSS kuralıyla aynı eşleme."""
+            variant = str(btn.property("variant") or "")
+            tone = str(btn.property("tone") or "")
+            colors = _T["color"]
+            if variant == "primary":
+                return colors["accent.ink"], colors["accent"]
+            if variant == "danger":
+                return colors["danger"], colors["surface"]
+            if tone in ("ok", "warn", "danger"):
+                return colors[tone], colors["surface"]
+            if tone == "muted":
+                return colors["text.muted"], colors["surface"]
+            return colors["text"], colors["surface"]
+
+        text_failures: List[str] = []
+        icon_failures: List[str] = []
+        heights: List[int] = []
+        for btn in win.findChildren(QAbstractButton):
+            if not btn.isVisible() or btn.visibleRegion().isEmpty():
+                continue
+            fg, bg = _button_pair(btn)
+            ratio = _cr(fg, bg)
+            name = btn.accessibleName() or btn.text() or type(btn).__name__
+            if btn.text().strip() and ratio < 4.5:
+                text_failures.append(f"{name}: {ratio:.2f}")
+            if not btn.icon().isNull() and ratio < 3.0:
+                icon_failures.append(f"{name}: {ratio:.2f}")
+            heights.append(int(btn.height()))
+        out["button_contrast_failures"] = text_failures
+        out["button_contrast"] = len(text_failures) + len(icon_failures)
+        out["button_icon_contrast_failures"] = icon_failures
+        out["min_button_height"] = min(heights) if heights else 0
+        out["buttons_measured"] = len(heights)
+
+        # --- Faz 13 kapıları (G13-1 … G13-4) -------------------------------
+        empty = empty_interactive_widgets(win)
+        out["empty_interactive_count"] = len(empty)
+        out["empty_interactive_names"] = empty
+        ghost = ghost_button_contrast_failures(win)
+        out["ghost_button_contrast"] = len(ghost)
+        out["ghost_button_contrast_failures"] = ghost
+        out.update(_phase13_live_metrics(app))
 
         # Gömülü okuma yüzeyi: 1366 ve 460 px'te yatay kaydırma çubuğu
         from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
@@ -464,6 +771,7 @@ def main(argv: List[str] | None = None) -> int:
         # (Qt yok) ilgili alan `data`'da olmaz ve kapı atlanır — sessiz yeşil
         # olmaması için `live_error` alanı JSON'a yazılır.
         gates.update(FINAL_GATES_12D2)
+        gates.update(FINAL_GATES_13)
     violations = []
     for key, limit in gates.items():
         actual = data.get(key)
@@ -496,7 +804,11 @@ def main(argv: List[str] | None = None) -> int:
             "themes_reachable",
         ] + ([
             "interactive_count_zen_1366", "header_leaf_widgets",
-            "embedded_h_overflow_count",
+            "embedded_h_overflow_count", "button_contrast", "min_button_height",
+            "empty_interactive_count", "ghost_button_contrast",
+            "click_latency_ms", "click_latency_cards",
+            "min_width_declaration_failures", "reader_min_width",
+            "board_view_mode_1366",
         ] if "interactive_count_zen_1366" in data else [])
         width = max(len(k) for k in keys)
         for k in keys:

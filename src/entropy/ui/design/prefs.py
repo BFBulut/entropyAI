@@ -23,6 +23,8 @@ __all__ = [
     "ui_density",
     "set_ui_theme",
     "set_ui_density",
+    "zen_core_visible",
+    "set_zen_core_visible",
     "save_splitter",
     "install_splitter_persistence",
     "restore_splitter",
@@ -83,6 +85,21 @@ def set_ui_density(density: str) -> str:
         raise ValueError(f"bilinmeyen yoğunluk: {density!r}")
     settings().setValue("ui/density", density)
     return density
+
+
+def zen_core_visible() -> bool:
+    """Zen sohbet bölgesindeki çekirdek görselleştirici görünür mü (varsayılan: evet).
+
+    Faz 13 (kullanıcı geri bildirimi): 11-E'de çekirdek 24 px'lik bir duruma
+    noktasına indirilmişti; kullanıcı "çekirdek görseli gitmiş" dedi. Geri
+    getirildi ve **gizleme** buradan ayarlanır; varsayılan görünür.
+    """
+    return _get("ui/zen_core_visible", "1") not in ("0", "false", "False")
+
+
+def set_zen_core_visible(visible: bool) -> bool:
+    settings().setValue("ui/zen_core_visible", "1" if visible else "0")
+    return bool(visible)
 
 
 # --------------------------------------------------------------------------- #

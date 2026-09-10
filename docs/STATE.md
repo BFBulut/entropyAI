@@ -7,9 +7,9 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.10.0** (Faz 12 kapanış) |
+| Sürüm | **v0.10.1** (Faz 13-A kapanış) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, **Faz 12 KAPANIŞ QA** (§2.6): tam süit **2.456 test / 1 bayat test düzeltildi**, build exit 0 (146 s, `dist/EntropyAI`, `--version` 0.10.0), ui gate exit 0, gerçek ekran LG %200'de Zen 4/4 köşe + 3 pencere denetimi görünür, açık tema regresyonu (gömülü gövdeler koyu kalıyordu) düzeltildi, uçtan uca otonom pano döngüsü canlı doğrulandı; kota 129.051 token (tavan 120k aşıldı), wiki derlemesi / oturum devri / skill approve **koşulmadı** (§2.6) |
+| Son güncelleme | 2026-09-10, **Faz 13-A KAPANIŞ, etiket öncesi son doğrulama** (§2.8): sürüm **0.10.1** (tek kaynak), tam süit **2.521 passed / 0 failed / 634 s**, build exit 0 (216 s, `dist/EntropyAI`, `--version` → `Entropy AI 0.10.1`), `ui_audit --gate --final` exit 0 (`ghost_button_contrast` 0, `click_latency_ms` 8, `empty_interactive_count` 0, `reader_min_width` 875), gerçek ekran LG %200: dolgu sözcüklü başlık **0/573**, digest ghost kenarlığı **koyu 4,85:1 / açık 5,49:1** (piksel örneklemesi) → 13-A'nın son açık maddesi kapandı; yalıtım önce=sonra, marka 0/0 |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -65,6 +65,74 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 **13 passed**.
 
 ---
+
+## 2.8 Faz 13-A KAPANIŞ (v0.10.1, 2026-09-10, qa-build-engineer) — kota 0
+
+Etiket öncesi son doğrulama. Ortam: `EntropyAI.exe` **kapalıydı**
+(`Get-Process EntropyAI` → yok), build doğrudan `dist/`e alındı.
+Model çağrısı **0**. Sürüm tek kaynaktan **0.10.1**.
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| Tam süit `pytest tests -q -p no:cacheprovider` (offscreen) | **2.521 passed / 0 failed / 634,4 s** | `scratch/_p13a_final_suite.log` |
+| `test_spec_sync.py` + `test_architecture_rules.py` + `tests/ui/test_phase13_ux.py` | **59 passed** | sürüm tek kaynak: `pyproject 0.10.1` = `entropy.__version__` = `run_entropy.py --version` → `Entropy AI 0.10.1` |
+| `python scripts/ui_audit.py --gate --final` | **exit 0** | `scratch/_p13a_audit_final.log` |
+| Build `python -m PyInstaller EntropyAI.spec --noconfirm` | **exit 0, 216 s**, `dist/EntropyAI` 1.207 MB, `EntropyAI.exe` **55.989.530 B** | `scratch/_p13a_build_final.log` |
+| `EntropyAI.exe --version` / `--help` | **`Entropy AI 0.10.1`** exit 0 / exit 0 | — |
+| 20 sn canlı koşum | **erken çıkış yok**; yeni 4 günlük satırında `Traceback`/`CRITICAL` **0**; yeni CrashDump **yok** (en yenisi 2026-09-09) | `.entropy/logs/entropy.log` 22:22:20 |
+| Marka taraması (iki ad, parçalı sabitten) | **izlenen dosyada 0 / 0** | `git grep -rIil` |
+| Yalıtım (önce = sonra) | `tasks_ledger.db` 77.824 B / 1789059837 · `skills_state.json` 112 B / 1788993407 · `cognitive_memory.db` 7.667.712 B / 1789059842 — **üçü de değişmedi**; kasa `Entropy/Reports` **423 → 423** | — |
+
+### `ui_audit --gate --final` sayaçları
+
+`click_latency_ms` **8** (180 kart) · `empty_interactive_count` **0** ·
+`ghost_button_contrast` **0** · `button_contrast` **0** ·
+`min_width_declaration_failures` **0** · `reader_min_width` **875** ·
+`board_view_mode_1366` `kanban` · `distinct_hex` **0** · `local_stylesheets` **0** ·
+`embedded_hex_count` 0 · `contrast_failure_count` 0 · `themes_reachable` 4 ·
+`settings_persisted_splitters` 12/12 · `min_button_height` 30 ·
+`embedded_h_overflow_count` 0 · `small_target_count` 0.
+Ghost kapısı artık **yüzey başına** ölçüyor (`scripts/ui_audit.py:222-269`
+`resolve_border_color` / `resolve_surface_color`): yükseltilmiş zeminde
+`line.onraised`, aksi hâlde `line.strong`.
+
+### Gerçek ekran — son doğrulama (LG ULTRAGEAR, dpr 2,0 = %200; 1920×1080, avail 1920×1032)
+
+Betik `scratch/ui/phase13/real_final.py`; ölçümler `real_final_metrics.json`;
+görüntüler `real_final_report_center_{dark,light}.png`,
+`real_final_digest_header_{dark,light}.png`, `real_final_reader.png`,
+`real_final_viewer.png`. Rapor gelen kutusu geçici depoya yönlendirildi,
+**gerçek kasa yalnızca okundu** (573 dosya: `Entropy/Reports` + `Entropy/Skills/**`).
+
+| Düzeltme | Ölçüm | Sonuç |
+|---|---|---|
+| (a) Dolgu sözcüğüyle başlayan başlık (`Tamamdır/Peki/Evet/Şimdi`) | ürün yolu `reports_viewer.read_report_meta` → `report_center.derive_report_title`, **573/573 kasa dosyası**: **0**; digest'te görünür 36 etiket: **0**; liste başlıkları 6: **0**; okuyucu kipi: **0** | **kapandı** |
+| (b) Digest başlık şeridi ghost kenarlığı — **piksel örneklemesi** (`grab()`) | **koyu: 4,85:1** (kenar `#7C8798` / zemin `#121924`) · **açık: 5,49:1** (`#5E6A7B` / `#FFFFFF`); iki düğme de (`mark_all_btn` "Tümünü okundu say", `prune_btn` "Temizle") `variant=ghost`, ebeveyn `surface="raised"`. Önceki ölçüm 2,35:1 idi | **kapandı** (≥ 3:1) |
+| Tema değiştirme akışı | **gerçek pencerede `SettingsDialog`** üzerinden (`combo_found true`, `path settings_dialog`): dark → `ui_theme dark`, light → `ui_theme light`; ölçüm her temada yeniden alındı, sonda `dark`a döndürüldü | **kapandı** |
+| Okuyucu → digest dönüşü | `open_report_by_path_or_id` **true**, "Gözden geçirmeye dön" sonrası başlık şeridi yeniden görünür (`digest_restored true`) | **kapandı** |
+
+Belirteç matematiği (`entropy.ui.design.tokens.contrast_ratio`) piksel ölçümüyle
+tutarlı: koyu `line.onraised`/`surface.raised` **4,31**, `line.onraised`/`line`
+**3,78**; açık **4,71** / **4,05** — dördü de ≥ 3, ve
+`CONTRAST_REQUIREMENTS`'a iki yeni hüküm olarak eklendi
+(`src/entropy/ui/design/tokens.py:286-291`).
+
+### Açık kalanlar / doğrulanamayanlar
+
+- Piksel ölçümlerinin tamamı **kaynak ağacından koşan gerçek `QApplication` +
+  `grab()`** iledir; paketlenmiş `EntropyAI.exe`'nin penceresinden piksel
+  örneklemesi **alınmadı** (exe yalnızca `--version`/`--help` + 20 sn canlı).
+- `.entropy/logs/entropy_fault.log` içindeki `Windows fatal exception: code
+  0x8001010d` (COM `RPC_E_CANTCALLOUT_ININPUTSYNCCALL`) eski oturumlardan beri
+  tekrarlıyor; bu koşuda **yeni kayıt düşmedi**, kök neden hâlâ **açık iş**.
+- Depo dışındaki üç **kullanıcı verisi** dosyasında marka adı geçiyor
+  (`.entropy/chat_archive/20260909-000412-337391.json`,
+  `.entropy/report_inbox.json`, `.entropy/cache/graph_data.json`); üçü de
+  `.gitignore` kapsamında, **silinmedi** (izlenen dosyalarda 0).
+- Tam süit `scratch/ui/phase10/*.png` içindeki 8 görüntüyü yeniden üretti;
+  HEAD içeriği `git show HEAD:<yol> > <yol>` ile geri yazıldı (yasaklı
+  `git checkout --` kullanılmadı), `git status` bu yolda **temiz**.
+
 
 ## 2.7 CANLI KOŞU QA (2026-09-10, qa-build-engineer) — kotalı kol
 

@@ -6,7 +6,7 @@ description: >-
   mevcut bir ekranı sadeleştirirken veya "arayüz modern görünmüyor" türü bir istek
   geldiğinde kullanılır.
 tags: ui, design, pyside6, accessibility, tokens
-version: 1.1.0
+version: 1.2.0
 ---
 
 # ui-design — Entropy arayüz tasarımı
@@ -37,9 +37,17 @@ Belirteçler: `src/entropy/ui/design/tokens.py` · QSS: `design/qss.py` · ikon:
    panel açık/kapalı, tema, yoğunluk) `entropy.ui.design.prefs` (`QSettings`) üzerinden
    kalıcıdır. Yeni bir `QSplitter` eklersen aynı satırda
    `install_splitter_persistence("<ad>", splitter)` çağırırsın.
-10. **Kapı beyana dayanamaz.** Bir kapı, kodun kendi beyan ettiği listeyi (ör.
+10. **Metin kaldırılıyorsa yerine ad konur.** Bir sadeleştirme turu bir
+   etkileşimli öğeden metni kaldırıyorsa yerine **ikon + `accessibleName`**
+   koymak zorundadır; ikisi de yoksa öğe **silinir**. (Faz 11-E'de üç kez
+   ihlal edildi: slash paleti, terminal düğmesi, pin/arşiv düğmeleri; sonuç
+   kullanıcının gerçek ekranda gördüğü "düğmeler görünmüyor" hatasıydı.)
+11. **Kapı beyana dayanamaz.** Bir kapı, kodun kendi beyan ettiği listeyi (ör.
    `header_items`) değil **canlı widget ağacını** ölçer; "aynı anda görünen" =
-   `isVisible()` **ve** `visibleRegion()` boş değil.
+   `isVisible()` **ve** `visibleRegion()` boş değil. Aynı kural genişlik için de
+   geçerlidir: `setMinimumWidth` beyanı `minimumSizeHint()` hesabından küçükse
+   beyan **yalandır** (Faz 13'te Görevler panosu 220 px beyan edip 1.356 px
+   istiyordu).
 
 ## 1. Süreç (her arayüz işi bu sırayla)
 
@@ -136,8 +144,22 @@ canlı olanlar `--live` ya da `--final` ile offscreen Qt kolunda ölçülür):
 | `header_leaf_widgets` | ≤ 6 | **6** (önce 8) |
 | `embedded_h_overflow` | 0 | **0** |
 
-Bilgi (kapı değil): `midpoint_separators` (bugün 72), `emoji_raw`,
-`splitters_total`.
+Faz 13-A9'da eklenen dört kapı (`FINAL_GATES_13` + `FINAL_MIN_GATES`;
+dördü de **canlı** offscreen Qt kolunda ölçülür, `--live` ya da `--final`):
+
+| Kapı | Alan | Eşik | Nasıl ölçülür | Ölçüm (2026-09-10) |
+|---|---|---:|---|---:|
+| **G13-1** boş etkileşimli öğe | `empty_interactive_count` | 0 | görünür her `QAbstractButton`: `text()` dolu **veya** ikon boş değil **veya** `accessibleName()` dolu (WCAG 4.1.2) | **0** |
+| **G13-2** düğme kontrastı (ghost dâhil) | `ghost_button_contrast` | 0 | ghost varyantında şeffaf zemin üzerindeki kenarlık `line.strong`/`surface` ≥ 3:1 (WCAG 1.4.11), metin ≥ 4,5:1 | **0** (önce 10) |
+| **G13-3** tıklama gecikmesi | `click_latency_ms` | ≤ 50 (uyarı 100) | Rapor Merkezi, **sessiz bölüm AÇIK**, ≥ 150 sentetik küme; `QElapsedTimer` ile "okundu" tıklaması (RAIL) | **6 ms / 180 kart** |
+| **G13-4** okuyucu asgarisi + beyan doğruluğu | `reader_min_width` ≥ 560 · `min_width_declaration_failures` | 560 · 0 | okuma kipinde gövde genişliği; panel beyanı ≥ `minimumSizeHint().width()` | **875 px · 0** |
+
+Kapıların **gerçekten ölçtüğü** `tests/ui/test_phase13_ux.py` içinde kanıtlanır:
+bilerek adsız bırakılmış bir düğme G13-1'i, 200 ms uyuyan bir işleyici G13-3'ü,
+yalan beyanlı bir panel G13-4'ü kırmızıya çevirir.
+
+Bilgi (kapı değil): `midpoint_separators` (bugün 74), `emoji_raw`,
+`splitters_total`, `click_latency_cards`, `board_view_mode_1366`.
 
 ## 7. Gerçek ekran kontrol listesi (offscreen'in kapatamadığı boşluk)
 

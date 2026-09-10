@@ -416,8 +416,11 @@ def test_inbox_read_pin_archive_roundtrip(store, tmp_path):
     assert "/r/a.md" not in visible, "arşivlenen girdi şeritten düşmeli"
 
     # Kalıcılık: yeni bir depo aynı dosyadan aynı durumu okur.
+    # Faz 13-A3: yazım ~1 sn ertelenir (tıklama yolunda disk yok); kalıcılık
+    # ölçümünden önce bekleyen yazım flush edilir (kapanış kancasının yaptığı).
     from entropy.ui.widgets.report_inbox import ReportInboxStore
 
+    assert store.flush() is True
     reloaded = ReportInboxStore(path=store.path)
     assert reloaded.is_read("/r/a.md") is True
     assert reloaded.is_pinned("/r/b.md") is True

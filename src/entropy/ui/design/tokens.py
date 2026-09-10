@@ -61,6 +61,10 @@ DARK_TOKENS: Dict[str, Any] = {
         "surface.raised": "#1A2431",  # hover, seçili, üst kademe
         "line": "#232E3D",            # dekoratif ayraç
         "line.strong": "#5A6676",     # denetim sınırı (WCAG 1.4.11 ≥ 3:1)
+        # Faz 13-A kapanış: `line.strong` yalnızca `surface`/`bg` üstünde 3:1
+        # tutuyor; yükseltilmiş yüzeyde (kart hover, digest başlık şeridi
+        # `line` zemini) 2,35:1'e düşüyordu. Bu belirteç o yüzeyler için.
+        "line.onraised": "#7C8798",   # yükseltilmiş yüzeyde denetim sınırı
         "text": "#E7EEF7",            # gövde
         "text.muted": "#9AAABE",      # ikincil etiket
         "accent": "#4CC2FF",          # TEK vurgu: seçili, bağlantı, odak halkası
@@ -150,6 +154,7 @@ def _light_overrides() -> Dict[str, str]:
         "surface.raised": "#E9EEF5",
         "line": "#D6DEE9",
         "line.strong": "#6B7788",
+        "line.onraised": "#5E6A7B",
         "text": "#101720",
         "text.muted": "#55637A",
         "accent": "#0A6EB4",
@@ -281,6 +286,9 @@ CONTRAST_REQUIREMENTS = [
     ("text.muted", "bg", 4.5),
     ("line.strong", "surface", 3.0),
     ("line.strong", "bg", 3.0),
+    # Yükseltilmiş yüzeylerde ghost kenarlığı (Faz 13-A kapanış ölçümü).
+    ("line.onraised", "surface.raised", 3.0),
+    ("line.onraised", "line", 3.0),
     ("accent", "surface", 4.5),
     ("accent", "bg", 4.5),
     ("accent.ink", "accent", 4.5),

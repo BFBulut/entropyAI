@@ -40,11 +40,22 @@ from PySide6.QtWidgets import (
 
 from entropy.core.config import STATE_DIR
 from entropy.core.event_bus import bus
+# Faz 13: başlık mantığının TEK KAYNAĞI çekirdektir (yazma tarafı da onu kullanır).
+from entropy.core.report_title import (
+    TITLE_MAX_CHARS as _CORE_TITLE_MAX,
+    _CHAT_OPENERS as _CORE_CHAT_OPENERS,
+    derive_report_title as core_derive_report_title,
+    title_from_h1 as core_title_from_h1,
+)
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
-from entropy.ui.widgets.report_inbox import ReportInboxStore, get_shared_store
+from entropy.ui.widgets.flow_layout import FlowHeaderFrame
+from entropy.ui.widgets.report_inbox import (
+    ReportInboxStore, get_shared_store, is_session_entry,
+)
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design import TOKENS as _TOKENS, icon as design_icon
 from entropy.ui.design.embedded import live_palette as _live_palette
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
@@ -185,6 +196,140 @@ def first_sentences(text: str, count: int = 1) -> List[str]:
     return parts[:count]
 
 
+# ------------------------------------------------------------------ başlık
+
+# Faz 13 (kullanıcı geri bildirimi: "rapor başlıkları garip"). Rapor başlığı
+# sohbet metninin ilk satırından türüyordu — kartta
+# "Tamamdır, şimdi senden yeni bir yetenek (+2)" gibi başlıklar çıkıyordu.
+# Kaynak sırası: frontmatter `title` → gövdedeki ilk `#` başlık → dosya adı
+# (Gorev_/tarih öneki temizlenmiş) → ANCAK sonra ilk cümle.
+# Her aday makullük süzgecinden geçer; geçmeyen aday bir sonrakine devreder.
+
+#
+# Faz 13 (ikinci geçiş): H1 / ilk cümle / kırpma / makine bloğu atlama mantığı
+# ARTIK TEK KAYNAKTAN gelir — `entropy.core.report_title`. Bu modülde yalnızca
+# **okuma tarafına özgü** iki süzgeç kalır: `title_is_plausible` (frontmatter'da
+# yazan başlık gerçekten başlık mı?) ve `title_from_filename` (dosya adı yalnız
+# okuma tarafında bir kaynaktır; yazma tarafında dosya adı başlıktan türer).
+#: Sohbet açılış sözcükleri — bunlarla başlayan aday başlık değildir.
+#: Liste çekirdekten devralınır; iki taraf çelişemez.
+_CHAT_OPENERS = tuple(_CORE_CHAT_OPENERS) + ("sure", "thanks", "hello")
+
+#: Dosya adındaki tür öneki ve tarih/saat damgaları.
+_TITLE_KIND_PREFIX_RE = re.compile(
+    r"^(gorev|görev|task|report|rapor|query|sorgu|note|not)[ _-]+", re.IGNORECASE
+)
+_TITLE_DATE_PREFIX_RE = re.compile(r"^\d{4}[-_ ]?\d{2}[-_ ]?\d{2}([-_ ]\d{2,6})?[ _-]*")
+_TITLE_TIME_SUFFIX_RE = re.compile(r"[ _-]+\d{4,8}$")
+
+#: Makul başlık üst sınırları (üst sınır çekirdekten gelir).
+TITLE_MAX_CHARS = _CORE_TITLE_MAX
+TITLE_MAX_WORDS = 12
+
+#: Çekirdek türetimin "hiçbir şey bulamadım" işareti (varsayılan metnini
+#: dosya adının önüne geçirmemek için).
+_NO_CORE_TITLE = "\x00yok"
+
+
+def title_is_plausible(text: str) -> bool:
+    """Aday bir *başlık* mı yoksa sohbetten kopmuş bir *cümle* mi?"""
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if len(value) > TITLE_MAX_CHARS or len(value.split()) > TITLE_MAX_WORDS:
+        return False
+    if value[-1] in ".!?…":
+        return False
+    if ", " in value:  # cümle bağlacı: "Tamamdır, şimdi senden ..."
+        return False
+    first = re.split(r"[\s,.:;!?]+", value.lower(), maxsplit=1)[0]
+    if first in _CHAT_OPENERS:
+        return False
+    return True
+
+
+def strip_title_decorations(text: str, *, underscores: bool = False) -> str:
+    """Başlıktan tür önekini (`Gorev_`), tarih önekini ve `_YYYYMMDD_HHMM`
+    zaman damgalarını atar.
+
+    Faz 13-A kapanış: bu temizlik yalnızca DOSYA ADINA uygulanıyordu; kasadaki
+    eski raporların **frontmatter `title`** alanı da aynı damgaları taşıyor
+    (ör. `Gorev_Otonom Ajan Mimarisi Arastirma_20260905_1527`), o başlık
+    "makul" sayılıp ham hâliyle karta ve küme başlığına düşüyordu.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    value = _TITLE_DATE_PREFIX_RE.sub("", value)
+    value = _TITLE_KIND_PREFIX_RE.sub("", value)
+    # Zaman/tarih damgası birden fazla olabilir: `..._20260905_1527`
+    for _ in range(3):
+        shorter = _TITLE_TIME_SUFFIX_RE.sub("", value)
+        if shorter == value:
+            break
+        value = shorter
+    if underscores:
+        value = value.replace("_", " ")
+    value = value.strip(" -_")
+    return re.sub(r"\s+", " ", value)
+
+
+def title_from_filename(path: Any) -> str:
+    """Dosya adından başlık türetir: tür öneki, tarih ve saat damgası atılır."""
+    stem = Path(str(path or "")).stem
+    if not stem:
+        return ""
+    return strip_title_decorations(stem, underscores=True)
+
+
+def title_from_body(body: str) -> str:
+    """Gövdedeki ilk `# H1` — **tek kaynak** `core.report_title.title_from_h1`.
+
+    Sarmalayıcı yalnızca eski çağrı adını korur; kural çekirdektedir (ön bilgi,
+    kod çiti ve `[PANO …]` makine blokları orada atlanır).
+    """
+    return core_title_from_h1(body)
+
+
+def derive_report_title(
+    front_title: str = "", body: str = "", path: Any = "", fallback: str = "",
+) -> str:
+    """Rapor başlığını sözleşmedeki sırayla türetir (bkz. yukarıdaki not).
+
+    Okuma tarafı sarmalayıcısıdır: gövdeden türetmenin tamamı (H1 → ilk anlamlı
+    cümle → kırpma) `core.report_title` içindedir; buraya yalnızca okuma
+    tarafının iki ek kaynağı eklenir — frontmatter `title` ve dosya adı.
+    """
+    candidates = [
+        strip_title_decorations(front_title),
+        title_from_body(body),
+        title_from_filename(path),
+    ]
+    for candidate in candidates:
+        if title_is_plausible(candidate):
+            return candidate
+    # Faz 13-A kapanış: hiçbir aday makul değilse SIRA sabittir —
+    #   çekirdek gövde türetimi (sohbet açılışlarını zaten atlar)
+    #   → dosya adı (en azından tarih/önek temizlenmiş)
+    #   → çağıranın yedeği
+    #   → EN SON ham frontmatter başlığı.
+    # Ham başlık daha önce ikinci sırada geliyordu; "Tamamdır, şimdi senden ..."
+    # gibi sohbet açılışları listede o yüzden görünüyordu.
+    core_title = core_derive_report_title(str(body or ""), fallback=_NO_CORE_TITLE)
+    if core_title == _NO_CORE_TITLE:
+        core_title = ""
+    tail = [
+        core_title,
+        candidates[2],                       # dosya adı
+        str(fallback or "").strip(),
+        candidates[0] or str(front_title or "").strip(),  # ham frontmatter
+    ]
+    for candidate in tail:
+        if candidate:
+            return candidate[:TITLE_MAX_CHARS].rstrip()
+    return "Adsız rapor"
+
+
 # ------------------------------------------------------------- künye zenginleştirme
 
 def _body_after_frontmatter(text: str) -> str:
@@ -316,6 +461,11 @@ def enrich_entry(entry: Dict[str, Any], read_body: bool = True) -> Dict[str, Any
     if body is None and read_body:
         body = _read_head(out.get("path", ""))
     body = str(body or "")
+    # Faz 13: başlık sözleşmesi (frontmatter → ilk `#` → dosya adı → ilk cümle).
+    out["title"] = derive_report_title(
+        front_title=out.get("title", ""), body=body, path=out.get("path", ""),
+        fallback=str(out.get("title", "")),
+    )
     if not out.get("summary") or not out.get("decision"):
         summary, decision = extract_summary_and_decision(body)
         out.setdefault("summary", "")
@@ -461,9 +611,38 @@ def cluster_entries(
 
 
 def _cluster_title(members: Sequence[Dict[str, Any]]) -> str:
-    """Küme başlığı: en önemli üyenin başlığı, çoklu kümede "+N" ekiyle."""
-    ordered = sorted(members, key=lambda e: (-float(e.get("importance", 0.0)), str(e.get("title", ""))))
-    head = str(ordered[0].get("title") or Path(str(ordered[0].get("path", ""))).stem)
+    """Küme başlığı: **en sık geçen makul başlık**, çoklu kümede "+N" ekiyle.
+
+    Faz 13: eskiden yalnızca en önemli üyenin başlığı alınıyordu; o üyenin
+    başlığı sohbetten kopmuş bir cümleyse bütün küme öyle adlanıyordu.
+    """
+    titles = [
+        derive_report_title(
+            front_title=e.get("title", ""), body=e.get("body", "") or "",
+            path=e.get("path", ""), fallback=str(e.get("title", "")),
+        )
+        for e in members
+    ]
+    plausible = [t for t in titles if title_is_plausible(t)]
+    head = ""
+    if plausible:
+        counts = Counter(plausible)
+        top = max(counts.values())
+        # Beraberlikte önem sırası karar verir.
+        by_importance = sorted(
+            (t for t, n in counts.items() if n == top),
+            key=lambda t: -max(
+                (float(m.get("importance", 0.0)) for m, mt in zip(members, titles) if mt == t),
+                default=0.0,
+            ),
+        )
+        head = by_importance[0]
+    if not head:
+        ordered = sorted(
+            zip(members, titles),
+            key=lambda pair: (-float(pair[0].get("importance", 0.0)), pair[1]),
+        )
+        head = ordered[0][1] or Path(str(ordered[0][0].get("path", ""))).stem
     if len(members) > 1:
         head = f"{head} (+{len(members) - 1})"
     return head
@@ -780,41 +959,103 @@ class DigestCardWidget(QFrame):
         self.decision_label.setProperty("role", "label")
         root.addWidget(self.decision_label)
 
+        # Faz 13: eylemler kartın gövdesinden **ayrı satırda** ve görünür
+        # düğmelerle durur. Kullanıcı geri bildirimi: "Detayı aç / Orkestratöre
+        # sor / Okundu düz metin gibi görünüyor" — hepsi `variant="ghost"` ve
+        # sönük metin rengindeydi, kenarlık yoktu. Birincil eylem artık
+        # `primary`, kalanlar kenarlıklı `ghost` + ikon.
+        root.addSpacing(_TOKENS["space"]["1"])
         actions = QHBoxLayout()
-        actions.setSpacing(4)
-        self.open_btn = self._action_btn("Detayı aç", "Kümenin birincil raporunu okuyucuda aç")
+        actions.setSpacing(_TOKENS["space"]["1"])
+        self.open_btn = self._action_btn(
+            "Detayı aç", "Kümenin birincil raporunu okuyucuda aç",
+            icon_name="book", variant="primary",
+        )
         self.open_btn.clicked.connect(self._on_open)
         actions.addWidget(self.open_btn)
 
         self.ask_btn = self._action_btn(
             "Orkestratöre sor",
             "Bu kümenin ofisine `/ask <ofis> ...` ile revizyon/açıklama isteği gönderir",
+            icon_name="comment",
         )
         self.ask_btn.clicked.connect(self._on_ask)
         self.ask_btn.setEnabled(bool(card.get("office")))
         actions.addWidget(self.ask_btn)
 
-        self.read_btn = self._action_btn("Okundu", "Kümedeki bütün raporları okundu işaretle")
+        self.read_btn = self._action_btn(
+            "Okundu", "Kümedeki bütün raporları okundu işaretle", icon_name="check",
+        )
         self.read_btn.clicked.connect(self._on_read)
         actions.addWidget(self.read_btn)
 
-        self.pin_btn = self._action_btn("", "Sabitle / sabitlemeyi kaldır")
+        self.pin_btn = self._action_btn(
+            "Sabitle", "Sabitle / sabitlemeyi kaldır", icon_name="pin",
+        )
         self.pin_btn.clicked.connect(self._on_pin)
         actions.addWidget(self.pin_btn)
 
-        self.archive_btn = self._action_btn("", "Kümeyi arşivle")
+        self.archive_btn = self._action_btn(
+            "Arşivle", "Kümeyi arşivle", icon_name="inbox",
+        )
         self.archive_btn.clicked.connect(self._on_archive)
         actions.addWidget(self.archive_btn)
         actions.addStretch()
         root.addLayout(actions)
 
     @staticmethod
-    def _action_btn(text: str, tip: str) -> QPushButton:
+    def _action_btn(
+        text: str, tip: str, icon_name: str = "", variant: str = "ghost",
+    ) -> QPushButton:
         btn = QPushButton(text)
         btn.setToolTip(tip)
+        btn.setAccessibleName(text or tip)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setProperty("variant", "ghost")
+        btn.setProperty("variant", variant)
+        if icon_name:
+            # İkon rengi `text` belirtecinden gelir (sönük değil): kullanıcı
+            # "ikonlar belli belirsiz" dedi.
+            tone = _TOKENS["color"]["accent.ink"] if variant == "primary" else _TOKENS["color"]["text"]
+            btn.setIcon(design_icon(icon_name, color=tone))
         return btn
+
+    # ------------------------------------------------------- yerinde güncelleme
+
+    def update_card(self, card: Dict[str, Any]) -> None:
+        """Kartı yeniden kurmadan içeriğini tazeler (okundu/pin tıklaması).
+
+        `ReportCenterWidget.refresh()` her tıklamada bütün digest kartlarını
+        yıkıp yeniden kuruyordu; kullanıcı bunu "kasma" olarak görüyor.
+        """
+        self.card = card
+        self.title_label.setText(str(card.get("title", "")))
+        self.title_label.setToolTip(str(card.get("path", "")))
+        imp_fg, imp_bg = IMPORTANCE_COLORS.get(card["importance_label"], IMPORTANCE_COLORS["düşük"])
+        urg_fg, urg_bg = URGENCY_COLORS.get(card["urgency_label"], URGENCY_COLORS["sakin"])
+        self.badge_label.setText(
+            _badge(f"önem: {card['importance_label']}", imp_fg, imp_bg)
+            + " "
+            + _badge(f"aciliyet: {card['urgency_label']}", urg_fg, urg_bg)
+        )
+        meta_bits = [f"{card['count']} rapor"]
+        if card.get("unread"):
+            meta_bits.append(f"{card['unread']} okunmadı")
+        if card.get("office"):
+            meta_bits.append(f"{card['office']}")
+        if card.get("card"):
+            meta_bits.append(f"{card['card']}")
+        self.meta_label.setText(" · ".join(meta_bits))
+        findings = card.get("findings") or []
+        self.findings_label.setText(
+            "\n".join(f"• {f}" for f in findings) if findings
+            else "• Bu kümedeki raporlarda özet cümlesi bulunamadı."
+        )
+        decision = card.get("decision") or ""
+        self.decision_label.setText(
+            f"{decision}" if decision
+            else "Karar önerisi yok (raporda öneri/sonuç başlığı bulunmadı)."
+        )
+        self.ask_btn.setEnabled(bool(card.get("office")))
 
     # ---------------------------------------------------------- eylemler
 
@@ -877,6 +1118,8 @@ class ReportCenterWidget(QFrame):
         self._cluster_index: List[List[int]] = []
         self._enrich_cache: Dict[tuple, Dict[str, Any]] = {}
         self._quiet_expanded = False
+        #: "Oturumlar" süzgeci (varsayılan kapalı — oturum notu rapor değildir).
+        self.include_sessions = False
         self._mailbox_cache: Optional[List[Dict[str, Any]]] = None
         self.quiet_threshold = load_quiet_threshold()
         # Faz 9 - kasa tazelemesi icin birlestirme zamanlayicisi ve isci durumu.
@@ -891,8 +1134,17 @@ class ReportCenterWidget(QFrame):
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(5)
 
-        head = QHBoxLayout()
-        head.setSpacing(8)
+        # Faz 13-A4 (G13-4 "beyan = hesaplanan"): eskiden başlık satırı sabit
+        # bir `QHBoxLayout`'tu ve panelin GERÇEK asgarisini 572 px'e çıkarıyordu;
+        # panel ise 240 px beyan ediyordu → araç çubuğu dar panelde kırpılıyordu.
+        # Akan yerleşimde satır alt satıra iner, gerçek asgari tek düğme
+        # genişliğine düşer ve beyan artık doğru olur.
+        head_frame = FlowHeaderFrame(margins=(0, 0, 0, 0))
+        head = head_frame.flow()
+        # Faz 13-A kapanış: başlık şeridi yükseltilmiş bir yüzeydir; içindeki
+        # ghost düğmeler `line.onraised` kenarlığını alsın (QSS seçicisi).
+        head_frame.setProperty("surface", "raised")
+        self.header_frame = head_frame
         self.header_label = QLabel("")
         self.header_label.setTextFormat(Qt.TextFormat.RichText)
         self.header_label.setProperty("role", "label")
@@ -901,11 +1153,10 @@ class ReportCenterWidget(QFrame):
         # 1400 px'in üstüne çıkarıp dar panelde araç çubuğunu kırpıyordu. Açık
         # küçük minimum vererek satırın daralmasına izin veriyoruz.
         self.header_label.setMinimumWidth(120)
-        self.header_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
-        head.addWidget(self.header_label, 1)
-        head.addStretch()
+        # Akan yerleşimde öğe kendi `sizeHint`'i kadar yer kaplar; zengin metin
+        # başlığın üst sınırı olmasaydı dar panelde satırdan taşardı.
+        self.header_label.setMaximumWidth(420)
+        head.addWidget(self.header_label)
         self.mark_all_btn = DigestCardWidget._action_btn(
             "Tümünü okundu say", "Rapor Merkezi'ndeki bütün raporları okundu işaretle"
         )
@@ -929,7 +1180,7 @@ class ReportCenterWidget(QFrame):
             label = "kapalı" if value > 1.0 else f"eşik {value:.2f}"
             self.threshold_combo.addItem(label, value)
         head.addWidget(self.threshold_combo)
-        root.addLayout(head)
+        root.addWidget(head_frame)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -998,8 +1249,20 @@ class ReportCenterWidget(QFrame):
     # ------------------------------------------------------------ veri
 
     def set_entries(self, entries: Sequence[Dict[str, Any]]) -> None:
-        self._entries = list(entries or [])
+        # Faz 13: oturum notları rapor değildir (araştırma notu §1.5). Yol
+        # `Entropy/Sessions/` altındaysa ya da ön bilgi `type: session` diyorsa
+        # künye listeye ve "Toplam N rapor" sayacına GİRMEZ; "Oturumlar"
+        # süzgeci açılınca görünür olur.
+        items = list(entries or [])
+        if not self.include_sessions:
+            items = [e for e in items if not is_session_entry(e)]
+        self._entries = items
         self.refresh()
+
+    def set_include_sessions(self, include: bool) -> None:
+        """"Oturumlar" süzgeci: oturum notlarını listeye dâhil eder."""
+        self.include_sessions = bool(include)
+        self.reload_from_vault()
 
     def total_count(self) -> int:
         """Ekrandaki **tek** rapor sayacı (Faz 12-D.2, denetim D12-03).
@@ -1144,25 +1407,36 @@ class ReportCenterWidget(QFrame):
             "total": len(enriched),
             "quiet_threshold": threshold,
         }
-        while self.cards_layout.count() > 1:
-            item = self.cards_layout.takeAt(0)
-            widget = item.widget() if item else None
-            if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
-        self.card_widgets = []
-
         visible = list(self._result["cards"])
         if self._quiet_expanded:
             visible += list(self._result["quiet"])
-        for card in visible:
-            widget = DigestCardWidget(card, self)
-            self.card_widgets.append(widget)
-            self.cards_layout.insertWidget(self.cards_layout.count() - 1, widget)
+
+        # Faz 13 — "kasma"nın kök nedeni: okundu/pin gibi YALNIZCA uçucu bayrağı
+        # değiştiren her tıklamada bütün digest kartları yıkılıp yeniden
+        # kuruluyordu (kart başına 5 düğme + 5 etiket + QSS repolish). Kart
+        # kimliği ve sırası aynıysa artık widget'lar korunur, yalnızca içerik
+        # tazelenir; yeniden kurma yalnızca küme bileşimi değişince olur.
+        layout_key = [str(c.get("path", "")) for c in visible]
+        if layout_key == getattr(self, "_layout_key", None) and len(self.card_widgets) == len(visible):
+            for widget, card in zip(self.card_widgets, visible):
+                widget.update_card(card)
+        else:
+            while self.cards_layout.count() > 1:
+                item = self.cards_layout.takeAt(0)
+                widget = item.widget() if item else None
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+            self.card_widgets = []
+            for card in visible:
+                widget = DigestCardWidget(card, self)
+                self.card_widgets.append(widget)
+                self.cards_layout.insertWidget(self.cards_layout.count() - 1, widget)
+            self._layout_key = layout_key
 
         unread = self.unread_count()
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>RAPOR MERKEZİ</b>"
+            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>Rapor merkezi</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"Toplam {self._result['total']} rapor ·"
             f" {len(self._result['cards'])} öne çıkan"
@@ -1192,7 +1466,40 @@ class ReportCenterWidget(QFrame):
             self.empty_label.setVisible(False)
             self.scroll.setVisible(True)
         self.mark_all_btn.setEnabled(bool(unread))
+        self.apply_review_card_width()
         self.unread_changed.emit(unread)
+
+    #: Gözden geçirme kipinde digest kartının okunur asgarisi (araştırma §1.3).
+    REVIEW_CARD_MIN_WIDTH = 520
+
+    def apply_review_card_width(self) -> None:
+        """Yer varsa kartı 520 px'e sabitler; dar panelde kart daralır.
+
+        Kartlar kaydırma alanının içindedir; bu yüzden asgari, panelin
+        beyanını (G13-4) şişirmez.
+        """
+        try:
+            available = self.scroll.viewport().width()
+        except RuntimeError:
+            return
+        target = self.REVIEW_CARD_MIN_WIDTH if available >= self.REVIEW_CARD_MIN_WIDTH else 0
+        for widget in self.card_widgets:
+            try:
+                widget.setMinimumWidth(target)
+            except RuntimeError:
+                continue
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self.apply_review_card_width()
+
+    def hideEvent(self, event):  # noqa: N802
+        # Faz 13-A3: ertelenmiş okundu/pin yazımı panel kapanırken diske iner.
+        try:
+            self.store.flush()
+        except (AttributeError, RuntimeError):
+            pass
+        super().hideEvent(event)
 
     def toggle_quiet(self) -> bool:
         self._quiet_expanded = not self._quiet_expanded
@@ -1288,7 +1595,9 @@ class ReportCenterWidget(QFrame):
         """Senkron tazeleme (testler ve ilk yukleme icin)."""
         from entropy.ui.widgets.report_inbox import collect_recent_entries
 
-        self.set_entries(collect_recent_entries(limit=self.VAULT_RELOAD_LIMIT))
+        self.set_entries(collect_recent_entries(
+            limit=self.VAULT_RELOAD_LIMIT, include_sessions=self.include_sessions,
+        ))
 
     def schedule_reload(self) -> None:
         """Kasadan tazelemeyi geciktirir; ana is parcacigi bloklanmaz."""
@@ -1308,6 +1617,7 @@ class ReportCenterWidget(QFrame):
         self._reload_running = True
         self._reload_again = False
         limit = self.VAULT_RELOAD_LIMIT
+        include_sessions = bool(self.include_sessions)
         widget = self
 
         class _ReloadJob(QRunnable):
@@ -1315,7 +1625,9 @@ class ReportCenterWidget(QFrame):
                 from entropy.ui.widgets.report_inbox import collect_recent_entries
 
                 try:
-                    entries = collect_recent_entries(limit=limit)
+                    entries = collect_recent_entries(
+                        limit=limit, include_sessions=include_sessions,
+                    )
                 except Exception:
                     entries = None
                 # Qt nesnelerine yalnizca ana is parcacigindan dokunulur.
@@ -1337,6 +1649,11 @@ class ReportCenterWidget(QFrame):
             return
 
     def closeEvent(self, event):  # noqa: N802
+        # Faz 13-A3: ertelenmis okundu/pin yazimi kapanista diske iner.
+        try:
+            self.store.flush()
+        except (AttributeError, RuntimeError):
+            pass
         # Faz 8: tekrarli kapanislarda ayni sinyali yeniden cozmek
         # libpyside'in "Failed to disconnect" uyarisini basiyordu.
         if not getattr(self, "_bus_connected", True):

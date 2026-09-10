@@ -341,6 +341,15 @@ bu tablo aynı commit'te güncellenir.
 Üç kip: **Zen** (tam pano), **Chat** (sohbet öncelikli), **Floating** (küçük yüzen pencere) —
 `ui/modes/`. 29 widget `ui/widgets/` altında.
 
+**Korunan kimlik öğeleri (Faz 13, sadeleştirme turları bunları kaldıramaz).**
+Aşağıdaki üç öğe dekor değil **kimlik + durum göstergesidir**; yoğunluk sayacını
+düşürmek için silinemez, ancak yeniden tasarlanabilir:
+(1) **Çekirdek görselleştirici** (`ui/widgets/core_visualizer.py`, Zen sohbetinin
+rezerve üst şeridinde, ≥ 48 px, ayardan gizlenebilir — sözleşme testi
+`tests/ui/test_phase13_ux.py`); (2) **marka kümesi** (`brandCluster`);
+(3) **model kapsülü** (`modelCapsule` — hangi modelin konuştuğu her an görünür).
+Bir tur bu öğelerden birini küçültürse gerekçesini faz raporuna yazar.
+
 ### 8.1 Tasarım sistemi (Faz 11-E, **sözleşme**)
 
 **Tek belirteç kaynağı** `ui/design/tokens.py` → `TOKENS`. Aileler: `color` (12 arayüz

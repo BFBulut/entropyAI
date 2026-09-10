@@ -392,13 +392,28 @@ def test_floating_core_click_opens_mode_menu_without_breaking_drag(qapp):
     widget.close()
 
 
-def test_zen_core_has_mode_menu_enabled(qapp, tmp_path):
+def test_zen_core_is_visualizer_and_mode_menu_moved_to_brand(qapp, tmp_path):
+    """Faz 13 sözleşme değişikliği: çekirdek artık kip menüsü taşımaz.
+
+    11-E'de çekirdek 24 px'lik bir üst çubuk noktasıydı ve kip menüsü ondaydı.
+    Kullanıcı geri bildirimiyle çekirdek sohbetin sağ üstüne **etkileşimsiz**
+    görselleştirici olarak döndü; kip anahtarı marka kümesindeki menü
+    düğmesindedir (zen/chat/floating aynı kalır).
+    """
+    from PySide6.QtCore import Qt
+
     TaskScheduler.reset_instance()
     TaskScheduler.get_instance(storage_path=tmp_path / "zen_core_tasks.json")
 
     bridge = AgyProcessBridge()
     zen = ZenModeWindow(bridge=bridge)
-    assert zen.core_visualizer.mode_menu_enabled is True
+    assert zen.core_visualizer.mode_menu_enabled is False
+    assert zen.core_visualizer.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+    )
+    assert [a.data() for a in zen.brand.mode_btn.menu().actions()] == [
+        "zen", "chat", "floating",
+    ]
 
     if getattr(zen, "tasks_widget", None) and zen.tasks_widget.scheduler:
         zen.tasks_widget.scheduler.stop()
