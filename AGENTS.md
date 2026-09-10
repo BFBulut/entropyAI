@@ -79,6 +79,17 @@ Kurallar:
 
 Ajan yaşam döngüsü arayüze `entropy.core.event_bus` üzerinden görünür:
 `agent_turn_started`, `agent_stream`, `agent_turn_completed`, `task_triggered`,
-`task_completed`, `task_notification`, `checkpoint_written`, `proof_recorded`,
-`office_progress`, `mailbox_updated`, `rules_updated`.
+`task_completed`, `task_notification`, `task_followup_completed`, `checkpoint_written`,
+`proof_recorded`, `office_progress`, `mailbox_updated`, `rules_updated`
+ve **Faz 11-C panosu**: `board_state_changed(dict)`, `task_report_ready(dict)`.
 Tam sözleşme: `docs/ARCHITECTURE.md` §7.
+
+---
+
+## 5. Pano araçları (Entropy Board)
+
+Ajan bir kartla konuşurken `[PANO <araç>] {json} [/PANO]` biçimini kullanır
+(`agents/board_tools.py`): `board_next`, `board_checkpoint`, `board_finish`, `board_ask`;
+Entropy'de ayrıca `board_create`. **Kanıtsız `board_finish` reddedilir** — kart `review`de
+kalır (§3/2 ile aynı kural, makine tarafında zorlanır).
+Durum makinesi ve olay günlüğü: `docs/ARCHITECTURE.md` §6.1.1.

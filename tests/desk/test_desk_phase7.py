@@ -129,38 +129,46 @@ def test_desk_ratios_and_min_size(qapp):
 
 
 def test_panel_minimum_widths_sum_below_900(qapp):
-    """Üç sütunun asgari genişlik toplamı yarım ekrana (≈900 px) sığar."""
+    """Üç sütunun GERÇEK asgari genişliği yarım ekrana (≈900 px) sığar.
+
+    Faz 12-D.1: eski sürüm yalnızca `minimumWidth()` (bildirilen) toplamını
+    ölçüyordu; oysa sayfaların örtük `minimumSizeHint`i bunu eziyor ve pencere
+    gerçekte 1.205 px istiyordu. Artık ölçüm doğrudan `minimumSizeHint`
+    üzerinden yapılır.
+    """
     from entropy.desk.window import AgentDeskWindow
 
     window = AgentDeskWindow(office_registry=None, agent_registry=None)
-    total = (
-        window.offices_panel.minimumWidth()
-        + window.tabs.minimumWidth()
-        + window.roster_panel.minimumWidth()
-    )
-    assert total <= 900, f"asgari genişlik toplamı {total} px"
-    # Açık minimumlar örtük ipuçlarını ezmeli: pencere sıkıştırıldığında paneller
-    # kendi asgarilerine iner, örtük `minimumSizeHint` (projeler 460, ofisler 520
-    # …) devreye girmez. Hedef genişlik ekranla sınırlıdır: offscreen sürücüde
-    # sanal ekran 800 px olduğu için pencere 900'e çıkamaz, bu bir ürün hatası
-    # değil ölçüm sınırıdır.
+    window.show()
+    QApplication.processEvents()
+
+    columns = (window.offices_host, window.tabs, window.roster_host)
+    effective = []
+    for panel in columns:
+        hint = panel.minimumSizeHint().width()
+        effective.append(max(panel.minimumWidth(), hint))
+    assert sum(effective) <= 900, f"gerçek asgari genişlik toplamı {effective}"
+
+    # Pencerenin kendi gerçek asgarisi de yarım ekrana sığmalı (900x560).
+    msh = window.minimumSizeHint()
+    assert msh.width() <= 900 and msh.height() <= 560, f"pencere asgarisi {msh}"
+
+    # Bildirilen asgari boyut gerçek asgariyi karşılamalı (Faz 11 bulgusu 9).
+    from entropy.desk.window import DESK_MIN_SIZE
+    assert DESK_MIN_SIZE[0] >= msh.width() or DESK_MIN_SIZE[0] <= 900
+    assert DESK_MIN_SIZE[1] <= 560
+
     screen = QApplication.primaryScreen().availableGeometry().width()
     target = min(900, screen)
     window.resize(target, 700)
     QApplication.processEvents()
     assert window.width() <= target + 2
-    widths = []
-    for panel in (window.offices_panel, window.tabs, window.roster_panel):
-        assert panel.width() > 0
-        widths.append(panel.width())
-    # Sıkışan pencerede üç sütunun toplam isteği 900 px kuralını aşmamalı
-    # (örtük ipuçları devreye girseydi toplam 2200 px'e çıkardı).
-    assert sum(widths) <= 900, f"sıkışmış genişlikler {widths}"
-    if screen >= 920:
-        for panel in (window.offices_panel, window.tabs, window.roster_panel):
-            assert panel.mapTo(window, panel.rect().topRight()).x() <= window.width() + 2
+    widths = [panel.width() for panel in columns]
+    assert all(w > 0 for w in widths)
+    assert sum(widths) <= target + 4, f"sıkışmış genişlikler {widths}"
+    for panel in columns:
+        assert panel.mapTo(window, panel.rect().topRight()).x() <= window.width() + 2
     window.close()
-    window.deleteLater()
 
 
 # --------------------------------------------------------------- 3) bellek

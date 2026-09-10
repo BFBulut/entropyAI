@@ -326,7 +326,6 @@ class EntropyConfig(BaseModel):
     obsidian_vault_path: Path = Field(default_factory=_default_obsidian_vault)
     default_project_path: Path = Field(default_factory=lambda: default_workspace_root())
     default_mode: str = "floating"  # "floating", "zen", "chat"
-    autostart_enabled: bool = True
     # Açılışta yarım kalmış ofis zincirlerini kaldığı yerden sürdür. Varsayılan
     # açık; kapatma imkânı var çünkü sürdürme model çağrısı demektir ve kotasını
     # kontrol etmek isteyen kullanıcı uygulamayı sessiz açabilmeli.
@@ -361,6 +360,13 @@ class EntropyConfig(BaseModel):
     # zamanlanmış görevi durdurur. Kapatma imkânı var çünkü kilit bir kartı
     # model çağırmadan kapatabiliyor ve kullanıcı bunu isteyerek atlayabilmeli.
     amplification_lock: bool = True
+    # Faz 12-A — CRAG eşiği (`context_builder.brain_has_answer`). Gerçek DB
+    # kopyasında 10 etiketli sorguyla (5 beyinde var / 5 beyinde yok) ölçüldü:
+    # 0,45 → 8/10 (2 yanlış negatif), **0,40 → 9/10** (0 yanlış pozitif,
+    # 1 yanlış negatif), 0,30 → 5/10 (beş alakasız sorgunun HEPSİ "beyinde var"
+    # sayılıyor). Ayar olarak duruyor çünkü eşik korpus büyüdükçe yeniden
+    # kalibre edilir.
+    brain_confidence_threshold: float = 0.40
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
@@ -485,7 +491,6 @@ class EntropyConfig(BaseModel):
             data = {
                 "selected_model": self.selected_model,
                 "default_mode": self.default_mode,
-                "autostart_enabled": self.autostart_enabled,
                 "last_conversation_id": self.last_conversation_id,
                 "last_cumulative_usage": self.last_cumulative_usage,
                 "provider": self.provider,
@@ -501,6 +506,7 @@ class EntropyConfig(BaseModel):
                 "board_claim_timeout_s": self.board_claim_timeout_s,
                 "entropy_max_parallel": self.entropy_max_parallel,
                 "amplification_lock": self.amplification_lock,
+                "brain_confidence_threshold": self.brain_confidence_threshold,
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
                 "claude_workspace_dir": self.claude_workspace_dir,
@@ -528,8 +534,6 @@ class EntropyConfig(BaseModel):
                     self.selected_model = data["selected_model"]
                 if "default_mode" in data and data["default_mode"]:
                     self.default_mode = data["default_mode"]
-                if "autostart_enabled" in data:
-                    self.autostart_enabled = data["autostart_enabled"]
                 if "last_conversation_id" in data:
                     self.last_conversation_id = data["last_conversation_id"]
                 if "last_cumulative_usage" in data and isinstance(data["last_cumulative_usage"], dict):
@@ -564,6 +568,10 @@ class EntropyConfig(BaseModel):
                     self.board_auto_dispatch = data["board_auto_dispatch"]
                 if isinstance(data.get("amplification_lock"), bool):
                     self.amplification_lock = data["amplification_lock"]
+                threshold = data.get("brain_confidence_threshold")
+                if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+                    if 0.0 <= float(threshold) <= 1.0:
+                        self.brain_confidence_threshold = float(threshold)
                 for key, floor in (("board_dispatch_interval_s", 1),
                                    ("board_claim_timeout_s", 60),
                                    ("entropy_max_parallel", 1)):

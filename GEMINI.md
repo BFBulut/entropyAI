@@ -1,53 +1,149 @@
-# Entropy AI (Agentic OS & Antigravity Interface)
+# Entropy AI — kök sistem bağlamı
 
-Entropy AI is an autonomous, desktop-native Agentic Operating System designed specifically as a sophisticated companion and interface for Google Antigravity (`agy` CLI). It runs on Windows, features three fluid desktop modes (Zen, Floating, Chat), maintains persistent cognitive memory via Obsidian and a local SQLite cognitive store, writes and executes its own tools, and provides full MCP orchestration without requiring external API keys.
+> **Bu dosyayı kim okur:** `GEMINI.md`'yi agy CLI oturumları kök bağlam olarak okur.
+> `AGENTS.md` bu depoda ajanların **nasıl tanımlandığını** anlatır (kadro listesi değil).
+> **`CLAUDE.md` bilerek YOKTUR** — gerekçe [`docs/adr/ADR-0002-claude-saf-kip.md`](docs/adr/ADR-0002-claude-saf-kip.md);
+> Entropy'nin kendi kimliği köprüden `--system-prompt-file` ile verilir, depodaki bir
+> markdown'dan değil.
+>
+> Yaşayan mimari: `docs/ARCHITECTURE.md` · Güncel durum: `docs/STATE.md` · Kararlar: `docs/adr/`.
+> Bir sözleşme burada ve orada çelişirse **`docs/ARCHITECTURE.md` kazanır**.
 
----
-
-## 1. Core Architecture Principles
-
-1. **Antigravity CLI (AGY) as Core Engine**:
-   - Zero direct cloud API key dependencies; Entropy AI communicates directly with the authenticated `agy` CLI process via `QProcess` or asynchronous `subprocess.Popen`.
-   - All tool approvals, session resumptions (`--conversation`, `--continue`), model reasoning efforts (`--effort`), and mode selections (`accept-edits`, `plan`) are controlled through AGY.
-
-2. **Tri-Modal Adaptive Desktop Interface**:
-   - **Zen Mode**: Immersive, borderless fullscreen workstation featuring a glowing central AI core visualizer, infinite split terminal panes, research report visualizer/reader, knowledge graph explorer, and active MCP status dock.
-   - **Floating Mode**: Ambient, draggable minimalist desktop widget showing only the pulsing AI core node. Features a rich context menu (Right-click: Pin on Top, Switch to Zen, Open Chat, Quick Command, Minimize).
-   - **Chat Mode**: Floating conversational modal with inline multi-modal image support (`Ctrl+C` / `Ctrl+V`), dynamic token meter, live dynamic model badges, and collapsible streaming terminal drawer.
-
-3. **Hybrid Cognitive Memory & GraphRAG**:
-   - **Obsidian Vault Layer**: Local-first, human-readable markdown exocortex situated at the user's Obsidian Vault. Manages daily notes, architectural decision records (`MEMORY.md`), and bidirectional wikilink graphs.
-   - **Local Cognitive Store (Mem0 Layer)**: 12-layer cognitive memory architecture (Surprise filter, Ebbinghaus forgetting curve, background consolidation/dreaming, ego/persona stability, and hybrid recall combining vector similarity, recency, and importance). Bugün tamamen yerel SQLite üzerinde çalışır (`memory/supabase/cognitive_memory.py`); Supabase/pgvector arka ucu henüz bağlanmadı ve `supabase` paketi bağımlılık listesinde değildir.
-   - **Project RAG**: Codebase indexing and semantic retrieval for any user-selected project folder.
-   - **Yetenek Yordamları (Skill Playbooks)**: Her yeteneğin birikmiş araştırma raporlarından bir kez damıtılan "bu iş nasıl yapılır" metni (`<vault>/Entropy/Skills/<yetenek>/PLAYBOOK.md`). Bağlama her turda raporların kendisi değil bu yordam enjekte edilir; böylece tur maliyeti depo büyüklüğünden bağımsız kalır. Damıtma `/distill [<yetenek>|all]` komutu ya da yetenek panelindeki 📘 düğmesiyle AGY üzerinden arka planda çalışır ve kota harcar. Kaynak raporlar `.entropy/skill_report_index.json` indeksiyle yeteneklere eşlenir; kasa dosyalarına dokunulmaz. Damıtma, agy'nin `distiller` alt ajanıyla koşar (`.agents/agents/distiller/agent.md`; araçsız, `model: flash`, tek yanıt) — ajan tanımı etkin proje dizinine yoksa `entropy.memory.distiller.ensure_distill_agent` tarafından yazılır; agy ajanları çalışma dizinine göre keşfeder. Not: `media-agency-researcher` 2026-09-07'de `media-agency-soldier` içine katıldı (araştırma aşamaları + `scripts/web_media_audit.py`); yönlendirme anahtar kelimeleri de oraya taşındı.
-   - **Bütçeli Bağlam Kurulumu**: `memory/context_builder.py` sabit bir token bütçesini öncelik sırasıyla doldurur: yordam → proje hafızası → hibrit recall → rapor alıntıları → kod → MEMORY.md. Gömme modeli çok dillidir (`paraphrase-multilingual-MiniLM-L12-v2`); Türkçe sorgularda İngilizce modelin sınıf ayrımı gürültü seviyesindeydi.
-   - **Yetenek Yönlendirme**: Sözcüksel skor + anlamsal benzerlik (ad, açıklama, Türkçe alan anahtar kelimeleri, playbook başı) + konuşma önceliği (kısa göndermeli takiplerde son yetenek). Tüm çağrılar `AgyProcessBridge.detect_skill_for_prompt()` üzerinden geçer.
-
-4. **Dynamic Tool Synthesis & Sandboxing**:
-   - Entropy AI can generate its own Python/Pydantic-AI tools on the fly, validate their schemas, test them, and execute them within a defined filesystem boundary.
-   - Tier 2 (mutating) araçlar, `ToolSynthesizer.set_approval_handler()` ile kayıtlı bir onay mercii olmadan çalıştırılmaz (fail-closed).
-   - **Sınır**: Kum havuzu denetimi araca geçirilen *yol argümanlarını* doğrular; aracın kendi gövdesindeki dosya erişimlerini kısıtlamaz. Gerçek bir işlem/dosya sistemi izolasyonu değildir.
-
-5. **Autonomous Background Task Scheduler**:
-   - Cron-like engine executing periodic tasks on minute, hour, day, and week cadences without blocking the GUI thread.
-   - Direct integration with Windows Startup (`shell:startup` or registry `Software\Microsoft\Windows\CurrentVersion\Run`).
+Entropy AI, Windows üzerinde çalışan masaüstü-yerel, kendi kendini geliştiren kişisel bir
+yapay zekadır: üç arayüz kipi (Zen, Floating, Chat), Obsidian kasası + yerel SQLite bilişsel
+bellek, kendi araçlarını yazıp koşturma, MCP orkestrasyonu ve **kendi görev panosu**.
+Harici API anahtarı gerektirmez: abonelik kimliğiyle oturum açmış CLI'lar üzerinden koşar.
+İçine gömülü ikinci ürün **Entropy Agent Desk**'tir (ofisler, orkestratörler, terminalde
+yazılım geliştiren alt ajanlar) — bilgi ve görev akışı **tek yönlüdür**
+([ADR-0001](docs/adr/ADR-0001-desk-ayrimi.md)).
 
 ---
 
-## 2. Mandatory Rules & Invariants
+## 1. Çekirdek mimari ilkeleri
 
-- **Dynamic Model Badges**: NEVER hardcode model names (e.g. `[Gemini 2.5 Flash]`). Always parse dynamically from `agy` process stdout or metadata. Default fallback is `[Model: Unknown]`.
-- **Real-Time Output Piping**: Never buffer subprocess outputs until completion. Stream `stdout` and `stderr` line-by-line using Qt signals to keep the terminal and visualizer instantly responsive.
-- **Visual Activity Feedback**: The central AI core widget must pulse/glow dynamically in response to incoming stdout chunks ("active thinking/typing").
-- **Context Window Management**: Implement sliding context window truncation (e.g., last 20 messages with summarization) before dispatching prompts to prevent token exhaustion and latency spikes.
-- **Agentic TDD**: Every module must be accompanied by automated `pytest` test suites. 100% test pass rate is mandatory before considering any feature complete.
-- **Concrete Agent Harness & Zero-Mock Invariant**: Never use `time.sleep()` or hardcoded simulated progress strings (`-> Dosya taranıyor...`, `-> Kod üretildi...`) to emulate task completion. If an external model or CLI is unavailable, the execution harness MUST execute real deterministic filesystem actions: reading files, analyzing ASTs, writing code files via `ASTPreflightGuard`, running shell commands, and recording evidence logs. Goal decomposers must introspect the actual project directory and test suites to produce file-grounded `TaskItem`s with concrete DoD. Multi-agent systems must automatically dispatch structured A2A handoff events upon task completion.
+### 1.1 İKİ sağlayıcı köprüsü — Claude birincil, agy ikincil
+
+Entropy bulut API anahtarı kullanmaz; **abonelik kimliğiyle oturum açmış iki CLI**'dan
+biriyle konuşur. Sağlayıcı `config.provider` ile seçilir, köprüler aynı olay veriyolu
+sözleşmesini paylaşır.
+
+| | Claude köprüsü (`core/claude_bridge.py`) | agy köprüsü (`core/agy_bridge.py`) |
+|---|---|---|
+| Durum | **birincil koşum yolu** ([ADR-0002](docs/adr/ADR-0002-claude-saf-kip.md)) | ikincil |
+| İzolasyon | **Saf Kip: sağlam** | **yok — kayıtlı sınır** |
+| Bayraklar | `--system-prompt-file`, `--setting-sources ""`, `--strict-mcp-config`, `--mcp-config`, `--agents <json>`, `CLAUDE_CONFIG_DIR`, `run_cwd()` = `~/.entropy/workspace` | `--conversation` / `--continue`, efor **model varyantı olarak** (ayrı bayrak değil) |
+| Oturum | `AgentSessionStore` → `session.json`; `session_id` (yeni) / `conversation_id` (sürdür) | aynı depo, `conversation_id` |
+| Ajan derleme | **yalnızca** `claude_compile_root()` = `~/.entropy/workspace` altına (proje kökünde `.claude/agents` OLUŞMAZ) | `compile_roots()`'un hepsine, `.agents/agents/<ad>/agent.md` |
+
+**Claude-only çalışmak zorunludur:** agy kurulu ve oturum açılmış olmasa bile Entropy
+tamamen Claude üzerinde koşar ve **kendi kimliğini korur** — çıplak bir CLI terminali gibi
+davranmaz (yalıtılmış profil, kendi sistem istemi, kullanıcının kök markdown/MCP/otomatik
+hafızası sızmaz).
+
+### 1.2 Üç kipli uyarlanır masaüstü arayüzü
+
+- **Zen:** çerçevesiz tam ekran çalışma istasyonu; merkezde çekirdek görselleştirici,
+  bölünebilir terminal panoları, rapor okuyucu, bilgi grafı gezgini, MCP durum yuvası.
+  **Dikey gezinme (`NavList`) 7 bölüm**; üst çubukta **en çok 4 öğe** (kapı testi).
+- **Floating:** sürüklenebilir küçük pencere, yalnızca nabız atan çekirdek düğümü.
+- **Chat:** sohbet öncelikli kip; satır içi görsel (`Ctrl+C`/`Ctrl+V`), token ölçer,
+  dinamik model rozeti, katlanır akış terminali.
+
+Tasarım sistemi Faz 11-E'de kuruldu: **tek belirteç kaynağı** `ui/design/tokens.py`,
+**tek QSS girişi** `ui/design/qss.py`, ikonlar QtAwesome/Codicons
+([ADR-0005](docs/adr/ADR-0005-tasarim-sistemi-kendi-belirtecler.md), `docs/ARCHITECTURE.md` §8.1).
+
+### 1.3 Beyin: hibrit bilişsel bellek + GraphRAG (v2)
+
+- **Obsidian kasası:** yerel-öncelikli, insan okunur markdown dış-beyin; günlük notlar,
+  `MEMORY.md`, çift yönlü wikilink grafı. **Kasa soğuk depodur ve ASLA silinmez.**
+- **Yerel bilişsel depo:** 12 katmanlı mimari, bugün **tamamen yerel SQLite**
+  (`memory/supabase/cognitive_memory.py`). **Supabase/pgvector bağlanmadı**, `supabase`
+  paketi bağımlılık listesinde **değil**; mem0 kullanılmıyor
+  ([ADR-0003](docs/adr/ADR-0003-hafiza-algoritmasi-mem0-degil.md)).
+- **Yazma kapısı (v2):** hafızaya giden tek yol `memory/gate.py` →
+  `MemoryGate.admit(...) -> GateDecision` (`add|noop|gray|supersede|reject`);
+  `cos >= 0.95` NOOP, `< 0.80` ADD, arası gri bant kuyruğu.
+- **Kategori kapalı kümesi:** `working, episodic, semantic, procedural`; kimlik/kural
+  **kategori değil bayraktır** (`is_identity`).
+- **Turlar:** rüya döngüsü `memory/dream.py` (yeniden gömme → gri tur → kopya birleştirme →
+  ölçülü unutma **arşivler, silmez** → wiki adayı → graf konsolidasyonu),
+  gri bant birleştirme `memory/gray_merge.py`, wiki derleme `memory/wiki.py`
+  (rapor başına bir tur, artımlı, köprüsüz kuru koşum).
+- **Yetenek yordamları (playbook):** her yeteneğin raporlarından bir kez damıtılan
+  "bu iş nasıl yapılır" metni (`<kasa>/Entropy/Skills/<yetenek>/PLAYBOOK.md`); bağlama
+  raporlar değil bu yordam enjekte edilir → tur maliyeti depo büyüklüğünden bağımsız.
+  `/distill [<yetenek>|all]` ile arka planda koşar ve kota harcar.
+- **Bütçeli bağlam:** `memory/context_builder.py`, `DEFAULT_TOKEN_BUDGET = 4000`;
+  sıra playbook → hibrit recall → rapor alıntıları → kalıcı hafıza. Genel sohbet beyin
+  paketi `BUDGET_GENERAL_BRAIN = 1500` yalnız yeteneksiz sohbette ödenir.
+  Gömme modeli çok dillidir (`paraphrase-multilingual-MiniLM-L12-v2`); Türkçe sorgularda
+  İngilizce modelin sınıf ayrımı gürültü seviyesindeydi.
+- **Ölçüm paketi:** `scripts/brain_metrics.py` (salt okunur) K1–K12; sözleşme testleri
+  `tests/contracts/test_phase11_brain_metrics.py`.
+
+### 1.4 Görev panosu (Entropy Board)
+
+`<kasa>/Entropy/Board/`: `TASKBOARD.md` (türetilmiş) + `events.jsonl` (yalnızca ekleme) +
+`claims/<id>.lock` (atomik `O_CREAT|O_EXCL`) + `agents/<ad>/session.json`.
+Durum makinesi tek kaynak `agents/board_fsm.py`:
+`backlog → assigned → taken → running → review → done | failed | canceled`.
+`BoardDispatcher` (QTimer) ajanlara "panoda sana görev var mı?" diye sorar.
+Ajan araçları: `board_next / board_checkpoint / board_finish / board_ask` (+ Entropy'de
+`board_create`); **kanıtsız `board_finish` reddedilir**. Ayrıntı: `docs/ARCHITECTURE.md` §6.1.1.
+
+### 1.5 Dinamik araç sentezi ve kum havuzu
+
+- Entropy kendi Python/Pydantic-AI araçlarını üretebilir, şemasını doğrular, test eder ve
+  tanımlı bir dosya sistemi sınırı içinde koşturur (`tools/synthesizer.py`).
+- Tier 2 (değiştirici) araçlar `ToolSynthesizer.set_approval_handler()` ile kayıtlı bir
+  onay mercii olmadan **çalıştırılmaz** (fail-closed).
+- **Sınır:** kum havuzu denetimi araca geçirilen *yol argümanlarını* doğrular; aracın kendi
+  gövdesindeki dosya erişimlerini kısıtlamaz. Gerçek işlem/dosya sistemi izolasyonu değildir.
+
+### 1.6 Otonom arka plan zamanlayıcısı
+
+`scheduler/cron_engine.py` — dakika/saat/gün/hafta ritminde, GUI iş parçacığını bloklamadan
+koşan cron benzeri motor (`scheduler_tasks.json`). Günlük rüya turu `daily-dreaming`
+kimliğiyle idempotent kaydedilir.
+**Windows otomatik başlatma YOKTUR** — `platform/autostart.py` ve `config.autostart_enabled`
+Faz 12-E'de kaldırıldı ([ADR-0006](docs/adr/ADR-0006-autostart-kaldirildi.md)):
+ayar vardı, davranış yoktu.
+
+---
+
+## 2. Değişmezler (ihlali hata sayılır)
+
+- **Dinamik model rozetleri:** model adı ASLA gömülü yazılmaz. Sağlayıcı sürecinin
+  stdout'undan / meta verisinden ayrıştırılır; yedek `[Model: Unknown]`.
+- **Gerçek zamanlı çıktı akışı:** alt süreç çıktısı bitene kadar tamponlanmaz;
+  `stdout`/`stderr` satır satır Qt sinyalleriyle akıtılır.
+- **Görsel etkinlik geri bildirimi:** merkezî çekirdek widget'ı gelen stdout parçalarına
+  göre nabız atar/parlar.
+- **Bağlam penceresi yönetimi:** istem gönderilmeden önce kayan pencere kısaltması
+  uygulanır; token tükenmesi ve gecikme sıçraması önlenir.
+- **Ajanlı TDD:** her modülün otomatik `pytest` süiti olur; bir özellik testleri yeşil
+  olmadan "bitti" sayılmaz. **Kanıtla kapat:** bir işçi testleri koşup yeşil sonucu
+  raporuna iliştirmeden kartı `done` yapamaz.
+- **Sıfır taklit (zero-mock) değişmezi:** görev tamamlanmasını taklit etmek için
+  `time.sleep()` ya da sahte ilerleme dizgileri KULLANILMAZ. Model/CLI yoksa harness
+  gerçek, belirlenimci dosya sistemi eylemleri yapar: dosya okuma, AST çözümleme,
+  `ASTPreflightGuard` ile kod yazma, kabuk komutu koşturma, kanıt günlüğü.
+- **GUI daima ana iş parçacığında:** widget dokunuşları `bus.call_on_main(object)` üzerinden.
+- **Kullanıcı verisi kutsaldır:** `~/.entropy` ve Obsidian kasası ASLA silinmez;
+  testler `tests/conftest.py` ile ikisini de izole eder.
+- **Tek yönlü Desk sınırı:** Entropy Desk'i bilir ve geliştirir; Desk Entropy'yi **bilmez**.
+  Orkestratör istemlerinde Entropy'nin adı geçmez; Desk Entropy'nin panosuna kart itemez.
+- **Marka kuralı:** ticari referans ürünün ve üreticisinin adı **hiçbir dosyaya** yazılmaz
+  (kod, test, belge, rapor, veri, not). "Ticari referans ürün" diye anılır.
+- **`EntropyAI.spec` hiddenimports bir dizgi listesidir:** yalnız `importlib` ile çağrılan
+  bir modül eklenmezse `.exe` **sessizce eksik** paketlenir (Faz 10-C'de yaşandı).
 
 ---
 
 ## 3. Directory Map
 
-> Faz 11-A'da gerçekle eşitlendi (2026-09-10). Ayrıntılı ve **yaşayan** mimari:
+> Faz 12-E'de gerçekle eşitlendi (2026-09-10). Ayrıntılı ve **yaşayan** mimari:
 > `docs/ARCHITECTURE.md`; güncel durum: `docs/STATE.md`; kararlar: `docs/adr/`.
 > Bu haritada olmayan bir klasör görürsen ya harita ya kod yanlıştır — ikisinden
 > birini aynı commit'te düzelt.
@@ -58,7 +154,6 @@ C:/EntropiAI/
 ├── AGENTS.md                           # Bu depoda ajanlar nasıl tanımlanır (kadro listesi DEĞİL)
 ├── THIRD_PARTY.md                      # Üçüncü taraf varlık ve lisans bildirimleri
 ├── EntropyAI.spec                      # PyInstaller (hiddenimports bir dizgi listesidir!)
-├── EntropyAI_OneFile.spec
 ├── run_entropy.py                      # Giriş noktası -> entropy.main:main
 ├── launch.bat · entropy.ico · entropy.png · pyproject.toml
 ├── .claude/agents/                     # YALNIZCA kullanıcının 6 geliştirme alt ajanı
@@ -69,8 +164,9 @@ C:/EntropiAI/
 │   ├── ROADMAP.md                      # Faz durumları (eski PHASED_ROADMAP.md)
 │   ├── adr/                            # ADR-0001… geri alınamaz kararlar
 │   ├── reports/                        # Faz raporları (tarih önekli)
-│   ├── specifications/                 # Eski spec'ler (ARCHITECTURE.md'ye damıtılıyor)
-│   └── _archive/{customer,prototype}/  # Müşteri çıktıları ve silinen prototipin notları
+│   ├── specifications/README.md        # MEZAR TAŞI: 5 eski spec _archive/prototype/'a taşındı
+│   └── _archive/                       # customer/ (müşteri çıktıları) · prototype/ (eski spec'ler +
+│                                       # OneFile spec) · skills/ (tekilleştirmede ayrılan kopyalar)
 ├── src/
 │   └── entropy/
 │       ├── __init__.py · main.py       # Uygulama girişi ve açılış kablolaması
@@ -89,20 +185,25 @@ C:/EntropiAI/
 │       ├── ui/
 │       │   ├── modes/                  # zen_mode, chat_mode, floating_mode
 │       │   ├── widgets/                # 29 widget (graf, rapor merkezi, komut paleti, terminal…)
-│       │   └── themes/                 # bugün iki yarım sistem; Faz 11-E'de tek belirteç seti
+│       │   ├── themes/                 # eski tema artıkları
+│       │   └── design/                 # tokens.py · qss.py · icons.py (TEK belirteç ve stil kaynağı)
 │       ├── skills/                     # SKILL.md keşfi (manager.py) + tembel yüklenen motorlar
 │       ├── tools/                      # synthesizer.py (dinamik araç sentezi) — tek ürün modülü
 │       ├── mcp/                        # MCP hub ve süreç yöneticisi
 │       ├── scheduler/                  # cron benzeri arka plan görev koşucusu
-│       └── platform/                   # Windows açılış kancaları, pano görsel işleyici
-├── skills/                             # Kurulu yetenek paketleri (her biri SKILL.md içerir)
-├── scripts/                            # Geliştirici betikleri (perf_bench, routing_eval, graph_metrics…)
+│       └── platform/                   # clipboard.py (pano görsel işleyici) — autostart KALDIRILDI
+├── skills/                             # Kurulu yetenek paketleri (tireli dizin = kanonik, SKILL.md +
+│                                       # scripts/; alt çizgili dizin = testlerin içe aktardığı proxy)
+├── scripts/                            # CANLI geliştirici betikleri (brain_metrics, memory_migrate_v2,
+│   └── _oneshot/                       # perf_bench, routing_eval, ui_audit…) — _oneshot/: 59 tek
+│                                       # seferlik faz betiği, KOŞULMAZ (bkz. _oneshot/README.md)
 ├── scratch/                            # Ölçüm çıktıları ve ekran görüntüleri (git'te dar kapsamlı)
 └── tests/
     ├── conftest.py                     # kasa + ~/.entropy yalıtımı
     ├── contracts/                      # kalıcı ürün sözleşmeleri (eski test_phase*)
     ├── ui/ · desk/ · skills/           # konu bazlı gruplar
-    └── (kök)                           # modül testleri ve nicel finans defterleri
+    ├── _reference/                     # 82 dosya / 563 test — ürün kodunu SINAMAYAN ispat defterleri
+    └── (kök)                           # modül testleri
 ```
 
 **Haritada bilerek OLMAYANLAR** (eski haritada vardı, gerçekte yok):
@@ -117,3 +218,9 @@ C:/EntropiAI/
 - `dist/`, `build/`, `dist_check/`, `build_check/`, kök `EntropyAI.exe` — üretilmiş çıktı;
   `.gitignore`'da ve depoda tutulmaz, `pyinstaller EntropyAI.spec` ile yeniden üretilir.
 - `CLAUDE.md` — **bilerek yok**; gerekçe `docs/adr/ADR-0002-claude-saf-kip.md`.
+- `EntropyAI_OneFile.spec` — çürümüştü (kimse çağırmıyordu, 32/127 hiddenimports,
+  makineye çakılı `pathex`); Faz 12-E'de `docs/_archive/prototype/EntropyAI_OneFile.spec.txt`
+  olarak arşivlendi. Onefile derleme gerekirse `EntropyAI.spec` üzerinden türetilir.
+- `src/entropy/platform/autostart.py` — kaldırıldı, `docs/adr/ADR-0006-autostart-kaldirildi.md`.
+- `docs/specifications/` içindeki 5 spec — `docs/_archive/prototype/` altında; klasörde
+  yalnızca mezar taşı `README.md` var.

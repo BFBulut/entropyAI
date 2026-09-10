@@ -66,3 +66,18 @@ scratch/pixel-agents-main/
 .claude/agents/degerlendirici.md
 .claude/agents/orkestrator.md
 .claude/agents/yazar.md
+
+# --- Faz 12-E depo bakimi (2026-09-10) ---
+# Kullanici raporlari depo kokune dusuyor (ajan kosumlarinin ciktisi). ASLA
+# SILINMEZ ve tasinmaz; yalnizca git'in gormesi engellenir. Arsivlenmesi
+# gerekirse docs/_archive/customer/ altina elle alinir.
+/*_audit.md
+/*_audit.json
+/*_audit_full.md
+/*_audit_full.json
+/*_financial_audit.md
+/*_metrics.json
+
+# Faz 12-E: tek seferlik betikler scripts/_oneshot/ altinda IZLENIR (git mv ile
+# tasindi, gecmisleri korundu). Yeni tek seferlik betik de oraya yazilir;
+# burada bir yok sayma kurali YOKTUR - bilerek.

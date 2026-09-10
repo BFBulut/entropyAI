@@ -78,11 +78,34 @@ BRAIN_RULES_TOKENS = 400
 # Yetenekler arası en iyi wiki sayfası sayısı (K5'in ana kaynağı).
 BRAIN_WIKI_PAGES = 4
 
-# CRAG esigi (Faz 11.10). Kor testte (denetim Ek A) isabetli sorgularin top-1
-# hibrit skoru 0,478-0,585 araligindaydi; tek kacirmanin top-1 skoru 0,398'di.
-# 0,45 bu iki kumeyi ayiriyor. Altinda kalan sorgu icin baglam kurucusu
-# "beyinde yok" sinyali verir.
-CRAG_MIN_SCORE = 0.45
+# CRAG esigi. Faz 11.10'da 0,45 secilmisti (kor testin isabetli sorgulari
+# 0,478-0,585, tek kacirma 0,398). Faz 12-A'da GERCEK korpusun kopyasinda
+# 10 etiketli sorguyla (5 beyinde var / 5 beyinde yok) yeniden olculdu:
+#   esik  dogruluk  yanlis-pozitif  yanlis-negatif
+#   0,30    5/10          5               0     <- arastirmanin onerisi, ELENDI
+#   0,35    6/10          3               1
+#   0,40    9/10          0               1     <- SECILEN
+#   0,45    8/10          0               2
+#   0,50    6/10          0               4
+# En yuksek olumsuz skor 0,3835 / en dusuk olumlu skor 0,3472 oldugu icin
+# ayrim 0,3835 < esik <= 0,4183 araliginda; orta nokta 0,40 alindi.
+# Deger artik bir AYAR (`config.brain_confidence_threshold`); bu sabit
+# yalnizca varsayilandir.
+CRAG_MIN_SCORE = 0.40
+
+
+def crag_min_score() -> float:
+    """Etkin CRAG esigi: ayar varsa ondan, yoksa modul varsayilanindan."""
+    try:
+        from entropy.core.config import config
+
+        value = getattr(config, "brain_confidence_threshold", None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if 0.0 <= float(value) <= 1.0:
+                return float(value)
+    except Exception:  # pragma: no cover - ayar okunamazsa varsayilan
+        pass
+    return CRAG_MIN_SCORE
 
 
 @dataclass
@@ -111,7 +134,7 @@ class AssembledContext:
     @property
     def brain_has_answer(self) -> bool:
         """Beyinde ise yarar bir karsilik var mi (CRAG esigi)."""
-        return self.brain_confidence >= CRAG_MIN_SCORE
+        return self.brain_confidence >= crag_min_score()
 
     @property
     def tokens(self) -> int:

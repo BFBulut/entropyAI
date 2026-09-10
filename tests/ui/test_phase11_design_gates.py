@@ -203,6 +203,54 @@ def test_zen_fits_1366(app):
         zen.close()
 
 
+def test_zen_fits_960x540_scaled(app):
+    """Faz 12-D.1: Zen'in GERÇEK asgarisi 960x540 mantıksal sınırın altında.
+
+    Neden: %200 ölçeklenen bir monitörde 1 mantıksal px = 2 fiziksel px.
+    Eski asgari 1100x680 mantıksal (= 2200x1360 fiziksel) o panele hiçbir
+    boyutta sığmıyordu. Ölçüm mantıksaldır, bu yüzden ölçek çarpanından
+    bağımsızdır; `QT_SCALE_FACTOR=2` ile alınan ekran görüntüleri
+    `scratch/ui/phase12/` altındadır.
+    """
+    from entropy.ui.modes.zen_mode import ZEN_MIN_SIZE
+
+    zen = _make_zen(app)
+    try:
+        hint = zen.minimumSizeHint()
+        assert hint.width() <= 960, f"asgari genişlik {hint.width()}"
+        assert hint.height() <= 540, f"asgari yükseklik {hint.height()}"
+        assert ZEN_MIN_SIZE[0] <= 960 and ZEN_MIN_SIZE[1] <= 540, ZEN_MIN_SIZE
+
+        zen.setMinimumSize(*ZEN_MIN_SIZE)
+        zen.setGeometry(0, 0, 960, 540)
+        zen.show()
+        app.processEvents()
+        assert zen.width() <= 962 and zen.height() <= 542, zen.size()
+
+        # Pencere denetimleri ve durum kümesi 960'ta da görünür (kompakt kip).
+        for name in ("btn_minimize", "btn_maximize"):
+            btn = getattr(zen, name)
+            assert btn.isVisible(), name
+            assert btn.mapTo(zen, btn.rect().bottomRight()).y() <= zen.height() + 1
+        cluster = zen.status_cluster
+        assert cluster.isVisible()
+        top_right = cluster.mapTo(zen, cluster.rect().topRight())
+        assert top_right.x() <= zen.width() + 1, top_right
+
+        # Sohbet gövdesi öncelikli: yine görünür ve taşmıyor.
+        assert zen.chat_browser.isVisible()
+        overflowing = []
+        for child in zen.centralWidget().findChildren(QWidget):
+            if not child.isVisible() or child.parentWidget() is not zen.centralWidget():
+                continue
+            rect = child.geometry()
+            if rect.right() > zen.width() + 1 or rect.bottom() > zen.height() + 1:
+                overflowing.append(child.objectName() or child.__class__.__name__)
+        assert overflowing == []
+    finally:
+        zen.close()
+
+
 def test_chat_chrome_ratio(app):
     """1280x800'de krom (üst çubuk + şeritler) pencerenin ≤ %25'i."""
     chat = _make_chat(app)

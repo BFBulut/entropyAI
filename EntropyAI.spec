@@ -27,6 +27,19 @@ a = Analysis(
     binaries=[],
     datas=[
         ('entropy.ico', '.'),
+        # Faz 12-E (üçüzleme kararı): `skills/` TEK PARÇA paketlenmeye devam
+        # ediyor, dosya dosya SAYILMIYOR. Gerekçe ölçüyle: yetenekler çalışma
+        # anında yol çözümüyle bulunur — `SkillManager` ağacı tarayıp `SKILL.md`
+        # arar, `skills/media_agency_soldier_engine.py:33`
+        # `root/"skills"/"media-agency-soldier"/"scripts"` yolunu diskten kurar.
+        # Açık liste yazmak, spec'in yukarıda kaydettiği Faz 10-C sessiz
+        # düşmesinin aynı sınıfını geri getirir (bir girdi atlanır, .exe'de
+        # yetenek sessizce kaybolur). Bunun yerine ÜÇÜZLEME KAYNAKTA çözüldü:
+        # `skills/media-agency-soldier/` kökündeki 6 ölü proxy dosyası
+        # (1.107 satır) `docs/_archive/skills/media-agency-soldier-root-proxies/`
+        # altına alındı; pakete artık iki katman giriyor — kanonik
+        # `media-agency-soldier/{SKILL.md,scripts}` ve testlerin kullandığı
+        # alt çizgili proxy paketi. Kanıt: `docs/_archive/skills/README.md`.
         ('skills', 'skills'),
         # AGENTS.md PAKETLENMEZ: eski, elle yazılmış bir kadro listesiydi
         # (CodeArchitect / Tester / Researcher / MemoryConsolidator) ve
@@ -198,9 +211,30 @@ a = Analysis(
         'entropy.scheduler',
         'entropy.scheduler.cron_engine',
         'entropy.platform',
-        'entropy.platform.autostart',
         'entropy.platform.clipboard',
         'entropy.desk',
+        # Faz 12-A: Faz 11'de eklenen 15 modul spec'te hic gecmiyordu (arastirma
+        # B §2.3). Cogu statik import ile cagriliyor, ama spec ile kaynak
+        # arasindaki sapma Faz 10-C'de tam olarak bu sinifta sessiz bir dusme
+        # uretmisti; kalici esleme testi tests/contracts/test_spec_sync.py.
+        'entropy.agents.amplification',
+        'entropy.agents.board_events',
+        'entropy.agents.board_fsm',
+        'entropy.agents.board_tools',
+        'entropy.agents.dispatcher',
+        'entropy.core.claude_bg',
+        'entropy.memory.categories',
+        'entropy.memory.dream',
+        'entropy.memory.gate',
+        'entropy.memory.gray_merge',
+        'entropy.ui.widgets.agent_session_badge',
+        'entropy.ui.widgets.header_bar',
+        'entropy.ui.widgets.nav_list',
+        'entropy.ui.widgets.report_card_bridge',
+        'entropy.ui.widgets.report_chat_card',
+        # Faz 12-A: hafiza turlarinin kopru uyarlayicisi (slash komutlari
+        # calisma aninda ice aktariyor).
+        'entropy.core.bridge_prompt',
     ],
     hookspath=[],
     hooksconfig={},

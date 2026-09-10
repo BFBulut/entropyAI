@@ -457,9 +457,18 @@ def test_agent_effort_and_model_write_to_agent_md_and_recompile():
     assert "Kaynak:" in detail
 
 
-def test_memory_and_wiki_compile_degrade_when_layer_missing():
+def test_memory_and_wiki_compile_run_dry_without_bridge():
+    """
+    Faz 12-A: köprüsüz çağrı artık "modül kurulu değil" demez — modüller
+    GERÇEKTEN koşar, yalnızca model turu harcanmaz (kuru koşum).
+    Kablolama sözleşmesi: tests/contracts/test_phase12_bridge_wiring.py.
+    """
     out = _cmd("/memory merge")
-    assert "gray_merge" in out or "Gri Bant" in out
+    assert "Gri Bant" in out
+    assert "kurulu değil" not in out
     assert _cmd("/memory") is not None and "Kullanım" in _cmd("/memory")
     compiled = _cmd("/wiki compile yazilim --turns 3")
-    assert "compile_skill" in compiled or "Wiki Derle" in compiled
+    assert "Wiki Derle" in compiled
+    assert "kurulu değil" not in compiled
+    # Köprüsüz çağrıda tavan yazılır ama harcanan tur 0'dır.
+    assert "0 tur harcandı" in compiled and "tavan 3" in compiled

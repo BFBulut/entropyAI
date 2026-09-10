@@ -1262,7 +1262,7 @@ def _handle_chat(args: str, bridge=None) -> str:
     )
 
 
-def _handle_wiki(args: str) -> str:
+def _handle_wiki(args: str, bridge=None) -> str:
     """
     `/wiki <yetenek>`: playbook'tan kavram/varlık sayfalarını elle üretir.
 
@@ -1273,7 +1273,7 @@ def _handle_wiki(args: str) -> str:
 
     parts = (args or "").split()
     if parts and parts[0].lower() == "compile":
-        return _handle_wiki_compile(parts[1:])
+        return _handle_wiki_compile(parts[1:], bridge)
 
     name = (args or "").split()[0] if (args or "").strip() else ""
     if not name:
@@ -1299,13 +1299,15 @@ def _handle_wiki(args: str) -> str:
     )
 
 
-def _handle_wiki_compile(parts: List[str]) -> str:
+def _handle_wiki_compile(parts: List[str], bridge=None) -> str:
     """
     `/wiki compile <yetenek> [--turns N]`: wiki sayfalarını çok turlu derler.
 
-    Derleyici hafıza ajanının modülüdür (`memory.wiki.compile_skill`); henüz
-    yoksa komut bunu söyler. `--turns` tavanı KULLANICININ verdiği kota
-    tavanıdır: derleme model çağırabilir, bu yüzden varsayılan 1'dir.
+    Derleyici hafıza ajanının modülüdür
+    (`memory.wiki.compile_skill(skill, bridge=send_prompt, budget_turns=N)`).
+    `--turns` KULLANICININ verdiği kota tavanıdır (`budget_turns`): derleme
+    model çağırır, bu yüzden varsayılan 1'dir. Kullanıcıya yazılan tur sayısı
+    tavan değil, modülün **gerçekten harcadığı** tur sayısıdır.
     """
     args = [p for p in parts if p]
     turns = 1
@@ -1334,22 +1336,23 @@ def _handle_wiki_compile(parts: List[str]) -> str:
         return ("<b>📗 Wiki Derleme</b><br/>Kullanım: "
                 "<code>/wiki compile &lt;yetenek&gt; [--turns N]</code>")
     try:
-        from entropy.memory.wiki import compile_skill  # type: ignore
-    except Exception:
-        return ("<b>📗 Wiki Derleme</b><br/>Derleyici "
-                "(<code>memory.wiki.compile_skill</code>) henüz kurulu değil.")
+        from entropy.memory.wiki import compile_skill
+    except ImportError as e:
+        return ("<b>📗 Wiki Derleme</b><br/>Derleyici içe aktarılamadı: "
+                f"<code>{_html_escape(e)}</code>")
+    send_prompt, bridge_note = _memory_send_prompt(bridge, f"Wiki derleme: {name}")
     try:
-        res = compile_skill(name, turns=turns)
-    except TypeError:
-        res = compile_skill(name)
+        res = compile_skill(name, bridge=send_prompt, budget_turns=turns)
     except Exception as e:
         return f"<span style='color:#e06c75;'>Derleme başarısız: {_html_escape(e)}</span>"
-    detail = res if isinstance(res, dict) else {"sonuç": res}
+    detail = res if isinstance(res, dict) else _result_fields(res)
+    spent = detail.get("turns", 0) if isinstance(detail, dict) else 0
     rows = "".join(
         f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
         f"<td>{_html_escape(v)}</td></tr>" for k, v in detail.items()
     )
-    return (f"<b>📗 Wiki Derlendi — {_html_escape(name)}</b> ({turns} tur)"
+    return (f"<b>📗 Wiki Derlendi — {_html_escape(name)}</b> "
+            f"({_html_escape(spent)} tur harcandı, tavan {turns}){bridge_note}"
             f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>")
 
 
@@ -1666,6 +1669,35 @@ def _handle_board(args: str) -> str:
     )
 
 
+def _result_fields(res) -> dict:
+    """Dataclass/nesne sonucunu görüntülenebilir alan sözlüğüne indirger."""
+    import dataclasses
+
+    if dataclasses.is_dataclass(res) and not isinstance(res, type):
+        return {f.name: getattr(res, f.name) for f in dataclasses.fields(res)}
+    return {"sonuç": res}
+
+
+def _memory_send_prompt(bridge, label: str):
+    """
+    Hafıza turları için `(send_prompt, not)` üretir.
+
+    Köprü yoksa ya da arka plan yüzeyi sunmuyorsa `None` döner: modüller o
+    durumda **kuru koşuma** iner (model çağrılmaz). Hata YUTULMAZ; kullanıcıya
+    gerçek neden bir not olarak gösterilir.
+    """
+    from entropy.core.bridge_prompt import BridgeUnavailable, make_send_prompt
+
+    if bridge is None:
+        return None, ("<div style='color:#8B949E;font-size:11px;'>Köprü yok → "
+                      "kuru koşum (model çağrılmadı).</div>")
+    try:
+        return make_send_prompt(bridge, label=label), ""
+    except BridgeUnavailable as e:
+        return None, (f"<div style='color:#e5c07b;font-size:11px;'>Kuru koşum: "
+                      f"{_html_escape(e)}</div>")
+
+
 def _handle_memory(args: str, bridge) -> str:
     """
     `/memory merge` (gri bant toplu turu) ve `/memory dream` (rüya döngüsü).
@@ -1682,35 +1714,33 @@ def _handle_memory(args: str, bridge) -> str:
 
     if verb == "merge":
         try:
-            from entropy.memory.gray_merge import run as gray_run  # type: ignore
-        except Exception:
+            from entropy.memory.gray_merge import run_merge_round
+        except ImportError as e:
             return ("<b>🧠 Hafıza — Gri Bant</b><br/>Toplu birleştirme modülü "
-                    "(<code>memory/gray_merge.py</code>) henüz kurulu değil.")
-        try:
-            res = gray_run(bridge=bridge)
-        except TypeError:
-            res = gray_run()
-        except Exception as e:
-            return f"<span style='color:#e06c75;'>Birleştirme başarısız: {_html_escape(e)}</span>"
-        res = res if isinstance(res, dict) else {"sonuç": res}
-        rows = "".join(
-            f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
-            f"<td>{_html_escape(v)}</td></tr>" for k, v in res.items()
-        )
-        return f"<b>🧠 Gri Bant Birleştirildi</b><table style='font-size:11px;'>{rows}</table>"
-
-    try:
+                    f"içe aktarılamadı: <code>{_html_escape(e)}</code>")
+        send_prompt, bridge_note = _memory_send_prompt(bridge, "Gri bant birleştirme")
         from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 
-        cog = CognitiveMemorySystem()
-        # Faz 11-D sözleşmesi: `/memory dream` → `memory.dream`. Eski metot
-        # yalnızca geriye dönük uyum için duruyor (48 saat + epizodik koşulu).
         try:
-            from entropy.memory.dream import dream_and_consolidate
+            res = run_merge_round(CognitiveMemorySystem(), send_prompt=send_prompt, limit=8)
+        except Exception as e:
+            return f"<span style='color:#e06c75;'>Birleştirme başarısız: {_html_escape(e)}</span>"
+        detail = res if isinstance(res, dict) else _result_fields(res)
+        rows = "".join(
+            f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
+            f"<td>{_html_escape(v)}</td></tr>" for k, v in detail.items()
+        )
+        return (f"<b>🧠 Gri Bant Birleştirildi</b>{bridge_note}"
+                f"<table style='font-size:11px;'>{rows}</table>")
 
-            result = dream_and_consolidate(memory=cog, send_prompt=None)
-        except ImportError:
-            result = cog.dream_and_consolidate()
+    from entropy.memory.dream import dream_and_consolidate
+    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+
+    send_prompt, bridge_note = _memory_send_prompt(bridge, "Rüya döngüsü")
+    try:
+        # Faz 11-D sözleşmesi: `/memory dream` → `memory.dream`. Köprü varsa
+        # gri bant adımı gerçek tur koşar; yoksa kuru koşuma düşer.
+        result = dream_and_consolidate(memory=CognitiveMemorySystem(), send_prompt=send_prompt)
     except Exception as e:
         return f"<span style='color:#e06c75;'>Rüya döngüsü koşamadı: {_html_escape(e)}</span>"
     if isinstance(result, dict):
@@ -1719,7 +1749,7 @@ def _handle_memory(args: str, bridge) -> str:
         detail = f"{len(result)} özet"
     else:
         detail = " ".join(str(getattr(result, "summary", result) or "").split())[:400]
-    return (f"<b>🧠 Rüya Döngüsü</b><br/>{_html_escape(detail) or 'sonuç yok'}"
+    return (f"<b>🧠 Rüya Döngüsü</b>{bridge_note}<br/>{_html_escape(detail) or 'sonuç yok'}"
             "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
             "Konsolidasyon doğrudan bilişsel belleğe yazılır.</div>")
 
@@ -1847,9 +1877,10 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     if head_low == "/chat":
         return _handle_chat(args, bridge)
 
-    # Wiki katmanı: ikisi de model çağırmaz, bu yüzden yerel komuttur.
+    # Wiki katmanı: `/wiki <yetenek>` ve `/lint` model çağırmaz;
+    # `/wiki compile` köprüyü çağırandan alır (Faz 12-A sözleşmesi).
     if head_low == "/wiki":
-        return _handle_wiki(args)
+        return _handle_wiki(args, bridge)
     if head_low == "/lint":
         return _handle_lint(args)
 

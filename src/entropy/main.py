@@ -22,6 +22,11 @@ def main():
     parser = argparse.ArgumentParser(description="Entropy AI Agentic Desktop Operating System")
     parser.add_argument("--mode", choices=["zen", "floating", "chat"], default=None, help="Initial desktop mode")
     parser.add_argument("--project", default=None, help="Project directory to mount")
+    # Sürümün tek kaynağı pyproject.toml (entropy.__version__ oradan türer).
+    from entropy import __app_name__, __version__
+
+    parser.add_argument("--version", action="version",
+                        version=f"{__app_name__} {__version__}")
     args = parser.parse_args()
 
     # Pencereli derlemede stderr yok: kapanış nedenleri ancak dosyaya yazılırsa görülür.

@@ -9,7 +9,7 @@
 |---|---|
 | Sürüm | **v0.8.0** (Faz 11-A sonrası etiket adayı: v0.9.0) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, **Faz 11 KAPANIŞ QA** (§2.4): tam süit **2.355 passed / 0 failed / 406 s**, build exit 0 (241 s, `dist/EntropyAI`), **K12 = 0**, 11-E sözleşmeleri §3'e yazıldı, 2 sessiz arayüz regresyonu düzeltildi, 3 açık bulgu (§5.8-10) |
+| Son güncelleme | 2026-09-10, **Faz 12-E depo bakımı** (§2.5): 59 betik `_oneshot/`, 82 test dosyası `tests/_reference/`, 5 eski spec + OneFile spec arşivde, ARCHITECTURE 274→456 satır, `autostart` kaldırıldı (ADR-0006); hedefli testler **1.163 passed / 0 failed**. Önceki: **Faz 11 KAPANIŞ QA** (§2.4): tam süit **2.355 passed / 0 failed / 406 s**, build exit 0 (241 s, `dist/EntropyAI`), **K12 = 0**, 11-E sözleşmeleri §3'e yazıldı, 2 sessiz arayüz regresyonu düzeltildi, 3 açık bulgu (§5.8-10) |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -129,6 +129,78 @@ Düğüm sayısı 729 → 729 (yazma yok, yalnızca sütun güncellemesi).
 | Sürükleme (üst çubuk) | çalışıyor | **evet**: `FramelessWindowHelper.handle is header_frame`, sol tık **tüketildi**, `_system_drag=True` (`startSystemMove` yerel/bloklayıcı olduğu için sentetik olayla piksel ölçülemez) |
 | Desk `minimumSize` | ≤ 960×540 | **860×540** (bildirilen) |
 | Desk 1600×900 taşma | 0 | **0** |
+
+## 2.5 Faz 12-E — depo bakımı (2026-09-10, repo-curator)
+
+Kapsam: `scripts/`, `docs/`, `tests/` (yalnız taşıma), `skills/`, eski spec'ler,
+`GEMINI.md`, `AGENTS.md`, `platform/autostart.py`, `.gitignore`.
+**Silme yok** (tek istisna: ölü `autostart.py` modülü, ADR-0006 ile); her adım `git mv`
+ya da arşiv taşıması → `git revert` ile geri alınabilir.
+
+| Ölçüm | Önce | Sonra | Kanıt |
+|---|---:|---:|---|
+| `scripts/` kökünde `.py` | 80 | **21** | `ls scripts/*.py \| wc -l` |
+| `scripts/_oneshot/` | — | **59** | `ls scripts/_oneshot/*.py \| wc -l` |
+| `tests/` kökünde `test_*.py` | 130+ | **48** | 82 dosya `tests/_reference/`'a taşındı |
+| Toplanan test | 2.347 (12-B ölçümü) | **2.386** | `pytest --collect-only -q` (fark paralel ajanların yeni testleri; taşımadan gelen fark **0**) |
+| `docs/specifications/` | 5 spec | **0** (mezar taşı `README.md`) | `ls docs/specifications` |
+| Kökteki `.spec` | 2 | **1** (`EntropyAI.spec`) | `ls *.spec` |
+| `skills/media-agency-soldier/` kökünde ölü proxy | 6 dosya / 1.107 satır | **0** | `docs/_archive/skills/README.md` |
+| İzlenen dosya | 765 | **779** | `git ls-files \| wc -l` |
+| Depo (`.git` dahil) | 1.459 MB | **1.469 MB** | `du -sm .` — fark `dist/`+`build/` yeniden derlemesi; izlenen ağaç değişmedi |
+
+**Koşulan hedefli testler (hepsi yeşil):**
+
+| Süit | Sonuç |
+|---|---|
+| `tests/_reference` | **563 passed / 15,2 s** |
+| `tests/skills` | **111 passed / 20,2 s** |
+| `tests/test_exe.py` + `tests/test_scheduler.py` | **6 passed** (autostart testleri kaldırıldıktan sonra; önce 9) |
+| `tests/contracts` (mimari kuralları + marka taraması dahil) | **470 passed / 92,8 s** |
+| toplam bu dilimde | **693 + 470 = 1.163 passed, 0 failed** |
+
+**Yapılanlar:**
+
+1. **59 tek seferlik betik** (`record_/save_/sync_/process_/register_/update_*`) →
+   `scripts/_oneshot/` (`git mv`, geçmiş korundu) + `_oneshot/README.md` ("koşulmaz").
+   Kanıt: hiçbiri testten/üründen çağrılmıyor; kalan 21 betiğin **19'u** teste ya da
+   ürün koduna bağlı (`scripts/README.md` tablosu).
+2. **`EntropyAI_OneFile.spec`** (çürük) + **`docs/specifications/` 5 spec** →
+   `docs/_archive/prototype/`; `docs/specifications/README.md` mezar taşı bırakıldı.
+3. **`docs/ARCHITECTURE.md`** 274 → **456 satır**: §5.1 Beyin v2 (kapı/kategoriler/rüya/
+   gri tur/wiki hattı/amplifikasyon/ölçüm paketi), §6.1.1 Entropy Board (FSM/olay günlüğü/
+   dispatcher/oturum deposu/araçlar), §8.1 tasarım sistemi (belirteçler/QSS/ikonlar/5 kapı),
+   §9 test düzeni + §9.1 `docs/` arşiv kuralı, §10 Faz 12 hedefleri. Başlık v0.9.4.
+   `GEMINI.md` §1–2 çift sağlayıcı gerçeğine yeniden yazıldı (`claude` geçişi 3 → 11) ve
+   §3 haritası eşitlendi; `AGENTS.md` §4'e pano sinyalleri, §5 pano araçları eklendi.
+   **`CLAUDE.md` OLUŞTURULMADI** (ADR-0002).
+4. **`tests/_reference/`**: ürün kodunu sınamayan 82 dosya / 563 test ayrıldı.
+   Tek kod değişikliği: 49 dosyada `Path(__file__).parent.parent` → `parents[2]`.
+   `pyproject.toml`/`conftest.py` **dokunulmadı**, toplama sayısı değişmedi.
+5. **`skills/` üçüzlemesi ikizlemeye indi:** ölçüm üç kopyanın hangisinin gerçek olduğunu
+   gösterdi — `skills/media-agency-soldier/scripts/` (4.928 satır) **tek gerçek kaynak**
+   (`skills/media_agency_soldier_engine.py:33` ve `SKILL.md:43-53` oraya bakar);
+   `skills/media_agency_soldier/` (alt çizgili) testlerin proxy paketi olarak kalır;
+   tireli dizinin **kökündeki** 6 dosya ölüydü (dizin adı tireli → paket olarak içe
+   aktarılamaz; çıplak import 0; `url_analyzer.py` alt çizgili kopyayla `diff` → SAME)
+   → `docs/_archive/skills/media-agency-soldier-root-proxies/`.
+   `EntropyAI.spec` `datas` **`('skills','skills')` olarak kaldı** — gerekçe spec'teki
+   yeni yorumda: yetenekler çalışma anında yol çözümüyle bulunur, açık dosya listesi
+   Faz 10-C'nin sessiz düşmesini geri getirir. hiddenimports'a dokunulmadı.
+6. **`platform/autostart.py` kaldırıldı** (ADR-0006): ayar vardı, davranış yoktu
+   (`config.autostart_enabled` okunup yazılıyor, uygulayan kod 0). Beraberinde
+   `config.py`'deki 4 satır, iki test ve spec'teki tek hiddenimport satırı.
+   `core/claude_bg.py` **"deneysel, bağlı değil"** etiketiyle duruyor (ADR-0007).
+7. **`.gitignore`:** depo köküne düşen kullanıcı denetim çıktıları (`*_audit.md/json`,
+   `*_financial_audit.md`, `*_metrics.json`) yok sayılıyor — **silinmiyor, taşınmıyor**.
+   Untracked satır 60+ → **4** (dördü de paralel ajanların yeni dosyaları).
+
+**Açık kalanlar (bu dilimde ölçülmedi):** tam süit ve `.exe` derlemesi (paralel ajanlar
+aynı anda `src/` düzenliyordu — kapanış QA'sı 12-F'ye ait); `EntropyAI.spec`'in 15 eksik
+modülü (12-A'nın işi); `scratch/` 55 izlenen PNG'nin arşive taşınması (M7, yapılmadı);
+`entropy.png` (1,37 MB) ve `pyproject.toml` sürüm tekilleştirmesi (M8/M9, paralel ajanda).
+
+---
 
 ## 2.3 QA 11-C/D — uçtan uca pano döngüsü + hafıza turları (2026-09-10)
 
@@ -598,9 +670,10 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
    olan arayüz hatası; **Faz 11 kapanış QA'sında kök nedeni bulundu**, madde 9'a taşındı.
 3. `scripts/` altındaki ~60 tek seferlik betik: izlemeye mi alınacak, `scratch/`e mi taşınacak,
    silinecek mi? Karar verilmedi (silinmedi, dokunulmadı).
-4. `src/entropy/platform/autostart.py` — **tek ölü ürün modülü**: üründe içe aktaranı yok,
-   yalnızca iki test ve spec canlı tutuyor; `config.autostart_enabled` okunup yazılıyor ama
-   hiçbir yerde uygulanmıyor. Özellik ya bağlanmalı ya kaldırılmalı.
+4. ~~`src/entropy/platform/autostart.py` ölü ürün modülü~~ — **KAPANDI (Faz 12-E)**:
+   kaldırıldı, `config.autostart_enabled` ve iki testiyle birlikte
+   ([ADR-0006](adr/ADR-0006-autostart-kaldirildi.md)). `core/claude_bg.py` "deneysel,
+   bağlı değil" etiketiyle duruyor ([ADR-0007](adr/ADR-0007-claude-bg-ertelendi.md)).
 5. **agy köprüsünde izolasyon yok** (kayıtlı sınır, ADR-0002): süreç proje dizininde koşar,
    ajanlar çalışma dizininden keşfedilir; CLI'da karşılık gelen bayrak yok.
 6. `docs/specifications/` altındaki 5 eski spec `ARCHITECTURE.md`'ye damıtılıp arşive

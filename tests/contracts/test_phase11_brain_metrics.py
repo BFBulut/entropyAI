@@ -417,3 +417,64 @@ def test_k12_excludes_identity_nodes_and_counts_them_separately(tmp_path):
     after = brain_metrics.collect(db, include_recall=False, include_latency=False)
     assert after["K12_unsourced_l2"]["count"] == 1
     assert after["K12_unsourced_l2"]["identity_untagged"] == 0
+
+
+# --------------------------------------------------------------------------
+# Faz 12-A — CRAG eşiği kalibrasyonu (araştırma A §3.2)
+# --------------------------------------------------------------------------
+
+
+def test_crag_threshold_is_calibrated_value():
+    """
+    Eşik gerçek DB kopyasında 10 etiketli sorguyla ölçüldü (5 var / 5 yok):
+    0,45 → 8/10, **0,40 → 9/10**, 0,30 → 5/10. Sabit ölçülen değerde durmalı.
+    """
+    from entropy.memory.context_builder import CRAG_MIN_SCORE
+
+    assert CRAG_MIN_SCORE == 0.40
+
+
+def test_crag_threshold_reads_config_setting(monkeypatch):
+    """Eşik artık ayar; `config.brain_confidence_threshold` etkin değeri belirler."""
+    from entropy.core.config import config
+    from entropy.memory.context_builder import AssembledContext, crag_min_score
+
+    monkeypatch.setattr(config, "brain_confidence_threshold", 0.90, raising=False)
+    assert crag_min_score() == 0.90
+    ctx = AssembledContext()
+    ctx.brain_confidence = 0.50
+    assert ctx.brain_has_answer is False
+
+    monkeypatch.setattr(config, "brain_confidence_threshold", 0.20, raising=False)
+    assert ctx.brain_has_answer is True
+
+
+def test_crag_threshold_ignores_out_of_range_setting(monkeypatch):
+    """Bozuk ayar (aralık dışı / bool) modül varsayılanına düşer."""
+    from entropy.core.config import config
+    from entropy.memory.context_builder import CRAG_MIN_SCORE, crag_min_score
+
+    for bad in (5.0, -1.0, True, "0.4", None):
+        monkeypatch.setattr(config, "brain_confidence_threshold", bad, raising=False)
+        assert crag_min_score() == CRAG_MIN_SCORE
+
+
+def test_crag_separates_labelled_queries_on_synthetic_corpus():
+    """
+    Kalibrasyon yöntemi kalıcı: etiketli sorgu kümesinde seçilen eşik
+    doğruluğu ≥ 8/10 vermeli. Burada gerçek DB yerine sentetik skor dağılımı
+    (ölçümün kendisi: 5 olumlu / 5 olumsuz sorgunun top-1 hibrit skorları)
+    kullanılır, böylece test kullanıcının veritabanına dokunmaz.
+    """
+    from entropy.memory.context_builder import CRAG_MIN_SCORE
+
+    olculen = [
+        (0.5533, True), (0.4947, True), (0.4790, True),
+        (0.3472, True), (0.4183, True),
+        (0.3386, False), (0.3551, False), (0.3445, False),
+        (0.3835, False), (0.3773, False),
+    ]
+    dogru = sum(1 for score, label in olculen if (score >= CRAG_MIN_SCORE) == label)
+    assert dogru >= 8, f"CRAG eşiği {CRAG_MIN_SCORE} doğruluğu {dogru}/10 — kalibrasyon bozuldu"
+    yanlis_pozitif = sum(1 for score, label in olculen if not label and score >= CRAG_MIN_SCORE)
+    assert yanlis_pozitif == 0
