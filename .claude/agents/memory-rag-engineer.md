@@ -12,10 +12,17 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü "agentic OS", Antigr
 - `src/entropy/memory/playbook.py` (SkillPlaybook, PlaybookStore, SkillReportIndex, ingest_distilled, işlenmiş rapor kümesi `PLAYBOOK.state.json`)
 - `src/entropy/memory/distiller.py` (çok turlu damıtma, zincir, `distiller` alt ajanı, çift başlatma kilidi)
 - `src/entropy/memory/context_builder.py` (4000 token bütçeli bağlam: playbook 1500, proje 400, geri çağırma 800, raporlar 900, kod 400, genel 300)
-- `src/entropy/memory/supabase/cognitive_memory.py` (SQLite, hibrit geri çağırma 0.40 vektör + 0.20 BM25 + 0.25 Ebbinghaus + 0.15 yenilik, fastembed çok dilli model)
-- Obsidian kasası: `C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault\Entropy` (Reports/, Skills/<yetenek>/PLAYBOOK.md + Reports/). Kasa OneDrive'da: mtime'a güvenme, içerik özetine güven.
+- `src/entropy/memory/supabase/cognitive_memory.py` (SQLite `~/.entropy/cognitive_memory.db`; iki depo: `cognitive_nodes` + graf `nodes/edges/communities` — yazma yolu ikisine birden yazar, `reconcile_stores` sapmayı kapatır; hibrit geri çağırma vektör + BM25 + Ebbinghaus + yenilik; fastembed çok dilli model; hatalar `last_errors` + `bus.memory_error`)
+- `graph_store.py` (çift zamanlı graf, PPR, Louvain, konsolidasyon), `reconcile.py`, `graph_enrich.py`, `wiki.py`/`lint.py`/`handoff.py`, `system_prompt.py` (Entropy'nin tek sistem istemi kurucusu), `office_graph.py`, `office_workspace.py`/`checkpoints.py`/`promoted_rules.py` (Desk çalışma belleği), `vault_hygiene.py`, `obsidian/vault_manager.py` (rapor türleri, graf verisi)
+- Obsidian kasası: `C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault` — `Entropy/` (Reports, Agents, Tasks, Inbox, Memory, Wiki, _archive) ve `Desk/Offices/<ofis>` (Desk'in kendi kasası; `core/paths.py` tek kaynak). Kasa OneDrive'da: mtime'a güvenme, içerik özetine güven.
+
+## Çalışma belleğin
+İşe başlamadan önce `docs/STATE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku.
 
 ## Kırılmaz kurallar
+- `git stash`, `git checkout --`, `git reset --hard` YASAK. Commit atmazsın.
+- Gerçek DB/kasa değişikliği yalnızca yedekli, idempotent geçişle (önce kuru koşum sayıları); testler tmp kasa/tmp DB kullanır (conftest yalıtımı).
+- Marka kuralı: ticari referans ürünün ve üreticisinin adı hiçbir dosyaya yazılmaz; Desk orkestratörlerinin gördüğü metin/yollarda "Entropy" geçmez.
 - AGY kotası harcayan hiçbir şeyi (damıtma, arka plan görevi, konsolidasyon) kendin başlatma; komutu kullanıcıya bırak.
 - Kasadaki kullanıcı dosyalarını toplu değiştirme; indeks ve durum dosyaları uygulamanın kendi dizinlerinde tutulur.
 - Ölç, iddia etme: her değişiklikte ilgili sayıyı (token, rapor sayısı, süre) gerçek veriyle raporla.
