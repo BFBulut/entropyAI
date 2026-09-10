@@ -977,14 +977,12 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             return self._background_conversations.get(task_id)
 
     @staticmethod
-    def _notify_result(on_result, text: str, success: bool) -> None:
+    def _notify_result(on_result, text: str, success: bool,
+                       report_path: str = "") -> None:
         """Geri çağrıyı korumalı çağırır; geri çağrının hatası köprüyü düşürmez."""
-        if on_result is None:
-            return
-        try:
-            on_result(text, success)
-        except Exception as cb_err:
-            bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
+        from entropy.core.provider import call_on_result
+
+        call_on_result(on_result, text, success, report_path)
 
     def _execute_background_task_worker(
         self,
@@ -1297,10 +1295,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     emit_stream("error", execution_error or full_text or "Görev başarısız.")
 
                 # Tam çıktı, sinyallere sığmayan tüketicilere doğrudan verilir.
+                # SIRA (Faz 11 kapanışı): rapor kasaya YAZILDIKTAN sonra haber
+                # verilir; geri çağrı (kartın `_finish`i) rapor yolunu ancak o
+                # zaman alabiliyor. `save_report=False` yolunda beklenecek bir
+                # şey yok, geri çağrı hemen koşar.
                 notified["done"] = True
-                self._notify_result(on_result, full_text, success)
+                saved_report_path = ""
 
                 if not save_report:
+                    self._notify_result(on_result, full_text, success)
                     bus.task_completed.emit(task_id, success)
                     bus.terminal_output_received.emit(
                         f"\n[✔ Arka Plan Görevi: {task_name} Tamamlandı]\n"
@@ -1340,6 +1343,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                         project_name=proj_name,
                         skill_name=task_skill,
                     )
+                    saved_report_path = str(rep_path)
 
                     # Store distilled summary in cognitive memory
                     try:
@@ -1361,6 +1365,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     bus.terminal_output_received.emit(f"[Otonom Rapor Hatası]: {e}\n")
                     bus.task_notification.emit(task_id, task_name, masked_text[:200])
 
+                self._notify_result(on_result, full_text, success, saved_report_path)
                 bus.task_completed.emit(task_id, success)
                 bus.terminal_output_received.emit(
                     f"\n[✔ Otonom Arka Plan Görevi: {task_name} Tamamlandı]\n"

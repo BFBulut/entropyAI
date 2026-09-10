@@ -1378,8 +1378,12 @@ class TaskBoard:
         if card is None:
             return None
 
-        def _on_result(full_text: str, ok: bool, _card_id=card.id):
-            self._finish(_card_id, full_text, ok)
+        def _on_result(full_text: str, ok: bool, report_path: str = "",
+                       _card_id=card.id):
+            # `report_path`: köprünün kasaya yazdığı rapor dosyası. Köprü bu
+            # üçüncü argümanı YALNIZCA parametre adı `report_path` olan geri
+            # çağrılara geçirir (`core/provider.call_on_result`).
+            self._finish(_card_id, full_text, ok, report_path=report_path)
             if on_done is not None:
                 try:
                     on_done(_card_id, ok)
@@ -1563,7 +1567,8 @@ class TaskBoard:
 
     # -- tamamlama ------------------------------------------------------
 
-    def _finish(self, card_id: str, full_text: str, ok: bool) -> None:
+    def _finish(self, card_id: str, full_text: str, ok: bool,
+                report_path: str = "") -> None:
         """
         Görev bitince kartı günceller, wiki sayfası ve ajan belleği yazar.
 
@@ -1576,6 +1581,19 @@ class TaskBoard:
             return
         summary = (full_text or "").strip()
         outputs = list(card.output_paths or [])
+        # RAPOR YOLU (Faz 11 kapanışı): köprü raporu
+        # `Entropy/Skills/<yetenek>/Reports/Gorev_*.md` altına yazıyor ve yolu
+        # şimdiye dek yalnızca `bus.task_notification` ile yayıyordu; kartın
+        # `report_path` alanı hiç dolmuyordu. Yol geldiyse karta İŞLENİR
+        # (var olanın üzerine yazılmaz) ve `output_paths`a da girer ki
+        # amplifikasyon kilidi kaynağı (provenance) buradan türetebilsin.
+        report_path = str(report_path or "").strip()
+        if report_path and not (card.report_path or "").strip():
+            # Diske YAZILIR: `apply_event` kartı dosyadan yeniden okur,
+            # bellekteki kopya oraya taşınmaz.
+            card = self._write(replace(card, report_path=report_path))
+        if report_path and report_path not in outputs:
+            outputs.append(report_path)
 
         if ok and summary:
             page = self._write_wiki_page(card, summary)
@@ -1604,6 +1622,10 @@ class TaskBoard:
             "summary": summary if summary else ("Çıktı üretilmedi." if not ok else ""),
             "finished_at": _now(),
         }
+        if card.report_path:
+            # Projeksiyona taşınır (`board_events.PROJECTED_FIELDS`): TASKBOARD.md
+            # rapor bağlantısını buradan basar.
+            payload["report_path"] = card.report_path
         if proof_payload:
             payload["proof"] = proof_payload
         moved = None
@@ -1676,6 +1698,15 @@ class TaskBoard:
         # kendi çıktısını hafızaya geri yazmak tam olarak engellenen döngüdür.
         if (summary or "").lstrip().startswith("Beyinden yanıtlandı"):
             return card
+        # Anahtar (`/lock off`): kilit kapalıysa yenilik kotası da koşmaz —
+        # açık tespitiyle aynı ayar, aksi hâlde "kapattım ama hâlâ ölçüyor".
+        try:
+            from entropy.core.config import config as _config
+
+            if not getattr(_config, "amplification_lock", True):
+                return card
+        except Exception:
+            pass
         try:
             from entropy.agents import amplification
 

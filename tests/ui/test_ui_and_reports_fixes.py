@@ -74,8 +74,9 @@ def test_reports_viewer_flexible_resizing_and_buttons(qapp):
     # Explicit action buttons exist
     assert hasattr(viewer, "btn_read_report")
     assert hasattr(viewer, "btn_open_standalone")
-    assert viewer.btn_read_report.text() == "📖 Raporu Oku"
-    assert viewer.btn_open_standalone.text() == "🔍 Ayrı Aç ↗"
+    # Faz 11-E adim 3: dugme metninden emoji kaldirildi (ikon design.icon()).
+    assert viewer.btn_read_report.text() == "Raporu Oku"
+    assert viewer.btn_open_standalone.text() == "Ayrı Aç ↗"
     
     # Splitter is non-collapsible for both sides
     assert viewer.splitter.isCollapsible(0) is False

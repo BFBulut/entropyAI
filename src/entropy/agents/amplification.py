@@ -265,17 +265,30 @@ def admit_report(
             continue
         action = str(getattr(decision, "action", "") or "").lower()
         if action in ("add", "gray", "supersede") and memory is not None:
-            record = getattr(memory, "record_memory", None)
-            if callable(record):
+            # KAPI İKİ KEZ KOŞMAZ (Faz 11 kapanışı): karar YUKARIDA alındı.
+            # `record_memory` çağrısı aynı adayı kapıdan bir kez daha geçirip
+            # gömmeyi yeniden hesaplıyor ve kapı sayaçlarını ikinci kez
+            # artırıyordu. `store_decision` kararı olduğu gibi yazar (vektör
+            # karardan gelir). Eski hafıza nesneleri için `record_memory`
+            # yedeği korunur.
+            store = getattr(memory, "store_decision", None)
+            if callable(store):
                 try:
-                    record(category, claim, metadata=meta, provenance=provenance)
-                except TypeError:
-                    try:
-                        record(category, claim)
-                    except Exception:
-                        logger.debug("Hafızaya yazılamadı", exc_info=True)
+                    store(decision, importance=getattr(decision, "importance", None))
                 except Exception:
                     logger.debug("Hafızaya yazılamadı", exc_info=True)
+            else:
+                record = getattr(memory, "record_memory", None)
+                if callable(record):
+                    try:
+                        record(category, claim, metadata=meta, provenance=provenance)
+                    except TypeError:
+                        try:
+                            record(category, claim)
+                        except Exception:
+                            logger.debug("Hafızaya yazılamadı", exc_info=True)
+                    except Exception:
+                        logger.debug("Hafızaya yazılamadı", exc_info=True)
         if action == "add":
             report.add += 1
         elif action == "noop":

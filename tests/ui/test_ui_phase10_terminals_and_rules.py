@@ -128,9 +128,14 @@ def test_terminal_kinds_are_colored_and_raw_text_visible(_app):
     pane = panel.pane_for("a")
     # Qt zengin metni renkleri küçük harfe indirir.
     html = pane.view.toHtml().lower()
-    assert "#ef4444" in html          # hata kırmızı
-    assert "#3de8a8" in html          # sonuç yeşil
-    assert "#ffc24d" in html          # araç çağrısı sarı
+    # Faz 11-E adım 6: renkler artık düz onaltılık değil belirteçten gelir
+    # (tasarım sistemi tek kaynak). Anlam eşlemesi aynı: hata=danger,
+    # sonuç=ok, araç çağrısı=warn.
+    from entropy.ui.design import TOKENS
+
+    assert TOKENS["color"]["danger"].lower() in html   # hata
+    assert TOKENS["color"]["ok"].lower() in html       # sonuç
+    assert TOKENS["color"]["warn"].lower() in html     # araç çağrısı
     assert "italic" in html           # düşünce italik
     raw = pane.raw_text()
     assert "düşünüyorum" in raw and "Read(x.py)" in raw and "çöktü" in raw

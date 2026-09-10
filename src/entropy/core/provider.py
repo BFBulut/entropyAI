@@ -356,6 +356,45 @@ def followup_rejection(text: Optional[str]) -> Optional[str]:
     return None
 
 
+def call_on_result(on_result, text: str, success: bool,
+                   report_path: str = "") -> None:
+    """
+    Arka plan görevi geri çağrısını çağırır; rapor yolunu YALNIZCA kabul edene verir.
+
+    Sözleşme geriye dönük uyumludur: eski çağıranlar `(metin, başarı)` imzasıyla
+    yazıldı ve öyle kalabilir. Geri çağrı üçüncü bir konumlu/anahtarlı parametre
+    (`report_path`) kabul ediyorsa köprünün kasaya yazdığı rapor yolu ona da
+    geçirilir — kartın `report_path` alanı böyle doluyor (Faz 11 kapanışı).
+    """
+    if on_result is None:
+        return
+    try:
+        if report_path and _accepts_report_path(on_result):
+            on_result(text, success, report_path=report_path)
+        else:
+            on_result(text, success)
+    except Exception as cb_err:  # geri çağrının hatası köprüyü düşürmez
+        try:
+            from entropy.core.event_bus import bus
+
+            bus.terminal_output_received.emit(f"[Görev Geri Çağrı Hatası]: {cb_err}\n")
+        except Exception:
+            pass
+
+
+def _accepts_report_path(fn) -> bool:
+    """Geri çağrı üçüncü bir argüman (`report_path`) alıyor mu?"""
+    try:
+        import inspect
+
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    # Ad üzerinden tespit: birçok geri çağrı üçüncü parametreyi kapanış hilesi
+    # olarak kullanıyor (`_card_id=card.id`), sayı saymak onları yanlış eşler.
+    return "report_path" in sig.parameters
+
+
 class InteractiveSession:
     """
     Canlı kalan bir kart sürecinin turlar arası durumu.

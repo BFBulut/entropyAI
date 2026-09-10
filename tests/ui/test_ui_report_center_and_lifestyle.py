@@ -529,8 +529,13 @@ def test_timeline_panel_renders_four_event_kinds(qapp):
         assert len(panel.events()) == 4
         assert panel.list_widget.count() == 4
         text = " ".join(panel.list_widget.item(i).text() for i in range(4))
-        for icon in ("⏰", "📄", "🪢", "🏢"):
-            assert icon in text
+        # Faz 11-E adim 3: satir basindaki emoji simge sutunu kaldirildi;
+        # tur artik ADIYLA yazilir (KIND_LABELS) - anlam metinde.
+        for label in ("Gorev", "Rapor", "Aktarim", "Ofis"):
+            normalized = (
+                text.replace("ö", "o").replace("ı", "i").replace("İ", "I")
+            )
+            assert label in normalized
     finally:
         panel.close()
         panel.deleteLater()

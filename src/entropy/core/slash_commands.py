@@ -138,7 +138,15 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
         category="builtin",
         badge="⚡ Yerel",
         color="#00FF9D",
-        usage="/board [pick <kart> <ajan>]",
+        usage="/board [pick <kart> <ajan>] [auto on|off]",
+    ),
+    SlashCommand(
+        name="/lock",
+        description="Öz-amplifikasyon kilidini açar/kapatır (kalıcı ayar).",
+        category="builtin",
+        badge="⚡ Yerel",
+        color="#9D00FF",
+        usage="/lock [on|off]",
     ),
     SlashCommand(
         name="/memory",
@@ -1474,6 +1482,69 @@ def _refresh_agent_session(name: str) -> bool:
     return False
 
 
+_BOOL_WORDS = {"on": True, "aç": True, "ac": True, "true": True, "1": True,
+               "off": False, "kapat": False, "false": False, "0": False}
+
+
+def _toggle_setting(key: str, value: str, title: str, usage: str,
+                    on_change=None) -> str:
+    """
+    Boole bir ayarı gösterir ya da kalıcı olarak değiştirir (model çağırmaz).
+
+    Değer verilmezse yalnızca mevcut durum yazılır. `on_change(yeni_değer)`
+    ayarın çalışan sistemdeki karşılığını uygular (ör. tetikleyiciyi
+    başlat/durdur); hatası komutu düşürmez, satır olarak raporlanır.
+    """
+    from entropy.core.config import config as cfg
+
+    word = (value or "").strip().lower()
+    if not word:
+        state = "AÇIK" if bool(getattr(cfg, key, False)) else "KAPALI"
+        return (f"<b>{title}</b><br/>Durum: <b>{state}</b>"
+                f"<div style='color:#8B949E;font-size:11px;'>Kullanım: "
+                f"<code>{_html_escape(usage)}</code></div>")
+    if word not in _BOOL_WORDS:
+        return (f"<b>{title}</b><br/>Anlaşılmayan değer: "
+                f"<code>{_html_escape(word)}</code>. Kullanım: "
+                f"<code>{_html_escape(usage)}</code>")
+    new_value = _BOOL_WORDS[word]
+    setattr(cfg, key, new_value)
+    try:
+        cfg.save_settings()
+    except Exception as e:
+        return (f"<span style='color:#e06c75;'>Ayar kaydedilemedi: "
+                f"{_html_escape(e)}</span>")
+    extra = ""
+    if on_change is not None:
+        try:
+            extra = on_change(new_value) or ""
+        except Exception as e:
+            extra = f" (uygulanamadı: {_html_escape(e)})"
+    state = "AÇIK" if new_value else "KAPALI"
+    return f"<b>{title}</b><br/>Durum: <b>{state}</b>{extra}"
+
+
+def _apply_board_auto(enabled: bool) -> str:
+    """Ayarı çalışan tetikleyiciye uygular: açıksa başlat, kapalıysa durdur."""
+    from entropy.agents.dispatcher import board_dispatcher
+
+    dispatcher = board_dispatcher()
+    if enabled:
+        dispatcher.start()
+        return " · tetikleyici başlatıldı"
+    dispatcher.stop()
+    return " · tetikleyici durduruldu"
+
+
+def _handle_lock(args: str) -> str:
+    """`/lock [on|off]` — öz-amplifikasyon kilidi (Faz 11.6) anahtarı."""
+    return _toggle_setting(
+        "amplification_lock", (args or "").strip(),
+        title="🔒 Öz-amplifikasyon kilidi",
+        usage="/lock on|off",
+    )
+
+
 def _handle_board(args: str) -> str:
     """
     `/board` (özet) ve `/board pick <kart> <ajan>` (elle sahiplenme).
@@ -1488,6 +1559,14 @@ def _handle_board(args: str) -> str:
 
     parts = (args or "").split()
     board = TaskBoard()
+
+    if parts and parts[0].lower() == "auto":
+        return _toggle_setting(
+            "board_auto_dispatch", parts[1] if len(parts) > 1 else "",
+            title="📋 Pano — Otomatik tetikleyici",
+            usage="/board auto on|off",
+            on_change=_apply_board_auto,
+        )
 
     if parts and parts[0].lower() == "pick":
         if len(parts) < 3:
@@ -1664,6 +1743,8 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
         /board                   pano özeti (durumlar, sahiplenmeler, son olaylar)
         /board pick <kart> <ajan>  kartı ajana atar ve kilidini alır
+        /board auto [on|off]     otomatik tetikleyiciyi açar/kapatır (kalıcı)
+        /lock [on|off]           öz-amplifikasyon kilidini açar/kapatır (kalıcı)
         /model [<ad>]            Entropy'nin KENDİ modelini gösterir/değiştirir
         /agent effort <ad> <sev> ajanın eforunu AGENT.md'ye yazar, derler, oturumu tazeler
         /agent model <ad> <model>  ajanın modelini AGENT.md'ye yazar, derler, oturumu tazeler
@@ -1714,6 +1795,8 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_model(args, bridge)
     if head_low == "/board":
         return _handle_board(args)
+    if head_low == "/lock":
+        return _handle_lock(args)
     if head_low == "/memory":
         return _handle_memory(args, bridge)
     if head_low == "/tasks":

@@ -340,7 +340,12 @@ def render_taskboard_text(cards: Iterable[dict], last_seq: int = 0,
             priority = str(card.get("priority") or "").strip()
             bits = [b for b in (agent, priority, effort) if b]
             suffix = f" — {' · '.join(bits)}" if bits else ""
-            lines.append(f"- `{card.get('id')}` {title}{suffix}")
+            # Rapor bağlantısı (Faz 11 kapanışı): kartın `report_path`i doluysa
+            # panodan doğrudan rapora gidilir. Obsidian bağlantısı değil düz
+            # Markdown bağlantısı: pano kasa dışından da okunuyor.
+            report = str(card.get("report_path") or "").strip()
+            link = f" · [rapor]({report.replace(chr(92), '/')})" if report else ""
+            lines.append(f"- `{card.get('id')}` {title}{suffix}{link}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
