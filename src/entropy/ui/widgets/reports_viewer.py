@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from entropy.core.config import config
 from entropy.core.event_bus import bus
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
 from entropy.ui.widgets.report_center import (
     ReportCenterWidget, derive_report_title, title_from_filename,
@@ -700,7 +700,7 @@ class ReportsViewerWidget(QFrame):
         content = p.read_text(encoding="utf-8", errors="replace")
         
         # 1. Store in Cognitive Memory
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
         cog = CognitiveMemorySystem()
         paragraphs = [para.strip() for para in content.split("\n\n") if para.strip() and not para.startswith("#")]
         summary = paragraphs[0][:250] if paragraphs else content[:200]
@@ -712,7 +712,7 @@ class ReportsViewerWidget(QFrame):
         )
 
         # 2. Re-index in Project RAG
-        from entropy.memory.rag.project_indexer import ProjectIndexer
+        from entropy.brain.rag.project_indexer import ProjectIndexer
         active_proj = getattr(self, "active_project_dir", None) or config.default_project_path
         indexer = ProjectIndexer(active_proj)
         indexer.scan_and_index(max_files=150)
@@ -768,7 +768,7 @@ class ReportsViewerWidget(QFrame):
                 # 2. Remove associated memory node from SQLite
                 try:
                     import sqlite3
-                    from entropy.memory.supabase.cognitive_memory import (
+                    from entropy.brain.supabase.cognitive_memory import (
                         default_cognitive_db_path,
                     )
 

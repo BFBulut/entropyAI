@@ -7,7 +7,7 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.10.2** (Faz 13-A2 kapanış) |
+| Sürüm | **v0.10.3** (Faz 13-B, `entropy.brain` taşıması) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
 | Son güncelleme | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
@@ -63,6 +63,53 @@ girdilerinin hepsi mevcut, silinen `tools/*` ailesinin spec'te girdisi yoktu,
 `skills/media_agency_soldier` pakete girdi (`dist/EntropyAI/_internal/skills/`).
 Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rules.py`
 **13 passed**.
+
+---
+
+## 2.11 Faz 13-B — `entropy.brain` paket taşıması (2026-09-11, memory-rag-engineer) — kota 0
+
+Karar ve gerekçe: [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md) (ADR-0004'ün yerine geçti).
+
+| Adım | Kanıt |
+|---|---|
+| Taban toplama | `pytest --collect-only -q` → **2.596 tests collected** |
+| `git mv src/entropy/memory src/entropy/brain` | `git status --porcelain` → **27 satır, hepsi `R`** |
+| Dizgi değişimi (`entropy.memory`→`entropy.brain`, `entropy/memory`→`entropy/brain`) | **166 dosya** (src 48, tests 57, `scripts/*.py` 5, `scripts/_oneshot/*.py` 55, `EntropyAI.spec` 1) |
+| Kalan atıf | `grep -rn 'entropy\.memory\|entropy/memory' src tests scripts EntropyAI.spec` → **0** (şim + spec'in şim girdisi hariç) |
+| Dizgi hâlindeki modül adları | `ui/widgets/memory_inspector_dialog.py:508-509`, `brain/supabase/cognitive_memory.py:36` (`logging.getLogger("entropy.brain.cognitive")`) — günlükleme kök günlükçüyle çalışıyor, ada dayalı süzgeç yok |
+| Uyumluluk şimi | `src/entropy/memory/__init__.py`: `entropy.memory.gate is entropy.brain.gate` → **True**; derin yol `entropy.memory.obsidian.vault_manager` → **True**; `DeprecationWarning` yükseliyor; `entropy.brain` **uyarısız** |
+| Spec | `'entropy.memory'` (şim) hiddenimports'a eklendi; `test_spec_sync.py` **9 passed** |
+| Yeni sözleşme testi | `tests/contracts/test_brain_package_move.py` **9 passed** |
+| Toplama (sonra) | **2.605** (= 2.596 + 9 yeni test) |
+| Veri | `~/.entropy` altında `*.json`/`*.db` içinde `entropy.memory` dizgisi **0**; kasadaki eşleşmeler yalnız tarihsel rapor metni — **hiçbir kullanıcı dosyasına dokunulmadı** |
+
+### B4 doğrulama (2026-09-11, qa-build-engineer) — kota 0, model çağrısı yok
+
+Ortam: `EntropyAI.exe` **kapalıydı** → build doğrudan `dist/` içine alındı.
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| `import entropy.main` (PYTHONPATH=src) | **OK**; `entropy.brain.__file__` = `src/entropy/brain/__init__.py`; `import entropy.memory` yalnızca `DeprecationWarning` | — |
+| Toplama | **2.605 tests collected** (2,6 s) — taşımada test kaybı yok | — |
+| **Tam süit** `pytest tests -q -p no:cacheprovider` (offscreen) | **2.605 passed / 0 failed / 681,1 s**, exit 0 | `scratch/_p13b4_suite.log` |
+| `test_spec_sync` + `test_brain_package_move` + `test_architecture_rules` | **32 passed** | — |
+| Sürüm tek kaynak | `pyproject.toml:7` = `0.10.3`, `src/entropy/__init__.py:9` `_FALLBACK_VERSION` = `0.10.3` | — |
+| Kalan `entropy.memory` atfı | kaynakta **0**; yalnız şim dosyası, `EntropyAI.spec:193-194` (bilinçli şim girdisi) ve sözleşme testinin kendi dizgileri | `grep -rn` |
+| **Build** `PyInstaller EntropyAI.spec --noconfirm` | **exit 0, 467 s**, `dist/EntropyAI` | `scratch/_p13b4_build.log` |
+| `EntropyAI.exe --version` / `--help` | **`Entropy AI 0.10.3`** exit 0 / exit 0 | — |
+| **Paket kontrolü** (PYZ, 7.308 modül) | `entropy.brain*` **30 girdi**; kaynak ağacındaki 27 brain modülünün **tamamı** pakette (`NOT PACKAGED: []`); şim `entropy.memory` **var**, `entropy.memory.<alt modül>` girdisi **yok** | `CArchiveReader` + `ZlibArchiveReader` |
+| 20 sn canlı koşum | **canlı kaldı** (PID 53488, 20 sn sonra hâlâ çalışıyordu; QA kendi başlattığı süreci kapattı) | `scratch/_p13b4_live.{out,err}` |
+| Beyin katmanı gerçekten yükleniyor | paketten koşan exe'nin stderr'i: `entropyrain\supabase\cognitive_memory.py:163` (fastembed uyarısı) → hafıza katmanı **yeni yoldan** yüklendi | `scratch/_p13b4_live.err` |
+| Günlük deltası (447 → 451 satır) | `Traceback` 0, `CRITICAL` 0, `ModuleNotFoundError` 0 | `scratch/_p13b4_live_newlog.txt` |
+| `entropy_fault.log` | yalnız `0x8001010d` (COM, iyi huylu) — dosyada **45 kez**, tamamı aynı kod, taşımadan önce de vardı; kayıt QA'nın kendi `Stop-Process`'inden | — |
+| Yeni CrashDump | **yok** (en yenisi 2026-09-09, `EntropyAgentDesk.exe`) | `%LOCALAPPDATA%\CrashDumps` |
+| Marka taraması (iki ad, parçalı sabitten) | **0 / 0** | `git grep -riIl` |
+| Yalıtım | süit öncesi=sonrası: `cognitive_memory.db` 9.822.208 B / mtime **aynı**, `tasks_ledger.db` 86.016 B / mtime **aynı**, `skills_state.json` 112 B / mtime **aynı**; kasa `Entropy/Reports` **423 → 423**, `Entropy/Tasks` **1 → 1** | — |
+| `scratch/ui/phase10/*.png` | süit 8 dosyayı yeniden üretti → `git show HEAD:<yol>` ile geri yazıldı, `git status` **0 satır** | — |
+
+**Kalan risk kapandı:** PyInstaller sessiz eksik paketleme ölçüldü, eksik yok.
+Doğrulanamayan: gerçek pencere geometrisi/sürükleme ölçümü (canlı koşum
+görsel etkileşimsiz yapıldı).
 
 ---
 
@@ -222,10 +269,10 @@ düğümü**ydü. Entropy bunu aşmak için ikinci kartta `kind: write` seçmiş
 | `has_answer` artık "**kart canlı koşmadan kapatılabilir**" demek | `agents/amplification.py:202-259` (`BrainAnswer`), `:261-341` (`brain_lookup` + `_shortcut_decision`) | Tek anahtar burada olduğu için `agents/tasks.py`'ye (paralel ajan kapsamı) hiç dokunulmadı |
 | Kısa devre koşulları: açık tercih **VE** CRAG isabeti **VE** güven ≥ **0,75** **VE** metin dolu **VE** kaynaklı | `amplification.py:320-341`, `SHORTCUT_MIN_CONFIDENCE = 0.75` (`:156`) | Açık tercih: `card.brain_only` alanı ya da metinde `--brain-only` / `[brain-only]` / "yalnız beyin" (`BRAIN_ONLY_MARKERS`) |
 | Kısa devrede kart özeti **"CANLI ARAŞTIRMA YAPILMADI"** yazar | `amplification.py:244-259` (`note()`) | Kullanıcı bu kapanışı ayırt edebilsin |
-| Kimlik (`is_identity=1` / `identity:core`) ve `legacy:pre-v2` düğümleri **asla** yanıt sayılmaz | `memory/context_builder.py:126-152` (`is_answer_node`, `is_identity_node`), `_recall_section` `:522-539` | 0,49'luk "yanıt" tam olarak buydu; güven artık yalnız yanıt sayılabilen düğümlerden |
+| Kimlik (`is_identity=1` / `identity:core`) ve `legacy:pre-v2` düğümleri **asla** yanıt sayılmaz | `brain/context_builder.py:126-152` (`is_answer_node`, `is_identity_node`), `_recall_section` `:522-539` | 0,49'luk "yanıt" tam olarak buydu; güven artık yalnız yanıt sayılabilen düğümlerden |
 | Kimlik düğümü bağlama **hiç paketlenmez** | `context_builder.py:1016-1022` (beyin paketinden `[Kimlik]` bloğu çıktı), `_recall_section` filtresi | Kimlik zaten sistem isteminin 1. bölümünde; ikinci kopya bütçe yiyordu |
 | Tazelik ipuçlu sorguda `brain_has_answer` **False** | `context_builder.py:104-123` (`FRESHNESS_HINTS`, `wants_fresh_data`), `AssembledContext.freshness_required` `:189-205`, `build()` `:1187` | "güncel / sıfırdan / yeni / bugün / web / internet / tara" + tarih deseni (`2026`, `12.09.2026`) |
-| İstem sözleşmesi artık kısa devre **vaat etmiyor** | `agents/board_tools.py:214-215` (`_ENTROPY_TOOL_TEXT`) (tek kaynak; `memory/system_prompt.board_tools_section` onu sunar) | Eski metin: "`research` kartı hafızada yanıt varsa CLI'ya HİÇ gitmez". Yeni metin 485 karakter → 600'lük `BUDGET_BOARD_TOOLS`'a **bütün** sığıyor (kırpılırsa `board_create` bloğu tümden düşüyordu) |
+| İstem sözleşmesi artık kısa devre **vaat etmiyor** | `agents/board_tools.py:214-215` (`_ENTROPY_TOOL_TEXT`) (tek kaynak; `brain/system_prompt.board_tools_section` onu sunar) | Eski metin: "`research` kartı hafızada yanıt varsa CLI'ya HİÇ gitmez". Yeni metin 485 karakter → 600'lük `BUDGET_BOARD_TOOLS`'a **bütün** sığıyor (kırpılırsa `board_create` bloğu tümden düşüyordu) |
 | `[BEYİN]` bölümü kalıyor ve tonu değişti | `amplification.py:223-242` (`prompt_section`) | "BAĞLAMDIR, yanıt değildir: doğrula… canlı araştırmanın yerine GEÇMEZ" |
 | `infer_kind`: "incele", "tara" tek başlarına da research | `amplification.py:71-76` | Ölçülen eksik sezgi |
 
@@ -466,7 +513,7 @@ tutarlı: koyu `line.onraised`/`surface.raised` **4,31**, `line.onraised`/`line`
 Uygulama **kapalıydı** (`tasklist` → EntropyAI.exe yok), `config.board_auto_dispatch
 = True` ama dispatcher/rüya döngüsü koşmadığı için yazan adımlarla çakışma
 olmadı. Yedek: `~/.entropy/backups/live-20260910-195802/` (cognitive_memory.db,
-tasks_ledger.db, `~/.entropy/memory`, kasadan Memory/Skills/Board — 8,1 MB).
+tasks_ledger.db, `~/.entropy/brain`, kasadan Memory/Skills/Board — 8,1 MB).
 Sağlayıcı `claude` (saf kip), köprü `bridge_prompt.make_send_prompt`.
 
 **R-CANLI-1 (düzeltildi):** `core/bridge_prompt.py:55` `ClaudeProcessBridge`
@@ -657,13 +704,13 @@ Yedek: `~/.entropy/backups/cognitive_memory.qa12f.*.db`.
 - `/skill synth media-agency-soldier`: **kotasız kol** koşuldu (`turns 0`),
   3 dosya üretildi, `validate_candidate` → **`draft`**, bulgu
   "eksik/boş bölüm: Girdiler, Çıktılar". Bu **tasarım gereği**dir: iskelet
-  `"- (… doldurulacak)"` yazıyor (`memory/skill_synthesis.py:299-300`) ve
+  `"- (… doldurulacak)"` yazıyor (`brain/skill_synthesis.py:299-300`) ve
   doğrulayıcı "doldurulacak" içeren bölümü eksik sayıyor (`:556-558`).
   Yani **kotasız kol asla `validated` olamaz**; tek turluk zenginleştirme
   **kota tavanı** nedeniyle koşulmadı → `/skill approve` ve kasada
   `Skills/<ad>/SKILL.md` adımı **doğrulanamadı**. Açık iş.
 - `/memory merge`: gri kuyruk turdan önce **0**, sonra **2 pending**
-  (`~/.entropy/memory/gray_queue.jsonl`) — bugünkü kart raporları kapıdan
+  (`~/.entropy/brain/gray_queue.jsonl`) — bugünkü kart raporları kapıdan
   gri banda düştü. Birleştirme turu köprü (model) gerektirdiği için
   **koşulmadı** (kota). Açık iş.
 - `/distill wiki compile financial-auditor --turns 25`: **KOŞULMADI** — kota
@@ -979,7 +1026,7 @@ K4/K5/K6/K8 bağlam derleyici ve tur harness'ında ölçülür; bu dilimin kapsa
 
 **K12 kök nedeni ikiye ayrıldı:**
 1. *Düzeltildi* — `GraphStore._mirror_to_cognitive` `provenance` sütununu hiç
-   yazmıyordu (`src/entropy/memory/graph_store.py:388-400`): konsolidasyonun
+   yazmıyordu (`src/entropy/brain/graph_store.py:388-400`): konsolidasyonun
    ürettiği 42 küme/yansıma düğümü graf tarafında
    `consolidate:label_propagation` kaynağını taşıdığı hâlde `cognitive_nodes`
    tarafında kaynaksız görünüyordu. Ayna artık kaynağı taşıyor (var olan
@@ -1004,6 +1051,14 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
 
 ## 3. Aktif sözleşmeler (değiştirirsen `ARCHITECTURE.md` ile birlikte güncelle)
 
+- **Bellek paketinin adı `entropy.brain`** (Faz 13-B, [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)).
+  Yeni kod **yalnızca** `entropy.brain...` içe aktarır. Eski `entropy.memory` adı
+  `src/entropy/memory/__init__.py` şimiyle bir sürüm daha çalışır
+  (`sys.meta_path` bulucusu → **aynı modül nesnesi**, içe aktarımda
+  `DeprecationWarning`) ve **v0.12.0'da silinir**. Kapı:
+  `tests/contracts/test_brain_package_move.py` (atıf sayacı 0, kimlik, uyarı, spec girdisi).
+  Veri yolları paket adından bağımsızdır ve değişmedi (`~/.entropy/memory/`,
+  `<db klasörü>/memory/gray_queue.jsonl`).
 - **Olay veriyolu:** `entropy.core.event_bus` — sinyal adı ve imzası sözleşmedir.
   Sık kullanılanlar: `agent_stream(dict)`, `agent_turn_started(str)`,
   `agent_turn_completed(str)`, `task_notification(str, str, str)`,
@@ -1105,14 +1160,14 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
 - **Hafıza şeması v2 (Faz 11-B):** `cognitive_nodes` sütunları `provenance`,
   `confidence`, `valid_from`, `valid_to`, `archived`, `novelty`, `is_identity`
   (hepsi idempotent `ALTER`, `_init_sqlite_db` içinde).
-- **Kategori kapalı kümesi:** `memory/categories.py` →
+- **Kategori kapalı kümesi:** `brain/categories.py` →
   `CANONICAL_CATEGORIES = ("working", "episodic", "semantic", "procedural")`.
   Kimlik/kural (L4) **kategori değil bayrak**: `is_identity`. Ego düğümü
   `ego-entropy-core` kimliğini korur ama kategorisi `semantic`. Eski 13+ ad
   (`query`, `session`, `office`, `agent`, `architecture`, `math`, `federation`,
   `skill` …) `LEGACY_CATEGORY_MAP` ile eşlenir; ham değer
   `metadata.legacy_category`'de kalır.
-- **Yazma kapısı (`memory/gate.py`):** `MemoryGate.admit(category, content,
+- **Yazma kapısı (`brain/gate.py`):** `MemoryGate.admit(category, content,
   importance=0.5, metadata=None, provenance="") -> GateDecision`.
   `GateDecision(action, category, content, importance, is_identity, provenance,
   confidence, novelty, similarity, nearest_id, reason, metadata, embedding,
@@ -1159,7 +1214,7 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   `brain_has_answer`; eşik **`config.brain_confidence_threshold = 0.40`**
   (Faz 12-A kalibrasyonu: 0,45 → 8/10, **0,40 → 9/10**, 0,30 → 5/10).
   `summary()` ikisini de döndürür.
-- **Gri bant birleştirme turu (Faz 11.3, `memory/gray_merge.py`):**
+- **Gri bant birleştirme turu (Faz 11.3, `brain/gray_merge.py`):**
   `run_merge_round(memory=None, send_prompt=None, limit=8, gate=None, graph=None)
   -> MergeResult`. `send_prompt(prompt) -> str` **eşzamanlı çağrılabilir**
   (`distiller.run_with_bridge` sözleşmesinin aynısı); sağlayıcı seçimi
@@ -1173,7 +1228,7 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   `reset_cancel()`. Ayrıştırılamayan yanıt kuyruğu **boşaltmaz**.
   K9 ölçümü: `gray_stats(memory) -> {pending, done, total_gray, nodes, ratio}`.
   Tur günlüğü `<db klasörü>/memory/gray_merge_log.jsonl`.
-- **Rüya döngüsü v2 (Faz 11.7, `memory/dream.py`):**
+- **Rüya döngüsü v2 (Faz 11.7, `brain/dream.py`):**
   `dream_and_consolidate(memory=None, send_prompt=None, vault_path=None, ...)
   -> DreamReport`. **Epizodik-48s koşulu YOK.** Adımlar: (1) yeniden gömme →
   (2) gri bant turu (`send_prompt` yoksa kuru koşum) → (3) cos ≥ 0,95 kopya
@@ -1227,7 +1282,7 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   genel beyin paketindeki `[Wiki]` bloğu. CLI: `--context [--context-skill X]`.
   **Salt okunur:** bağlam `include_handoff=False` ile kurulur (aktarım sayfası
   okunduğunda tüketilir; ölçüm kasayı değiştirmemeli). Model çağrısı yok.
-- **Beceri sentezi v1 (Faz 12-C, `memory/skill_synthesis.py`, SKILLFOUNDRY):**
+- **Beceri sentezi v1 (Faz 12-C, `brain/skill_synthesis.py`, SKILLFOUNDRY):**
   Girdi: bir yetenek (playbook + wiki + raporlar) ya da tekrarlayan iş sinyali
   (`recurring_signals(vault_path, store, min_reports=MIN_RECURRENCE=3)`).
   Çıktı **aday**: `<kasa>/Entropy/Skills/_candidates/<ad>/{SKILL.md,
@@ -1531,13 +1586,13 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
      kapanışında K12 = 0** (§2.4): 256 eski düğüm `legacy:pre-v2`, kalan 2
      kimlik düğümü `identity:core` ile damgalandı.
    - ~~Gri bant kuyruğunu boşaltan toplu CLI turu yok~~ → **Faz 11-D:
-     `memory/gray_merge.py`** (§3). Kalan: agy tarafında `/memory merge`
+     `brain/gray_merge.py`** (§3). Kalan: agy tarafında `/memory merge`
      komutunun köprüye bağlanması ve **gerçek koşum** (QA).
    - ~~**Öz-amplifikasyon kilidi (11.6)**~~ → **Faz 11-C'de tamamlandı**
      (`agents/amplification.py`, §3). Kalan: gerçek kapıyla uçtan uca ölçüm
      (ADD oranının gerçek korpusta ne çıktığı) yapılmadı.
    - ~~`dream_and_consolidate` hâlâ 48 saat + epizodik koşuluna bağlı~~ →
-     **Faz 11-D: `memory/dream.py`** (§3). Eski metot geriye dönük uyum için
+     **Faz 11-D: `brain/dream.py`** (§3). Eski metot geriye dönük uyum için
      duruyor; `main.py` / `tasks_widget.py` çağrılarının yeni modüle
      taşınması **ui/agy tarafında açık iş**.
    - **K4 hedefin altında (%56,8 < %60, Faz 11-D ölçümü).** Neden: wiki
@@ -1591,9 +1646,9 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   etkileşimli kart kipi, proje = depo + dal, kart başına worktree (Windows'ta güvenli
   temizlik), PR akışı (yerel dal + diff → onaylı push), ekip şablonları, makbuz = ofis raporu,
   Desk kökü `Desk/` altına taşındı, bilişsel bellek çift depo eşitlemesi.
-- **Faz 11-D (hafıza katmanı, konsolidasyon/wiki/genel beyin):** `memory/gray_merge.py`
+- **Faz 11-D (hafıza katmanı, konsolidasyon/wiki/genel beyin):** `brain/gray_merge.py`
   (gri bant kuyruğu birleştirme turu, N aday tek istemde, iptal edilebilir,
-  idempotent), `memory/dream.py` (rüya döngüsü v2 — epizodik koşulu yok, altı
+  idempotent), `brain/dream.py` (rüya döngüsü v2 — epizodik koşulu yok, altı
   adım, adım başına sayaç, `dream_log.md`), `wiki.compile_skill` (Karpathy L2
   derleme hattı, rapor başına bir tur, `WIKI.state.json` ile artımlı, lint
   entegre), `context_builder` genel beyin paketi (`BUDGET_GENERAL_BRAIN=1500`,

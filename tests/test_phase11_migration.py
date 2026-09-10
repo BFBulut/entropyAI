@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.categories import CANONICAL_CATEGORIES
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.categories import CANONICAL_CATEGORIES
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "memory_migrate_v2.py"
 
@@ -222,7 +222,7 @@ def test_tag_legacy_dry_run_writes_nothing(migrate, legacy_db):
 
 
 def test_tag_legacy_apply_is_idempotent_and_sets_fields(migrate, legacy_db):
-    from entropy.memory.gate import LEGACY_CONFIDENCE, LEGACY_PROVENANCE
+    from entropy.brain.gate import LEGACY_CONFIDENCE, LEGACY_PROVENANCE
 
     tagged = migrate.apply_legacy_tagging(legacy_db)
     assert tagged == 3
@@ -247,7 +247,7 @@ def test_tag_legacy_apply_is_idempotent_and_sets_fields(migrate, legacy_db):
 
 def test_legacy_label_is_not_strong_provenance():
     """Etiket kaynak yerine geçmez: yeni L2 yazımı bununla kapıyı geçemez."""
-    from entropy.memory.gate import LEGACY_PROVENANCE, derive_provenance
+    from entropy.brain.gate import LEGACY_PROVENANCE, derive_provenance
 
     prov, strong = derive_provenance({}, LEGACY_PROVENANCE)
     assert prov == LEGACY_PROVENANCE

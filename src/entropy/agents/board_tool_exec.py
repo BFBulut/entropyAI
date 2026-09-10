@@ -135,7 +135,7 @@ def _run_checkpoint(board, card, args: Dict[str, Any], actor: str,
     office = (card.office or "").strip()
     try:
         if office:
-            from entropy.memory.checkpoints import write_checkpoint  # type: ignore
+            from entropy.brain.checkpoints import write_checkpoint  # type: ignore
 
             written = write_checkpoint(
                 office,

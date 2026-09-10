@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.office_graph import (
+from entropy.brain.office_graph import (
     OfficeGraph,
     desk_office_dir,
     desk_roster,
@@ -140,8 +140,8 @@ def test_view_data_and_export_markdown(office):
 
 
 def _store(tmp_path):
-    from entropy.memory.graph_store import GraphStore
-    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+    from entropy.brain.graph_store import GraphStore
+    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
     return GraphStore(memory=CognitiveMemorySystem(db_path=tmp_path / "desk.db"))
 
@@ -168,7 +168,7 @@ def test_ingest_office_uses_desk_scope_and_member_of(office):
 
 
 def test_desk_scopes_visible_in_default_scopes(office):
-    from entropy.memory.graph_store import GraphStore
+    from entropy.brain.graph_store import GraphStore
 
     assert desk_scopes(office) == ["desk:medya"]
     scopes = GraphStore.default_scopes(active_office=None, vault_path=office)
@@ -211,7 +211,7 @@ def test_desk_roster_lists_orchestrator_purpose_and_last_report(office):
 
 
 def test_desk_dir_is_not_a_distillation_source(office):
-    from entropy.memory.playbook import _NON_REPORT_DIRS, discover_reports
+    from entropy.brain.playbook import _NON_REPORT_DIRS, discover_reports
 
     assert "desk" in _NON_REPORT_DIRS
     # Damıtma eşiğini (400 bayt) aşan iki dosya: biri Desk'te, biri kasada.

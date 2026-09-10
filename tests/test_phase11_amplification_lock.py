@@ -39,7 +39,7 @@ class FakeCtx:
 
     @property
     def brain_has_answer(self) -> bool:
-        from entropy.memory.context_builder import CRAG_MIN_SCORE
+        from entropy.brain.context_builder import CRAG_MIN_SCORE
 
         return self.brain_confidence >= CRAG_MIN_SCORE
 
@@ -147,7 +147,7 @@ def test_low_confidence_brain_answer_lets_the_run_proceed(vault, monkeypatch):
     board.apply_event(card.id, "task.assigned", payload={"agent": "arastirmaci"})
 
     builder = FakeBuilder(FakeCtx(0.10))
-    monkeypatch.setattr("entropy.memory.context_builder.CognitiveContextBuilder",
+    monkeypatch.setattr("entropy.brain.context_builder.CognitiveContextBuilder",
                         lambda *a, **k: builder)
 
     calls = []

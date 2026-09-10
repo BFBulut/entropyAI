@@ -12,8 +12,8 @@ import sqlite3
 
 import pytest
 
-from entropy.memory.graph_store import GraphStore
-from entropy.memory.supabase.cognitive_memory import (
+from entropy.brain.graph_store import GraphStore
+from entropy.brain.supabase.cognitive_memory import (
     CognitiveMemorySystem,
     LocalEmbeddingEngine,
 )
@@ -210,7 +210,7 @@ def test_dream_reports_step_errors(memory, monkeypatch):
 
 def test_build_knowledge_graph_survives_none_member(tmp_path, monkeypatch):
     """`None` ofis üyesi tüm grafik yenilemesini çökertmemeli (Faz 7 regresyonu)."""
-    from entropy.memory.obsidian import vault_manager as vm
+    from entropy.brain.obsidian import vault_manager as vm
 
     # Yönetici kasa kökünün altında `Entropy/` alt klasörünü tarar.
     root = tmp_path / "Entropy"

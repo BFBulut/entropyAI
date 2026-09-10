@@ -5,8 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from entropy.core.config import config
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 def main():
     vault_manager = ObsidianVaultManager()

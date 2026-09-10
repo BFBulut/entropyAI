@@ -61,7 +61,7 @@ def test_memory_merge_calls_run_merge_round_with_bridge(monkeypatch):
         seen["memory"] = memory
         return {"merged": 3, "pending": 0}
 
-    monkeypatch.setattr("entropy.memory.gray_merge.run_merge_round", fake_round)
+    monkeypatch.setattr("entropy.brain.gray_merge.run_merge_round", fake_round)
     bridge = FakeBridge()
     out = sc._handle_memory("merge --wait 5", bridge)
 
@@ -82,7 +82,7 @@ def test_memory_merge_without_bridge_is_dry_run(monkeypatch):
         seen["send_prompt"] = send_prompt
         return {"pending": 4}
 
-    monkeypatch.setattr("entropy.memory.gray_merge.run_merge_round", fake_round)
+    monkeypatch.setattr("entropy.brain.gray_merge.run_merge_round", fake_round)
     out = sc._handle_memory("merge --wait 5", None)
     assert seen["send_prompt"] is None
     assert "kuru koşum" in out
@@ -95,7 +95,7 @@ def test_memory_merge_import_error_surfaces_real_reason(monkeypatch):
     real_import = builtins.__import__
 
     def boom(name, *a, **k):
-        if name == "entropy.memory.gray_merge":
+        if name == "entropy.brain.gray_merge":
             raise ImportError("numpy yok (deneme)")
         return real_import(name, *a, **k)
 
@@ -120,7 +120,7 @@ def test_memory_dream_passes_bridge(monkeypatch):
         seen["send_prompt"] = send_prompt
         return Rapor()
 
-    monkeypatch.setattr("entropy.memory.dream.dream_and_consolidate", fake_dream)
+    monkeypatch.setattr("entropy.brain.dream.dream_and_consolidate", fake_dream)
     out = sc._handle_memory("dream --wait 5", FakeBridge())
     assert callable(seen["send_prompt"]), "/memory dream hâlâ send_prompt=None geçiyor"
     assert "Rüya Döngüsü" in out
@@ -138,7 +138,7 @@ def test_wiki_compile_passes_bridge_and_budget_turns(monkeypatch):
         seen.update(skill=skill, bridge=bridge, budget_turns=budget_turns)
         return {"skill": skill, "turns": 5, "pages": 18, "remaining": 20}
 
-    monkeypatch.setattr("entropy.memory.wiki.compile_skill", fake_compile)
+    monkeypatch.setattr("entropy.brain.wiki.compile_skill", fake_compile)
     out = sc._handle_wiki("compile yazilim --turns 7 --wait 5", FakeBridge())
 
     assert seen["skill"] == "yazilim"
@@ -151,7 +151,7 @@ def test_wiki_compile_passes_bridge_and_budget_turns(monkeypatch):
 
 def test_wiki_compile_reports_zero_turns_without_bridge(monkeypatch):
     monkeypatch.setattr(
-        "entropy.memory.wiki.compile_skill",
+        "entropy.brain.wiki.compile_skill",
         lambda skill, bridge=None, budget_turns=8, **kw: {"turns": 0, "pages": 3},
     )
     out = sc._handle_wiki("compile yazilim --turns 4 --wait 5", None)
@@ -162,7 +162,7 @@ def test_wiki_compile_reports_zero_turns_without_bridge(monkeypatch):
 def test_wiki_plain_command_still_needs_no_bridge(monkeypatch):
     """`/wiki <yetenek>` model çağırmaz; köprü olmadan da çalışır."""
     monkeypatch.setattr(
-        "entropy.memory.wiki.ingest_playbook_to_wiki",
+        "entropy.brain.wiki.ingest_playbook_to_wiki",
         lambda name, **kw: {"written": 2, "concepts": ["a"], "entities": ["b"], "index": "i.md"},
     )
     out = sc._handle_wiki("yazilim", None)
@@ -180,7 +180,7 @@ def test_real_bridge_send_prompt_returns_full_output(tmp_path, monkeypatch):
     yolunu sürer (süreç sahte Popen ile taklit edilir): dönen dize turun tam
     çıktısıdır ve kasaya rapor YAZILMAZ (ara ürün).
     """
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.bridge_prompt import make_send_prompt
     from entropy.core.task_ledger import TaskLedger

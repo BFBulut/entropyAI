@@ -172,7 +172,7 @@ def load_office_memory(office_name: str) -> str:
     """
     Ofis belleğini (MEMORY.md) okur.
 
-    Uygulamayı memory-rag ajanı yazıyor (`entropy.memory.office_memory.
+    Uygulamayı memory-rag ajanı yazıyor (`entropy.brain.office_memory.
     load_office_memory`); yoksa kasadaki dosya doğrudan okunur, o da yoksa
     açıklayıcı bir metin döner. Guard olmasaydı Bellek sekmesi modül gelene
     kadar pencereyi çökertirdi.
@@ -180,7 +180,7 @@ def load_office_memory(office_name: str) -> str:
     if not office_name:
         return ""
     try:
-        from entropy.memory.office_memory import load_office_memory as _load  # type: ignore
+        from entropy.brain.office_memory import load_office_memory as _load  # type: ignore
 
         return str(_load(office_name) or "")
     except Exception:

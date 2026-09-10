@@ -15,9 +15,9 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 
 from entropy.core.event_bus import bus
 from entropy.core.config import config
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager, is_test_artifact_name
-from entropy.memory.graph_enrich import enrich_graph
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager, is_test_artifact_name
+from entropy.brain.graph_enrich import enrich_graph
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.skills.manager import SkillManager
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
@@ -4014,7 +4014,7 @@ class KnowledgeGraphWidget(QFrame):
             "registered_skills": registered_skills
         }
 
-        # Faz 8: temizlik + zenginleştirme (bkz. entropy.memory.graph_enrich).
+        # Faz 8: temizlik + zenginleştirme (bkz. entropy.brain.graph_enrich).
         # Sarkan/katalog/öz-döngü kenarları düşer; `level`, `degree`,
         # `child_count`, `short_label`, `importance`, `t_valid_from/to`,
         # `type`, `community_id/label/size` ve kenar `kind`/`weight` eklenir.
@@ -4024,7 +4024,7 @@ class KnowledgeGraphWidget(QFrame):
         store = getattr(self, "graph_store", None)
         if store is None:
             try:
-                from entropy.memory.graph_store import GraphStore
+                from entropy.brain.graph_store import GraphStore
                 # Aynı SQLite dosyası paylaşılır: ayrı bir bağlantı açmak
                 # testlerde geçici veritabanını atlayıp gerçek belleğe düşerdi.
                 store = GraphStore(memory=self.cognitive_memory)

@@ -19,15 +19,15 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.office_graph import (
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.office_graph import (
     OfficeGraph,
     desk_office_dir,
     ingest_office_into_entropy,
     orchestrator_context,
     schedule_office_ingest,
 )
-from entropy.memory.vault_hygiene import (
+from entropy.brain.vault_hygiene import (
     archive_stale,
     find_ghost_offices,
     find_stale_agentdesk_dirs,
@@ -152,8 +152,8 @@ def test_view_data_never_empty_for_small_office(tmp_path):
 
 
 def test_done_project_produces_report_edges(tmp_path):
-    from entropy.memory.graph_store import GraphStore
-    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+    from entropy.brain.graph_store import GraphStore
+    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
     root = desk_office_dir("medya", tmp_path)
     proj = root / "projects" / "kampanya"
@@ -175,7 +175,7 @@ def test_done_project_produces_report_edges(tmp_path):
 
 
 def test_schedule_office_ingest_debounces(tmp_path, monkeypatch):
-    from entropy.memory import office_graph
+    from entropy.brain import office_graph
 
     state = tmp_path / "office_ingest.state.json"
     monkeypatch.setattr(office_graph, "_office_ingest_state_path", lambda: state)

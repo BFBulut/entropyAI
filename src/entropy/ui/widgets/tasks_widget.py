@@ -16,7 +16,7 @@ from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import extract_windows_paths
 from entropy.core.task_ledger import task_ledger
 from entropy.scheduler.cron_engine import TaskScheduler, ScheduledTask
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
@@ -359,11 +359,11 @@ class TasksWidget(QFrame):
                 # Faz 11 kapanışı: rüya döngüsü v2 (`memory.dream`). Eski
                 # `CognitiveMemorySystem.dream_and_consolidate` 48 saat + epizodik
                 # koşuluna bağlıydı; `send_prompt=None` → KOTA HARCAMAZ.
-                from entropy.memory.dream import dream_and_consolidate
+                from entropy.brain.dream import dream_and_consolidate
 
                 report = dream_and_consolidate(memory=cog, send_prompt=None)
                 detail = report.summary_line()
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 today_str = datetime.date.today().isoformat()
                 content = f"# Bilişsel Hafıza Konsolidasyonu & Rüya Raporu ({today_str})\n\n"
@@ -385,7 +385,7 @@ class TasksWidget(QFrame):
 
         elif task.id == "obsidian-sync":
             try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 log_path = ovm.append_daily_log("Periyodik arka plan bellek senkronu gerçekleştirildi.")
                 notes_count = len(ovm.list_all_notes())
@@ -404,8 +404,8 @@ class TasksWidget(QFrame):
 
         elif task.id == "rag-reindex":
             try:
-                from entropy.memory.rag.project_indexer import ProjectIndexer
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.rag.project_indexer import ProjectIndexer
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 from entropy.core.config import config
                 indexer = ProjectIndexer(root_dir=config.default_project_path)
                 indexed_count = indexer.scan_and_index()

@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from entropy.memory.gate import LEGACY_PROVENANCE
+from entropy.brain.gate import LEGACY_PROVENANCE
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +394,7 @@ def dream_and_consolidate(
     """
     started = time.time()
     if memory is None:
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
         memory = CognitiveMemorySystem()
     report = DreamReport()
@@ -413,7 +413,7 @@ def dream_and_consolidate(
 
     graph = None
     try:
-        from entropy.memory.graph_store import GraphStore
+        from entropy.brain.graph_store import GraphStore
 
         graph = GraphStore(memory=memory)
     except Exception as exc:  # pragma: no cover - graf katmanı zorunlu değil
@@ -421,7 +421,7 @@ def dream_and_consolidate(
 
     # 2. gri bant birleştirme turu
     try:
-        from entropy.memory import gray_merge
+        from entropy.brain import gray_merge
 
         merge_res = gray_merge.run_merge_round(memory, send_prompt=send_prompt, graph=graph)
         report.gray_candidates = merge_res.candidates
@@ -475,7 +475,7 @@ def dream_and_consolidate(
         except Exception as exc:
             _err(report, "graph_consolidate", exc)
         try:
-            from entropy.memory.office_graph import schedule_office_ingest
+            from entropy.brain.office_graph import schedule_office_ingest
 
             schedule_office_ingest(store=graph, background=False)
         except Exception as exc:

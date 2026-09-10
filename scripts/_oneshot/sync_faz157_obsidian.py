@@ -9,7 +9,7 @@ from pathlib import Path
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
 def main():
     ovm = ObsidianVaultManager()

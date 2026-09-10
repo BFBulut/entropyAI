@@ -14,7 +14,7 @@ Blok sözleşmesi (alt ajan çıktısında, harness ayrıştırır):
     [KONTROL NOKTASI]
     yapılan: kart deposu ayrıldı
     sonraki: pano üretimini bağla
-    dosyalar: src/entropy/memory/office_workspace.py
+    dosyalar: src/entropy/brain/office_workspace.py
     testler: 4 geçti
 
     [KANIT]
@@ -124,7 +124,7 @@ def checkpoints_dir(office: str, vault_path: Optional[Path] = None) -> Path:
 
         return vault_root(vault_path) / ENTROPY_CHECKPOINTS_SUBDIR
 
-    from entropy.memory.office_workspace import workspace_dir
+    from entropy.brain.office_workspace import workspace_dir
 
     return workspace_dir(office, vault_path) / "checkpoints"
 

@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.gate import MemoryGate, default_strict
-from entropy.memory.supabase.cognitive_memory import (
+from entropy.brain.gate import MemoryGate, default_strict
+from entropy.brain.supabase.cognitive_memory import (
     CognitiveMemorySystem,
     default_cognitive_db_path,
 )
@@ -80,7 +80,7 @@ def test_background_thread_write_stays_in_tmp(tmp_path, monkeypatch):
 
     def worker() -> None:
         # kasıtlı olarak GEÇ içe aktarma: modül iş parçacığı içinde çözülür
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem as CMS
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem as CMS
 
         inner = CMS()
         inner.record_memory(

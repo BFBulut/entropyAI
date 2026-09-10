@@ -1113,8 +1113,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
     def _update_telemetry_badges(self):
         """Dynamically refresh telemetry metric badges in the center column."""
         try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
-            from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
             from entropy.skills.manager import SkillManager
             from entropy.mcp.manager import MCPManager
 

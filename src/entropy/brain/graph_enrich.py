@@ -272,7 +272,7 @@ def apply_default_fields(nodes: Iterable[Dict[str, Any]]) -> None:
     Zaman kaydırıcısı ve önem eşiği tek bir eksik alanda kapanıyordu; bu yüzden
     her düğümün `type`, `importance`, `t_valid_from` alanı DOLU olmak zorunda.
     """
-    from entropy.memory.obsidian.vault_manager import _graph_node_type
+    from entropy.brain.obsidian.vault_manager import _graph_node_type
 
     base = {
         "report": 0.55, "session": 0.4, "fact": 0.5, "episode": 0.4,

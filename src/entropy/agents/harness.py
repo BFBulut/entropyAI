@@ -817,7 +817,7 @@ class OfficeHarness:
         yoksa/patlarsa boş döner — ajan katmanı bellek katmanına bağımlı olamaz.
         """
         try:
-            from entropy.memory.office_graph import orchestrator_context  # type: ignore
+            from entropy.brain.office_graph import orchestrator_context  # type: ignore
         except Exception:
             return ""
         try:
@@ -864,7 +864,7 @@ class OfficeHarness:
             "rules": base / RULES_FILENAME,
         }
         try:
-            from entropy.memory import office_workspace  # type: ignore
+            from entropy.brain import office_workspace  # type: ignore
 
             result = _flex_call(
                 office_workspace.ensure_workspace,
@@ -899,7 +899,7 @@ class OfficeHarness:
         harness aynı sözleşmenin yalın hâlini yazar.
         """
         try:
-            from entropy.memory import office_workspace  # type: ignore
+            from entropy.brain import office_workspace  # type: ignore
 
             self.workspace_paths()  # dosyalar yoksa önce kurulsun
             text = _flex_call(
@@ -931,7 +931,7 @@ class OfficeHarness:
     def approved_rules_section(self) -> str:
         """Onaylı proje kuralları bölümü (bellek katmanı yoksa RULES.md gövdesi)."""
         try:
-            from entropy.memory import promoted_rules  # type: ignore
+            from entropy.brain import promoted_rules  # type: ignore
 
             text = _flex_call(
                 promoted_rules.rules_section,
@@ -953,7 +953,7 @@ class OfficeHarness:
         yeniden yapmaya kalkıyordu.
         """
         try:
-            from entropy.memory import office_workspace  # type: ignore
+            from entropy.brain import office_workspace  # type: ignore
 
             result = _flex_call(
                 office_workspace.render_board,
@@ -996,7 +996,7 @@ class OfficeHarness:
         if not rows:
             return None
         try:
-            from entropy.memory import office_workspace  # type: ignore
+            from entropy.brain import office_workspace  # type: ignore
 
             result = _flex_call(
                 office_workspace.update_architecture,
@@ -1032,7 +1032,7 @@ class OfficeHarness:
         if not block:
             return None
         try:
-            from entropy.memory import checkpoints  # type: ignore
+            from entropy.brain import checkpoints  # type: ignore
 
             fields = checkpoints.parse_checkpoint_block(text or "") or {}
             result = _flex_call(
@@ -1074,7 +1074,7 @@ class OfficeHarness:
         """
         local = parse_proof(text or "", needs_write=needs_write)
         try:
-            from entropy.memory import checkpoints  # type: ignore
+            from entropy.brain import checkpoints  # type: ignore
 
             data = checkpoints.parse_proof_block(text or "")
         except Exception:
@@ -1097,7 +1097,7 @@ class OfficeHarness:
         if not card.checkpoint:
             return ""
         try:
-            from entropy.memory import checkpoints  # type: ignore
+            from entropy.brain import checkpoints  # type: ignore
 
             text = _flex_call(
                 checkpoints.resume_section,
@@ -1133,7 +1133,7 @@ class OfficeHarness:
         stored: List[str] = []
         for rule in rules:
             try:
-                from entropy.memory import promoted_rules  # type: ignore
+                from entropy.brain import promoted_rules  # type: ignore
 
                 result = _flex_call(
                     promoted_rules.propose_rule,
@@ -1298,7 +1298,7 @@ class OfficeHarness:
         if not isinstance(raw, list) or not raw:
             return []
         try:
-            from entropy.memory.office_graph import OfficeGraph  # type: ignore
+            from entropy.brain.office_graph import OfficeGraph  # type: ignore
         except Exception:
             return []
         try:
@@ -2250,7 +2250,7 @@ class OfficeHarness:
         # Ofis çıktısının Entropy'nin bilgi grafına aktarımı bellek ajanının
         # işi; modül yoksa rapor yine de diskte ve gelen kutusunda kalır.
         try:
-            from entropy.memory.office_graph import ingest_office_into_entropy  # type: ignore
+            from entropy.brain.office_graph import ingest_office_into_entropy  # type: ignore
         except Exception:
             ingest_office_into_entropy = None  # type: ignore
         if ingest_office_into_entropy is not None:
@@ -2271,15 +2271,15 @@ class OfficeHarness:
 
     def _write_office_report(self, card: TaskCard, body: str):
         try:
-            from entropy.memory.wiki import write_query_page  # type: ignore
+            from entropy.brain.wiki import write_query_page  # type: ignore
         except Exception:
             return None
         # Ayri ve korumali icaktarim: kategori sabiti bulunamazsa rapor yine
-        # yazilir. `from entropy.memory.wiki import ...` bicimi bilerek
-        # korunuyor; `from entropy.memory import wiki` paket ozniteligini
+        # yazilir. `from entropy.brain.wiki import ...` bicimi bilerek
+        # korunuyor; `from entropy.brain import wiki` paket ozniteligini
         # okur ve testlerin sys.modules yamasini atlar.
         try:
-            from entropy.memory.wiki import OFFICE_REPORT_CATEGORY as office_category  # type: ignore
+            from entropy.brain.wiki import OFFICE_REPORT_CATEGORY as office_category  # type: ignore
         except Exception:
             office_category = "Ofis raporları"
         try:
@@ -2325,7 +2325,7 @@ class OfficeHarness:
             "vault_path": self.board.vault_path,
         }
         try:
-            from entropy.memory.agent_memory import append_office_memory  # type: ignore
+            from entropy.brain.agent_memory import append_office_memory  # type: ignore
         except Exception:
             append_office_memory = None  # type: ignore
         if append_office_memory is not None:
@@ -2335,7 +2335,7 @@ class OfficeHarness:
             except Exception:
                 pass
         try:
-            from entropy.memory.agent_memory import append_agent_memory  # type: ignore
+            from entropy.brain.agent_memory import append_agent_memory  # type: ignore
         except Exception:
             return
         try:

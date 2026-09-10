@@ -187,7 +187,7 @@ def followups():
 
 def _make_bridge(kind, tmp_path, monkeypatch, turns):
     """Gerçek köprü + sahte Popen; rapor yazımı kasaya değil belleğe gider."""
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
 
     if kind == "agy":
         from entropy.core.agy_bridge import AgyProcessBridge as Bridge

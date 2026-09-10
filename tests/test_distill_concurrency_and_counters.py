@@ -20,13 +20,13 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from entropy.core.event_bus import bus
-from entropy.memory.distiller import (
+from entropy.brain.distiller import (
     MAX_SOURCES_PER_PASS,
     PlaybookDistiller,
     _ACTIVE_TASKS,
     _REFRESH_CURSOR,
 )
-from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
 
 class _FakeBridge:
@@ -192,7 +192,7 @@ def test_removed_report_drops_counter_by_one(tmp_path):
 
 
 def test_playbook_roundtrip_keeps_processed_digest(tmp_path):
-    from entropy.memory.playbook import SkillPlaybook
+    from entropy.brain.playbook import SkillPlaybook
 
     pb = SkillPlaybook(skill="s", procedure="## A\n- b", source_count=3, processed_count=2,
                        source_digest="abc", processed_digest="def")
@@ -268,7 +268,7 @@ def test_rejected_last_batch_ends_chain_without_refresh_restart(tmp_path, monkey
     Ledger'da görülen hata: [120→123] bitti, 33 sn sonra kendiliğinden [0→24] başladı.
     Son grup reddedilip atlandığında zincir bitmeli; tazeleme turu açılmamalı.
     """
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 3)
     store = _store(tmp_path, "demo", 6)
@@ -289,7 +289,7 @@ def test_rejected_last_batch_ends_chain_without_refresh_restart(tmp_path, monkey
 
 
 def test_small_tail_batch_joins_previous_pass(tmp_path, monkeypatch):
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 24)
     store = _store(tmp_path, "demo", 51)  # 24 + 24 + 3 → kuyruk 3 ≤ 24//6
@@ -307,7 +307,7 @@ def test_legacy_fully_processed_playbook_is_green_despite_stale_digest(tmp_path)
     (OneDrive dokununca değişti). Yeni build'de yan dosya yok → tek seferlik geçiş →
     durum 'guncel' olmalı, sayaç toplamda kalmalı; parmak izi uyuşmazlığı turuncu yapmamalı.
     """
-    from entropy.memory.playbook import SkillPlaybook
+    from entropy.brain.playbook import SkillPlaybook
 
     store = _store(tmp_path, "demo", 5)
     pb = SkillPlaybook(skill="demo", procedure=_PROC, source_count=5, processed_count=5,

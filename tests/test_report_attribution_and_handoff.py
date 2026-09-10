@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.distiller import PlaybookDistiller
-from entropy.memory.handoff import (
+from entropy.brain.distiller import PlaybookDistiller
+from entropy.brain.handoff import (
     SECTION_ORDER,
     SECTION_TITLES,
     extract_sections,
@@ -33,7 +33,7 @@ from entropy.memory.handoff import (
     render_handoff,
     write_handoff,
 )
-from entropy.memory.playbook import (
+from entropy.brain.playbook import (
     PlaybookStore,
     SkillReportIndex,
     classify_report,
@@ -198,7 +198,7 @@ def test_save_research_report_prefers_skill_folder_and_indexes(vault, tmp_path, 
     Rapor yazımı: yetenek biliniyorsa dosya Skills/<yetenek>/Reports/ altına
     düşer (proje verilmiş olsa bile) ve proje bağlamı etiket olarak korunur.
     """
-    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
     vm = ObsidianVaultManager(vault_path=vault)
     path = vm.save_research_report(
@@ -283,7 +283,7 @@ def test_report_watcher_indexes_new_report_and_emits(qapp, store, vault):
     indeks artımlı büyür ve `bus.reports_updated` yayılır.
     """
     from entropy.core.event_bus import bus
-    from entropy.memory.report_watcher import ReportWatcher
+    from entropy.brain.report_watcher import ReportWatcher
 
     watcher = ReportWatcher(store=store, poll_interval_ms=5000)
     watcher.set_known_skills({"google-flow"})
@@ -310,7 +310,7 @@ def test_report_watcher_indexes_new_report_and_emits(qapp, store, vault):
 
 def test_report_watcher_watches_all_report_dirs(qapp, store, vault):
     """Düz, proje ve yetenek kapsamlı rapor klasörlerinin üçü de izlenmeli."""
-    from entropy.memory.report_watcher import ReportWatcher
+    from entropy.brain.report_watcher import ReportWatcher
 
     (vault / "Entropy" / "Projects" / "P" / "Reports").mkdir(parents=True)
     (vault / "Entropy" / "Skills" / "media" / "Reports").mkdir(parents=True)
@@ -372,7 +372,7 @@ HISTORY = [
     {
         "role": "assistant",
         "content": (
-            "Kök neden: raporlar src/entropy/memory/playbook.py tarafından yalnızca düz klasörde aranıyor.\n"
+            "Kök neden: raporlar src/entropy/brain/playbook.py tarafından yalnızca düz klasörde aranıyor.\n"
             "Karar: source_reports proje klasörlerini de taramalı.\n"
             "Hata: index_new_reports OSError verdi; çözüldü, try/except eklendi.\n"
             "Ölçüm: 77 rapor, ~1200 token, 0.12 s.\n"
@@ -461,8 +461,8 @@ def test_context_includes_previous_session_once(vault, tmp_path, monkeypatch):
     Aktarım BİR SONRAKİ oturuma girer, her tura değil: 300 token her turda
     yeniden ödenirse aktarımın kazandırdığı bağlam maliyetiyle eşitlenir.
     """
-    import entropy.memory.handoff as handoff_mod
-    from entropy.memory.context_builder import BUDGET_HANDOFF, CognitiveContextBuilder
+    import entropy.brain.handoff as handoff_mod
+    from entropy.brain.context_builder import BUDGET_HANDOFF, CognitiveContextBuilder
 
     monkeypatch.setattr(handoff_mod, "_CONSUMED_FILE", tmp_path / "consumed.json")
     write_handoff(HISTORY, {"topic": "önceki oturum"}, vault_path=vault, memory=_NullMemory())
@@ -482,7 +482,7 @@ def test_context_includes_previous_session_once(vault, tmp_path, monkeypatch):
 
 
 def test_pending_handoff_respects_consumed_marker(vault, tmp_path, monkeypatch):
-    import entropy.memory.handoff as handoff_mod
+    import entropy.brain.handoff as handoff_mod
 
     monkeypatch.setattr(handoff_mod, "_CONSUMED_FILE", tmp_path / "c.json")
     path = write_handoff(HISTORY, {"topic": "işaret"}, vault_path=vault, memory=_NullMemory())
@@ -514,7 +514,7 @@ class _FakeBridge:
 
 def test_handoff_command_writes_page_and_compresses(vault, tmp_path, monkeypatch):
     """`/handoff` sayfayı yazar ve köprünün sıkıştırma yöntemi VARSA çağırır."""
-    import entropy.memory.handoff as handoff_mod
+    import entropy.brain.handoff as handoff_mod
     from entropy.core.slash_commands import try_handle_local_command
 
     monkeypatch.setattr(handoff_mod.config, "obsidian_vault_path", vault, raising=False)
@@ -537,7 +537,7 @@ def test_handoff_command_survives_bridge_without_compression(vault, tmp_path, mo
     Köprüde `compress_history_with_handoff` yoksa (paralel ajan henüz yazmadıysa)
     komut düşmemeli: sayfanın değeri sıkıştırmaya bağlı değildir.
     """
-    import entropy.memory.handoff as handoff_mod
+    import entropy.brain.handoff as handoff_mod
     from entropy.core.slash_commands import try_handle_local_command
 
     monkeypatch.setattr(handoff_mod.config, "obsidian_vault_path", vault, raising=False)

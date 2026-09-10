@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Add src to python path
 sys.path.insert(0, r"c:\EntropiAI\src")
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
 def run_sync():
     ovm = ObsidianVaultManager()

@@ -13,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, r"c:\EntropiAI\src")
 
 from entropy.core.config import config
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 PHASE_40_MEMORY_ENTRY = """
 ## Hansen-Sargent Sağlam Kontrol, Glasserman-Li Nadir Olay, Bouchaud-Mézard Ekonofizik, Moallemi-Sağlam Kuyruk Dinamiği, Schwartz-Smith Emtia & MEV-Tax AMM (Faz 40) (2026-09-04)

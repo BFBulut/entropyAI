@@ -50,8 +50,8 @@ try:
 except Exception:  # pragma: no cover - numpy pyproject'te sert bağımlılık
     np = None
 
-from entropy.memory.categories import normalize_category  # noqa: E402
-from entropy.memory.gate import (  # noqa: E402
+from entropy.brain.categories import normalize_category  # noqa: E402
+from entropy.brain.gate import (  # noqa: E402
     IDENTITY_PROVENANCE,
     LEGACY_CONFIDENCE,
     LEGACY_PROVENANCE,
@@ -59,7 +59,7 @@ from entropy.memory.gate import (  # noqa: E402
     derive_provenance,
     fixture_match,
 )
-from entropy.memory.supabase.cognitive_memory import (  # noqa: E402
+from entropy.brain.supabase.cognitive_memory import (  # noqa: E402
     CognitiveMemoryNode,
     CognitiveMemorySystem,
     default_cognitive_db_path,

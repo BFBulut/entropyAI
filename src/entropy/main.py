@@ -100,7 +100,7 @@ def main():
     # Kasadaki rapor dosyaları (Obsidian vault) da canlı izlenir: bir alt ajan
     # rapor yazdığında yetenek kartındaki 📘 sayacı yeniden başlatmadan güncellensin
     # (bus.reports_updated).
-    from entropy.memory.report_watcher import start_report_watcher, stop_report_watcher
+    from entropy.brain.report_watcher import start_report_watcher, stop_report_watcher
     try:
         start_report_watcher()
     except Exception as e:
@@ -184,7 +184,7 @@ def main():
         from entropy.core.event_bus import bus
         if task.id == "daily-dreaming":
             try:
-                from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
                 cog = CognitiveMemorySystem()
                 # Faz 11-D: rüya döngüsü v2 (`memory.dream`). Eski
                 # `CognitiveMemorySystem.dream_and_consolidate` 48 saat +
@@ -192,7 +192,7 @@ def main():
                 # dönüyordu. `send_prompt=None` → bu adım KOTA HARCAMAZ;
                 # model sentezi aşağıdaki arka plan görevidir.
                 try:
-                    from entropy.memory.dream import dream_and_consolidate
+                    from entropy.brain.dream import dream_and_consolidate
 
                     rules = dream_and_consolidate(memory=cog, send_prompt=None)
                 except Exception:
@@ -224,7 +224,7 @@ def main():
                 bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
         elif task.id == "obsidian-sync":
             try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 log_p = ovm.append_daily_log("Otonom arka plan senkronu.")
                 moc_p = ovm.sync_map_of_content()
@@ -233,7 +233,7 @@ def main():
                 bus.terminal_output_received.emit(f"[Otonom Görev Hata] {e}\n")
         elif task.id == "rag-reindex":
             try:
-                from entropy.memory.rag.project_indexer import ProjectIndexer
+                from entropy.brain.rag.project_indexer import ProjectIndexer
                 indexer = ProjectIndexer(config.default_project_path)
                 cnt = indexer.scan_and_index()
                 bus.terminal_output_received.emit(f"[Otonom Görev] Proje kodları indekslendi ({cnt} dosya).\n")

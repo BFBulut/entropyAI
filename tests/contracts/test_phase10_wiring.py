@@ -354,7 +354,7 @@ def test_archive_releases_worktrees_before_archiving(board, offices, monkeypatch
         wt, "release_worktree",
         lambda c, force=True, vault_path=None: order.append(("wt", c.id)) or {"removed": True},
     )
-    from entropy.memory import vault_hygiene
+    from entropy.brain import vault_hygiene
 
     monkeypatch.setattr(
         vault_hygiene, "archive_office",
@@ -516,7 +516,7 @@ def test_real_bridge_desk_card_followup_takes_lock_and_writes_note(
     alınır, (3) tur bitince kilit + sayaç bırakılır, (4) `task_followup_completed`
     kartın notlarına düşer.
     """
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 
@@ -585,7 +585,7 @@ def test_archive_office_moves_a_real_office_folder(tmp_path):
     Desk'teki "Arsivle" dugmesi de sessizce etkisizdi. Guard artik yalnizca
     hayalet ofis taramasinda gecerli (`intentional=False`).
     """
-    from entropy.memory.vault_hygiene import archive_office
+    from entropy.brain.vault_hygiene import archive_office
 
     office_dir = tmp_path / "Desk" / "Offices" / "gercek"
     (office_dir / "cards").mkdir(parents=True)
@@ -603,7 +603,7 @@ def test_archive_office_moves_a_real_office_folder(tmp_path):
 
 def test_ghost_office_guard_still_protects_real_offices(tmp_path):
     """Hayalet tarama yolu (`intentional` yok) kunyeli ofise HALA dokunmaz."""
-    from entropy.memory.vault_hygiene import archive_stale
+    from entropy.brain.vault_hygiene import archive_stale
 
     office_dir = tmp_path / "Desk" / "Offices" / "gercek"
     office_dir.mkdir(parents=True)

@@ -635,7 +635,7 @@ class DeskRegistry:
 
         Dönüş: `vault_hygiene.archive_office` çıktısı + `worktrees` özeti.
         """
-        from entropy.memory.vault_hygiene import archive_office
+        from entropy.brain.vault_hygiene import archive_office
 
         released: List[str] = []
         closed: List[str] = []
@@ -984,7 +984,7 @@ def desk_roster(desk: Optional[DeskRegistry] = None) -> List[Dict[str, object]]:
     Ofis/orkestratör listesi (bellek ajanının `desk_roster()` sözleşmesi).
 
     Bellek katmanı kendi (graf destekli) sürümünü sağlıyorsa `desk_manifest`
-    onu tercih eder; bu işlev güvenli geri düşüştür ve `entropy.memory`
+    onu tercih eder; bu işlev güvenli geri düşüştür ve `entropy.brain`
     kurulmamışken de manifestin dolu kalmasını sağlar.
     """
     try:
@@ -1006,7 +1006,7 @@ def desk_roster(desk: Optional[DeskRegistry] = None) -> List[Dict[str, object]]:
 def _roster_rows() -> List[Dict[str, object]]:
     """Önce bellek ajanının `desk_roster()`ı (koruma altında), sonra yerel."""
     try:
-        from entropy.memory.office_graph import desk_roster as memory_roster  # type: ignore
+        from entropy.brain.office_graph import desk_roster as memory_roster  # type: ignore
     except Exception:
         memory_roster = None  # type: ignore
     if memory_roster is not None:

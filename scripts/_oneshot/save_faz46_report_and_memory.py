@@ -11,8 +11,8 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT / "src"))
 
 from entropy.core.config import config
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 REPORT_TITLE = "AcharyaSRISK_GeskeDebt_EKOPpin_CochraneGoodDeal_MertonICAPM_ve_RoySafetyFirst"
 TAGS = [

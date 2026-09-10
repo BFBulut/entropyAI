@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
 
 # ---------------------------------------------------- 1. graf cokme korumasi
@@ -90,7 +90,7 @@ def test_collect_recent_entries_keeps_kind_and_office(tmp_path, monkeypatch):
         report_inbox, "ObsidianVaultManager", lambda *a, **k: vault, raising=False
     )
     monkeypatch.setattr(
-        "entropy.memory.obsidian.vault_manager.ObsidianVaultManager",
+        "entropy.brain.obsidian.vault_manager.ObsidianVaultManager",
         lambda *a, **k: vault,
     )
 

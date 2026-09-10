@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 
 from entropy.core.config import config
 from entropy.core.event_bus import bus
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem, CognitiveMemoryNode
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem, CognitiveMemoryNode
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design.embedded import live_palette as _live_palette
@@ -505,8 +505,8 @@ class MemoryInspectorDialog(QDialog):
             # kalıyordu. Sözleşme yoksa (paralel ajan yazıyor) eski yola düşülür.
             deleted = False
             for module_path in (
-                "entropy.memory.graph_store",
-                "entropy.memory.cognitive_memory",
+                "entropy.brain.graph_store",
+                "entropy.brain.cognitive_memory",
                 "entropy.core.cognitive_memory",
             ):
                 try:
@@ -522,7 +522,7 @@ class MemoryInspectorDialog(QDialog):
                     break
             if not deleted:
                 import sqlite3
-                from entropy.memory.supabase.cognitive_memory import (
+                from entropy.brain.supabase.cognitive_memory import (
                     default_cognitive_db_path,
                 )
 

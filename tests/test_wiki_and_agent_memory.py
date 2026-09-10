@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import agent_memory as am
-from entropy.memory import wiki
+from entropy.brain import agent_memory as am
+from entropy.brain import wiki
 
 
 class FakeMemory:
@@ -221,8 +221,8 @@ def test_load_agent_memory_respects_budget(tmp_path):
 
 
 def _builder(tmp_path):
-    from entropy.memory.context_builder import CognitiveContextBuilder
-    from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+    from entropy.brain.context_builder import CognitiveContextBuilder
+    from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
     store = PlaybookStore(vault_path=tmp_path, index=SkillReportIndex(index_path=tmp_path / "idx.json"))
 
@@ -275,7 +275,7 @@ def test_query_pages_enter_report_pool(tmp_path):
 
 
 def test_non_report_dirs_are_excluded_from_distillation_sources(tmp_path):
-    from entropy.memory.playbook import discover_reports
+    from entropy.brain.playbook import discover_reports
 
     ent = tmp_path / "Entropy"
     filler = "gövde " * 200
@@ -304,7 +304,7 @@ def test_non_report_dirs_are_excluded_from_distillation_sources(tmp_path):
 
 def test_knowledge_graph_marks_query_pages_and_links_to_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("ENTROPY_GRAPH_CACHE", "0")
-    from entropy.memory.obsidian import vault_manager as vm
+    from entropy.brain.obsidian import vault_manager as vm
 
     vm.clear_graph_cache()
     mem = FakeMemory()

@@ -16,7 +16,7 @@ if sys.platform == "win32":
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT / "src"))
 
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 VAULT_DIR = Path(r"C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault\Entropy")
 REPORTS_DIR = VAULT_DIR / "Reports"

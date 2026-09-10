@@ -6,7 +6,7 @@ from pathlib import Path
 # Add src to pythonpath
 sys.path.insert(0, r"c:\EntropiAI\src")
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
 REPORT_TITLE = "BergomiVariance_BNSLevy_HeKrishnamurthy_RosenbaumTick_BuchenKellyMED_ve_AngerisCFMM"
 TAGS = [

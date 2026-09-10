@@ -172,7 +172,7 @@ AGY_LINES = [
 
 
 def _run_agy_card(tmp_path, monkeypatch, lines=AGY_LINES, stdin=None, **kwargs):
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 

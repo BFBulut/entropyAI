@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, "src")
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
 ovm = ObsidianVaultManager()
 

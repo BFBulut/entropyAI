@@ -274,7 +274,7 @@ def test_scene_click_target_agent_is_focusable_in_terminals(_app):
 @pytest.fixture
 def rules_vault(tmp_path, monkeypatch):
     """Kural deposunu geçici kasaya bağlar (gerçek kasa salt okunur kalır)."""
-    from entropy.memory import promoted_rules
+    from entropy.brain import promoted_rules
 
     monkeypatch.setattr(promoted_rules, "_vault_root", lambda vault_path=None: tmp_path)
     return promoted_rules

@@ -525,7 +525,7 @@ def _merge_round_impl(
     """
     reset_cancel()
     if memory is None:
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
         memory = CognitiveMemorySystem()
     res = MergeResult()
@@ -563,7 +563,7 @@ def _merge_round_impl(
 
     if graph is None:
         try:
-            from entropy.memory.graph_store import GraphStore
+            from entropy.brain.graph_store import GraphStore
 
             graph = GraphStore(memory=memory)
         except Exception as exc:  # pragma: no cover - graf katmanı zorunlu değil

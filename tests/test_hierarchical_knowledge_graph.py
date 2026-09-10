@@ -7,7 +7,7 @@ import pytest
 
 from entropy.core.config import config
 from entropy.skills.manager import SkillManager
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.widgets.skills_widget import SkillsWidget
 from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget, classify_report_to_hub, normalize_slug
 

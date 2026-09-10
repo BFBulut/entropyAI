@@ -50,7 +50,7 @@ GROUPS = ("imports", "cognitive", "context", "graph", "routing", "playbook")
 
 HEAVY_MODULES = {
     "import_zen_mode_ms": "entropy.ui.modes.zen_mode",
-    "import_cognitive_memory_ms": "entropy.memory.supabase.cognitive_memory",
+    "import_cognitive_memory_ms": "entropy.brain.supabase.cognitive_memory",
     "import_knowledge_graph_ms": "entropy.ui.widgets.knowledge_graph",
 }
 
@@ -192,7 +192,7 @@ def bench_imports(repeat: int) -> Dict[str, Any]:
 
 def bench_cognitive(repeat: int, db_path: Optional[Path] = None) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {}
-    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
     def _new():
         return CognitiveMemorySystem(db_path) if db_path else CognitiveMemorySystem()
@@ -255,7 +255,7 @@ def bench_cognitive(repeat: int, db_path: Optional[Path] = None) -> Dict[str, An
 
 def bench_context(repeat: int, project_dir: Optional[Path] = None) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {}
-    from entropy.memory.context_builder import CognitiveContextBuilder
+    from entropy.brain.context_builder import CognitiveContextBuilder
 
     builder = CognitiveContextBuilder()
     proj = Path(project_dir) if project_dir else REPO_ROOT
@@ -287,8 +287,8 @@ class _GraphHost:
     """
 
     def __init__(self, project_dir: Path):
-        from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
         from entropy.mcp.manager import MCPManager
         from entropy.skills.manager import SkillManager
 
@@ -378,7 +378,7 @@ def bench_playbook(
     store: Any = None,
 ) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {}
-    from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+    from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
     if store is None:
         if vault_path is not None:

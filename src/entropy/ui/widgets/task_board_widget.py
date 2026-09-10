@@ -153,7 +153,7 @@ def card_checkpoint(card: Any, office: str = "") -> Optional[Dict[str, Any]]:
     """
     Kartın kontrol noktası: önce kart alanı, yoksa kasadaki dosya.
 
-    Bellek katmanı (`entropy.memory.checkpoints`) paralel ajanda; modül ya da
+    Bellek katmanı (`entropy.brain.checkpoints`) paralel ajanda; modül ya da
     dosya yoksa None (panel bölümü gizlenir, uydurma özet yazılmaz).
     """
     data = spec_field(card, "checkpoint", None)
@@ -164,7 +164,7 @@ def card_checkpoint(card: Any, office: str = "") -> Optional[Dict[str, Any]]:
     if not card_id or not office:
         return None
     try:
-        from entropy.memory.checkpoints import read_checkpoint  # type: ignore
+        from entropy.brain.checkpoints import read_checkpoint  # type: ignore
 
         result = read_checkpoint(office, card_id)
     except Exception:

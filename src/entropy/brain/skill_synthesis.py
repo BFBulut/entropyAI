@@ -167,7 +167,7 @@ def recurring_signals(
     Kotasız: yalnızca rapor indeksi okunur. Dönen satır:
     `{skill, reports, has_playbook, candidate_status}`.
     """
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = store or PlaybookStore(vault_path=vault_path)
     vault_path = vault_path if vault_path is not None else store.vault_path
@@ -232,7 +232,7 @@ def _sections_from_playbook(procedure: str) -> Dict[str, Any]:
     """Playbook bölümlerini şema bölümlerine kabaca eşler (LLM'siz)."""
     pairs: List[tuple] = []
     try:
-        from entropy.memory.wiki import split_playbook_sections
+        from entropy.brain.wiki import split_playbook_sections
 
         pairs = list(split_playbook_sections(procedure or ""))
     except Exception:  # pragma: no cover
@@ -266,7 +266,7 @@ def _sections_from_playbook(procedure: str) -> Dict[str, Any]:
 def _wiki_concept_titles(skill: str, vault_path: Optional[Path]) -> List[str]:
     """Yeteneğin wiki kavram sayfası adları (kaynağı olan girdi listesi)."""
     try:
-        from entropy.memory.wiki import concepts_dir
+        from entropy.brain.wiki import concepts_dir
 
         folder = concepts_dir(skill, vault_path)
         if not folder.is_dir():
@@ -299,7 +299,7 @@ def _provenance_lines(skill: str, store: Any, vault_path: Optional[Path]) -> Lis
     if len(reports) > MAX_PROVENANCE_ITEMS:
         lines.append(f"- … ve {len(reports) - MAX_PROVENANCE_ITEMS} rapor daha")
     try:
-        from entropy.memory.wiki import wiki_dir
+        from entropy.brain.wiki import wiki_dir
 
         index = wiki_dir(skill, vault_path) / "INDEX.md"
         if index.is_file():
@@ -566,7 +566,7 @@ def synthesize_skill(
 
     Dönen: `{name, skill, dir, status, turns, checks, findings, files, reason}`.
     """
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = store or PlaybookStore(vault_path=vault_path)
     vault_path = vault_path if vault_path is not None else store.vault_path

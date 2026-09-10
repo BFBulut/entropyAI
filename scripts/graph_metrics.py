@@ -33,8 +33,8 @@ class _GraphHost:
     """`build_unified_graph()` yalnızca beş özniteliğe dokunur (bkz. perf_bench)."""
 
     def __init__(self, project_dir: Path, vault_path: Path | None = None):
-        from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
         from entropy.mcp.manager import MCPManager
         from entropy.skills.manager import SkillManager
 

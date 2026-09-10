@@ -31,7 +31,7 @@ from PySide6.QtCore import QObject, QTimer, Slot
 from PySide6.QtCore import QFileSystemWatcher
 
 from entropy.core.event_bus import bus
-from entropy.memory.playbook import PlaybookStore, clear_file_facts_cache, index_new_reports
+from entropy.brain.playbook import PlaybookStore, clear_file_facts_cache, index_new_reports
 
 logger = logging.getLogger(__name__)
 

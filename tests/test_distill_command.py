@@ -12,8 +12,8 @@ import pytest
 
 from entropy.core.event_bus import bus
 from entropy.core.slash_commands import try_handle_local_command
-from entropy.memory.distiller import PlaybookDistiller
-from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+from entropy.brain.distiller import PlaybookDistiller
+from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
 
 class _FakeBridge:
@@ -129,8 +129,8 @@ def test_background_task_report_is_attributed_to_detected_skill(tmp_path, monkey
     Bu atıf olmadan zamanlanmış araştırma raporları hiçbir yetenek için damıtma
     kaynağı sayılmaz (eski kasada 0 rapor atıflıydı).
     """
-    import entropy.memory.obsidian.vault_manager as vm_mod
-    import entropy.memory.supabase.cognitive_memory as cm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
+    import entropy.brain.supabase.cognitive_memory as cm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 
@@ -202,7 +202,7 @@ def test_real_bridge_background_task_delivers_full_output_and_skips_report(tmp_p
     """
     import threading
 
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 
@@ -499,7 +499,7 @@ def test_local_command_unknown_skill_reports_available(monkeypatch, tmp_path):
 
 def test_run_via_bridge_uses_distiller_subagent_in_project_dir(tmp_path):
     """Damıtma agy'nin araçsız 'distiller' alt ajanıyla koşar; tanım proje dizinine yazılır."""
-    from entropy.memory.distiller import DISTILL_AGENT_MD
+    from entropy.brain.distiller import DISTILL_AGENT_MD
 
     store = _skill_store(tmp_path, "demo", 2)
     proj = tmp_path / "proj"

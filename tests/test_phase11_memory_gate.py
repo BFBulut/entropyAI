@@ -11,12 +11,12 @@ import time
 
 import pytest
 
-from entropy.memory.categories import (
+from entropy.brain.categories import (
     CANONICAL_CATEGORIES,
     DEFAULT_RECALL_CATEGORIES,
     normalize_category,
 )
-from entropy.memory.gate import (
+from entropy.brain.gate import (
     ACTION_ADD,
     ACTION_GRAY,
     ACTION_NOOP,
@@ -25,7 +25,7 @@ from entropy.memory.gate import (
     derive_provenance,
     fixture_match,
 )
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 
 @pytest.fixture
@@ -291,8 +291,8 @@ def test_archived_nodes_leave_the_recall_scope(mem):
 
 
 def test_context_builder_reports_brain_confidence(tmp_path):
-    from entropy.memory.context_builder import CRAG_MIN_SCORE, CognitiveContextBuilder
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.context_builder import CRAG_MIN_SCORE, CognitiveContextBuilder
+    from entropy.brain.playbook import PlaybookStore
 
     mem = CognitiveMemorySystem(db_path=tmp_path / "ctx.db")
     mem.record_memory(
@@ -340,7 +340,7 @@ def test_record_memory_with_precomputed_decision_skips_the_gate(mem, monkeypatch
         lambda self, *a, **k: (calls.__setitem__("admit", calls["admit"] + 1),
                                real_admit(*a, **k))[1],
     )
-    from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine
+    from entropy.brain.supabase.cognitive_memory import LocalEmbeddingEngine
 
     engine = LocalEmbeddingEngine.get_instance()
     real_embed = engine.embed_text_status

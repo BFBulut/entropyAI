@@ -412,7 +412,7 @@ def _store_session_node(
     """Aktarımı bilişsel belleğe "session" düğümü olarak yazar; başarılıysa True."""
     try:
         if memory is None:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
             memory = CognitiveMemorySystem()
         summary_bits = []

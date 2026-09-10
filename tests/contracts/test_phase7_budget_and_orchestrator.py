@@ -507,7 +507,7 @@ def test_no_code_rule_does_not_apply_to_subagents(board, offices, seeded):
 
 
 def test_plan_prompt_carries_memory_context_and_recent_reports(board, offices, seeded, monkeypatch):
-    import entropy.memory.office_graph as og
+    import entropy.brain.office_graph as og
 
     monkeypatch.setattr(
         og, "orchestrator_context",
@@ -558,7 +558,7 @@ def test_plan_prompt_asks_for_research_notes_when_web_tools_exist(board, offices
 
 
 def test_research_notes_become_office_graph_findings(board, offices, seeded, vault):
-    from entropy.memory.office_graph import OfficeGraph
+    from entropy.brain.office_graph import OfficeGraph
 
     notes = [{"title": "Rakip fiyatları düştü", "body": "Kaynak: sektör raporu."},
              "İkinci bulgu"]
@@ -579,7 +579,7 @@ def test_research_notes_become_office_graph_findings(board, offices, seeded, vau
 
 def test_plan_still_works_when_memory_layer_is_missing(board, offices, seeded, monkeypatch):
     """Bellek katmanı patlarsa planlama yine ilerler (guard sözleşmesi)."""
-    import entropy.memory.office_graph as og
+    import entropy.brain.office_graph as og
 
     def _boom(*a, **kw):
         raise RuntimeError("bellek yok")

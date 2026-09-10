@@ -342,7 +342,7 @@ class SkillsWidget(QFrame):
         # gereken tek yüzey bu panel; main.py bunu ayrıca çağırırsa ikinci
         # izleyici açılmaz. (Kapanışta stop_report_watcher() çağrılmalıdır.)
         try:
-            from entropy.memory.report_watcher import start_report_watcher
+            from entropy.brain.report_watcher import start_report_watcher
 
             start_report_watcher()
         except Exception:
@@ -377,7 +377,7 @@ class SkillsWidget(QFrame):
         skills = self.skill_manager.list_skills()
         states: Dict[str, Dict[str, Any]] = {}
         try:
-            from entropy.memory.playbook import PlaybookStore
+            from entropy.brain.playbook import PlaybookStore
 
             store = PlaybookStore()
             for s in skills:
@@ -596,7 +596,7 @@ class SkillsWidget(QFrame):
         if self.bridge is None:
             QMessageBox.information(self, "Yordam Damıtma", "Damıtma için AGY köprüsü gerekli; bu panel köprüsüz açılmış.")
             return
-        from entropy.memory.distiller import PlaybookDistiller
+        from entropy.brain.distiller import PlaybookDistiller
 
         if skill_name in PlaybookDistiller.active_skills():
             QMessageBox.information(
@@ -657,7 +657,7 @@ class SkillsWidget(QFrame):
     def _on_reports_updated(self, _skill_name: str = ""):
         """Kaynak raporlar değişti: durum yeniden hesaplanmalı (sayaç/düğme canlı)."""
         try:
-            from entropy.memory.playbook import clear_file_facts_cache
+            from entropy.brain.playbook import clear_file_facts_cache
 
             clear_file_facts_cache()
         except Exception:

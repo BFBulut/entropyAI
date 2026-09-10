@@ -12,10 +12,10 @@ import time
 
 import pytest
 
-from entropy.memory.obsidian import vault_manager as vault_module
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.playbook import PlaybookStore, SkillReportIndex, clear_file_facts_cache
-from entropy.memory.supabase.cognitive_memory import (
+from entropy.brain.obsidian import vault_manager as vault_module
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.playbook import PlaybookStore, SkillReportIndex, clear_file_facts_cache
+from entropy.brain.supabase.cognitive_memory import (
     CognitiveMemorySystem,
     LocalEmbeddingEngine,
     embedding_warmup_enabled,

@@ -357,7 +357,7 @@ class ProjectsPanel(QFrame):
         if not self.office:
             return {}
         try:
-            from entropy.memory.office_workspace import workspace_paths  # type: ignore
+            from entropy.brain.office_workspace import workspace_paths  # type: ignore
 
             return dict(workspace_paths(self.office) or {})
         except Exception:

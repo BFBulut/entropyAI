@@ -394,11 +394,11 @@ def test_manifest_prefers_memory_layer_roster(desk, monkeypatch):
     import sys
     import types
 
-    module = types.ModuleType("entropy.memory.office_graph")
+    module = types.ModuleType("entropy.brain.office_graph")
     module.desk_roster = lambda: [
         {"office": "graf-ofisi", "orchestrator": "orkestrator", "purpose": "graftan"}
     ]
-    monkeypatch.setitem(sys.modules, "entropy.memory.office_graph", module)
+    monkeypatch.setitem(sys.modules, "entropy.brain.office_graph", module)
     desk.create(DeskOffice(name="medya", purpose="Medya"))
 
     text = desk_manifest()

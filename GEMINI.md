@@ -58,23 +58,23 @@ Tasarım sistemi Faz 11-E'de kuruldu: **tek belirteç kaynağı** `ui/design/tok
 - **Obsidian kasası:** yerel-öncelikli, insan okunur markdown dış-beyin; günlük notlar,
   `MEMORY.md`, çift yönlü wikilink grafı. **Kasa soğuk depodur ve ASLA silinmez.**
 - **Yerel bilişsel depo:** 12 katmanlı mimari, bugün **tamamen yerel SQLite**
-  (`memory/supabase/cognitive_memory.py`). **Supabase/pgvector bağlanmadı**, `supabase`
+  (`brain/supabase/cognitive_memory.py`). **Supabase/pgvector bağlanmadı**, `supabase`
   paketi bağımlılık listesinde **değil**; mem0 kullanılmıyor
   ([ADR-0003](docs/adr/ADR-0003-hafiza-algoritmasi-mem0-degil.md)).
-- **Yazma kapısı (v2):** hafızaya giden tek yol `memory/gate.py` →
+- **Yazma kapısı (v2):** hafızaya giden tek yol `brain/gate.py` →
   `MemoryGate.admit(...) -> GateDecision` (`add|noop|gray|supersede|reject`);
   `cos >= 0.95` NOOP, `< 0.80` ADD, arası gri bant kuyruğu.
 - **Kategori kapalı kümesi:** `working, episodic, semantic, procedural`; kimlik/kural
   **kategori değil bayraktır** (`is_identity`).
-- **Turlar:** rüya döngüsü `memory/dream.py` (yeniden gömme → gri tur → kopya birleştirme →
+- **Turlar:** rüya döngüsü `brain/dream.py` (yeniden gömme → gri tur → kopya birleştirme →
   ölçülü unutma **arşivler, silmez** → wiki adayı → graf konsolidasyonu),
-  gri bant birleştirme `memory/gray_merge.py`, wiki derleme `memory/wiki.py`
+  gri bant birleştirme `brain/gray_merge.py`, wiki derleme `brain/wiki.py`
   (rapor başına bir tur, artımlı, köprüsüz kuru koşum).
 - **Yetenek yordamları (playbook):** her yeteneğin raporlarından bir kez damıtılan
   "bu iş nasıl yapılır" metni (`<kasa>/Entropy/Skills/<yetenek>/PLAYBOOK.md`); bağlama
   raporlar değil bu yordam enjekte edilir → tur maliyeti depo büyüklüğünden bağımsız.
   `/distill [<yetenek>|all]` ile arka planda koşar ve kota harcar.
-- **Bütçeli bağlam:** `memory/context_builder.py`, `DEFAULT_TOKEN_BUDGET = 4000`;
+- **Bütçeli bağlam:** `brain/context_builder.py`, `DEFAULT_TOKEN_BUDGET = 4000`;
   sıra playbook → hibrit recall → rapor alıntıları → kalıcı hafıza. Genel sohbet beyin
   paketi `BUDGET_GENERAL_BRAIN = 1500` yalnız yeteneksiz sohbette ödenir.
   Gömme modeli çok dillidir (`paraphrase-multilingual-MiniLM-L12-v2`); Türkçe sorgularda
@@ -174,7 +174,7 @@ C:/EntropiAI/
 │       │                               # paths, identity, slash_commands, task_ledger, kilitler
 │       ├── agents/                     # registry, compile, tasks, harness, mailbox, worktrees,
 │       │                               # pr_flow, templates, watchers, desk_registry (Desk defteri)
-│       ├── memory/                     # bilişsel bellek, graf, wiki, playbook, context_builder,
+│       ├── brain/                      # bilişsel bellek, graf, wiki, playbook, context_builder,
 │       │   ├── obsidian/               # kasa yöneticisi
 │       │   ├── supabase/               # 12 katmanlı bilişsel bellek (bugün yerel SQLite)
 │       │   └── rag/                    # proje kodu indeksleme

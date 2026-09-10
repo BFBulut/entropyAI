@@ -12,22 +12,22 @@ import time
 
 import pytest
 
-from entropy.memory.graph_store import (
+from entropy.brain.graph_store import (
     EDGE_TYPES,
     NODE_TYPES,
     SCOPE_GENERAL,
     GraphStore,
     compute_importance,
 )
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.reconcile import (
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.reconcile import (
     ExistingFact,
     extract_entities,
     extract_facts,
     normalize_text,
     reconcile_facts,
 )
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 
 @pytest.fixture

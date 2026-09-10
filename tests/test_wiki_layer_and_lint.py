@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import lint as lintmod
-from entropy.memory import wiki
-from entropy.memory.playbook import PlaybookStore, SkillPlaybook, SkillReportIndex
+from entropy.brain import lint as lintmod
+from entropy.brain import wiki
+from entropy.brain.playbook import PlaybookStore, SkillPlaybook, SkillReportIndex
 
 PROCEDURE = """## Çalışma Adımları
 1. `agy` CLI ile Kredi Kayıt Bürosu kayıtlarını çek.
@@ -337,7 +337,7 @@ def test_lint_vault_covers_all_skills(tmp_path):
 
 
 def test_context_builder_selects_at_most_two_wiki_pages(tmp_path):
-    from entropy.memory.context_builder import (
+    from entropy.brain.context_builder import (
         BUDGET_WIKI_PAGES,
         DEFAULT_TOKEN_BUDGET,
         MAX_WIKI_PAGES,
@@ -366,7 +366,7 @@ def test_context_builder_selects_at_most_two_wiki_pages(tmp_path):
 
 def test_context_builder_skips_pages_already_in_playbook_section(tmp_path):
     """Kavram sayfası playbook bölümünün kopyasıdır; ikisi birden alınmamalı."""
-    from entropy.memory.context_builder import BUDGET_WIKI_PAGES, CognitiveContextBuilder
+    from entropy.brain.context_builder import BUDGET_WIKI_PAGES, CognitiveContextBuilder
 
     store = _linted(tmp_path)
     builder = CognitiveContextBuilder(playbook_store=store)
@@ -383,7 +383,7 @@ def test_context_builder_skips_pages_already_in_playbook_section(tmp_path):
 
 
 def test_context_builder_without_wiki_pages_returns_none(tmp_path):
-    from entropy.memory.context_builder import BUDGET_WIKI_PAGES, CognitiveContextBuilder
+    from entropy.brain.context_builder import BUDGET_WIKI_PAGES, CognitiveContextBuilder
 
     store = _seed(tmp_path)
     builder = CognitiveContextBuilder(playbook_store=store)
@@ -396,7 +396,7 @@ def test_context_builder_without_wiki_pages_returns_none(tmp_path):
 
 
 def test_graph_marks_concept_and_entity_groups(tmp_path):
-    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
     store = _linted(tmp_path)
     vm = ObsidianVaultManager(vault_path=str(tmp_path))
@@ -429,14 +429,14 @@ def test_wiki_and_lint_are_local_commands(monkeypatch, tmp_path):
         calls["wiki"] = skill
         return {"written": 2, "concepts": ["A"], "entities": ["B"], "index": "i", "reason": ""}
 
-    monkeypatch.setattr("entropy.memory.wiki.ingest_playbook_to_wiki", _fake_ingest)
+    monkeypatch.setattr("entropy.brain.wiki.ingest_playbook_to_wiki", _fake_ingest)
     out = sc.try_handle_local_command("/wiki denetci", bridge=None)
     assert out is not None and "denetci" in out and calls["wiki"] == "denetci"
 
     store = _linted(tmp_path)
     res = lintmod.lint_skill("denetci", vault_path=tmp_path, store=store)
-    monkeypatch.setattr("entropy.memory.lint.lint_vault", lambda **kw: [res])
-    monkeypatch.setattr("entropy.memory.lint.write_lint_report",
+    monkeypatch.setattr("entropy.brain.lint.lint_vault", lambda **kw: [res])
+    monkeypatch.setattr("entropy.brain.lint.write_lint_report",
                         lambda r, **kw: calls.setdefault("lint", r.skill))
     out2 = sc.try_handle_local_command("/lint all", bridge=None)
     assert out2 is not None and "Wiki Denetimi" in out2 and calls["lint"] == "denetci"
@@ -456,7 +456,7 @@ def test_wiki_and_lint_are_local_commands(monkeypatch, tmp_path):
 
 
 def test_distiller_complete_triggers_wiki_ingest(tmp_path):
-    from entropy.memory.distiller import PlaybookDistiller
+    from entropy.brain.distiller import PlaybookDistiller
 
     store = _store(tmp_path, n_reports=2)
     d = PlaybookDistiller(store=store)

@@ -8,7 +8,7 @@ from pathlib import Path
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 
 def main():

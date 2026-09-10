@@ -144,7 +144,7 @@ def entities_dir(skill: Optional[str], vault_path: Optional[Path] = None) -> Pat
 
 def offices_dir(vault_path: Optional[Path] = None) -> Path:
     """Ofis kökü. Desk ayrı bir kasadadır: `Desk/Offices` tek kaynaktır."""
-    from entropy.memory.office_graph import desk_offices_dir
+    from entropy.brain.office_graph import desk_offices_dir
 
     return desk_offices_dir(vault_path)
 
@@ -267,7 +267,7 @@ def write_query_page(skill: str, title: str, body: str, meta: dict) -> Path:
         # içeriği üretim grafına yazılmamalı.
         try:
             if not vault_path:
-                from entropy.memory.office_graph import schedule_office_ingest
+                from entropy.brain.office_graph import schedule_office_ingest
 
                 schedule_office_ingest(background=True)
         except Exception as exc:  # pragma: no cover
@@ -377,7 +377,7 @@ def _store_query_node(
     try:
         memory = meta.get("memory")
         if memory is None:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
             memory = CognitiveMemorySystem()
         content = f"{title}\n{masked_body}".strip()
@@ -650,7 +650,7 @@ def ingest_playbook_to_wiki(
 
     Dönen: {"skill", "concepts", "entities", "written", "pages", "index", "log"}
     """
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = store or PlaybookStore(vault_path=vault_path)
     vault_path = vault_path if vault_path is not None else store.vault_path
@@ -864,7 +864,7 @@ def compile_skill(
     Dönen: `{"skill", "turns", "pages", "new_pages", "processed", "remaining",
              "base", "index", "log", "lint", "reason"}`
     """
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = store or PlaybookStore(vault_path=vault_path)
     vault_path = vault_path if vault_path is not None else store.vault_path
@@ -969,7 +969,7 @@ def compile_skill(
         logger.warning("Wiki günlüğü yazılamadı (%s): %s", skill, exc)
     if run_lint:
         try:
-            from entropy.memory.lint import lint_skill
+            from entropy.brain.lint import lint_skill
 
             lint = lint_skill(skill, vault_path=vault_path, store=store)
             result["lint"] = {

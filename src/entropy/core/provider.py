@@ -969,7 +969,7 @@ class ProviderCommonMixin:
 
         parts = []
         try:
-            from entropy.memory.context_builder import CognitiveContextBuilder, DEFAULT_TOKEN_BUDGET
+            from entropy.brain.context_builder import CognitiveContextBuilder, DEFAULT_TOKEN_BUDGET
 
             builder = CognitiveContextBuilder()
             ctx = builder.build(
@@ -1044,7 +1044,7 @@ class ProviderCommonMixin:
     def get_mini_cognitive_context(self, prompt: str, target_skill=None) -> str:
         """Lightweight memory retrieval for follow-up turns."""
         try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
             cog = CognitiveMemorySystem()
             q = f"{target_skill.name} {prompt}" if target_skill else prompt
             recalled = cog.recall(q, limit=2)
@@ -1154,7 +1154,7 @@ class ProviderCommonMixin:
         """
         Geçmişi aktarım sayfasına yazıp yerel geçmişi kısaltır.
 
-        `entropy.memory.handoff.write_handoff` memory-rag tarafından sağlanır;
+        `entropy.brain.handoff.write_handoff` memory-rag tarafından sağlanır;
         henüz yoksa (import guard) hiçbir şey yapılmaz — köprü tek başına da
         çalışmak zorunda. Yeni konuşma = aktarım sayfası + son HANDOFF_KEEP_TURNS
         tur; böylece model devam eden işi kaybetmez ama pencere boşalır.
@@ -1163,7 +1163,7 @@ class ProviderCommonMixin:
         if not history:
             return None
         try:
-            from entropy.memory.handoff import write_handoff  # type: ignore
+            from entropy.brain.handoff import write_handoff  # type: ignore
         except Exception:
             return None
 

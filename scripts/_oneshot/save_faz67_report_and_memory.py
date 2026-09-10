@@ -16,7 +16,7 @@ if sys.platform == "win32":
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKSPACE_ROOT / "src"))
 
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 VAULT_DIR = Path(r"C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault\Entropy")
 REPORTS_DIR = VAULT_DIR / "Reports"
@@ -273,7 +273,7 @@ tests/test_faz67_finance_models.py::test_engle_russell_acd_engine PASSED        
 - **Kalıcı Mimari Bellek**: `Entropy/MEMORY.md` (Faz 67 sütunları eklendi)
 - **Master Bellek Haritası**: `Entropy/BELLEK_HARITASI.md` (Düğümler senkronize edildi)
 - **Günlük Oturum Kaydı**: `Entropy/DailyNotes/2026-09-06.md` (İcra günlüğü işlendi)
-- **Vektörel Bilişsel Bellek**: `src/entropy/memory/supabase/cognitive_memory.db` içerisine 6 yeni semantik düğüm (`scripts/save_faz67_report_and_memory.py`) başarıyla mühürlendi.
+- **Vektörel Bilişsel Bellek**: `src/entropy/brain/supabase/cognitive_memory.db` içerisine 6 yeni semantik düğüm (`scripts/save_faz67_report_and_memory.py`) başarıyla mühürlendi.
 """
 
 TASK_REPORT_CONTENT = r"""# Otonom Görev Raporu: Finans Yeteneği Geliştirme (Faz 67)

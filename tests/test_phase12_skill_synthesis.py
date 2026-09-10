@@ -20,9 +20,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from entropy.memory import gray_merge, system_prompt, wiki  # noqa: E402
-from entropy.memory import skill_synthesis as ss  # noqa: E402
-from entropy.memory.playbook import PlaybookStore, SkillPlaybook  # noqa: E402
+from entropy.brain import gray_merge, system_prompt, wiki  # noqa: E402
+from entropy.brain import skill_synthesis as ss  # noqa: E402
+from entropy.brain.playbook import PlaybookStore, SkillPlaybook  # noqa: E402
 
 
 SKILL = "rapor-denetleyici"
@@ -261,7 +261,7 @@ def test_brain_metrics_k9_reports_ratio_and_last_round(tmp_path):
 def test_brain_metrics_k6_wiki_share_is_measurable(tmp_path):
     """K6 hesaplayıcı kalıcı: wiki bölümünün bağlam içindeki payı."""
     import brain_metrics
-    from entropy.memory.context_builder import AssembledContext, ContextSection
+    from entropy.brain.context_builder import AssembledContext, ContextSection
 
     ctx = AssembledContext(budget=4000)
     ctx.sections = [

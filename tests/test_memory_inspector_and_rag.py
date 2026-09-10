@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from entropy.core.config import config
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.skills.manager import SkillManager, SkillDefinition
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow, open_standalone_report_window
 from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog, _parse_frontmatter
 from entropy.ui.widgets.markdown_renderer import render_markdown_to_html

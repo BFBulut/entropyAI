@@ -40,7 +40,7 @@ class FakeCtx:
 
     @property
     def brain_has_answer(self) -> bool:
-        from entropy.memory.context_builder import crag_min_score
+        from entropy.brain.context_builder import crag_min_score
 
         return self.brain_confidence >= crag_min_score()
 
@@ -76,7 +76,7 @@ def test_research_card_runs_live_even_with_a_confident_brain_hit(
 
     monkeypatch.setattr(config, "brain_shortcut_enabled", False, raising=False)
     body = "Bulgu: hibrit arama BM25 + vektör. Kaynak: https://ornek.org/rapor"
-    monkeypatch.setattr("entropy.memory.context_builder.CognitiveContextBuilder",
+    monkeypatch.setattr("entropy.brain.context_builder.CognitiveContextBuilder",
                         lambda *a, **k: FakeBuilder(FakeCtx(0.93, body)))
 
     board = TaskBoard(vault_path=vault)
@@ -98,7 +98,7 @@ def test_research_card_runs_live_even_with_a_confident_brain_hit(
 # --- (b) kimlik düğümü ASLA yanıt değil -------------------------------------
 
 def test_identity_node_is_never_an_answer_and_never_packed():
-    from entropy.memory import context_builder as cb
+    from entropy.brain import context_builder as cb
 
     class Node:
         def __init__(self, is_identity=0, provenance=""):
@@ -116,7 +116,7 @@ def test_identity_node_is_never_an_answer_and_never_packed():
 
 def test_identity_hit_does_not_raise_brain_confidence(tmp_path):
     """Geri çağırma yalnız kimlik düğümü döndürürse güven 0 kalır."""
-    from entropy.memory.context_builder import CognitiveContextBuilder
+    from entropy.brain.context_builder import CognitiveContextBuilder
 
     class Node:
         def __init__(self, content, is_identity=0, provenance=""):
@@ -184,7 +184,7 @@ def test_brain_only_card_field_is_honoured():
     "2026 raporunu getir",
 ])
 def test_freshness_hints_close_the_crag_gate(query, tmp_path):
-    from entropy.memory.context_builder import (
+    from entropy.brain.context_builder import (
         CognitiveContextBuilder, wants_fresh_data,
     )
 
@@ -209,7 +209,7 @@ def test_freshness_hints_close_the_crag_gate(query, tmp_path):
 
 
 def test_stable_question_keeps_the_gate_open(tmp_path):
-    from entropy.memory.context_builder import wants_fresh_data
+    from entropy.brain.context_builder import wants_fresh_data
 
     assert wants_fresh_data("hibrit aramanın matematiği nedir") is False
 
@@ -227,7 +227,7 @@ def test_research_verbs_are_inferred_as_research(text):
 # --- (f) sistem istemi kısa devre vaat etmez --------------------------------
 
 def test_board_tool_contract_promises_a_live_run():
-    from entropy.memory.system_prompt import board_tools_section
+    from entropy.brain.system_prompt import board_tools_section
 
     text = board_tools_section()
     assert "board_create" in text

@@ -117,7 +117,7 @@ def promoted_rules_section(max_chars: int = BUDGET_RULES) -> str:
     kendi kayıtlarını `office="entropy"` altında tutar. Onaysız aday asla girmez.
     """
     try:
-        from entropy.memory.promoted_rules import ENTROPY_OFFICE, rules_section
+        from entropy.brain.promoted_rules import ENTROPY_OFFICE, rules_section
 
         return _trim(rules_section(ENTROPY_OFFICE, max_chars=max_chars), max_chars)
     except Exception:
@@ -299,7 +299,7 @@ def cognitive_section(
     if not (query or "").strip():
         return ""
     try:
-        from entropy.memory.context_builder import (
+        from entropy.brain.context_builder import (
             DEFAULT_TOKEN_BUDGET,
             CognitiveContextBuilder,
         )

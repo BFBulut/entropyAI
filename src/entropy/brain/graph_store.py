@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from entropy.memory.reconcile import (
+from entropy.brain.reconcile import (
     ExistingFact,
     Fact,
     ReconcileResult,
@@ -40,7 +40,7 @@ from entropy.memory.reconcile import (
     reconcile_facts,
     tr_lower,
 )
-from entropy.memory.supabase.cognitive_memory import (
+from entropy.brain.supabase.cognitive_memory import (
     EMBEDDING_DIM,
     CognitiveMemorySystem,
 )
@@ -371,7 +371,7 @@ class GraphStore:
         # atladığı için kategori disiplininin dışında kalıyordu ("session",
         # "query", "report" değerleri buradan da giriyordu). Kanonik dörtlüye
         # indirgenir; ham değer metadata'da izlenebilir kalır.
-        from entropy.memory.categories import normalize_category
+        from entropy.brain.categories import normalize_category
 
         resolution = normalize_category(category)
         if resolution.mapped:
@@ -1149,7 +1149,7 @@ class GraphStore:
             p = Path(vault_path)
             return p if p.name == "Entropy" else p / "Entropy"
         try:
-            from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+            from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
             return Path(ObsidianVaultManager().entropy_dir)
         except Exception:
@@ -1166,14 +1166,14 @@ class GraphStore:
 
         Desk kapsamları (`desk:<ofis>`) Entropy'nin geri çağırmasında **salt
         okunur** görünür: ofis projeleri Entropy'nin belleğine akar, ters yön
-        yoktur (bkz. entropy.memory.office_graph).
+        yoktur (bkz. entropy.brain.office_graph).
         """
         scopes = [SCOPE_GENERAL]
         if active_office:
             scopes.append(f"office:{active_office}")
         if include_desk:
             try:
-                from entropy.memory.office_graph import desk_scopes
+                from entropy.brain.office_graph import desk_scopes
 
                 scopes.extend(s for s in desk_scopes(vault_path) if s not in scopes)
             except Exception:  # pragma: no cover - kasa yoksa sessiz geç

@@ -652,14 +652,14 @@ def test_finalize_calls_wiki_and_office_memory_when_available(seeded, board, reg
     import types
 
     seen = {}
-    wiki = types.ModuleType("entropy.memory.wiki")
+    wiki = types.ModuleType("entropy.brain.wiki")
     wiki.write_query_page = lambda skill, title, body, meta: (
         seen.__setitem__("wiki", (title, meta)), tmp_path / "page.md")[1]
-    mem = types.ModuleType("entropy.memory.agent_memory")
+    mem = types.ModuleType("entropy.brain.agent_memory")
     mem.append_office_memory = lambda name, entry: seen.__setitem__("office_mem", (name, entry))
     mem.append_agent_memory = lambda name, entry: seen.__setitem__("agent_mem", (name, entry))
-    monkeypatch.setitem(sys.modules, "entropy.memory.wiki", wiki)
-    monkeypatch.setitem(sys.modules, "entropy.memory.agent_memory", mem)
+    monkeypatch.setitem(sys.modules, "entropy.brain.wiki", wiki)
+    monkeypatch.setitem(sys.modules, "entropy.brain.agent_memory", mem)
 
     bridge = _ScriptedBridge([
         ("office-plan", _plan_json("A"), True),

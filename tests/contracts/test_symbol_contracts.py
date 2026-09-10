@@ -9,7 +9,7 @@ Araştırma A §3.3 iki sessiz kopukluk ölçtü:
     yutuluyor ve komut köprüsüz `compile_skill(name)`'e geriliyordu.
 
 Bu test kopukluğu **import anında** yakalar: `core/slash_commands.py` içindeki
-her `from entropy.memory.* import ...` / `from entropy.agents.* import ...`
+her `from entropy.brain.* import ...` / `from entropy.agents.* import ...`
 girdisi gerçekten çözülmeli, ve kritik üç çağrının parametre adları
 `inspect.signature` ile doğrulanmalı.
 """
@@ -33,7 +33,7 @@ def _imported_symbols() -> list[tuple[str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 0:
             module = node.module or ""
-            if not (module.startswith("entropy.memory") or module.startswith("entropy.agents")):
+            if not (module.startswith("entropy.brain") or module.startswith("entropy.agents")):
                 continue
             for alias in node.names:
                 pairs.append((module, alias.name))
@@ -59,7 +59,7 @@ def test_slash_commands_import_real_symbols():
 
 def test_gray_merge_run_alias_does_not_exist():
     """Yanlış ad (`run`) hâlâ yok; sözleşme `run_merge_round`."""
-    gm = importlib.import_module("entropy.memory.gray_merge")
+    gm = importlib.import_module("entropy.brain.gray_merge")
     assert hasattr(gm, "run_merge_round")
     assert not hasattr(gm, "run"), (
         "gray_merge.run geri eklenmiş: sözleşme tek ad (run_merge_round) olmalı"
@@ -69,13 +69,13 @@ def test_gray_merge_run_alias_does_not_exist():
 @pytest.mark.parametrize(
     "module, symbol, expected",
     [
-        ("entropy.memory.gray_merge", "run_merge_round",
+        ("entropy.brain.gray_merge", "run_merge_round",
          ("memory", "send_prompt", "limit", "gate", "graph")),
-        ("entropy.memory.dream", "dream_and_consolidate",
+        ("entropy.brain.dream", "dream_and_consolidate",
          ("memory", "send_prompt", "vault_path")),
-        ("entropy.memory.wiki", "compile_skill",
+        ("entropy.brain.wiki", "compile_skill",
          ("skill", "bridge", "budget_turns", "vault_path")),
-        ("entropy.memory.distiller", "PlaybookDistiller", ()),
+        ("entropy.brain.distiller", "PlaybookDistiller", ()),
     ],
 )
 def test_call_signatures_match_contract(module, symbol, expected):
@@ -90,7 +90,7 @@ def test_call_signatures_match_contract(module, symbol, expected):
 
 def test_wiki_compile_rejects_legacy_turns_kwarg():
     """Eski (yutulmuş) çağrı biçimi `turns=` artık sessizce geçmemeli."""
-    from entropy.memory.wiki import compile_skill
+    from entropy.brain.wiki import compile_skill
 
     assert "turns" not in inspect.signature(compile_skill).parameters
 

@@ -318,7 +318,7 @@ def ensure_workspace(
         )
     render_board(office, vault_path=vault_path)
 
-    from entropy.memory import promoted_rules
+    from entropy.brain import promoted_rules
 
     try:
         rules_md = promoted_rules.render_rules_markdown(office, vault_path=vault_path)
@@ -363,7 +363,7 @@ def spawn_instruction(
     blocks.append("\n".join(head))
 
     if card_id:
-        from entropy.memory import checkpoints as _checkpoints
+        from entropy.brain import checkpoints as _checkpoints
 
         try:
             resume = _checkpoints.resume_section(office, card_id, vault_path)
@@ -372,7 +372,7 @@ def spawn_instruction(
         if resume:
             blocks.append(resume)
 
-    from entropy.memory import promoted_rules
+    from entropy.brain import promoted_rules
 
     try:
         rules = promoted_rules.rules_section(office, agent, vault_path=vault_path)

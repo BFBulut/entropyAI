@@ -61,7 +61,7 @@ def load_office_view_data(office: str) -> Dict[str, List[Dict[str, Any]]]:
     if not office:
         return {"nodes": [], "links": []}
     try:
-        from entropy.memory.office_graph import OfficeGraph  # type: ignore
+        from entropy.brain.office_graph import OfficeGraph  # type: ignore
 
         data = OfficeGraph(office).to_view_data() or {}
     except Exception:

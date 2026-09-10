@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from entropy.core.config import config
-from entropy.memory.categories import (
+from entropy.brain.categories import (
     DEFAULT_RECALL_CATEGORIES,
     EPISODIC,
     normalize_category,
 )
-from entropy.memory.gate import (
+from entropy.brain.gate import (
     ACTION_GRAY as GATE_GRAY,
     ACTION_NOOP as GATE_NOOP,
     ACTION_REJECT as GATE_REJECT,
@@ -33,7 +33,7 @@ from entropy.memory.gate import (
 # entropy.log'da "cognitive_memory", "embedding", "recall", "dream" için 0 eşleşme).
 # Sessiz `except Exception: pass` blokları yüzünden kullanıcı "hafızam çalışmıyor
 # ama hata da görmüyorum" durumundaydı. Artık her yutulan istisna buraya yazılır.
-logger = logging.getLogger("entropy.memory.cognitive")
+logger = logging.getLogger("entropy.brain.cognitive")
 
 # `last_errors` listesinin üst sınırı: hata döngüsünde bellek şişmesin.
 MAX_TRACKED_ERRORS = 20
@@ -898,7 +898,7 @@ class CognitiveMemorySystem:
             if self._graph_store is not None:
                 return self._graph_store
             try:
-                from entropy.memory.graph_store import GraphStore
+                from entropy.brain.graph_store import GraphStore
 
                 self._graph_store = GraphStore(memory=self)
             except Exception as exc:
@@ -1737,7 +1737,7 @@ class CognitiveMemorySystem:
 
             # T3.2: Export to Obsidian MEMORY.md if available
             try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 ovm.append_to_global_memory("Otonom Bilişsel Konsolidasyon (Rüya)", summary)
             except Exception as exc:
@@ -1771,7 +1771,7 @@ class CognitiveMemorySystem:
         # Faz 5: graf katmanı konsolidasyonu (LLM'siz, kota harcamaz). Graf
         # katmanı yoksa veya şema kurulamazsa rüya döngüsü bozulmamalıdır.
         try:
-            from entropy.memory.graph_store import GraphStore
+            from entropy.brain.graph_store import GraphStore
             GraphStore(memory=self).consolidate()
         except Exception as exc:
             errors.append(self._record_error(
@@ -1781,8 +1781,8 @@ class CognitiveMemorySystem:
         # tetiklenir (modelsiz, kota harcamaz). Ayrı bir kullanıcı komutu yok;
         # başarısız olursa rüya döngüsü etkilenmez.
         try:
-            from entropy.memory.graph_store import GraphStore
-            from entropy.memory.office_graph import schedule_office_ingest
+            from entropy.brain.graph_store import GraphStore
+            from entropy.brain.office_graph import schedule_office_ingest
 
             # Depo bu bellek örneğine bağlanır: testlerdeki geçici veritabanı
             # yerine üretim grafına yazılmasın.

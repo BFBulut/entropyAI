@@ -502,7 +502,7 @@ def test_finish_calls_wiki_and_agent_memory_when_available(board, registry, monk
     import sys
     import types
 
-    wiki = types.ModuleType("entropy.memory.wiki")
+    wiki = types.ModuleType("entropy.brain.wiki")
     page = tmp_path / "wiki" / "sayfa.md"
     calls = {}
 
@@ -512,15 +512,15 @@ def test_finish_calls_wiki_and_agent_memory_when_available(board, registry, monk
 
     wiki.write_query_page = write_query_page
 
-    mem = types.ModuleType("entropy.memory.agent_memory")
+    mem = types.ModuleType("entropy.brain.agent_memory")
 
     def append_agent_memory(agent, entry):
         calls["memory"] = (agent, entry)
 
     mem.append_agent_memory = append_agent_memory
 
-    monkeypatch.setitem(sys.modules, "entropy.memory.wiki", wiki)
-    monkeypatch.setitem(sys.modules, "entropy.memory.agent_memory", mem)
+    monkeypatch.setitem(sys.modules, "entropy.brain.wiki", wiki)
+    monkeypatch.setitem(sys.modules, "entropy.brain.agent_memory", mem)
 
     card = board.create(_card())
     board._finish(card.id, "Ajan çıktısı.", True)
@@ -537,13 +537,13 @@ def test_finish_closes_card_even_if_memory_layer_raises(board, monkeypatch):
     import sys
     import types
 
-    broken = types.ModuleType("entropy.memory.wiki")
+    broken = types.ModuleType("entropy.brain.wiki")
 
     def boom(*args, **kwargs):
         raise RuntimeError("wiki bozuk")
 
     broken.write_query_page = boom
-    monkeypatch.setitem(sys.modules, "entropy.memory.wiki", broken)
+    monkeypatch.setitem(sys.modules, "entropy.brain.wiki", broken)
 
     card = board.create(_card())
     board._finish(card.id, "Çıktı.", True)

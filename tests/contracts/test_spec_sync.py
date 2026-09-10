@@ -61,7 +61,7 @@ def _spec_hidden_imports() -> set[str]:
 
 def test_spec_lists_phase12c_skill_synthesis():
     """Faz 12-C: beceri sentezi exe'de sessizce kapanmasın (12-B kablolaması)."""
-    assert "entropy.memory.skill_synthesis" in _spec_hidden_imports()
+    assert "entropy.brain.skill_synthesis" in _spec_hidden_imports()
 
 
 def test_spec_lists_every_entropy_module():

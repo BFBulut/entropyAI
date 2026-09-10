@@ -406,7 +406,7 @@ def collect_recent_entries(
     listeye ve sayaca girmez; `include_sessions=True` ile görünür olurlar.
     """
     try:
-        from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+        from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
         from entropy.ui.widgets.reports_viewer import read_report_meta
 
         vault = ObsidianVaultManager()

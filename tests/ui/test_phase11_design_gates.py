@@ -365,5 +365,5 @@ def test_scheduled_dreaming_uses_dream_v2_module():
     src = Path(__file__).resolve().parents[2] / "src/entropy/ui/widgets/tasks_widget.py"
     text = src.read_text(encoding="utf-8")
     assert "cog.dream_and_consolidate()" not in text, "eski 48 saat koşullu metot"
-    assert "from entropy.memory.dream import dream_and_consolidate" in text
+    assert "from entropy.brain.dream import dream_and_consolidate" in text
     assert "send_prompt=None" in text, "zamanlanmış görev kota harcamamalı"

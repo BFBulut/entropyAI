@@ -251,7 +251,7 @@ def _query_page_skill(file: Path) -> Optional[str]:
 
     Yetenek disi (kasa geneli) sorgular icin bos dize, sorgu sayfasi degilse
     None doner. Yol kurali: Skills/<yetenek>/wiki/queries/*.md ya da
-    Wiki/queries/*.md (bkz. entropy.memory.wiki).
+    Wiki/queries/*.md (bkz. entropy.brain.wiki).
     """
     parents = file.parents
     if len(parents) < 2 or parents[0].name.lower() != "queries":
@@ -269,7 +269,7 @@ def _wiki_generated_role(file: Path) -> Optional[Tuple[str, str]]:
 
     Grup "concept" ya da "entity"; yetenek disi (kasa geneli) sayfalarda yetenek
     bos dizedir. Yol kurali: Skills/<yetenek>/wiki/concepts|entities/*.md ya da
-    Wiki/concepts|entities/*.md (bkz. entropy.memory.wiki).
+    Wiki/concepts|entities/*.md (bkz. entropy.brain.wiki).
     """
     parents = file.parents
     if len(parents) < 2:
@@ -554,7 +554,7 @@ class ObsidianVaultManager:
         yazımını düşürmez: indeks türetilmiş veridir, yeniden üretilebilir.
         """
         try:
-            from entropy.memory.playbook import PlaybookStore, classify_report
+            from entropy.brain.playbook import PlaybookStore, classify_report
 
             store = PlaybookStore(vault_path=self.vault_path)
             skill = skill_name
@@ -603,7 +603,7 @@ class ObsidianVaultManager:
             # Veritabanı yolu doğrudan kurulur: `CognitiveMemorySystem()`
             # kurmak gömme modelini yüklüyor (yüzlerce ms) — rapor listesi için
             # tek bir salt-okunur SQL sorgusu yeter.
-            from entropy.memory.supabase.cognitive_memory import (
+            from entropy.brain.supabase.cognitive_memory import (
                 default_cognitive_db_path,
             )
 

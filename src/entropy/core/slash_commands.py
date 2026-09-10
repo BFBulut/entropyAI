@@ -388,7 +388,7 @@ def _handle_handoff(note: str, bridge) -> str:
     aittir: `compress_history_with_handoff(page)` varsa çağrılır, yoksa sayfa
     yine de yazılmıştır — aktarımın değeri sıkıştırmaya bağlı değildir.
     """
-    from entropy.memory.handoff import write_handoff
+    from entropy.brain.handoff import write_handoff
 
     history = list(getattr(bridge, "conversation_history", None) or [])
     if not history:
@@ -420,7 +420,7 @@ def _handle_handoff(note: str, bridge) -> str:
         except Exception as exc:
             logger.warning("Aktarım sonrası bağlam sıkıştırılamadı: %s", exc)
 
-    from entropy.memory.handoff import SECTION_TITLES, load_latest_handoff
+    from entropy.brain.handoff import SECTION_TITLES, load_latest_handoff
 
     page = load_latest_handoff() or {}
     sections = page.get("sections") or {}
@@ -1269,7 +1269,7 @@ def _handle_wiki(args: str, bridge=None) -> str:
     Model çağırmaz (bkz. memory/wiki.ingest_playbook_to_wiki), bu yüzden kota
     harcamaz; damıtma bittiğinde aynı işlev zaten otomatik çalışır.
     """
-    from entropy.memory.wiki import ingest_playbook_to_wiki
+    from entropy.brain.wiki import ingest_playbook_to_wiki
 
     parts = (args or "").split()
     if parts and parts[0].lower() == "compile":
@@ -1343,7 +1343,7 @@ def _handle_wiki_compile(parts: List[str], bridge=None) -> str:
         return ("<b>📗 Wiki Derleme</b><br/>Kullanım: "
                 "<code>/wiki compile &lt;yetenek&gt; [--turns N]</code>")
     try:
-        from entropy.memory.wiki import compile_skill
+        from entropy.brain.wiki import compile_skill
     except ImportError as e:
         return ("<b>📗 Wiki Derleme</b><br/>Derleyici içe aktarılamadı: "
                 f"<code>{_html_escape(e)}</code>")
@@ -1785,7 +1785,7 @@ def cancel_memory_job(job: str) -> bool:
     entry[1].set()
     if job == "memory-merge":
         try:
-            from entropy.memory.gray_merge import cancel_merge
+            from entropy.brain.gray_merge import cancel_merge
 
             cancel_merge()
         except Exception:
@@ -1872,12 +1872,12 @@ def _handle_memory(args: str, bridge) -> str:
 
     if verb == "merge":
         try:
-            from entropy.memory.gray_merge import reset_cancel, run_merge_round
+            from entropy.brain.gray_merge import reset_cancel, run_merge_round
         except ImportError as e:
             return ("<b>Hafıza — Gri Bant</b><br/>Toplu birleştirme modülü "
                     f"içe aktarılamadı: <code>{_html_escape(e)}</code>")
         send_prompt, bridge_note = _memory_send_prompt(bridge, "Gri bant birleştirme")
-        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+        from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
         def _work(_cancel):
             reset_cancel()
@@ -1892,11 +1892,11 @@ def _handle_memory(args: str, bridge) -> str:
                 "Durdurmak için: <code>/memory stop</code>")
 
     try:
-        from entropy.memory.dream import dream_and_consolidate
+        from entropy.brain.dream import dream_and_consolidate
     except ImportError as e:
         return ("<b>Hafıza — Rüya</b><br/>Rüya modülü içe aktarılamadı: "
                 f"<code>{_html_escape(e)}</code>")
-    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
     send_prompt, bridge_note = _memory_send_prompt(bridge, "Rüya döngüsü")
 
@@ -1932,7 +1932,7 @@ def _wait_seconds(parts: List[str]) -> float:
 
 def _handle_lint(args: str) -> str:
     """`/lint [<yetenek>|all]`: wiki sağlık denetimi; sonucu lint.md'ye de yazar."""
-    from entropy.memory.lint import lint_skill, lint_vault, render_lint_html, write_lint_report
+    from entropy.brain.lint import lint_skill, lint_vault, render_lint_html, write_lint_report
 
     target = (args or "").strip()
     try:
@@ -2076,7 +2076,7 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_wiki(args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else "",
                             bridge)
 
-    from entropy.memory.distiller import PlaybookDistiller
+    from entropy.brain.distiller import PlaybookDistiller
     from entropy.skills.manager import SkillManager
 
     sm = SkillManager(project_dir=getattr(bridge, "active_project_dir", None))
@@ -2099,7 +2099,7 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         # Eski (yetenek klasörü dışındaki) raporları sınıflandırıp indeksler.
         # Yeni raporlar zaten Skills/<yetenek>/Reports/ altına düştüğü için bu,
         # yalnızca geçmiş arşivi damıtmaya kaynak yapmak için gerekir.
-        from entropy.memory.playbook import discover_reports
+        from entropy.brain.playbook import discover_reports
 
         store = distiller.store
         reports = discover_reports(store.vault_path)

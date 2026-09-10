@@ -13,16 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import graph_enrich as ge
-from entropy.memory.graph_store import GraphStore
-from entropy.memory.obsidian.vault_manager import (
+from entropy.brain import graph_enrich as ge
+from entropy.brain.graph_store import GraphStore
+from entropy.brain.obsidian.vault_manager import (
     ObsidianVaultManager,
     clear_graph_cache,
     is_test_artifact_name,
     is_test_artifact_path,
     strip_code_spans,
 )
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.widgets.knowledge_graph import (
     KnowledgeGraphWidget,
     _cognitive_node_name,

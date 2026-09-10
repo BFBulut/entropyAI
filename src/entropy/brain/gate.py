@@ -45,13 +45,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from entropy.memory.categories import (
+from entropy.brain.categories import (
     CategoryResolution,
     SEMANTIC,
     WORKING,
     normalize_category,
 )
-from entropy.memory.reconcile import ExistingFact, extract_facts, reconcile_facts
+from entropy.brain.reconcile import ExistingFact, extract_facts, reconcile_facts
 
 logger = logging.getLogger(__name__)
 

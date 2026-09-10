@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import dream, gray_merge, wiki
-from entropy.memory.context_builder import (
+from entropy.brain import dream, gray_merge, wiki
+from entropy.brain.context_builder import (
     BUDGET_GENERAL_BRAIN,
     CognitiveContextBuilder,
 )
-from entropy.memory.playbook import PlaybookStore, SkillPlaybook
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.playbook import PlaybookStore, SkillPlaybook
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 
 @pytest.fixture
@@ -452,7 +452,7 @@ def test_general_brain_contains_rules_and_cross_skill_wiki_but_no_identity(skill
         content="Entropy: kendi becerilerini öğrenen, ölçen ve raporlayan bir sistemim.",
         importance=0.95, provenance="system",
     )
-    from entropy.memory import promoted_rules
+    from entropy.brain import promoted_rules
 
     rule = promoted_rules.propose_rule(
         promoted_rules.ENTROPY_OFFICE,

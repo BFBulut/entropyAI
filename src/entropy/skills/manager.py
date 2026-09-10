@@ -476,7 +476,7 @@ class SkillManager:
 
         # Register procedural memory in SQLite
         try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
             cog = CognitiveMemorySystem()
             cog.store_node(
                 category="procedural",
@@ -777,14 +777,14 @@ class SkillManager:
         if hit and hit[0] == key:
             return hit[1]
 
-        from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine
+        from entropy.brain.supabase.cognitive_memory import LocalEmbeddingEngine
 
         text = f"{skill.name.replace('-', ' ')}. {skill.description or ''}"
         kws = getattr(self, "_domain_keywords_cache", {}).get(skill.name)
         if kws:
             text += "\nAnahtar konular: " + ", ".join(kws)
         try:
-            from entropy.memory.playbook import PlaybookStore
+            from entropy.brain.playbook import PlaybookStore
 
             pb = PlaybookStore().load(skill.name)
             if pb and pb.procedure:
@@ -837,7 +837,7 @@ class SkillManager:
                 semantic_query = " ".join(tail + [prompt])
         query_vec = None
         try:
-            from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine, cosine_similarity
+            from entropy.brain.supabase.cognitive_memory import LocalEmbeddingEngine, cosine_similarity
 
             query_vec = LocalEmbeddingEngine.get_instance().embed_text(semantic_query)
         except Exception:

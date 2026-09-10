@@ -11,7 +11,7 @@ klasöründedir):
 - Desk "Bellek" sekmesi: seçili ofisin kuralları.
 - Zen "Ajanlar" sekmesi: `office="entropy"` — Entropy'nin kendi kuralları.
 
-Bellek katmanı (`entropy.memory.promoted_rules`) paralel ajanda; modül yoksa
+Bellek katmanı (`entropy.brain.promoted_rules`) paralel ajanda; modül yoksa
 panel boş ve pasif kalır (guard), Desk penceresi çökmez.
 """
 
@@ -34,9 +34,9 @@ STATUS_PROMOTED = "promoted"
 
 
 def rules_api() -> Optional[Any]:
-    """`entropy.memory.promoted_rules` modülü; yoksa None."""
+    """`entropy.brain.promoted_rules` modülü; yoksa None."""
     try:
-        from entropy.memory import promoted_rules  # type: ignore
+        from entropy.brain import promoted_rules  # type: ignore
 
         return promoted_rules
     except Exception:

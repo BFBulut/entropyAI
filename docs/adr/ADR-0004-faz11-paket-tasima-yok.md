@@ -1,6 +1,6 @@
 # ADR-0004 — Faz 11'de paket taşıması yapılmaz (`memory → brain` Faz 12'ye ertelendi)
 
-- Durum: **kabul edildi**
+- Durum: **yerine geçildi** ([ADR-0008](ADR-0008-brain-paket-tasimasi.md), 2026-09-11 — taşıma Faz 13-B'de yapıldı)
 - Tarih: 2026-09-10
 - Kaynak: `docs/reports/2026-09-10_Faz11_Arastirma_B_Depo_Denetimi.md` §6.2–6.3
 

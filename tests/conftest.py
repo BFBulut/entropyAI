@@ -153,7 +153,7 @@ def isolate_chat_history(tmp_path, monkeypatch):
 def _reset_distiller_state():
     """Damıtıcının modül durumu (süren görevler, iptaller) testler arasında sızmasın."""
     try:
-        from entropy.memory import distiller as _d
+        from entropy.brain import distiller as _d
     except Exception:
         yield
         return

@@ -310,7 +310,7 @@ def test_cluster_title_prefers_the_most_common_real_title(tmp_path):
 
 
 def test_vault_manager_sanitizes_chat_like_titles():
-    from entropy.memory.obsidian.vault_manager import sanitize_report_title
+    from entropy.brain.obsidian.vault_manager import sanitize_report_title
 
     assert sanitize_report_title(
         "Tamamdır, şimdi senden yeni bir yetenek"
@@ -682,7 +682,7 @@ def test_ui_and_core_title_derivation_agree_on_five_samples():
 
 def test_vault_manager_uses_core_safe_filename_title():
     from entropy.core.report_title import safe_filename_title
-    from entropy.memory.obsidian import vault_manager
+    from entropy.brain.obsidian import vault_manager
 
     assert vault_manager.REPORT_TITLE_MAX == 80
     assert vault_manager.sanitize_report_title("Rapor: bir/iki") == safe_filename_title(

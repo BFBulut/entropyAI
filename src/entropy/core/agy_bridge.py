@@ -666,7 +666,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
         def _bg_index():
             try:
-                from entropy.memory.rag.project_indexer import ProjectIndexer
+                from entropy.brain.rag.project_indexer import ProjectIndexer
                 idx = ProjectIndexer(self.active_project_dir)
                 count = idx.scan_and_index(max_files=100)
                 bus.terminal_output_received.emit(f"[RAG İndeksleyici] '{self.active_project_dir.name}' projesinde {count} dosya indekslendi.\n")
@@ -1331,8 +1331,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 report_title = f"Gorev_{derived_name}_{time_tag}"
 
                 try:
-                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-                    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
                     vm = ObsidianVaultManager()
 
                     report_content = f"# Otonom Görev Raporu: {task_name}\n\n"
@@ -2404,8 +2404,8 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
             if not is_err and (is_task_prompt or is_explicit_research):
                 try:
-                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-                    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+                    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
                     vm = ObsidianVaultManager()
 
                     if is_task_prompt:
@@ -2469,7 +2469,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 # kaybolmasın diye `Entropy/Sessions/<gün>/<saat>-<konu>.md`
                 # altına `type: session` künyesiyle yazılır.
                 try:
-                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                     vm_s = ObsidianVaultManager()
                     save_session_note(
                         vm_s.entropy_dir,
@@ -2483,7 +2483,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
             # Automatically log interaction to Obsidian Daily Note
             try:
-                from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                 vm = ObsidianVaultManager()
                 short_p = raw_user_prompt.replace("\n", " ")[:60]
                 short_r = full_text.replace("\n", " ")[:100]

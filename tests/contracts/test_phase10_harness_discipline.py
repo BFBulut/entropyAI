@@ -367,7 +367,7 @@ def test_eval_prompt_has_proof_section_and_criterion(seeded, board, offices):
 
 
 def test_rule_lines_become_candidates_not_memory(seeded, board, offices, vault):
-    from entropy.memory import promoted_rules
+    from entropy.brain import promoted_rules
 
     rule = "Kart özetleri her zaman Türkçe yazılmalı ve kaynak bağlantısı içermeli."
     output = f"{GREEN_PROOF}\n[KURAL] {rule}\n"
@@ -423,7 +423,7 @@ def test_orchestrator_web_tools_enable_research_step(seeded, board, offices):
 
 
 def test_research_note_source_is_stored_with_finding(seeded, board, offices, vault):
-    from entropy.memory.office_graph import OfficeGraph
+    from entropy.brain.office_graph import OfficeGraph
 
     plan = "```json\n" + json.dumps({
         "subtasks": [{"title": "Ayrıştırıcı", "goal": "g", "criteria": ["c"],

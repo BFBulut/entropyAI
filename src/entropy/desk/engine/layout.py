@@ -320,7 +320,7 @@ def office_layout_path(office: str) -> Optional[Path]:
     if not office:
         return None
     try:
-        from entropy.memory.office_graph import desk_office_dir  # type: ignore
+        from entropy.brain.office_graph import desk_office_dir  # type: ignore
 
         return Path(desk_office_dir(office)) / "layout.json"
     except Exception:

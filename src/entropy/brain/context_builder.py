@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from entropy.memory.playbook import PlaybookStore, estimate_tokens
+from entropy.brain.playbook import PlaybookStore, estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,7 @@ class CognitiveContextBuilder:
     @property
     def memory(self):
         if self._memory is None:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
             self._memory = CognitiveMemorySystem()
         return self._memory
@@ -307,7 +307,7 @@ class CognitiveContextBuilder:
     @property
     def vault(self):
         if self._vault is None:
-            from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+            from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
             self._vault = ObsidianVaultManager()
         return self._vault
@@ -570,7 +570,7 @@ class CognitiveContextBuilder:
         if not candidates:
             return []
         try:
-            from entropy.memory.supabase.cognitive_memory import (
+            from entropy.brain.supabase.cognitive_memory import (
                 LocalEmbeddingEngine,
                 cosine_similarity,
             )
@@ -603,7 +603,7 @@ class CognitiveContextBuilder:
             # biri). Kasa geneli raporlar son çare olarak havuza girer; maliyet
             # sabit kalsın diye yalnızca en yeni GENERAL_REPORT_CANDIDATES tanesi.
             try:
-                from entropy.memory.playbook import discover_reports
+                from entropy.brain.playbook import discover_reports
 
                 sources = list(discover_reports(self.playbooks.vault_path))
             except Exception as e:  # pragma: no cover - kasa okunamazsa bölüm boş
@@ -698,7 +698,7 @@ class CognitiveContextBuilder:
                 out.extend(self._wiki_page_files(name))
             return out
         try:
-            from entropy.memory.wiki import concepts_dir, entities_dir
+            from entropy.brain.wiki import concepts_dir, entities_dir
         except Exception:
             return []
         out: List[Path] = []
@@ -808,7 +808,7 @@ class CognitiveContextBuilder:
     def _query_pages(self, skill_name: Optional[str]) -> List[Path]:
         """Yeteneğin ve kasa genelinin wiki sorgu sayfaları (en yeniler önce)."""
         try:
-            from entropy.memory.wiki import queries_dir
+            from entropy.brain.wiki import queries_dir
         except Exception:
             return []
         out: List[Path] = []
@@ -823,7 +823,7 @@ class CognitiveContextBuilder:
         if not agent or not str(agent).strip():
             return None
         try:
-            from entropy.memory.agent_memory import load_agent_memory
+            from entropy.brain.agent_memory import load_agent_memory
 
             body = load_agent_memory(
                 str(agent), budget_tokens=budget, vault_path=self.playbooks.vault_path
@@ -846,7 +846,7 @@ class CognitiveContextBuilder:
         if not office or not str(office).strip():
             return None
         try:
-            from entropy.memory.agent_memory import load_office_memory
+            from entropy.brain.agent_memory import load_office_memory
 
             body = load_office_memory(
                 str(office), budget_tokens=budget, vault_path=self.playbooks.vault_path
@@ -928,7 +928,7 @@ class CognitiveContextBuilder:
         if not technical:
             return None
         try:
-            from entropy.memory.rag.project_indexer import ProjectIndexer
+            from entropy.brain.rag.project_indexer import ProjectIndexer
 
             indexer = ProjectIndexer(Path(project_dir))
             indexer.scan_and_index(max_files=120)
@@ -988,7 +988,7 @@ class CognitiveContextBuilder:
     def _brain_rules(self, budget: int) -> str:
         """Kullanıcının 'kalıcı yap' dediği kurallar; aday/reddedilen asla girmez."""
         try:
-            from entropy.memory.promoted_rules import ENTROPY_OFFICE, rules_section
+            from entropy.brain.promoted_rules import ENTROPY_OFFICE, rules_section
 
             text = rules_section(
                 ENTROPY_OFFICE, vault_path=self.playbooks.vault_path,
@@ -1073,7 +1073,7 @@ class CognitiveContextBuilder:
         bölümlerinden ve geri çağırmadan geliyor, burada 300 token'ı yerlerdi.
         """
         try:
-            from entropy.memory.handoff import (
+            from entropy.brain.handoff import (
                 SECTION_TITLES,
                 mark_handoff_consumed,
                 pending_handoff,

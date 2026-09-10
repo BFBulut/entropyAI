@@ -11,7 +11,7 @@ from typing import List
 
 import pytest
 
-from entropy.memory import checkpoints, office_workspace, promoted_rules
+from entropy.brain import checkpoints, office_workspace, promoted_rules
 
 OFFICE = "TestOfis"
 
@@ -266,7 +266,7 @@ def test_parse_proof_block_missing():
         "ERROR modül yüklenemedi çünkü bağımlılık eksik",
         'File "src/a.py", line 42',
         "C:\\EntropiAI\\src\\entropy dizinini kullan",
-        "src/entropy/memory/playbook.py dosyasını güncelle",
+        "src/entropy/brain/playbook.py dosyasını güncelle",
         "kısa",
     ],
 )
@@ -361,7 +361,7 @@ def test_rules_path_split_for_entropy_and_office(vault):
 
 
 def test_system_prompt_injects_promoted_rules(vault, monkeypatch):
-    from entropy.memory import system_prompt
+    from entropy.brain import system_prompt
 
     rule = promoted_rules.propose_rule(
         "entropy", "-", "Faz sonunda kullanıcı onayı beklenir", "sohbet", vault
@@ -388,7 +388,7 @@ def test_system_prompt_injects_promoted_rules(vault, monkeypatch):
 
 
 def test_system_prompt_without_rules_has_no_section(vault, monkeypatch):
-    from entropy.memory import system_prompt
+    from entropy.brain import system_prompt
 
     monkeypatch.setattr(system_prompt, "promoted_rules_section", lambda max_chars=0: "")
     monkeypatch.setattr(system_prompt, "cognitive_section", lambda *a, **k: "")

@@ -1455,14 +1455,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         """
         Varsayılan istemin YERİNE geçecek Entropy kimliğini kurar (Faz 9.2/9.4).
 
-        Gerçek metin `entropy.memory.system_prompt.build_system_prompt`'tan
+        Gerçek metin `entropy.brain.system_prompt.build_system_prompt`'tan
         gelir; o modül henüz yoksa ya da patlarsa buradaki yedek devreye girer.
         Guard bilinçli: kimliksiz koşmak (bugünkü kart davranışı) saf kipte çok
         daha kötü olurdu — varsayılan istem de düştüğü için model tamamen
         yönergesiz kalırdı.
         """
         try:
-            from entropy.memory.system_prompt import build_system_prompt
+            from entropy.brain.system_prompt import build_system_prompt
 
             text = build_system_prompt(
                 kind,
@@ -1851,7 +1851,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             try:
                 if not re.search(r'(?:^|\s)/learn\b', prompt or "", re.IGNORECASE) \
                         and not TASK_PROMPT_RE.search(prompt or ""):
-                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
                     save_session_note(
                         ObsidianVaultManager().entropy_dir,
                         full_text,
@@ -2356,7 +2356,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 clean_name = re.sub(r'[\\/*?:"<>|]', "_", task_name).strip() or task_id
                 time_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M")
                 try:
-                    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+                    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 
                     vm = ObsidianVaultManager()
                     report = (

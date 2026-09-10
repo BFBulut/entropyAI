@@ -88,8 +88,8 @@ def _dummy_proc_factory(lines, pid=4711):
 
 def test_real_bridge_passes_saved_report_path_to_on_result(tmp_path, monkeypatch):
     """Köprü, kasaya yazdığı rapor yolunu geri çağrıya `report_path=` ile verir."""
-    import entropy.memory.obsidian.vault_manager as vm_mod
-    import entropy.memory.supabase.cognitive_memory as cm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
+    import entropy.brain.supabase.cognitive_memory as cm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 
@@ -136,7 +136,7 @@ def test_real_bridge_passes_saved_report_path_to_on_result(tmp_path, monkeypatch
 
 def test_bridge_keeps_two_argument_callbacks_working(tmp_path, monkeypatch):
     """Eski `(metin, başarı)` imzalı geri çağrılar bozulmaz."""
-    import entropy.memory.obsidian.vault_manager as vm_mod
+    import entropy.brain.obsidian.vault_manager as vm_mod
     from entropy.core.agy_bridge import AgyProcessBridge
     from entropy.core.task_ledger import TaskLedger
 

@@ -77,7 +77,7 @@ class PDFIngestionEngine:
 
         # 1. Store high-level semantic node in Cognitive Memory
         try:
-            from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+            from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
             cog = CognitiveMemorySystem()
             excerpt = result["full_content"][:600]
             summary_text = (
@@ -101,7 +101,7 @@ class PDFIngestionEngine:
 
         # 2. Add to Project RAG indexer
         try:
-            from entropy.memory.rag.project_indexer import ProjectIndexer
+            from entropy.brain.rag.project_indexer import ProjectIndexer
             indexer = ProjectIndexer(config.default_project_path)
             indexer.scan_and_index(max_files=100)
         except Exception:

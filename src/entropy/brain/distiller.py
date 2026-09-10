@@ -23,7 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from entropy.memory.playbook import (
+from entropy.brain.playbook import (
     CHARS_PER_TOKEN,
     DISTILL_EXCERPT_CHARS,
     PLAYBOOK_MAX_CHARS,
@@ -491,7 +491,7 @@ class PlaybookDistiller:
         komutuyla elle yeniden üretilebilir.
         """
         try:
-            from entropy.memory.wiki import ingest_playbook_to_wiki
+            from entropy.brain.wiki import ingest_playbook_to_wiki
 
             res = ingest_playbook_to_wiki(skill_name, store=self.store)
             logger.info(

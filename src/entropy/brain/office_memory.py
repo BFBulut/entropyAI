@@ -3,7 +3,7 @@ Ofis belleği için ince cephe (facade) modülü.
 
 Agent Desk penceresi (`entropy.desk.window`) ofis belleğini **tam metin**
 olarak göstermek ister; bağlam kurucu ise bütçeye sığan bir **özet** ister.
-Depolama tarafı tek yerde, `entropy.memory.agent_memory` içindedir; burada
+Depolama tarafı tek yerde, `entropy.brain.agent_memory` içindedir; burada
 yalnızca iki çağrı biçimini uzlaştıran bir sarmalayıcı vardır.
 
 `budget_tokens=None` (varsayılan) -> MEMORY.md'nin tam metni.
@@ -15,12 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from entropy.memory.agent_memory import (  # noqa: F401  (yeniden dışa aktarım)
+from entropy.brain.agent_memory import (  # noqa: F401  (yeniden dışa aktarım)
     append_office_memory,
     consolidate_office_memory,
     office_memory_path,
 )
-from entropy.memory import agent_memory as _agent_memory
+from entropy.brain import agent_memory as _agent_memory
 
 __all__ = [
     "load_office_memory",

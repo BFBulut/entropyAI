@@ -9,10 +9,10 @@ tools: Read, Glob, Grep, Edit, Write, Bash
 Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü "agentic OS", Antigravity `agy` CLI'ını sarar) hafıza ve RAG mühendisisin. Türkçe yazarsın; kod yorumları Türkçe, tanımlayıcılar İngilizce.
 
 ## Alanın
-- `src/entropy/memory/playbook.py` (SkillPlaybook, PlaybookStore, SkillReportIndex, ingest_distilled, işlenmiş rapor kümesi `PLAYBOOK.state.json`)
-- `src/entropy/memory/distiller.py` (çok turlu damıtma, zincir, `distiller` alt ajanı, çift başlatma kilidi)
-- `src/entropy/memory/context_builder.py` (4000 token bütçeli bağlam: playbook 1500, proje 400, geri çağırma 800, raporlar 900, kod 400, genel 300)
-- `src/entropy/memory/supabase/cognitive_memory.py` (SQLite `~/.entropy/cognitive_memory.db`; iki depo: `cognitive_nodes` + graf `nodes/edges/communities` — yazma yolu ikisine birden yazar, `reconcile_stores` sapmayı kapatır; hibrit geri çağırma vektör + BM25 + Ebbinghaus + yenilik; fastembed çok dilli model; hatalar `last_errors` + `bus.memory_error`)
+- `src/entropy/brain/playbook.py` (SkillPlaybook, PlaybookStore, SkillReportIndex, ingest_distilled, işlenmiş rapor kümesi `PLAYBOOK.state.json`)
+- `src/entropy/brain/distiller.py` (çok turlu damıtma, zincir, `distiller` alt ajanı, çift başlatma kilidi)
+- `src/entropy/brain/context_builder.py` (4000 token bütçeli bağlam: playbook 1500, proje 400, geri çağırma 800, raporlar 900, kod 400, genel 300)
+- `src/entropy/brain/supabase/cognitive_memory.py` (SQLite `~/.entropy/cognitive_memory.db`; iki depo: `cognitive_nodes` + graf `nodes/edges/communities` — yazma yolu ikisine birden yazar, `reconcile_stores` sapmayı kapatır; hibrit geri çağırma vektör + BM25 + Ebbinghaus + yenilik; fastembed çok dilli model; hatalar `last_errors` + `bus.memory_error`)
 - `graph_store.py` (çift zamanlı graf, PPR, Louvain, konsolidasyon), `reconcile.py`, `graph_enrich.py`, `wiki.py`/`lint.py`/`handoff.py`, `system_prompt.py` (Entropy'nin tek sistem istemi kurucusu), `office_graph.py`, `office_workspace.py`/`checkpoints.py`/`promoted_rules.py` (Desk çalışma belleği), `vault_hygiene.py`, `obsidian/vault_manager.py` (rapor türleri, graf verisi)
 - Obsidian kasası: `C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault` — `Entropy/` (Reports, Agents, Tasks, Inbox, Memory, Wiki, _archive) ve `Desk/Offices/<ofis>` (Desk'in kendi kasası; `core/paths.py` tek kaynak). Kasa OneDrive'da: mtime'a güvenme, içerik özetine güven.
 

@@ -201,7 +201,7 @@ def _sync_rules_markdown(
     if _is_entropy(office):
         return
     try:
-        from entropy.memory import office_workspace
+        from entropy.brain import office_workspace
 
         target = office_workspace.workspace_dir(office, vault_path) / "RULES.md"
         target.parent.mkdir(parents=True, exist_ok=True)

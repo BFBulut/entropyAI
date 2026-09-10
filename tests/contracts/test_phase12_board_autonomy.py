@@ -413,7 +413,7 @@ def test_long_memory_commands_do_not_block_the_caller(monkeypatch):
         gate.wait(5)
         return {"merged": 1}
 
-    monkeypatch.setattr("entropy.memory.gray_merge.run_merge_round", slow_round)
+    monkeypatch.setattr("entropy.brain.gray_merge.run_merge_round", slow_round)
     started = time.time()
     out = sc._handle_memory("merge", None)
     elapsed = time.time() - started

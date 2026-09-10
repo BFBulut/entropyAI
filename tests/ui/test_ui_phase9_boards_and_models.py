@@ -359,7 +359,7 @@ def test_desk_window_logical_minimum_fits_small_screen(desk_window):
 
 def test_office_delete_button_archives_instead_of_deleting(app, tmp_path, monkeypatch):
     from entropy.core.config import config
-    from entropy.memory import vault_hygiene
+    from entropy.brain import vault_hygiene
 
     monkeypatch.setattr(config, "obsidian_vault_path", str(tmp_path), raising=False)
     office_dir = tmp_path / "Desk" / "Offices" / "alfa"

@@ -1732,7 +1732,7 @@ class TaskBoard:
         """
         Görev bitince kartı günceller, wiki sayfası ve ajan belleği yazar.
 
-        Bellek katmanı çağrıları içe aktarma koruması altında: `entropy.memory.wiki`
+        Bellek katmanı çağrıları içe aktarma koruması altında: `entropy.brain.wiki`
         ve `agent_memory` memory-rag tarafından sağlanıyor; henüz yoksa kart yine
         de doğru biçimde kapanmalı — ajan katmanı onlara bağımlı olamaz.
         """
@@ -2001,7 +2001,7 @@ class TaskBoard:
 
     def _write_wiki_page(self, card: TaskCard, body: str):
         try:
-            from entropy.memory.wiki import write_query_page  # type: ignore
+            from entropy.brain.wiki import write_query_page  # type: ignore
         except Exception:
             return None
         try:
@@ -2024,7 +2024,7 @@ class TaskBoard:
 
     def _append_agent_memory(self, card: TaskCard, body: str) -> None:
         try:
-            from entropy.memory.agent_memory import append_agent_memory  # type: ignore
+            from entropy.brain.agent_memory import append_agent_memory  # type: ignore
         except Exception:
             return
         try:

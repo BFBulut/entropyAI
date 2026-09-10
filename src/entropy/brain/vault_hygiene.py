@@ -101,7 +101,7 @@ def find_ghost_offices(vault_path: Optional[Path] = None) -> List[Dict[str, Any]
     Bunlar Desk yüzeyinde ofis gibi görünür ama künyesiz oldukları için
     `desk_roster()` onları eksik doldurur ve ofis grafı boş kalır.
     """
-    from entropy.memory.office_graph import desk_offices_dir
+    from entropy.brain.office_graph import desk_offices_dir
 
     base = desk_offices_dir(vault_path)
     if not base.is_dir():
@@ -187,7 +187,7 @@ def archive_office(
     ofisin klasörünün İÇİNE değil, çünkü ofis klasörü hiç taşınmamış olabilir
     ve izler o durumda da temizlenmeli.
     """
-    from entropy.memory.office_graph import desk_offices_dir
+    from entropy.brain.office_graph import desk_offices_dir
 
     if isinstance(office, dict):
         name = str(office.get("name") or "").strip()

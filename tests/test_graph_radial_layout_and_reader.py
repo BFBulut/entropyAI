@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.widgets.knowledge_graph import GRAPH_HTML_TEMPLATE, KnowledgeGraphWidget
 from entropy.ui.widgets.reports_viewer import (
     ReportsViewerWidget,

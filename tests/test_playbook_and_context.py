@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory.context_builder import (
+from entropy.brain.context_builder import (
     DEFAULT_TOKEN_BUDGET,
     CognitiveContextBuilder,
     _best_excerpt,
 )
-from entropy.memory.distiller import PlaybookDistiller
-from entropy.memory.playbook import (
+from entropy.brain.distiller import PlaybookDistiller
+from entropy.brain.playbook import (
     PLAYBOOK_MAX_CHARS,
     PlaybookStore,
     SkillPlaybook,
@@ -198,7 +198,7 @@ def test_multi_pass_distillation_continues_and_refines(tmp_path, monkeypatch):
     Kaynak sayısı tur kapasitesini aşınca: ilk tur 'kısmi' bırakır, ikinci tur
     kaldığı yerden devam eder ve mevcut yordamı prompt'a verir, son tur 'güncel' yapar.
     """
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 3)
     store = _skill_vault(tmp_path, "demo", 7)
@@ -270,7 +270,7 @@ def test_degenerate_output_is_rejected_and_existing_kept(tmp_path):
     Regresyon: agy 'plan' modunda yordam yerine 1 KB'lık bir plan notu döndürdü ve
     9 KB'lık v4 sessizce silindi.
     """
-    from entropy.memory.playbook import DegenerateDistillation
+    from entropy.brain.playbook import DegenerateDistillation
 
     store = _skill_vault(tmp_path, "demo", 2)
     d = PlaybookDistiller(store=store)
@@ -445,7 +445,7 @@ def test_context_survives_failing_section(tmp_path):
 
 def test_procedural_excerpt_prefers_steps_over_narrative():
     """Ham ön ek yerine yordam taşıyan bloklar seçilmeli."""
-    from entropy.memory.playbook import procedural_excerpt
+    from entropy.brain.playbook import procedural_excerpt
 
     body = (
         "Bu rapor 2026 yilinda hazirlanmistir ve genel bir girise sahiptir. " * 12
@@ -460,7 +460,7 @@ def test_procedural_excerpt_prefers_steps_over_narrative():
 
 
 def test_procedural_excerpt_falls_back_to_prefix_when_nothing_scores():
-    from entropy.memory.playbook import procedural_excerpt
+    from entropy.brain.playbook import procedural_excerpt
 
     body = "duz metin " * 500
     out = procedural_excerpt(body, 200)
@@ -469,7 +469,7 @@ def test_procedural_excerpt_falls_back_to_prefix_when_nothing_scores():
 
 def test_known_content_loses_priority_to_new_content():
     """Mevcut yordamda zaten geçen blok, yeni bilgi taşıyan bloğa yer bırakmalı."""
-    from entropy.memory.playbook import _shingles, procedural_excerpt
+    from entropy.brain.playbook import _shingles, procedural_excerpt
 
     bilinen = "## Adim\n1. Teknik tarama yapilir ve sonuclar karsilastirilir sirayla.\n"
     yeni = "## Adim\n1. Rakip backlink profili cikarilir ve bosluk analizi yapilir.\n"
@@ -479,7 +479,7 @@ def test_known_content_loses_priority_to_new_content():
 
 
 def test_near_duplicate_reports_collapse_to_one_representative(tmp_path):
-    from entropy.memory.playbook import select_representatives
+    from entropy.brain.playbook import select_representatives
 
     d = tmp_path / "r"
     d.mkdir()
@@ -503,7 +503,7 @@ def test_near_duplicate_reports_collapse_to_one_representative(tmp_path):
 
 def test_short_reports_are_never_eliminated_as_duplicates(tmp_path):
     """Parmak izi çıkarılamayan rapor elenmemeli; eleme ancak ölçülebilirse yapılır."""
-    from entropy.memory.playbook import select_representatives
+    from entropy.brain.playbook import select_representatives
 
     d = tmp_path / "r"
     d.mkdir()
@@ -534,13 +534,13 @@ def test_large_archive_switches_to_compact_passes_and_costs_less(tmp_path):
     Büyük arşiv: tur başına daha çok rapor, rapor başına daha kısa yordam alıntısı.
     Toplam tahmini maliyet klasik şeklin belirgin altında kalmalı.
     """
-    from entropy.memory.distiller import (
+    from entropy.brain.distiller import (
         COMPACT_EXCERPT_CHARS,
         COMPACT_MIN_SOURCES,
         COMPACT_SOURCES_PER_PASS,
         estimate_chain_cost,
     )
-    from entropy.memory.playbook import DISTILL_EXCERPT_CHARS
+    from entropy.brain.playbook import DISTILL_EXCERPT_CHARS
 
     n = COMPACT_MIN_SOURCES + 8
     store = _big_vault(tmp_path, "demo", n)
@@ -568,8 +568,8 @@ def test_large_archive_switches_to_compact_passes_and_costs_less(tmp_path):
 
 def test_small_archive_behaviour_is_unchanged(tmp_path):
     """Küçük arşivde şekil ve maliyet aynen korunmalı (regresyon kilidi)."""
-    from entropy.memory.distiller import MAX_SOURCES_PER_PASS
-    from entropy.memory.playbook import DISTILL_EXCERPT_CHARS
+    from entropy.brain.distiller import MAX_SOURCES_PER_PASS
+    from entropy.brain.playbook import DISTILL_EXCERPT_CHARS
 
     store = _big_vault(tmp_path, "demo", 16)
     d = PlaybookDistiller(store=store)
@@ -584,7 +584,7 @@ def test_small_archive_behaviour_is_unchanged(tmp_path):
 
 def test_duplicates_are_marked_processed_so_chain_terminates(tmp_path):
     """Okunmayan kopyalar işlenmiş sayılmazsa zincir hiç bitmez."""
-    from entropy.memory.distiller import COMPACT_MIN_SOURCES
+    from entropy.brain.distiller import COMPACT_MIN_SOURCES
 
     skill = "demo"
     rep = tmp_path / "Entropy" / "Skills" / skill / "Reports"
@@ -622,7 +622,7 @@ def _rich_playbook() -> str:
 
 
 def test_playbook_quality_measures_coverage_steps_and_repetition():
-    from entropy.memory.playbook import playbook_quality
+    from entropy.brain.playbook import playbook_quality
 
     good = playbook_quality(_rich_playbook())
     assert good["coverage"] == 1.0
@@ -643,7 +643,7 @@ def test_quality_regression_rejects_long_but_sectionless_output(tmp_path):
     Uzunluk ve başlık sayısı kaba ölçüler: uzun ama bölümlerini kaybetmiş bir
     çıktı ikisini de geçebiliyor. Kalite ölçütü onu reddetmeli.
     """
-    from entropy.memory.playbook import DegenerateDistillation, playbook_quality
+    from entropy.brain.playbook import DegenerateDistillation, playbook_quality
 
     store = _skill_vault(tmp_path, "demo", 2)
     d = PlaybookDistiller(store=store)

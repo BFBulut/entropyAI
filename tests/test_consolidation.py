@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
 
 @pytest.fixture

@@ -246,7 +246,7 @@ def test_isolated_claude_argv_shape(tmp_path, monkeypatch):
 
 def test_system_prompt_has_no_brand_and_orchestrator_ignores_entropy(tmp_path):
     """Kural (d): marka adi istemde gecmez; orkestrator istemi Entropy'yi anmaz."""
-    from entropy.memory.system_prompt import build_system_prompt
+    from entropy.brain.system_prompt import build_system_prompt
 
     text = build_system_prompt("chat", provider="claude", query="merhaba")
     assert FORBIDDEN_BRAND not in text.lower(), "sistem isteminde yasakli marka"

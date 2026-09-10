@@ -8,7 +8,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QApplication
 
 from entropy.core.event_bus import bus
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
 from entropy.ui.widgets.knowledge_graph import GraphWebEnginePage, KnowledgeGraphWidget
 from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget

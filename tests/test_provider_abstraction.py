@@ -464,7 +464,7 @@ def test_handoff_compacts_history_when_memory_module_available(monkeypatch, tmp_
     page = tmp_path / "handoff.md"
     seen = {}
 
-    fake = types.ModuleType("entropy.memory.handoff")
+    fake = types.ModuleType("entropy.brain.handoff")
 
     def write_handoff(history, meta):
         seen["n"] = len(history)
@@ -473,7 +473,7 @@ def test_handoff_compacts_history_when_memory_module_available(monkeypatch, tmp_
         return str(page)
 
     fake.write_handoff = write_handoff
-    monkeypatch.setitem(sys.modules, "entropy.memory.handoff", fake)
+    monkeypatch.setitem(sys.modules, "entropy.brain.handoff", fake)
 
     result = b.compact_context_via_handoff()
 
@@ -496,7 +496,7 @@ def test_handoff_is_noop_without_memory_module(monkeypatch):
     real_import = builtins.__import__
 
     def guard(name, *args, **kwargs):
-        if name == "entropy.memory.handoff":
+        if name == "entropy.brain.handoff":
             raise ImportError("henüz yok")
         return real_import(name, *args, **kwargs)
 

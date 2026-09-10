@@ -31,7 +31,7 @@ kopya. Bu modül o döngüyü üç yerden keser:
 
 Bağımlılık yönü
 ---------------
-Hafıza katmanı (`entropy.memory.*`) burada **isteğe bağlıdır**: her çağrı
+Hafıza katmanı (`entropy.brain.*`) burada **isteğe bağlıdır**: her çağrı
 korumalı içe aktarma ardında. Ajan katmanı hafızaya bağımlı olamaz — kart, kapı
 yokken de doğru biçimde kapanmalı.
 """
@@ -285,7 +285,7 @@ def brain_lookup(query: str, builder: Any = None, card: Any = None) -> BrainAnsw
         return BrainAnswer()
     try:
         if builder is None:
-            from entropy.memory.context_builder import (  # type: ignore
+            from entropy.brain.context_builder import (  # type: ignore
                 CognitiveContextBuilder,
             )
 
@@ -426,10 +426,10 @@ def admit_report(
         return report
     try:
         if gate is None:
-            from entropy.memory.gate import MemoryGate  # type: ignore
+            from entropy.brain.gate import MemoryGate  # type: ignore
 
             if memory is None:
-                from entropy.memory.supabase.cognitive_memory import (  # type: ignore
+                from entropy.brain.supabase.cognitive_memory import (  # type: ignore
                     CognitiveMemorySystem,
                 )
 

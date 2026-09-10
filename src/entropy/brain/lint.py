@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from entropy.memory.wiki import (
+from entropy.brain.wiki import (
     concepts_dir,
     entities_dir,
     queries_dir,
@@ -177,7 +177,7 @@ def lint_skill(skill: str, vault_path: Optional[Path] = None, store: Any = None,
     """
     Bir yeteneğin wiki'sini denetler; hiçbir dosya yazmaz (rapor ayrı işlevdir).
     """
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = store or PlaybookStore(vault_path=vault_path)
     vault_path = vault_path if vault_path is not None else store.vault_path
@@ -303,7 +303,7 @@ def _open_task_findings(vault_path: Optional[Path]) -> List[LintFinding]:
     """En yeni aktarım sayfasındaki kapanmamış "Açık İşler" maddeleri."""
     out: List[LintFinding] = []
     try:
-        from entropy.memory.handoff import sessions_dir
+        from entropy.brain.handoff import sessions_dir
     except Exception:  # pragma: no cover
         return out
     d = sessions_dir(vault_path)
@@ -332,7 +332,7 @@ def _open_task_findings(vault_path: Optional[Path]) -> List[LintFinding]:
 
 def lint_vault(vault_path: Optional[Path] = None, skills: Optional[List[str]] = None) -> List[LintResult]:
     """Kasadaki tüm yetenekleri (ya da verilenleri) denetler."""
-    from entropy.memory.playbook import PlaybookStore
+    from entropy.brain.playbook import PlaybookStore
 
     store = PlaybookStore(vault_path=vault_path)
     if skills is None:

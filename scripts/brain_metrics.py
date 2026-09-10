@@ -40,12 +40,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from entropy.memory.categories import CANONICAL_CATEGORIES  # noqa: E402
-from entropy.memory.gate import (  # noqa: E402
+from entropy.brain.categories import CANONICAL_CATEGORIES  # noqa: E402
+from entropy.brain.gate import (  # noqa: E402
     IDENTITY_PROVENANCE,
     LEGACY_PROVENANCE,
 )
-from entropy.memory.supabase.cognitive_memory import (  # noqa: E402
+from entropy.brain.supabase.cognitive_memory import (  # noqa: E402
     CognitiveMemorySystem,
     default_cognitive_db_path,
 )
@@ -365,7 +365,7 @@ def _wiki_tokens(ctx: Any) -> int:
     bloktur (`[Wiki]`), o yüzden yalnızca o bloğun kendisi sayılır — bölümün
     tamamını saymak payı şişirirdi.
     """
-    from entropy.memory.playbook import estimate_tokens
+    from entropy.brain.playbook import estimate_tokens
 
     total = 0
     for section in getattr(ctx, "sections", []) or []:
@@ -390,7 +390,7 @@ def context_metrics(
     Model çağırmaz, hafızaya yazmaz: yalnızca `CognitiveContextBuilder.build`
     çağrılır ve bölüm token sayıları toplanır.
     """
-    from entropy.memory.context_builder import (
+    from entropy.brain.context_builder import (
         DEFAULT_TOKEN_BUDGET,
         CognitiveContextBuilder,
     )

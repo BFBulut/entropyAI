@@ -32,7 +32,7 @@ rapor alır; Desk Entropy'nin panosuna kart **itemez**. Gerekçe ve zorlayıcı 
 | Paket | Dosya | Satır | Rol |
 |---|---:|---:|---|
 | `ui/` (+ `modes/`, `widgets/`, `themes/`) | 37 | ~20.700 | PySide6 kabuğu: Zen / Chat / Floating kipleri, 29 widget |
-| `memory/` (+ `rag/`, `obsidian/`, `supabase/`) | 22 | ~13.800 | bilişsel bellek, graf, wiki, playbook, bağlam kurucu, ofis çalışma alanı, damıtıcı |
+| `brain/` (+ `rag/`, `obsidian/`, `supabase/`) | 22 | ~13.800 | bilişsel bellek, graf, wiki, playbook, bağlam kurucu, ofis çalışma alanı, damıtıcı |
 | `core/` | 15 | ~11.700 | yapılandırma, olay veriyolu, iki sağlayıcı köprüsü, slash komutlar, kilit, kimlik, defter |
 | `agents/` | 13 | ~8.500 | ajan kayıt defteri, derleme, görev kartları, harness, posta kutusu, worktree, PR akışı, şablonlar |
 | `desk/` (+ `engine/`, `assets/`, `templates/`) | 20 | ~6.700 | Agent Desk penceresi, piksel sahne motoru, paneller |
@@ -152,26 +152,26 @@ Efor ayrı bir bayrak değil **model varyantı** olarak geçirilir (v0.7.1).
 
 | Katman | Nerede | Ne tutar |
 |---|---|---|
-| Bilişsel bellek (12 katmanlı, çift depo) | `memory/supabase/cognitive_memory.py` — yerel SQLite + isteğe bağlı pgvector | düğümler, gömmeler, hibrit recall (semantik + sözcüksel) |
-| Bilgi grafı | `memory/graph_store.py`, `graph_enrich.py`, `office_graph.py` | düğüm-kenar grafı, PPR benzeri genişletme, topluluklar |
-| Wiki (derlenmiş bilgi) | `memory/wiki.py`, `lint.py` | raporlardan damıtılmış kalıcı maddeler |
-| Playbook (yordamsal) | `memory/playbook.py` | "bu iş nasıl yapılır" — yetenek başına yordam |
+| Bilişsel bellek (12 katmanlı, çift depo) | `brain/supabase/cognitive_memory.py` — yerel SQLite + isteğe bağlı pgvector | düğümler, gömmeler, hibrit recall (semantik + sözcüksel) |
+| Bilgi grafı | `brain/graph_store.py`, `graph_enrich.py`, `office_graph.py` | düğüm-kenar grafı, PPR benzeri genişletme, topluluklar |
+| Wiki (derlenmiş bilgi) | `brain/wiki.py`, `lint.py` | raporlardan damıtılmış kalıcı maddeler |
+| Playbook (yordamsal) | `brain/playbook.py` | "bu iş nasıl yapılır" — yetenek başına yordam |
 | Kalıcı notlar | kasada `MEMORY.md` | kullanıcının elle düzenlediği gerçek |
-| Ofis çalışma alanı | `memory/office_workspace.py` | `BOARD.md`, `ARCHITECTURE.md`, `RULES.md`, `checkpoints/<kart-id>.md` |
-| Uzlaştırma | `memory/reconcile.py` | "bunu zaten biliyorum" denetimi (bugün yalnızca graf katmanına bağlı — Faz 11-B'nin ana işi) |
-| Damıtma / rapor akışı | `memory/distiller.py`, `report_watcher.py`, `handoff.py` | rapor → wiki/playbook hattı |
+| Ofis çalışma alanı | `brain/office_workspace.py` | `BOARD.md`, `ARCHITECTURE.md`, `RULES.md`, `checkpoints/<kart-id>.md` |
+| Uzlaştırma | `brain/reconcile.py` | "bunu zaten biliyorum" denetimi (bugün yalnızca graf katmanına bağlı — Faz 11-B'nin ana işi) |
+| Damıtma / rapor akışı | `brain/distiller.py`, `report_watcher.py`, `handoff.py` | rapor → wiki/playbook hattı |
 
-**Bağlam kurucu** (`memory/context_builder.py`) sabit bir token bütçesini
+**Bağlam kurucu** (`brain/context_builder.py`) sabit bir token bütçesini
 (`DEFAULT_TOKEN_BUDGET = 4000`) öncelik sırasıyla doldurur: playbook → hibrit recall →
 rapor alıntıları → kalıcı hafıza. Maliyet kasanın büyüklüğünden bağımsızdır.
 
-**Onaylı kurallar** (`memory/promoted_rules.py`): ajan bir kural keşfettiğinde uygulama
+**Onaylı kurallar** (`brain/promoted_rules.py`): ajan bir kural keşfettiğinde uygulama
 kullanıcıya sorar; yalnızca "kalıcı yap" denince kural o ajanın sistem istemine her koşuda
 enjekte edilir. Ajanlar hata ve günlük **yazmaz**.
 
 ### 5.1 Beyin v2 — yazma kapısı, kategoriler, turlar (Faz 11-B/C/D, **kod**)
 
-**Yazma kapısı** `memory/gate.py` — hafızaya giden **tek** yol.
+**Yazma kapısı** `brain/gate.py` — hafızaya giden **tek** yol.
 `MemoryGate.admit(category, content, importance=0.5, metadata=None, provenance="")
 -> GateDecision`; `action ∈ {add, noop, gray, supersede, reject}`.
 Bantlar: `cos ≥ 0.95` NOOP · `cos < 0.80` ADD · arası **gri bant** (düğüm yazılır
@@ -181,7 +181,7 @@ Bantlar: `cos ≥ 0.95` NOOP · `cos < 0.80` ADD · arası **gri bant** (düğü
 `CognitiveMemorySystem.store_decision(decision)` kullanılır (aynı metin iki kez gömülmez).
 Bayraklar: `ENTROPY_MEMORY_GATE=0` kapıyı atlar, `ENTROPY_MEMORY_GATE_STRICT` katı kipi zorlar.
 
-**Kategori kapalı kümesi** `memory/categories.py` →
+**Kategori kapalı kümesi** `brain/categories.py` →
 `CANONICAL_CATEGORIES = ("working", "episodic", "semantic", "procedural")`.
 Kimlik/kural (L4) **kategori değil bayraktır**: `is_identity`; kaynağı
 `gate.IDENTITY_PROVENANCE = "identity:core"`. Eski 13+ ad `LEGACY_CATEGORY_MAP` ile
@@ -190,7 +190,7 @@ eşlenir, ham değer `metadata.legacy_category`'de kalır. Şema v2 sütunları:
 Kaynağı hiç kaydedilmemiş eski L2 düğümlere uydurma kaynak **yazılmaz**:
 `gate.LEGACY_PROVENANCE = "legacy:pre-v2"`, `confidence = 0.40`.
 
-**Rüya döngüsü** `memory/dream.py` —
+**Rüya döngüsü** `brain/dream.py` —
 `dream_and_consolidate(memory=None, send_prompt=None, vault_path=None, ...) -> DreamReport`.
 Altı adım: yeniden gömme → gri bant turu → `cos ≥ 0.95` kopya birleştirme (LLM'siz) →
 ölçülü unutma (`forget_stale`: önem < 0,35 **ve** `access_count ≤ 1` **ve** 30 gün →
@@ -198,13 +198,13 @@ Altı adım: yeniden gömme → gri bant turu → `cos ≥ 0.95` kopya birleşti
 konsolidasyonu. Zamanlanmış görev: `ensure_daily_dreaming_task(scheduler=None, hour=4)`
 (idempotent, `bootstrap.ensure_memory_tasks()` çağırır).
 
-**Gri bant birleştirme turu** `memory/gray_merge.py` —
+**Gri bant birleştirme turu** `brain/gray_merge.py` —
 `run_merge_round(memory=None, send_prompt=None, limit=8, ...) -> MergeResult`.
 N aday **tek istemde**; yanıt `{"decisions":[{"id","action","content","reason"}]}`,
 `action ∈ {merge, keep_both, supersede}`. `send_prompt=None` ise **kuru koşum**
 (kuyruk boşaltılmaz, model çağrılmaz). Sağlayıcı seçimi çağıranındır.
 
-**Wiki derleme hattı** `memory/wiki.py` —
+**Wiki derleme hattı** `brain/wiki.py` —
 `compile_skill(skill, bridge=None, budget_turns=8, ...) -> dict`. **Rapor başına bir tur**,
 artımlı (`WIKI.state.json` işlenen rapor kümesini tutar), `bridge=None` ise model
 çağrılmaz (yalnız playbook tabanlı sayfalar + indeks + lint).
@@ -464,8 +464,8 @@ Kullanıcı ─▶ Entropy Chat ─▶ [Beyin v2: MemoryGate ▸ L1 çalışma /
         rapor → Entropy/Reports + pano olayı → sohbete "rapor geldi" kartı → beyne yenilik kapısından
 ```
 
-Karşılıkları: `memory/gate.py`, `memory/categories.py`, `memory/dream.py`,
-`memory/gray_merge.py`, `memory/wiki.py`, `agents/board_fsm.py`, `agents/board_events.py`,
+Karşılıkları: `brain/gate.py`, `brain/categories.py`, `brain/dream.py`,
+`brain/gray_merge.py`, `brain/wiki.py`, `agents/board_fsm.py`, `agents/board_events.py`,
 `agents/dispatcher.py`, `agents/board_tools.py`, `agents/amplification.py`,
 `core/identity.AgentSessionStore`, `ui/design/{tokens,qss,icons}.py`.
 
@@ -475,7 +475,7 @@ Karşılıkları: `memory/gate.py`, `memory/categories.py`, `memory/dream.py`,
 |---|---|---|
 | 1 | **Depo bakımı (12-E, bu dilim):** tek seferlik betikler `scripts/_oneshot/`, referans testler `tests/_reference/`, çürük spec ve eskimiş özellik belgeleri `docs/_archive/prototype/`, `skills/` üçüzlemesinin tekilleştirilmesi, `platform/autostart.py` kaldırılması | toplama sayısı değişmez; `tests/_reference` + `tests/skills` + `test_exe` + `test_scheduler` yeşil |
 | 2 | **`EntropyAI.spec` sapması:** Faz 11'de eklenen 15 modülün paketlenip paketlenmediği **ölçülür**, eksikse hiddenimports tamamlanır | derleme exit 0; `build/EntropyAI/xref-EntropyAI.html` taraması ya da `.exe` içi içe aktarma kontrolü |
-| 3 | **`memory → brain` taşıması** — ön koşullar kapanmadan **başlamaz**: süit yeşil, spec sapması ölçülmüş, bu belge güncel | `grep -rn 'entropy\.memory' src tests scripts EntropyAI.spec` → 0; test sayısı değişmez ([ADR-0004](adr/ADR-0004-faz11-paket-tasima-yok.md) §adım planı) |
+| 3 | ~~**`memory → brain` taşıması**~~ — **YAPILDI** (Faz 13-B, [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)); kalan iş: uyumluluk şimi `src/entropy/memory/__init__.py` **v0.12.0'da silinir** | `grep -rn 'entropy\.memory' src tests scripts EntropyAI.spec` → 0 (şim hariç); test sayısı değişmedi (2.596) |
 | 4 | **Açık işler:** `K4/K5/K6` için kalıcı harness, `config.amplification_lock`'un arayüz karşılığı, kartın `report_path` alanının doldurulması, `ui/widgets/tasks_widget.py` eski `dream_and_consolidate` çağrısı | her biri sözleşme testiyle kapanır |
 
 **Kural:** bu bölümdeki bir hedef koda dönüştüğünde aynı commit'te yukarıdaki ilgili

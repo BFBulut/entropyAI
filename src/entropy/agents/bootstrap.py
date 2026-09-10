@@ -122,7 +122,7 @@ def ensure_memory_tasks(scheduler=None) -> Optional[str]:
     Dönüş: kaydedilen görev kimliği ya da None.
     """
     try:
-        from entropy.memory.dream import DAILY_DREAM_TASK_ID, ensure_daily_dreaming_task
+        from entropy.brain.dream import DAILY_DREAM_TASK_ID, ensure_daily_dreaming_task
     except Exception:
         logger.debug("Rüya modülü yok; gece konsolidasyonu kaydedilmedi", exc_info=True)
         return None
@@ -179,7 +179,7 @@ def bootstrap_agents(
         # modül yoksa (ya da taşınacak bir şey yoksa) sessizce atlanır. Açılışta
         # bir kez koşar: taşıma işlevi kendi içinde tekrarlanabilir olmalı.
         try:
-            from entropy.memory.office_graph import migrate_legacy_offices  # type: ignore
+            from entropy.brain.office_graph import migrate_legacy_offices  # type: ignore
         except Exception:
             migrate_legacy_offices = None  # type: ignore
         if migrate_legacy_offices is not None:

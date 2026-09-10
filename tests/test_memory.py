@@ -4,9 +4,9 @@ import time
 import pytest
 from pathlib import Path
 
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
-from entropy.memory.rag.project_indexer import ProjectIndexer
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
+from entropy.brain.rag.project_indexer import ProjectIndexer
 
 @pytest.fixture
 def temp_vault(tmp_path):
@@ -142,7 +142,7 @@ def test_bidirectional_backlinks_and_moc_sync(temp_vault):
 
 def test_local_embedding_engine_and_cosine_sim():
     # T2.1: Local zero-API embedding vector generation
-    from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine, cosine_similarity
+    from entropy.brain.supabase.cognitive_memory import LocalEmbeddingEngine, cosine_similarity
 
     engine = LocalEmbeddingEngine.get_instance()
     v1 = engine.embed_text("Entropy AI autonomous operating system")

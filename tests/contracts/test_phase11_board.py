@@ -753,7 +753,7 @@ def test_ensure_memory_tasks_registers_daily_dreaming_idempotently():
     kablolaması `bootstrap.ensure_memory_tasks` ile kuruldu.
     """
     from entropy.agents.bootstrap import ensure_memory_tasks
-    from entropy.memory.dream import DAILY_DREAM_TASK_ID
+    from entropy.brain.dream import DAILY_DREAM_TASK_ID
 
     class _Sched:
         def __init__(self):

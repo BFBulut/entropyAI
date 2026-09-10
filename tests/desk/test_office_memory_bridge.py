@@ -1,8 +1,8 @@
 """
 FAZ 3d QA — ofis belleği cephe modülü ve harness'ın gerçek kasaya yazımı.
 
-Pencere (`entropy.desk.window`) `entropy.memory.office_memory.load_office_memory`
-bekliyor; depolama `entropy.memory.agent_memory` içinde. Bu dosya iki katmanın
+Pencere (`entropy.desk.window`) `entropy.brain.office_memory.load_office_memory`
+bekliyor; depolama `entropy.brain.agent_memory` içinde. Bu dosya iki katmanın
 imza uyumunu ve harness -> wiki/bellek yazımının gerçekten dosya ürettiğini
 kanıtlar. Gerçek agy çağrısı yok: köprü sahte, kasa tmp_path.
 """
@@ -16,9 +16,9 @@ from entropy.agents.harness import OfficeHarness
 from entropy.agents.offices import OfficeRegistry
 from entropy.agents.registry import AgentRegistry
 from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
-from entropy.memory import agent_memory as am
-from entropy.memory import office_memory as om
-from entropy.memory import wiki
+from entropy.brain import agent_memory as am
+from entropy.brain import office_memory as om
+from entropy.brain import wiki
 
 
 # --- cephe modülü ----------------------------------------------------------

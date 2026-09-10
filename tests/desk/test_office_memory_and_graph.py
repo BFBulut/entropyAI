@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import agent_memory as am
-from entropy.memory import wiki
+from entropy.brain import agent_memory as am
+from entropy.brain import wiki
 
 
 class FakeMemory:
@@ -117,8 +117,8 @@ def test_consolidate_office_memory_is_llm_free_and_idempotent(tmp_path):
 
 
 def _builder(tmp_path):
-    from entropy.memory.context_builder import CognitiveContextBuilder
-    from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+    from entropy.brain.context_builder import CognitiveContextBuilder
+    from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
     store = PlaybookStore(vault_path=tmp_path, index=SkillReportIndex(index_path=tmp_path / "idx.json"))
 
@@ -134,7 +134,7 @@ def _builder(tmp_path):
 
 
 def test_context_includes_office_memory_when_meta_has_office(tmp_path):
-    from entropy.memory.context_builder import BUDGET_OFFICE_MEMORY
+    from entropy.brain.context_builder import BUDGET_OFFICE_MEMORY
 
     am.append_office_memory("ofis", _entry("kota kartı", tmp_path, learning="Ofis kartı 3 alt karta bölünür."))
     b = _builder(tmp_path)
@@ -224,7 +224,7 @@ def test_plain_query_page_does_not_create_office_folder(tmp_path):
 
 
 def test_office_report_is_not_a_distillation_source_but_enters_recall_pool(tmp_path):
-    from entropy.memory.playbook import discover_reports
+    from entropy.brain.playbook import discover_reports
 
     page, _ = _write_office_report(tmp_path, body="ölçüm " * 200)
     gercek = tmp_path / "Entropy" / "Reports" / "Gercek Rapor.md"
@@ -249,7 +249,7 @@ def test_office_report_is_not_a_distillation_source_but_enters_recall_pool(tmp_p
 
 
 def test_load_latest_handoff_skips_office_reports(tmp_path):
-    from entropy.memory.handoff import load_latest_handoff, sessions_dir
+    from entropy.brain.handoff import load_latest_handoff, sessions_dir
 
     d = sessions_dir(tmp_path)
     d.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ def _office_vault(tmp_path):
 
 def test_graph_data_has_office_agent_and_query_nodes(tmp_path, monkeypatch):
     monkeypatch.setenv("ENTROPY_GRAPH_CACHE", "0")
-    from entropy.memory.obsidian import vault_manager as vm
+    from entropy.brain.obsidian import vault_manager as vm
 
     vm.clear_graph_cache()
     _office_vault(tmp_path)
@@ -341,7 +341,7 @@ def test_graph_data_has_office_agent_and_query_nodes(tmp_path, monkeypatch):
 
 def test_unified_graph_places_office_nodes_under_offices_hub(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("ENTROPY_GRAPH_CACHE", "0")
-    from entropy.memory.obsidian import vault_manager as vm
+    from entropy.brain.obsidian import vault_manager as vm
     from entropy.ui.widgets.knowledge_graph import KnowledgeGraphWidget
 
     vm.clear_graph_cache()

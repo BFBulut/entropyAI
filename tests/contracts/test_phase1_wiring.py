@@ -19,7 +19,7 @@ def test_main_starts_and_stops_report_watcher():
 
 
 def test_report_watcher_exports_start_stop():
-    from entropy.memory import report_watcher
+    from entropy.brain import report_watcher
 
     assert callable(report_watcher.start_report_watcher)
     assert callable(report_watcher.stop_report_watcher)

@@ -28,8 +28,8 @@ brain_metrics = importlib.import_module("brain_metrics")
 memory_blind_test = importlib.import_module("memory_blind_test")
 memory_migrate_v2 = importlib.import_module("memory_migrate_v2")
 
-from entropy.memory.categories import CANONICAL_CATEGORIES  # noqa: E402
-from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem  # noqa: E402
+from entropy.brain.categories import CANONICAL_CATEGORIES  # noqa: E402
+from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -383,7 +383,7 @@ def _make_identity_db(tmp_path):
 
 def test_identity_nodes_get_identity_core_provenance(tmp_path):
     """`--tag-legacy` kimlik düğümlerini `identity:core` ile damgalar (idempotent)."""
-    from entropy.memory.gate import IDENTITY_PROVENANCE
+    from entropy.brain.gate import IDENTITY_PROVENANCE
 
     import sqlite3
 
@@ -429,7 +429,7 @@ def test_crag_threshold_is_calibrated_value():
     Eşik gerçek DB kopyasında 10 etiketli sorguyla ölçüldü (5 var / 5 yok):
     0,45 → 8/10, **0,40 → 9/10**, 0,30 → 5/10. Sabit ölçülen değerde durmalı.
     """
-    from entropy.memory.context_builder import CRAG_MIN_SCORE
+    from entropy.brain.context_builder import CRAG_MIN_SCORE
 
     assert CRAG_MIN_SCORE == 0.40
 
@@ -437,7 +437,7 @@ def test_crag_threshold_is_calibrated_value():
 def test_crag_threshold_reads_config_setting(monkeypatch):
     """Eşik artık ayar; `config.brain_confidence_threshold` etkin değeri belirler."""
     from entropy.core.config import config
-    from entropy.memory.context_builder import AssembledContext, crag_min_score
+    from entropy.brain.context_builder import AssembledContext, crag_min_score
 
     monkeypatch.setattr(config, "brain_confidence_threshold", 0.90, raising=False)
     assert crag_min_score() == 0.90
@@ -452,7 +452,7 @@ def test_crag_threshold_reads_config_setting(monkeypatch):
 def test_crag_threshold_ignores_out_of_range_setting(monkeypatch):
     """Bozuk ayar (aralık dışı / bool) modül varsayılanına düşer."""
     from entropy.core.config import config
-    from entropy.memory.context_builder import CRAG_MIN_SCORE, crag_min_score
+    from entropy.brain.context_builder import CRAG_MIN_SCORE, crag_min_score
 
     for bad in (5.0, -1.0, True, "0.4", None):
         monkeypatch.setattr(config, "brain_confidence_threshold", bad, raising=False)
@@ -466,7 +466,7 @@ def test_crag_separates_labelled_queries_on_synthetic_corpus():
     (ölçümün kendisi: 5 olumlu / 5 olumsuz sorgunun top-1 hibrit skorları)
     kullanılır, böylece test kullanıcının veritabanına dokunmaz.
     """
-    from entropy.memory.context_builder import CRAG_MIN_SCORE
+    from entropy.brain.context_builder import CRAG_MIN_SCORE
 
     olculen = [
         (0.5533, True), (0.4947, True), (0.4790, True),

@@ -39,7 +39,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from entropy.core import paths as _paths
 from entropy.core.config import config
-from entropy.memory.reconcile import tr_lower
+from entropy.brain.reconcile import tr_lower
 
 # --- sözleşme ---------------------------------------------------------------
 
@@ -654,7 +654,7 @@ def ingest_office_into_entropy(
     grafına `scope="desk:<ofis>"` ile ekler; hepsi ofis düğümüne `member_of`
     ile bağlanır. Ters yön YOKTUR: ofis grafına hiçbir şey yazılmaz.
     """
-    from entropy.memory.graph_store import GraphStore
+    from entropy.brain.graph_store import GraphStore
 
     st = store if store is not None else GraphStore()
     graph = OfficeGraph(office, vault_path)
@@ -821,7 +821,7 @@ def schedule_office_ingest(
         except Exception as exc:  # pragma: no cover - alım bir yan iştir
             result["error"] = f"offices: {exc}"
         try:
-            from entropy.memory.graph_store import GraphStore
+            from entropy.brain.graph_store import GraphStore
 
             st = store if store is not None else GraphStore()
             result["desk_memory"] = st.ingest_desk_memory(vault_path=vault_path)

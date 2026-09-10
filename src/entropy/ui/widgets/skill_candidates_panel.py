@@ -37,9 +37,9 @@ __all__ = ["SkillCandidatesPanel", "skill_synthesis_api", "candidate_field"]
 
 
 def skill_synthesis_api() -> Optional[Any]:
-    """`entropy.memory.skill_synthesis` modülü; yoksa None (12-C ekliyor)."""
+    """`entropy.brain.skill_synthesis` modülü; yoksa None (12-C ekliyor)."""
     try:
-        from entropy.memory import skill_synthesis  # type: ignore
+        from entropy.brain import skill_synthesis  # type: ignore
 
         return skill_synthesis
     except Exception:

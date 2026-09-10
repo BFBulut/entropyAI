@@ -42,7 +42,7 @@ def test_terminal_pane_widget(qapp):
     assert terminal.text_area.toPlainText() == ""
 
 def test_reports_viewer_widget(qapp, tmp_path):
-    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager
     vault = ObsidianVaultManager(vault_path=tmp_path)
     vault.save_research_report("Test Dossier", "# Content Dossier")
 
@@ -183,7 +183,7 @@ def test_zen_mode_dual_chat_and_terminal(qapp, monkeypatch):
 
 def test_memory_inspector_dialog(qapp, tmp_path):
     from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
-    from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+    from entropy.brain.supabase.cognitive_memory import CognitiveMemorySystem
 
     cog = CognitiveMemorySystem()
     cog.store_node("semantic", "Test semantic insight for inspector panel", importance=0.88, metadata={"test": "1"})

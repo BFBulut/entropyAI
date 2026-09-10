@@ -9,8 +9,8 @@ import pytest
 
 from entropy.core.event_bus import bus
 from entropy.core.single_instance import SingleInstanceGuard
-from entropy.memory.distiller import PlaybookDistiller
-from entropy.memory.playbook import PlaybookStore, SkillReportIndex
+from entropy.brain.distiller import PlaybookDistiller
+from entropy.brain.playbook import PlaybookStore, SkillReportIndex
 
 
 def _second_launch_child(name: str) -> "subprocess.Popen":
@@ -100,7 +100,7 @@ RICH = "\n\n".join(
 
 
 def test_auto_continue_chains_passes_and_reports_progress(tmp_path, monkeypatch):
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 4)
     store = _vault(tmp_path, "demo", 10)
@@ -126,7 +126,7 @@ def test_auto_continue_chains_passes_and_reports_progress(tmp_path, monkeypatch)
 
 def test_distill_stop_halts_chain_and_terminates_running_task(tmp_path, monkeypatch):
     """/distill stop: süren görev sonlandırılır, sıradaki tur başlamaz, iptal kayıt yazmaz."""
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
     from entropy.core.slash_commands import try_handle_local_command
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 4)
@@ -194,7 +194,7 @@ def test_token_badge_separates_chat_and_background():
 
 
 def test_auto_continue_off_runs_single_pass(tmp_path, monkeypatch):
-    import entropy.memory.distiller as dmod
+    import entropy.brain.distiller as dmod
 
     monkeypatch.setattr(dmod, "MAX_SOURCES_PER_PASS", 4)
     store = _vault(tmp_path, "demo", 10)

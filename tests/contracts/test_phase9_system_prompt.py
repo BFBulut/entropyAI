@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from entropy.memory import system_prompt as sp
-from entropy.memory.obsidian.vault_manager import ObsidianVaultManager, clear_report_cache
-from entropy.memory.vault_hygiene import archive_office, office_residue
+from entropy.brain import system_prompt as sp
+from entropy.brain.obsidian.vault_manager import ObsidianVaultManager, clear_report_cache
+from entropy.brain.vault_hygiene import archive_office, office_residue
 
 
 # --------------------------------------------------------------- 9.3 istem
@@ -304,7 +304,7 @@ def test_archive_office_prunes_dangling_wiki_index_link(tmp_path):
     kaldi ve Obsidian'da kirik bag olarak duruyordu. `log.md` bir OLAY
     gunlugudur, bilerek dokunulmaz.
     """
-    from entropy.memory.vault_hygiene import prune_wiki_index
+    from entropy.brain.vault_hygiene import prune_wiki_index
 
     _seed_office(tmp_path)
     wiki = tmp_path / "Entropy" / "Wiki"

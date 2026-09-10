@@ -34,7 +34,7 @@ def test_local_report_ingest_is_called_with_store_not_path(tmp_path, monkeypatch
         calls.append({"office": office, "store": store, "vault_path": vault_path})
         return {"ok": True}
 
-    import entropy.memory.office_graph as og
+    import entropy.brain.office_graph as og
     monkeypatch.setattr(og, "ingest_office_into_entropy", fake_ingest, raising=False)
 
     card = TaskCard(id="k1", title="Kart", office="ofis1", goal="hedef")
@@ -50,7 +50,7 @@ def test_ingest_signature_second_positional_is_store():
     """İmza sözleşmesi: ikinci parametre `store`, rapor yolu değil."""
     import inspect
 
-    from entropy.memory.office_graph import ingest_office_into_entropy
+    from entropy.brain.office_graph import ingest_office_into_entropy
 
     params = list(inspect.signature(ingest_office_into_entropy).parameters)
     assert params[:3] == ["office", "store", "vault_path"], params

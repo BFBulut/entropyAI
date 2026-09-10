@@ -19,7 +19,7 @@ import pytest
 
 from entropy.agents.desk_registry import DeskOffice, DeskRegistry
 from entropy.core import paths as _paths
-from entropy.memory import office_workspace
+from entropy.brain import office_workspace
 
 
 OFFICE = "medya"
@@ -196,7 +196,7 @@ def test_agent_registry_excludes_new_desk_root(vault):
 
 def test_list_reports_finds_office_reports_under_new_root(vault):
     """Kural 6: `Desk/Offices/<ofis>/reports/*.md` -> `office_report`."""
-    from entropy.memory.obsidian.vault_manager import ObsidianVaultManager, clear_report_cache
+    from entropy.brain.obsidian.vault_manager import ObsidianVaultManager, clear_report_cache
 
     desk = DeskRegistry(vault)
     desk.create(DeskOffice(name=OFFICE, purpose="Medya"))
@@ -231,7 +231,7 @@ def test_office_data_paths_are_free_of_product_name(vault):
     """Ofis verisinin tüm yolları yeni kökte; Entropy'nin verisi yerinde."""
     from entropy.agents.mailbox import office_mailbox
     from entropy.agents.tasks import TaskBoard
-    from entropy.memory import agent_memory, checkpoints, promoted_rules
+    from entropy.brain import agent_memory, checkpoints, promoted_rules
 
     desk = DeskRegistry(vault)
     desk.create(DeskOffice(name=OFFICE, purpose="Medya"))
