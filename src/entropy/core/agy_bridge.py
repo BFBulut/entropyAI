@@ -1883,7 +1883,13 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         # Check if continuing an existing conversation or starting turn 1
         if self.session_turn_count >= 15 and self.current_conversation_id:
             bus.terminal_output_received.emit(
-                "\n[Entropy Core] Oturum bağlamı 15 tura ulaştı. Bağlam özetlenerek yeni temiz bir AGY oturumuna aktarılıyor...\n"
+                # Faz 12-B (D2): eski metin "bağlam özetlenerek aktarılıyor"
+                # diyordu ama kod özet ÜRETMİYOR, konuşmayı düşürüyor. Mesaj
+                # koddaki davranışla birebir eşitlendi — yanlış makbuz, kullanıcı
+                # güvenini bozan sessiz bir sözleşme ihlaliydi.
+                "\n[Entropy Core] Oturum 15 tura ulaştı: AGY konuşması "
+                "kapatılıyor ve sonraki tur TEMİZ bir oturumda başlıyor. "
+                "Özet çıkarılmaz; kalıcı bilgi hafıza katmanındadır.\n"
             )
             self.current_conversation_id = None
             config.last_conversation_id = None
@@ -2299,7 +2305,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     next_task = self._prompt_queue.pop(0)
                     self._is_running = True
 
-            full_text = "".join(full_response_acc)
+            # Faz 12-B: iki köprü de AYNI kancadan geçer (`ProviderCommonMixin`);
+            # `[PANO board_create]` kart doğurur, araç blokları metinden çıkar.
+            full_text = self.finalize_chat_text("".join(full_response_acc))
             try:
                 self._save_chat_turn(raw_user_prompt, full_text)
                 bus.core_state_changed.emit("idle")

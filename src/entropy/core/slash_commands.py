@@ -189,11 +189,11 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
 LOCAL_COMMANDS: List[SlashCommand] = [
     SlashCommand(
         name="/distill",
-        description="Bir yeteneğin birikmiş raporlarından çalışma yordamı (playbook) damıtır. Argümansız: bekleyenleri listeler.",
+        description="Damıtım hattı: raporlardan yordam (playbook), yordamdan wiki sayfası üretir.",
         category="builtin",
         badge="📘 YORDAM",
         color="#00FF9D",
-        usage="/distill [<yetenek_adı>|all|index|stop [<yetenek>]|refresh <yetenek>]",
+        usage="/distill [<yetenek>|all|index|stop [<yetenek>]|refresh <yetenek>]  |  /distill wiki <yetenek>  |  /distill wiki compile <yetenek> [--turns N]",
     ),
     SlashCommand(
         name="/handoff",
@@ -211,37 +211,28 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         color="#9D00FF",
         usage="/provider [agy|claude]",
     ),
-    SlashCommand(
-        name="/agents",
-        description="Kasadaki ajanları listeler (ad, rol, sağlayıcı, yetenekler).",
-        category="builtin",
-        badge="🤖 AJAN",
-        color="#9D00FF",
-        usage="/agents",
-    ),
+    # Faz 12-B (araştırma C §5, öneri 3): `/agents` + `/agent` TEK komut.
+    # Gerekçe: iki komut aynı kaynağı (AgentRegistry) okuyordu ve tek fark
+    # argümanın varlığıydı; "az ve güçlü araç" ilkesi (K8) iki yakın adı
+    # kararsız bir yüzey sayar. Eski ad diğer ikisiyle birlikte ALIAS olarak
+    # yaşamayı sürdürür (kas hafızası kırılmasın).
     SlashCommand(
         name="/agent",
-        description="Bir ajanın ayrıntısını gösterir (model, araç politikası, gövde özeti).",
+        description="Ajanları listeler; ad verilirse ayrıntıyı gösterir, `effort`/`model` ile ayarını yazar.",
         category="builtin",
         badge="🤖 AJAN",
         color="#9D00FF",
-        usage="/agent <ad>",
+        usage="/agent  |  /agent <ad>  |  /agent effort|model <ad> <değer>",
     ),
+    # `/task` + `/tasks` TEK komut: argümansız ya da tek durum sözcüğü =
+    # liste, ajan adıyla = devretme. `/tasks` alias olarak yaşar.
     SlashCommand(
         name="/task",
-        description="Bir işi ajana devreder: kart oluşturur ve arka planda çalıştırır.",
+        description="Kartları listeler; ajan verilirse işi devreder (kart oluşturur, pano koşturur).",
         category="builtin",
         badge="📋 GÖREV",
         color="#FFB300",
-        usage="/task <ajan> <başlık> :: <hedef>  |  /task stop <id>",
-    ),
-    SlashCommand(
-        name="/tasks",
-        description="Görev kartlarını durumlarıyla birlikte listeler.",
-        category="builtin",
-        badge="📋 GÖREV",
-        color="#FFB300",
-        usage="/tasks [backlog|running|review|done|failed]",
+        usage="/task [backlog|running|review|done|failed]  |  /task <ajan> <başlık> :: <hedef>  |  /task stop <id>",
     ),
     SlashCommand(
         name="/offices",
@@ -282,14 +273,6 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         badge="🔑 KİMLİK",
         color="#FFA657",
         usage="/login [agy|claude]",
-    ),
-    SlashCommand(
-        name="/wiki",
-        description="Playbook'tan kavram ve varlık wiki sayfalarını üretir (model çağırmaz).",
-        category="builtin",
-        badge="📗 WİKİ",
-        color="#00FF9D",
-        usage="/wiki <yetenek>",
     ),
     SlashCommand(
         name="/lint",
@@ -1322,6 +1305,13 @@ def _handle_wiki_compile(parts: List[str], bridge=None) -> str:
                 pass
             i += 2
             continue
+        if token == "--wait" and i + 1 < len(args):
+            # Yalnızca testler için (senkron bekleme); ada karışmasın.
+            i += 2
+            continue
+        if token.startswith("--wait="):
+            i += 1
+            continue
         if token.startswith("--turns="):
             try:
                 turns = max(1, int(token.split("=", 1)[1]))
@@ -1340,20 +1330,26 @@ def _handle_wiki_compile(parts: List[str], bridge=None) -> str:
     except ImportError as e:
         return ("<b>📗 Wiki Derleme</b><br/>Derleyici içe aktarılamadı: "
                 f"<code>{_html_escape(e)}</code>")
+    if name.lower() == "stop":
+        return ("<b>Wiki Derleme</b><br/>"
+                + ("Durduruldu." if cancel_memory_job("wiki-compile")
+                   else "Koşan derleme yok."))
     send_prompt, bridge_note = _memory_send_prompt(bridge, f"Wiki derleme: {name}")
-    try:
-        res = compile_skill(name, bridge=send_prompt, budget_turns=turns)
-    except Exception as e:
-        return f"<span style='color:#e06c75;'>Derleme başarısız: {_html_escape(e)}</span>"
-    detail = res if isinstance(res, dict) else _result_fields(res)
-    spent = detail.get("turns", 0) if isinstance(detail, dict) else 0
-    rows = "".join(
-        f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
-        f"<td>{_html_escape(v)}</td></tr>" for k, v in detail.items()
-    )
-    return (f"<b>📗 Wiki Derlendi — {_html_escape(name)}</b> "
-            f"({_html_escape(spent)} tur harcandı, tavan {turns}){bridge_note}"
-            f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>")
+
+    # Faz 12-B: derleme ARKA PLANDA koşar. Gerçek koşu tavanı ölçüldü
+    # (`financial-auditor` 50 rapor ≈ 50 tur); bunu ana iş parçacığında
+    # beklemek pencereyi dakikalarca donduruyordu.
+    def _work(cancel):
+        return compile_skill(name, bridge=send_prompt, budget_turns=turns,
+                             cancel=cancel.is_set)
+
+    busy = start_memory_job("wiki-compile", f"Wiki derleme: {name}", _work,
+                            join=_wait_seconds(args))
+    if busy:
+        return f"<b>Wiki Derleme</b><br/>{busy}"
+    return (f"<b>Wiki Derleme — {_html_escape(name)}</b> (tavan {turns} tur)"
+            f"{bridge_note}<br/>Derleme arka planda başladı; sonuç bildirim "
+            f"olarak gelecek. Durdurmak için: <code>/distill wiki compile stop</code>")
 
 
 def _handle_model(args: str, bridge) -> str:
@@ -1698,60 +1694,223 @@ def _memory_send_prompt(bridge, label: str):
                       f"{_html_escape(e)}</div>")
 
 
+# ---------------------------------------------------------------------------
+# Uzun süren hafıza işleri: ARKA PLAN (Faz 12-B)
+#
+# `/wiki compile`, `/memory merge` ve `/memory dream` köprüye tur attırıyor;
+# üçü de çağıran iş parçacığında BLOKLUYORDU. Arayüzden çağrıldıklarında bu
+# ana iş parçacığı demek: pencere dakikalarca donuyordu. Komut artık işi bir
+# `threading.Thread`e verip HEMEN dönüyor; ilerleme ve sonuç
+# `bus.memory_job_progress` ile geliyor, iptal `<komut> stop`.
+# ---------------------------------------------------------------------------
+
+#: Aynı anda tek koşu: iş adı → (thread, iptal olayı).
+_MEMORY_JOBS: Dict[str, Tuple[threading.Thread, threading.Event]] = {}
+_MEMORY_JOBS_LOCK = threading.Lock()
+
+#: İş adı → son sonucun yükü. `bus.memory_job_progress` Qt kuyruğundan geçtiği
+#: için olay döngüsü olmayan bağlamlarda (testler, betikler) okunamıyor; sonuç
+#: burada da tutulur ve tek gerçek kaynak olur.
+_MEMORY_JOB_RESULTS: Dict[str, dict] = {}
+
+
+def reset_memory_jobs(timeout: float = 10.0) -> None:
+    """
+    Koşan hafıza işlerini iptal edip bekler; sonuç kayıtlarını temizler.
+
+    Testler için: arka plan iş parçacığı test sınırını aşarsa bir sonraki test
+    "zaten koşuyor" cevabını alır ve ölçüm sıraya bağımlı hâle gelir.
+    """
+    with _MEMORY_JOBS_LOCK:
+        entries = list(_MEMORY_JOBS.items())
+    for job, (thread, cancel) in entries:
+        cancel.set()
+        cancel_memory_job(job)
+        thread.join(timeout)
+    with _MEMORY_JOBS_LOCK:
+        _MEMORY_JOBS.clear()
+        _MEMORY_JOB_RESULTS.clear()
+
+
+def last_memory_job(job: str) -> dict:
+    """Bu işin son sonucu (`{"state", "message", ...}`); hiç koşmadıysa boş."""
+    with _MEMORY_JOBS_LOCK:
+        return dict(_MEMORY_JOB_RESULTS.get(job) or {})
+
+
+def _emit_job(job: str, label: str, state: str, message: str = "",
+              done: int = 0, total: int = 0) -> None:
+    payload = {"job": job, "label": label, "state": state,
+               "message": message, "done": int(done), "total": int(total)}
+    with _MEMORY_JOBS_LOCK:
+        _MEMORY_JOB_RESULTS[job] = payload
+    try:
+        from entropy.core.event_bus import bus
+
+        bus.memory_job_progress.emit(dict(payload))
+    except Exception:
+        logger.debug("memory_job_progress yayılamadı", exc_info=True)
+
+
+def memory_job_running(job: str) -> bool:
+    """Bu iş şu an koşuyor mu (test ve arayüz çıpası)."""
+    with _MEMORY_JOBS_LOCK:
+        entry = _MEMORY_JOBS.get(job)
+        return bool(entry and entry[0].is_alive())
+
+
+def cancel_memory_job(job: str) -> bool:
+    """Koşan işi iptal eder (iş bir sonraki denetim noktasında durur)."""
+    with _MEMORY_JOBS_LOCK:
+        entry = _MEMORY_JOBS.get(job)
+    if not entry or not entry[0].is_alive():
+        return False
+    entry[1].set()
+    if job == "memory-merge":
+        try:
+            from entropy.memory.gray_merge import cancel_merge
+
+            cancel_merge()
+        except Exception:
+            pass
+    _emit_job(job, job, "canceled", "İptal istendi.")
+    return True
+
+
+def start_memory_job(job: str, label: str, work, join: float = 0.0) -> Optional[str]:
+    """
+    İşi arka planda başlatır. Dönüş: hata metni ya da None (başladı).
+
+    `work(cancel)` çağrılabilirdir; `cancel` bir `threading.Event`tir ve modüle
+    `cancel=cancel.is_set` olarak geçirilir. `join` yalnızca TESTLER içindir:
+    0'dan büyükse çağrı işin bitmesini bekler (Qt olay döngüsü olmadan sonucu
+    ölçebilmek için).
+    """
+    with _MEMORY_JOBS_LOCK:
+        entry = _MEMORY_JOBS.get(job)
+        if entry and entry[0].is_alive():
+            return f"'{label}' zaten koşuyor. Durdurmak için: <code>stop</code>"
+        cancel = threading.Event()
+
+        def _runner():
+            _emit_job(job, label, "started", "Başladı.")
+            try:
+                result = work(cancel)
+            except Exception as exc:  # pragma: no cover - savunma
+                logger.warning("Hafıza işi başarısız (%s): %s", job, exc, exc_info=True)
+                _emit_job(job, label, "failed", str(exc))
+                return
+            if cancel.is_set():
+                _emit_job(job, label, "canceled", "Kullanıcı durdurdu.")
+                return
+            _emit_job(job, label, "finished", _job_summary(result))
+
+        thread = threading.Thread(target=_runner, name=f"entropy-{job}", daemon=True)
+        _MEMORY_JOBS[job] = (thread, cancel)
+    thread.start()
+    if join:
+        thread.join(join)
+    return None
+
+
+def _job_summary(result) -> str:
+    if isinstance(result, dict):
+        return ", ".join(f"{k}: {v}" for k, v in result.items())[:600]
+    if result is None:
+        return "sonuç yok"
+    detail = _result_fields(result)
+    if isinstance(detail, dict) and detail:
+        return ", ".join(f"{k}: {v}" for k, v in detail.items())[:600]
+    return " ".join(str(result).split())[:600]
+
+
 def _handle_memory(args: str, bridge) -> str:
     """
-    `/memory merge` (gri bant toplu turu) ve `/memory dream` (rüya döngüsü).
+    `/memory merge` (gri bant toplu turu), `/memory dream` (rüya döngüsü),
+    `/memory stop` (koşan turu iptal eder).
 
     İkisi de HAFIZA AJANININ modüllerine bağlıdır (11-D); modül henüz yoksa
     komut kullanıcıya bunu söyler ve hata vermez — ajan katmanı hafıza
     katmanına sert bağımlı olamaz.
+
+    Faz 12-B: iki tur da ARKA PLANDA koşar (`start_memory_job`); komut hemen
+    döner, ilerleme `bus.memory_job_progress` ile gelir. Eskiden çağıran iş
+    parçacığı (arayüzden çağrıldığında ANA iş parçacığı) tur boyunca bloke
+    oluyordu.
     """
-    verb = ((args or "").split() or [""])[0].lower()
+    parts = (args or "").split()
+    verb = (parts[0].lower() if parts else "")
+    if verb == "stop":
+        stopped = [j for j in ("memory-merge", "memory-dream") if cancel_memory_job(j)]
+        if not stopped:
+            return "<b>Hafıza</b><br/>Koşan hafıza turu yok."
+        return ("<b>Hafıza</b><br/>Durduruldu: "
+                + ", ".join(_html_escape(j) for j in stopped))
     if verb not in ("merge", "dream"):
-        return ("<b>🧠 Hafıza</b><br/>Kullanım: <code>/memory merge</code> "
+        return ("<b>Hafıza</b><br/>Kullanım: <code>/memory merge</code> "
                 "(gri bant kuyruğunu toplu işler) · <code>/memory dream</code> "
-                "(rüya/konsolidasyon döngüsü)")
+                "(rüya/konsolidasyon döngüsü) · <code>/memory stop</code>")
+    # Testler için: `--wait <saniye>` işi senkron bekler (Qt olay döngüsü yok).
+    wait = _wait_seconds(parts)
 
     if verb == "merge":
         try:
-            from entropy.memory.gray_merge import run_merge_round
+            from entropy.memory.gray_merge import reset_cancel, run_merge_round
         except ImportError as e:
-            return ("<b>🧠 Hafıza — Gri Bant</b><br/>Toplu birleştirme modülü "
+            return ("<b>Hafıza — Gri Bant</b><br/>Toplu birleştirme modülü "
                     f"içe aktarılamadı: <code>{_html_escape(e)}</code>")
         send_prompt, bridge_note = _memory_send_prompt(bridge, "Gri bant birleştirme")
         from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 
-        try:
-            res = run_merge_round(CognitiveMemorySystem(), send_prompt=send_prompt, limit=8)
-        except Exception as e:
-            return f"<span style='color:#e06c75;'>Birleştirme başarısız: {_html_escape(e)}</span>"
-        detail = res if isinstance(res, dict) else _result_fields(res)
-        rows = "".join(
-            f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
-            f"<td>{_html_escape(v)}</td></tr>" for k, v in detail.items()
-        )
-        return (f"<b>🧠 Gri Bant Birleştirildi</b>{bridge_note}"
-                f"<table style='font-size:11px;'>{rows}</table>")
+        def _work(_cancel):
+            reset_cancel()
+            return run_merge_round(CognitiveMemorySystem(),
+                                   send_prompt=send_prompt, limit=8)
 
-    from entropy.memory.dream import dream_and_consolidate
+        busy = start_memory_job("memory-merge", "Gri bant birleştirme", _work, join=wait)
+        if busy:
+            return f"<b>Hafıza — Gri Bant</b><br/>{busy}"
+        return (f"<b>Hafıza — Gri Bant</b>{bridge_note}<br/>"
+                "Tur arka planda başladı; ilerleme bildirim olarak gelecek. "
+                "Durdurmak için: <code>/memory stop</code>")
+
+    try:
+        from entropy.memory.dream import dream_and_consolidate
+    except ImportError as e:
+        return ("<b>Hafıza — Rüya</b><br/>Rüya modülü içe aktarılamadı: "
+                f"<code>{_html_escape(e)}</code>")
     from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 
     send_prompt, bridge_note = _memory_send_prompt(bridge, "Rüya döngüsü")
-    try:
+
+    def _work(_cancel):
         # Faz 11-D sözleşmesi: `/memory dream` → `memory.dream`. Köprü varsa
         # gri bant adımı gerçek tur koşar; yoksa kuru koşuma düşer.
-        result = dream_and_consolidate(memory=CognitiveMemorySystem(), send_prompt=send_prompt)
-    except Exception as e:
-        return f"<span style='color:#e06c75;'>Rüya döngüsü koşamadı: {_html_escape(e)}</span>"
-    if isinstance(result, dict):
-        detail = ", ".join(f"{k}: {v}" for k, v in result.items())
-    elif isinstance(result, (list, tuple)):
-        detail = f"{len(result)} özet"
-    else:
-        detail = " ".join(str(getattr(result, "summary", result) or "").split())[:400]
-    return (f"<b>🧠 Rüya Döngüsü</b>{bridge_note}<br/>{_html_escape(detail) or 'sonuç yok'}"
-            "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
-            "Konsolidasyon doğrudan bilişsel belleğe yazılır.</div>")
+        return dream_and_consolidate(memory=CognitiveMemorySystem(),
+                                     send_prompt=send_prompt)
+
+    busy = start_memory_job("memory-dream", "Rüya döngüsü", _work, join=wait)
+    if busy:
+        return f"<b>Hafıza — Rüya</b><br/>{busy}"
+    return (f"<b>Rüya Döngüsü</b>{bridge_note}<br/>"
+            "Döngü arka planda başladı; konsolidasyon doğrudan bilişsel belleğe "
+            "yazılır. Durdurmak için: <code>/memory stop</code>")
+
+
+def _wait_seconds(parts: List[str]) -> float:
+    """`--wait <sn>` bayrağı (yalnızca testler için; arayüz asla vermez)."""
+    for i, token in enumerate(parts or []):
+        if token == "--wait" and i + 1 < len(parts):
+            try:
+                return max(0.0, float(parts[i + 1]))
+            except ValueError:
+                return 0.0
+        if token.startswith("--wait="):
+            try:
+                return max(0.0, float(token.split("=", 1)[1]))
+            except ValueError:
+                return 0.0
+    return 0.0
 
 
 def _handle_lint(args: str) -> str:
@@ -1842,12 +2001,13 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
 
     # Ajan ve görev kartı komutları: hepsi yerel: kart yazımı ve listeleme model
     # çağırmaz, yalnızca /task <ajan> ... kartı çalıştırırken köprüyü kullanır.
-    if head_low == "/agents":
-        return _handle_agents(bridge)
-    if head_low == "/agent":
-        # `/agent effort|model <ad> <değer>` ayarı değiştirir; tek argüman
-        # ayrıntı gösterir. Ayrım ilk sözcükte: ajan adı "effort"/"model"
-        # olamaz (kayıt defteri o adları ayırıyor).
+    if head_low in ("/agent", "/agents"):
+        # Faz 12-B: TEK komut. Argümansız = liste (`/agents` alias),
+        # `effort|model` = ayar yazımı, aksi hâlde ajan ayrıntısı. Ayrım ilk
+        # sözcükte: ajan adı "effort"/"model" olamaz (kayıt defteri o adları
+        # ayırıyor).
+        if not args:
+            return _handle_agents(bridge)
         if (args.split() or [""])[0].lower() in ("effort", "model"):
             return _handle_agent_setting(args)
         return _handle_agent_detail(args)
@@ -1859,9 +2019,14 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         return _handle_lock(args)
     if head_low == "/memory":
         return _handle_memory(args, bridge)
-    if head_low == "/tasks":
-        return _handle_tasks(args)
-    if head_low == "/task":
+    if head_low in ("/task", "/tasks"):
+        # TEK komut: argümansız ya da tek durum sözcüğü = liste; aksi hâlde
+        # devretme (`/task <ajan> <başlık> :: <hedef>`). `/tasks` alias.
+        from entropy.agents.tasks import STATUSES
+
+        first = (args.split() or [""])[0].lower()
+        if head_low == "/tasks" or not args or (first in STATUSES and len(args.split()) == 1):
+            return _handle_tasks(args)
         return _handle_task(args)
     if head_low == "/offices":
         return _handle_offices(args)
@@ -1880,12 +2045,19 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     # Wiki katmanı: `/wiki <yetenek>` ve `/lint` model çağırmaz;
     # `/wiki compile` köprüyü çağırandan alır (Faz 12-A sözleşmesi).
     if head_low == "/wiki":
+        # Eski ad ALIAS olarak yaşar; kanonik yüzey `/distill wiki …`.
         return _handle_wiki(args, bridge)
     if head_low == "/lint":
         return _handle_lint(args)
 
     if head_low != "/distill":
         return None
+
+    # `/distill wiki …` — damıtım hattının ikinci adımı aynı komutun altında
+    # (araştırma C §5, öneri 3): raporlar → yordam → wiki sayfaları.
+    if args.lower().startswith("wiki"):
+        return _handle_wiki(args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else "",
+                            bridge)
 
     from entropy.memory.distiller import PlaybookDistiller
     from entropy.skills.manager import SkillManager

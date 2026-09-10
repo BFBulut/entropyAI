@@ -224,8 +224,84 @@ def tool_names(for_entropy: bool = False) -> Tuple[str, ...]:
     return ALL_TOOLS if for_entropy else AGENT_TOOLS
 
 
+# --- özet temizleyici (Faz 12-B, araştırma C §1.4) ----------------------------
+# Araç blokları MAKİNE yüküdür; kartın `summary`sine, sohbet rapor kartına ve
+# hafıza kapısına girdiklerinde (a) kullanıcıya JSON gösteriliyor, (b) yenilik
+# ölçümü aynı şablon metniyle kirleniyordu. Ham metin olay günlüğünde ve köprü
+# raporunda KALIR; temizlik yalnızca kart/sohbet/hafıza yolunda uygulanır.
+
+#: Satır bloğu olarak yazılan (etiket + `alan: değer` satırları) etiketler.
+LINE_BLOCK_TAGS: Tuple[str, ...] = ("[KONTROL NOKTASI]", "[KANIT]")
+#: Tek satırlık etiketler.
+LINE_TAGS: Tuple[str, ...] = ("[KURAL]",)
+
+_BRACKET_LINE_RE = re.compile(r"^\[[^\]]+\]\s*$")
+
+
+def _strip_pano_blocks(text: str) -> str:
+    """`[PANO …] … [/PANO]` bloklarını (kapanmamış olanlar dahil) siler."""
+    out = text
+    while True:
+        m = OPEN_RE.search(out)
+        if m is None:
+            return out
+        end = out.find(CLOSE_TAG, m.end())
+        stop = len(out) if end == -1 else end + len(CLOSE_TAG)
+        out = out[: m.start()] + out[stop:]
+
+
+def strip_tool_blocks(text: str) -> str:
+    """
+    Araç/etiket bloklarını metinden çıkarır (kart özeti, sohbet, hafıza yolu).
+
+    Kapsam: `[PANO …] … [/PANO]`, `[KONTROL NOKTASI]`/`[KANIT]` blokları ve
+    satır başındaki `[KURAL] …` satırları. Blok gövdesinin sonu boş satır ya da
+    yeni bir `[ETİKET]` satırıdır (`checkpoints._block_body` ile aynı kural),
+    böylece bloğun ardındaki serbest metin KORUNUR.
+    """
+    raw = text or ""
+    if not raw.strip():
+        return raw
+    body = _strip_pano_blocks(raw)
+    lines = body.splitlines()
+    kept: List[str] = []
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+        if skipping:
+            if not stripped:
+                skipping = False
+                continue
+            if _BRACKET_LINE_RE.match(stripped) and upper not in LINE_BLOCK_TAGS:
+                skipping = False
+                # etiket satırı normal akışta yeniden değerlendirilir
+            else:
+                continue
+        if upper in LINE_BLOCK_TAGS:
+            skipping = True
+            continue
+        if any(upper.startswith(tag) for tag in LINE_TAGS):
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept)
+    # Blok silinince geriye kalan üçlü boş satırlar sohbette boşluk yığıyordu.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def has_tool_blocks(text: str) -> bool:
+    """Metinde temizlenecek bir araç/etiket bloğu var mı (test/ölçüm çıpası)."""
+    raw = (text or "")
+    upper = raw.upper()
+    if OPEN_RE.search(raw):
+        return True
+    return any(tag in upper for tag in LINE_BLOCK_TAGS + LINE_TAGS)
+
+
 __all__ = [
     "AGENT_TOOLS", "ENTROPY_TOOLS", "ALL_TOOLS", "ToolCall", "ToolError",
     "parse_tool_calls", "validate_finish", "finish_outcome", "normalize_next",
     "tools_section", "tool_names", "CRITERIA_LIMIT", "INPUT_PATHS_LIMIT",
+    "strip_tool_blocks", "has_tool_blocks", "LINE_BLOCK_TAGS", "LINE_TAGS",
 ]

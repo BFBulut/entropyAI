@@ -15,6 +15,20 @@ import pytest
 from entropy.core import slash_commands as sc
 
 
+# Faz 12-B: üç komut da ARKA PLANDA koşuyor. Testler `--wait <sn>` bayrağıyla
+# işin bitmesini bekler (Qt olay döngüsü yok) ve sonucu `bus.memory_job_progress`
+# yükünden okur — kullanıcıya dönen HTML artık yalnızca "başladı" makbuzudur.
+def _finished_message(job: str) -> str:
+    """Arka plan işinin son sonucu (`bus.memory_job_progress` ile aynı yük).
+
+    Sinyal Qt kuyruğundan geçtiği için olay döngüsüz testte okunamaz; aynı yük
+    `slash_commands.last_memory_job()` ile de sunulur.
+    """
+    payload = sc.last_memory_job(job)
+    assert payload.get("state") == "finished", f"iş bitmedi: {payload}"
+    return str(payload.get("message") or "")
+
+
 class FakeBridge:
     """Sahte köprü: arka plan görev yüzeyini taklit eder, süreç açmaz."""
 
@@ -49,9 +63,10 @@ def test_memory_merge_calls_run_merge_round_with_bridge(monkeypatch):
 
     monkeypatch.setattr("entropy.memory.gray_merge.run_merge_round", fake_round)
     bridge = FakeBridge()
-    out = sc._handle_memory("merge", bridge)
+    out = sc._handle_memory("merge --wait 5", bridge)
 
-    assert "Gri Bant" in out and "merged" in out
+    assert "Gri Bant" in out and "arka planda" in out
+    assert "merged" in _finished_message("memory-merge")
     assert callable(seen["send_prompt"]), "köprü geçmedi: kuru koşum kaldı"
     assert seen["limit"] == 8
     assert seen["memory"] is not None, "gerçek bellek nesnesi geçmeli"
@@ -68,7 +83,7 @@ def test_memory_merge_without_bridge_is_dry_run(monkeypatch):
         return {"pending": 4}
 
     monkeypatch.setattr("entropy.memory.gray_merge.run_merge_round", fake_round)
-    out = sc._handle_memory("merge", None)
+    out = sc._handle_memory("merge --wait 5", None)
     assert seen["send_prompt"] is None
     assert "kuru koşum" in out
 
@@ -106,7 +121,7 @@ def test_memory_dream_passes_bridge(monkeypatch):
         return Rapor()
 
     monkeypatch.setattr("entropy.memory.dream.dream_and_consolidate", fake_dream)
-    out = sc._handle_memory("dream", FakeBridge())
+    out = sc._handle_memory("dream --wait 5", FakeBridge())
     assert callable(seen["send_prompt"]), "/memory dream hâlâ send_prompt=None geçiyor"
     assert "Rüya Döngüsü" in out
 
@@ -124,14 +139,14 @@ def test_wiki_compile_passes_bridge_and_budget_turns(monkeypatch):
         return {"skill": skill, "turns": 5, "pages": 18, "remaining": 20}
 
     monkeypatch.setattr("entropy.memory.wiki.compile_skill", fake_compile)
-    out = sc._handle_wiki("compile yazilim --turns 7", FakeBridge())
+    out = sc._handle_wiki("compile yazilim --turns 7 --wait 5", FakeBridge())
 
     assert seen["skill"] == "yazilim"
     assert seen["budget_turns"] == 7, "--turns budget_turns'e geçmedi"
     assert callable(seen["bridge"]), "wiki derleyicisi köprüsüz koşuyor"
-    # Kullanıcıya GERÇEK harcanan tur yazılır, tavan değil.
-    assert "5 tur harcandı" in out
     assert "tavan 7" in out
+    # GERÇEK harcanan tur iş sonucunda gelir, tavan değil.
+    assert "turns: 5" in _finished_message("wiki-compile")
 
 
 def test_wiki_compile_reports_zero_turns_without_bridge(monkeypatch):
@@ -139,9 +154,9 @@ def test_wiki_compile_reports_zero_turns_without_bridge(monkeypatch):
         "entropy.memory.wiki.compile_skill",
         lambda skill, bridge=None, budget_turns=8, **kw: {"turns": 0, "pages": 3},
     )
-    out = sc._handle_wiki("compile yazilim --turns 4", None)
-    assert "0 tur harcandı" in out
+    out = sc._handle_wiki("compile yazilim --turns 4 --wait 5", None)
     assert "kuru koşum" in out
+    assert "turns: 0" in _finished_message("wiki-compile")
 
 
 def test_wiki_plain_command_still_needs_no_bridge(monkeypatch):

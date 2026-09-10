@@ -443,10 +443,13 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   `/model [<ad>]` (**Entropy'nin KENDİ modeli**; yabancı model reddedilir),
   `/agent effort <ad> <seviye>` · `/agent model <ad> <model>` (AGENT.md'ye
   yazar → derler → `AgentSessionStore.forget(ad)` ile oturumu tazeler, çünkü
-  imza `sha1(istem|model|efor)`), `/memory merge` (`memory.gray_merge.run`,
-  guard) · `/memory dream`, `/wiki compile <yetenek> [--turns N]`
-  (`memory.wiki.compile_skill`, guard). Hafıza modülleri yoksa komut hata
-  vermez, "henüz kurulu değil" der.
+  imza `sha1(istem|model|efor)`), `/memory merge`
+  (**`memory.gray_merge.run_merge_round`** — `run` diye bir sembol YOK),
+  `/memory dream` (`memory.dream.dream_and_consolidate`), `/memory stop`,
+  `/distill wiki compile <yetenek> [--turns N]`
+  (`memory.wiki.compile_skill`). Hafıza modülü yoksa komut GERÇEK nedeni
+  gösterir ("henüz kurulu değil" yalanı yazılmaz). **Faz 12-B: üçü de arka
+  planda koşar** (aşağıya bak).
 - **Derleme hedefi (Faz 11-C, DEĞİŞTİ):** `compile_agent` agy biçimini
   `compile_roots()`'un hepsine, **claude biçimini YALNIZCA
   `claude_compile_root()` = `~/.entropy/workspace` altına** yazar. Proje
@@ -520,8 +523,9 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   kapsam **L2+L3** (`semantic`, `procedural`); `archived=1` satırlar indekse
   girmez. `expand_graph=True` PPR ile 1-2 atlama komşu ekler.
 - **CRAG sinyali:** `AssembledContext.brain_confidence` (en iyi recall skoru) +
-  `brain_has_answer` (`context_builder.CRAG_MIN_SCORE = 0.45`); `summary()`
-  ikisini de döndürür.
+  `brain_has_answer`; eşik **`config.brain_confidence_threshold = 0.40`**
+  (Faz 12-A kalibrasyonu: 0,45 → 8/10, **0,40 → 9/10**, 0,30 → 5/10).
+  `summary()` ikisini de döndürür.
 - **Gri bant birleştirme turu (Faz 11.3, `memory/gray_merge.py`):**
   `run_merge_round(memory=None, send_prompt=None, limit=8, gate=None, graph=None)
   -> MergeResult`. `send_prompt(prompt) -> str` **eşzamanlı çağrılabilir**
@@ -629,10 +633,16 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   iki kez ödenmez). `_wiki_page_files(None)` artık tüm yeteneklerin
   sayfalarını döndürür; `_reports_section` yeteneksiz sohbette kasa geneli
   en yeni `GENERAL_REPORT_CANDIDATES = 60` rapora düşer.
-- **Yerel komut sözleşmesi (agy bağlayacak):** `/memory merge` →
+- **Yerel komut sözleşmesi (BAĞLANDI, Faz 12-A):** `/memory merge` →
   `gray_merge.run_merge_round`, `/memory dream` → `dream.dream_and_consolidate`,
-  `/wiki compile <yetenek>` → `wiki.compile_skill`. Üçü de köprü
-  çağrılabilirini **çağırandan** alır; hiçbiri kendi başına kota harcamaz.
+  `/distill wiki compile <yetenek>` → `wiki.compile_skill`. Üçü de köprü
+  çağrılabilirini **çağırandan** alır; sağlayıcı seçimi ve `send_prompt`
+  uyarlaması tek yerde: **`core/bridge_prompt.py`**
+  (`active_bridge(bridge=None)`, `make_send_prompt(bridge, label=...) ->
+  Callable[[str], str]`, `BridgeUnavailable`, `DEFAULT_TURN_TIMEOUT = 900.0`).
+  Uyarlayıcı köprünün **arka plan görev yolunu** (`send_background_task_async`
+  → `on_result(full_text, ok)`) `threading.Event` ile bloklayan eşzamanlı bir
+  çağrılabilire sarar. Köprü yoksa `send_prompt=None` → **kuru koşum**.
 - **Bayraklar:** `ENTROPY_MEMORY_GATE=0` kapıyı tamamen atlar (geri alma);
   `ENTROPY_MEMORY_GATE_STRICT` katı kipi zorlar/kapatır (varsayılan: üretimde
   açık, pytest altında kapalı).
@@ -696,6 +706,100 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   ölçek 1,0–8,0 arası; `ENTROPY_TEST_TIMEOUT_SCALE` ile ezilir). Yük altında
   zaman aşımına giren eşzamanlılık testleri bunu kullanır.
 - **Doğuş talimatı:** `office_workspace.SPAWN_INSTRUCTION_MAX_CHARS = 1200`.
+### 3.1 Faz 12-B sözleşmeleri (otonom pano)
+
+- **Araç yürütücüsü:** `agents/board_tool_exec.py` — tek giriş
+  `execute(calls, board=None, card=None, actor="", actor_kind="agent",
+  vault_path=None) -> [ToolResult]`; `ToolResult` bir `dict`
+  (`{tool, ok, error?, card?, …}`). Beş araç TÜKETİLİR:
+  `board_checkpoint` → `memory.checkpoints.write_checkpoint` (içe aktarma
+  korumalı) + kartın `checkpoint` alanı (dosya YOLU; dosya yazılamazsa tek
+  satır özet) + `bus.checkpoint_written`; `board_ask` →
+  `mailbox.ask_entropy(...)` + kartın `review` alanı `"soru bekliyor"` +
+  `notes` içine `[SORU] …` (kart DURUMU değişmez); `board_next` → aynı ajana
+  atanmış sıradaki `assigned` Entropy kartı (`normalize_next`), yoksa
+  `result="yok"` (sahiplenme YAPMAZ — kilit tetikleyicinindir);
+  `board_finish` kapanış yolunda (`tasks._finish`); `board_create` ajanda
+  **reddedilir** (`actor_kind != "entropy"`), ofis kartında da reddedilir.
+  Hiçbir araç istisna yükseltmez.
+- **Yeni kart alanı `review`:** kartın insan müdahalesi bekleyen kısa durumu
+  (`status` DEĞİL). Ön bilgide `review:` olarak durur.
+- **Özet temizleyici:** `board_tools.strip_tool_blocks(text)` +
+  `has_tool_blocks(text)`; kapsam `[PANO …] … [/PANO]`,
+  `LINE_BLOCK_TAGS = ("[KONTROL NOKTASI]", "[KANIT]")`,
+  `LINE_TAGS = ("[KURAL]",)`. Uygulandığı yerler: kartın `summary`si (→
+  `events.jsonl` yükü, `task_report_ready.summary`, sohbet rapor kartı, wiki
+  sayfası, ajan belleği, hafıza kapısı) ve **sohbet yanıtı**. Ham metin köprü
+  raporunda kalır. **OFİS kartı kapsam dışı:** Desk harness'ı blokları kartın
+  `summary`sinden geri ayrıştırıyor (açık iş).
+- **Entropy'nin otonom görev üretimi:** `core/response_hooks.py` →
+  `process_chat_response(text, board=None, registry=None) -> str` (sohbette
+  GÖSTERİLECEK metin) ve **`entropy_tools_section() -> str`** (hafıza ajanı
+  `memory.system_prompt.build_system_prompt`a bunu ekler; kaynak
+  `board_tools.tools_section(for_entropy=True)`, modül yoksa `""`).
+  Kart üretimi `agents/board_autonomy.py`:
+  `create_card_from_args(args, board=None, registry=None) -> (kart|None, not)`,
+  `wake_dispatcher()`, `announce(card)`, `receipt_line(title, agent)`
+  (`RECEIPT_PREFIX = "Görev oluşturuldu:"`), `MAX_CARDS_PER_TURN = 1`
+  (risk R-A). Ajan Entropy kadrosunda değilse kart `backlog`ta AJANSIZ kalır
+  ve notuna neden yazılır. Geçersiz JSON blok yok sayılır (günlüğe düşer).
+  Kanca iki köprüde de **tek yerde**: `ProviderCommonMixin.finalize_chat_text
+  (text) -> str`; `claude_bridge` ve `agy_bridge` metni KAYDETMEDEN ve
+  `bus.agent_turn_completed` yaymadan önce çağırır. Görev yolunda çağrılmaz.
+- **Posta yön kilidi (değişti):** `ENTROPY_INBOX_KINDS` hâlâ
+  `("report", "status")`. Soru yalnızca AÇIK izinle geçer:
+  `Mailbox.send(..., allow_question=True)` — tek çağıranı
+  `mailbox.ask_entropy(agent, question, task_id="", sender_office=None,
+  vault_path=None)`. `sender_office` doluysa (ofis ajanı) `MailboxScopeError`.
+  Yeni sabit `ENTROPY_INBOX_AGENT_KINDS = ("report", "status", "question")`.
+- **Oturum bütçesi:** ayarlar `agent_session_max_cards = 3`,
+  `agent_session_max_tokens = 60000` (0 = sınırsız; ölçüm: 23.886 → 38.818 →
+  66.542 token). `AgentSessionStore` yeni metotlar: `note_run(agent, provider,
+  tokens) -> {cards_in_session, tokens_in_session}`, `rotate(agent, provider)`
+  (imza + `conversation_id` düşer, sayaçlar sıfırlanır — `forget` KULLANILMAZ,
+  R1), `budget_status(agent, provider, max_cards=0, max_tokens=0) ->
+  {cards_in_session, tokens_in_session, exceeded, reason, last_reset_at}`.
+  Yeni `session.json` alanları: `cards_in_session`, `tokens_in_session`,
+  `last_reset_at`. Politika `agents/session_budget.py`:
+  `rotate_if_needed(agent, provider, board=None, vault_path=None) -> str`
+  (dönen metin isteme eklenecek `[ÖNCEKİ OTURUM]` bloğu; "" = oturum sürüyor),
+  `write_handoff` / `build_handoff` / `handoff_section`,
+  `handoff_path(agent, vault) = Entropy/Board/agents/<ad>/handoff.md`.
+  Devir sayfası **kotasızdır** (kartların `summary`/`checkpoint`/`notes`
+  alanlarından çıkarımsal). `tasks.run` istemi kurduktan SONRA
+  `rotate_if_needed` çağırır ve bloğu isteme ekler; `tasks._finish`
+  `_note_session_usage(card)` ile ledger'dan (`card-<id>.total_tokens`)
+  sayaçları işler. Sinyal: `bus.task_notification("session:<ajan>", …)`.
+  `--autocompact` bağlanmadı (risk R-D: sürüm bağımlı bayrak).
+- **Projeksiyon ve ayrışma:** `TaskBoard.rewrite_taskboard()` artık
+  `events.write_projection()` çağırır → `Entropy/Board/projection.json`
+  yazılır ve `TASKBOARD.md` başlığındaki **`Projeksiyon karması` DOLU**.
+  `board_events.board_drift(cards, view) -> [{id, card, projection}]`
+  (kart dosyası ≠ projeksiyon). Ayrışma varsa `logger.warning` + olay
+  **`board.drift`** + `TASKBOARD.md`de `DRIFT_MARK = "[!]"` satırı.
+  `board_fsm.EVENTS` 12 → **13**; yeni `INFO_EVENTS = ("board.drift",)` —
+  durum değiştirmeyen GÖZLEM olayı, `project()` onu geçiş tablosuna sokmaz
+  (kart doğurmaz, `rejected` artırmaz).
+- **Slash yüzeyi 34 → 31:** `/agents` → `/agent` (argümansız = liste),
+  `/tasks` → `/task` (argümansız ya da tek durum sözcüğü = liste),
+  `/wiki` → `/distill wiki …` (damıtım hattının ikinci adımı). Üç eski ad
+  **alias olarak yaşar** (`try_handle_local_command` onları hâlâ yakalar),
+  yalnızca komut paletindeki ayrı kayıtları kaldırıldı.
+- **Uzun hafıza işleri arka planda:** `/memory merge`, `/memory dream`,
+  `/distill wiki compile` artık `threading.Thread`e verilir ve komut HEMEN
+  döner. API (`core/slash_commands`): `start_memory_job(job, label, work,
+  join=0.0)`, `cancel_memory_job(job)`, `memory_job_running(job)`,
+  `last_memory_job(job) -> {job,label,state,message,done,total}`,
+  `reset_memory_jobs(timeout=10.0)` (testler). İş adları:
+  `"memory-merge"`, `"memory-dream"`, `"wiki-compile"`. Sinyal
+  **`bus.memory_job_progress(dict)`**, `state ∈ {started, progress, finished,
+  failed, canceled}`. İptal: `/memory stop`, `/distill wiki compile stop`.
+  `--wait <sn>` bayrağı YALNIZCA testler içindir (Qt olay döngüsü yokken
+  senkron bekleme). `tests/conftest.py` her testten sonra
+  `reset_memory_jobs()` çağırır.
+- **agy 15-tur mesajı (D2 kapandı):** metin koddaki davranışla eşitlendi —
+  özet üretilmiyor, konuşma kapatılıyor.
+
 - **Test yalıtımı:** `tests/conftest.py` gerçek kasayı ve `~/.entropy`'yi izole eder
   (`isolate_obsidian_vault`). Yeni bir yazma noktası eklersen yalıtımı da ekle — bugünkü
   hafızanın %30'u bu yalıtım eksikken sızmış fikstürlerdir.

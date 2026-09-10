@@ -675,6 +675,77 @@ class AgentSessionStore:
         except OSError:
             logger.warning("Ajan oturumu yazılamadı: %s", path)
 
+    # -- oturum bütçesi (Faz 12-B, araştırma C §2.1) ---------------------
+    #
+    # Ölçüm: aynı ajanın üç kartı `--resume` ile 23.886 → 38.818 → 66.542
+    # token; artış hızlanıyor (her tur bütün geçmişi yeniden gönderiyor) ve
+    # 4. kart tek başına 90k tavanını aşıyor. Bu yüzden oturum SONSUZ değil:
+    # kart sayısı ya da token toplamı eşiği aşınca oturum döner.
+
+    def note_run(self, agent: str, provider: str, tokens: int = 0) -> Dict[str, object]:
+        """Bir kart koşusunu oturum sayaçlarına işler ve güncel sayaçları döndürür."""
+        provider = str(provider or "").strip().lower()
+        if not agent or not provider:
+            return {}
+        data = self.load(agent)
+        entry = dict(data.get(provider) or {})
+        entry["cards_in_session"] = int(entry.get("cards_in_session") or 0) + 1
+        entry["tokens_in_session"] = int(entry.get("tokens_in_session") or 0) + max(0, int(tokens or 0))
+        entry["updated_at"] = _now()
+        data[provider] = entry
+        self._write_all(agent, data)
+        return {"cards_in_session": entry["cards_in_session"],
+                "tokens_in_session": entry["tokens_in_session"]}
+
+    def rotate(self, agent: str, provider: str) -> bool:
+        """
+        Oturumu DÖNDÜRÜR: bir sonraki koşu taze bir oturumda başlar.
+
+        `forget` KULLANILMAZ — kayıt tümden silinirse `run_kwargs` deterministik
+        `uuid5(ad)` kimliğini yeniden verir ve CLI "Session ID is already in
+        use." ile ölür (QA 11-C/D, R1). Bunun yerine imza ve yakalanmış kimlik
+        düşürülür: `prior` dolu kaldığı için taze bir `uuid4` üretilir.
+        """
+        provider = str(provider or "").strip().lower()
+        data = self.load(agent)
+        entry = dict(data.get(provider) or {})
+        if not entry:
+            return False
+        entry["signature"] = ""
+        entry.pop("conversation_id", None)
+        entry["cards_in_session"] = 0
+        entry["tokens_in_session"] = 0
+        entry["last_reset_at"] = _now()
+        data[provider] = entry
+        self._write_all(agent, data)
+        return True
+
+    def budget_status(self, agent: str, provider: str,
+                      max_cards: int = 0, max_tokens: int = 0) -> Dict[str, object]:
+        """Oturum sayaçları + eşiğin aşılıp aşılmadığı (`exceeded`, `reason`)."""
+        entry = self.get(agent, provider)
+        cards = int(entry.get("cards_in_session") or 0)
+        tokens = int(entry.get("tokens_in_session") or 0)
+        reason = ""
+        if max_cards and cards >= max_cards:
+            reason = f"{cards} kart (tavan {max_cards})"
+        elif max_tokens and tokens >= max_tokens:
+            reason = f"{tokens} token (tavan {max_tokens})"
+        return {"cards_in_session": cards, "tokens_in_session": tokens,
+                "exceeded": bool(reason), "reason": reason,
+                "last_reset_at": str(entry.get("last_reset_at") or "")}
+
+    def _write_all(self, agent: str, data: Dict[str, dict]) -> None:
+        path = self.path_for(agent)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".json.tmp{os.getpid()}")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            logger.warning("Ajan oturumu yazılamadı: %s", path)
+
     def forget(self, agent: str, provider: str = "") -> bool:
         """
         Oturumu düşürür — model/efor/istem değişince ve ajan düzenlenince.

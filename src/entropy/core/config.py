@@ -360,6 +360,14 @@ class EntropyConfig(BaseModel):
     # zamanlanmış görevi durdurur. Kapatma imkânı var çünkü kilit bir kartı
     # model çağırmadan kapatabiliyor ve kullanıcı bunu isteyerek atlayabilmeli.
     amplification_lock: bool = True
+    # Faz 12-B — AJAN OTURUM BÜTÇESİ (araştırma C §2.1 ölçümü). Aynı ajanın
+    # `--resume` ile koşan üç kartı 23.886 → 38.818 → 66.542 token harcadı;
+    # artış doğrusal değil, 4. kart tek başına 90k tavanını aşıyor. Eşiklerden
+    # biri aşılınca oturum döner: sonraki kart taze `--session-id` ile başlar
+    # ve devir bilgisi `Board/agents/<ad>/handoff.md` üzerinden taşınır.
+    # 0 = sınırsız (eski davranış).
+    agent_session_max_cards: int = 3
+    agent_session_max_tokens: int = 60000
     # Faz 12-A — CRAG eşiği (`context_builder.brain_has_answer`). Gerçek DB
     # kopyasında 10 etiketli sorguyla (5 beyinde var / 5 beyinde yok) ölçüldü:
     # 0,45 → 8/10 (2 yanlış negatif), **0,40 → 9/10** (0 yanlış pozitif,
@@ -506,6 +514,8 @@ class EntropyConfig(BaseModel):
                 "board_claim_timeout_s": self.board_claim_timeout_s,
                 "entropy_max_parallel": self.entropy_max_parallel,
                 "amplification_lock": self.amplification_lock,
+                "agent_session_max_cards": self.agent_session_max_cards,
+                "agent_session_max_tokens": self.agent_session_max_tokens,
                 "brain_confidence_threshold": self.brain_confidence_threshold,
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
@@ -574,7 +584,9 @@ class EntropyConfig(BaseModel):
                         self.brain_confidence_threshold = float(threshold)
                 for key, floor in (("board_dispatch_interval_s", 1),
                                    ("board_claim_timeout_s", 60),
-                                   ("entropy_max_parallel", 1)):
+                                   ("entropy_max_parallel", 1),
+                                   ("agent_session_max_cards", 0),
+                                   ("agent_session_max_tokens", 0)):
                     value = data.get(key)
                     if isinstance(value, int) and not isinstance(value, bool) and value >= floor:
                         setattr(self, key, value)

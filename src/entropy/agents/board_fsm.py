@@ -55,7 +55,14 @@ EVENTS: Tuple[str, ...] = (
     "task.rejected",
     "task.canceled",
     "task.reset",
+    # Faz 12-B: DURUM DEĞİŞTİRMEYEN gözlem olayı. Kart dosyaları ile olay
+    # projeksiyonu ayrıştığında yazılır; `project()` bunu geçiş tablosuna
+    # sokmadan atlar (aksi hâlde her ayrışma bir de "rejected" üretirdi).
+    "board.drift",
 )
+
+#: Geçiş üretmeyen (yalnızca kayda geçen) olaylar.
+INFO_EVENTS: Tuple[str, ...] = ("board.drift",)
 
 # Kartı `review`den `done`a yalnızca İNSAN taşıyabilir. Ajan çıktısını kimse
 # okumadan "bitti" saymak panonun tamamını anlamsız kılardı (tasks.py:23-26).
@@ -386,7 +393,7 @@ def reset(card, reason: str = "", actor: str = "system"):
 
 
 __all__ = [
-    "STATUSES", "TERMINAL_STATUSES", "EVENTS", "TRANSITIONS", "Transition",
+    "STATUSES", "TERMINAL_STATUSES", "EVENTS", "INFO_EVENTS", "TRANSITIONS", "Transition",
     "InvalidTransition", "HUMAN_ACTOR", "MAX_ATTEMPTS", "RESET_SOURCES",
     "can", "allowed_events", "transitions_for", "resolve_target",
     "transition", "reset",

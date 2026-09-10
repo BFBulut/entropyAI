@@ -17,11 +17,14 @@ ile gelir; iki köprü de onu miras alır, böylece bağlam baskısı mantığı
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 # Desteklenen sağlayıcılar. "claude_api" kasıtlı olarak burada yok: API anahtarı
 # tespit edilse bile ücretli olduğu için kullanıcı açıkça açmadan seçilemez
@@ -631,6 +634,32 @@ class ProviderCommonMixin:
     """
 
     provider_name: str = "agy"
+
+    # ------------------------------------------------------------------
+    # Sohbet yanıtı kancası (Faz 12-B)
+    # ------------------------------------------------------------------
+
+    def finalize_chat_text(self, text: str) -> str:
+        """
+        SOHBET turunun ham metnini tüketilebilir hâle getirir (tek kanca).
+
+        `core.response_hooks` (a) `[PANO board_create]` bloğundan kart doğurur,
+        (b) araç/etiket bloklarını görüntülenen metinden ve diske yazılan
+        geçmişten çıkarır. İki köprü de metni KAYDETMEDEN ve
+        `bus.agent_turn_completed` yaymadan ÖNCE bunu çağırır; yoksa iki kol
+        ayrışır ve ham JSON sağlayıcıya göre bazen geçmişe sızardı.
+
+        GÖREV yolunda çağrılmaz: kartın ham çıktısı köprü raporunda ve olay
+        günlüğünde kayıpsız kalmalı (risk R-C), temizlik orada
+        `tasks._finish` içinde yapılır.
+        """
+        try:
+            from entropy.core.response_hooks import process_chat_response
+
+            return process_chat_response(text)
+        except Exception:
+            logger.debug("Sohbet yanıtı kancası koşmadı", exc_info=True)
+            return text
 
     # ------------------------------------------------------------------
     # Ajan akışı (Faz 10-B)

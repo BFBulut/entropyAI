@@ -211,3 +211,21 @@ def _isolate_user_state_session(tmp_path_factory):
     except Exception:
         pass
     yield root
+
+
+@pytest.fixture(autouse=True)
+def _reset_memory_jobs():
+    """
+    Faz 12-B: `/memory merge|dream` ve `/distill wiki compile` arka planda koşar.
+
+    İş parçacığı test sınırını aşarsa bir sonraki test "zaten koşuyor" cevabını
+    alır ve ölçüm sıraya bağımlı olur. Her testten sonra koşan iş iptal edilip
+    beklenir; sonuç kayıtları temizlenir.
+    """
+    yield
+    try:
+        from entropy.core.slash_commands import reset_memory_jobs
+
+        reset_memory_jobs()
+    except Exception:
+        pass

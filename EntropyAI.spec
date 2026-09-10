@@ -221,6 +221,10 @@ a = Analysis(
         'entropy.agents.board_events',
         'entropy.agents.board_fsm',
         'entropy.agents.board_tools',
+        # Faz 12-B: otonom pano (araç yürütücüsü, kart üretimi, oturum bütçesi).
+        'entropy.agents.board_tool_exec',
+        'entropy.agents.board_autonomy',
+        'entropy.agents.session_budget',
         'entropy.agents.dispatcher',
         'entropy.core.claude_bg',
         'entropy.memory.categories',
@@ -235,6 +239,7 @@ a = Analysis(
         # Faz 12-A: hafiza turlarinin kopru uyarlayicisi (slash komutlari
         # calisma aninda ice aktariyor).
         'entropy.core.bridge_prompt',
+        'entropy.core.response_hooks',
     ],
     hookspath=[],
     hooksconfig={},

@@ -79,11 +79,15 @@ def test_status_set_has_eight_values_and_table_has_twelve_rows():
         "review", "done", "failed", "canceled",
     )
     assert len(board_fsm.TRANSITIONS) == 12
-    assert len(board_fsm.EVENTS) == 12
+    # Faz 12-B: 12 geçiş olayı + 1 GÖZLEM olayı (`board.drift`, durum
+    # değiştirmez; `INFO_EVENTS` ile ayrılır).
+    assert len(board_fsm.EVENTS) == 13
+    assert board_fsm.INFO_EVENTS == ("board.drift",)
+    assert set(board_fsm.INFO_EVENTS) <= set(board_fsm.EVENTS)
     # Tablodaki her olay sözlükte var (ve tersi, `task.reset` kaçış kapısı hariç).
     table_events = {t.event for t in board_fsm.TRANSITIONS}
     assert table_events <= set(board_fsm.EVENTS)
-    assert set(board_fsm.EVENTS) - table_events == {"task.reset"}
+    assert set(board_fsm.EVENTS) - table_events == {"task.reset", *board_fsm.INFO_EVENTS}
 
 
 @pytest.mark.parametrize("status,event,target", [

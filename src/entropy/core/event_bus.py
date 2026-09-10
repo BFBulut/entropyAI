@@ -93,6 +93,11 @@ class EntropyEventBus(QObject):
     # playbook_updated "yordam yazıldı" demektir, bu ise "kaynak değişti".
     reports_updated = Signal(str)        # skill_name veya ""
     distill_progress = Signal(str, int, int)  # skill_name, işlenen rapor, toplam rapor
+    # Faz 12-B: uzun süren HAFIZA işleri (gri bant birleştirme, rüya döngüsü,
+    # wiki derleme) artık ana iş parçacığını bloklamıyor; ilerleme ve sonuç bu
+    # sinyalle gelir. Yük: {"job", "label", "state", "message", "done", "total"}
+    # — `state ∈ {started, progress, finished, failed, canceled}`.
+    memory_job_progress = Signal(dict)
 
     # Rapor Merkezi "Gelen" şeridi (Faz 4): son 24 saatteki okunmamış rapor
     # sayısı. Rozeti Zen üst çubuğu ve Chat başlığı ayrı ayrı gösterdiği için

@@ -471,4 +471,6 @@ def test_memory_and_wiki_compile_run_dry_without_bridge():
     assert "Wiki Derle" in compiled
     assert "kurulu değil" not in compiled
     # Köprüsüz çağrıda tavan yazılır ama harcanan tur 0'dır.
-    assert "0 tur harcandı" in compiled and "tavan 3" in compiled
+    # Faz 12-B: derleme arka planda koşar; komut "başladı" makbuzu döner ve
+    # gerçek tur sayısı iş sonucundadır.
+    assert "tavan 3" in compiled and "arka planda" in compiled

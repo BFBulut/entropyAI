@@ -231,6 +231,11 @@ class TaskCard:
     # kullanılır — sezgi dar tutulur çünkü yanlış pozitif bir geliştirme kartını
     # beyin cevabıyla kapatmak demek.
     kind: str = ""
+    # Faz 12-B. `review`: kartın İNSAN müdahalesi bekleyen kısa durumu
+    # ("soru bekliyor" gibi). Kart DURUMU (`status`) değil: `board_ask` bloke
+    # etmez, ajan çalışmaya devam eder; ama panoda "burada bir soru asılı"
+    # görünmeli. `notes` bunu taşıyamazdı (serbest metin, aranamaz).
+    review: str = ""
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -266,6 +271,7 @@ class TaskCard:
             "claim_expiry": self.claim_expiry,
             "event_seq": int(self.event_seq or 0),
             "kind": self.kind,
+            "review": self.review,
             # Kanıt ön bilgide tek satıra sıkıştırılır: YAML çok satırlı değer
             # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
             # sonucu ikiye bölerdi.
@@ -757,6 +763,7 @@ class TaskBoard:
             claim_expiry=str(front.get("claim_expiry") or ""),
             event_seq=event_seq,
             kind=str(front.get("kind") or "").strip().lower(),
+            review=str(front.get("review") or ""),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -898,16 +905,45 @@ class TaskBoard:
         `projection_hash` ile ayrıca ölçülebiliyor.
         """
         try:
+            cards = list(self.list())
             rows = [{
                 "id": c.id, "title": c.title, "status": c.status, "agent": c.agent,
                 "effort": c.effort, "priority": c.priority,
-            } for c in self.list()]
-            view = {"last_seq": self.events.last_seq(), "projection_hash": ""}
-            self.events.render_taskboard(
-                {"cards": {r["id"]: r for r in rows}, **view}, cards=rows
-            )
+                "report_path": c.report_path,
+            } for c in cards]
+            # Faz 12-B (araştırma C §1.6 / karar 5): projeksiyon ARTIK gerçekten
+            # hesaplanıyor. `projection_hash` şimdiye dek boş geçiliyordu, yani
+            # "iki görünüm ayrışırsa ölçeriz" iddiasının hiçbir karşılığı yoktu
+            # ve `Board/projection.json` hiç yazılmamıştı.
+            from entropy.agents.board_events import board_drift
+
+            view = self.events.write_projection()
+            drift = board_drift(cards, view)
+            view = dict(view, drift=len(drift))
+            self.events.render_taskboard(view, cards=rows)
+            if drift:
+                self._announce_drift(drift, view)
         except Exception:
             logging.getLogger(__name__).debug("TASKBOARD.md yazılamadı", exc_info=True)
+
+    def _announce_drift(self, drift: List[dict], view: dict) -> None:
+        """Kart dosyaları ile olay projeksiyonu ayrıştıysa uyarır ve olay yazar."""
+        logging.getLogger(__name__).warning(
+            "Pano ayrışması: %d kart (kart dosyası ≠ olay projeksiyonu): %s",
+            len(drift),
+            ", ".join(f"{d['id']}({d['card']}≠{d['projection']})" for d in drift[:5]),
+        )
+        try:
+            self.events.append(
+                task_id=drift[0]["id"],
+                actor="system",
+                action="board.drift",
+                payload={"count": len(drift), "cards": drift[:20],
+                         "projection_hash": str(view.get("projection_hash") or "")},
+                idempotency_key=f"drift:{view.get('projection_hash') or ''}",
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Ayrışma olayı yazılamadı", exc_info=True)
 
     @staticmethod
     def _announce_state(card: TaskCard, event: str, status: str) -> None:
@@ -1368,6 +1404,21 @@ class TaskBoard:
         prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path,
                                    lead_sections=lead_sections)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
+        # Faz 12-B: OTURUM BÜTÇESİ. Eşik aşıldıysa oturum burada döner ve devir
+        # sayfası isteme eklenir; `agent_session_kwargs` aşağıda taze bir
+        # kimlik üretir. Sıra önemli: istem oturum kararından SONRA
+        # tamamlanmalı, yoksa taze oturum devir sayfasını hiç görmez.
+        if card.agent and not card.worktree:
+            try:
+                from entropy.agents import session_budget
+
+                handoff_block = session_budget.rotate_if_needed(
+                    card.agent, provider, board=self, vault_path=self.vault_path
+                )
+            except Exception:
+                handoff_block = ""
+            if handoff_block:
+                prompt = f"{prompt}\n\n{handoff_block}"
         task_id = f"card-{card.id}"
         # Durum geçişi ARTIK durum makinesinden: `backlog`/`assigned` kart
         # gerekirse otomatik olarak `taken`a taşınır (uyumluluk yolu — dispatcher
@@ -1579,7 +1630,21 @@ class TaskBoard:
         card = self.get(card_id)
         if card is None:
             return
-        summary = (full_text or "").strip()
+        raw_output = (full_text or "").strip()
+        # Faz 12-B (araştırma C §1.4): araç/etiket blokları KARTA, sohbete ve
+        # hafızaya girmeden temizlenir. Ham metin köprünün raporunda ve olay
+        # günlüğünde kayıpsız kalır (risk R-C); buradan sonraki her tüketici
+        # temizlenmiş metni görür.
+        tool_calls, finish_args, tool_reject = _board_tool_results(raw_output)
+        # OFİS kartı KAPSAM DIŞI: Desk harness'ı blokları kartın `summary`sinden
+        # geri ayrıştırıyor (kontrol noktası dosyası, kanıt, kural adayı).
+        # Orada temizlik yapmak harness'ın tek gerçek kaynağını yok ederdi;
+        # Desk'in kendi temizliği harness'ın işidir (açık iş).
+        summary = raw_output if card.office else _strip_tool_blocks(raw_output)
+        if not summary and isinstance(finish_args, dict):
+            # Ajan SADECE araç bloğu yazdıysa özet boş kalmasın: `board_finish`
+            # zaten bir `summary` alanı taşıyor.
+            summary = str(finish_args.get("summary") or "").strip()
         outputs = list(card.output_paths or [])
         # RAPOR YOLU (Faz 11 kapanışı): köprü raporu
         # `Entropy/Skills/<yetenek>/Reports/Gorev_*.md` altına yazıyor ve yolu
@@ -1605,7 +1670,6 @@ class TaskBoard:
         # KANIT ondan gelir ve kanıtsız kapanış reddedilir (kart `review`de
         # insan önüne kalır). Kanıt açıkça kırmızıysa (`green: false`) kart
         # `failed`a düşer — close-with-proof kuralının makineleşmiş hâli.
-        tool_calls, finish_args, tool_reject = _board_tool_results(summary)
         if ok and finish_args and tool_reject is None:
             proof_payload = finish_args.get("proof")
         else:
@@ -1659,6 +1723,17 @@ class TaskBoard:
             ClaimStore(self.vault_path).release(card.id)
         except Exception:
             pass
+        # Faz 12-B: beş aracın YÜRÜTÜCÜSÜ. `board_finish` yukarıda tüketildi;
+        # `board_checkpoint` kontrol noktasını yazar, `board_ask` soruyu
+        # Entropy'nin kutusuna bırakır, `board_next` sıradaki kartı söyler,
+        # `board_create` ajanda REDDEDİLİR. Kart burada zaten kapandı: yürütücü
+        # kartın son hâlini alır ve alan güncellemeleri diske işlenir.
+        card = self._run_board_tools(tool_calls, card)
+        # Oturum sayaçları (Faz 12-B): kart + token. Token ledger'dan okunur —
+        # köprü `record_task_success`ı `on_result`tan ÖNCE çağırıyor, yani
+        # bu noktada satır dolu.
+        self._note_session_usage(card)
+
         if tool_reject:
             # Terminal olay YAYILMAZ: `emit_terminal` yalnızca son durumu
             # (completed/failed/canceled) taşır ve kartın gerçek sonu aşağıda
@@ -1683,6 +1758,58 @@ class TaskBoard:
             # kullanıcının "neden durdu" sorusunun tek yanıtıdır.
             card = self._apply_amplification_lock(card, summary, ok)
             self._report_to_entropy(card, summary, ok)
+
+    def _note_session_usage(self, card: TaskCard) -> None:
+        """Kartın token harcamasını ajanın oturum sayacına işler (Faz 12-B)."""
+        if not card.agent or card.worktree or card.office:
+            return
+        tokens = 0
+        try:
+            from entropy.core.task_ledger import task_ledger
+
+            row = task_ledger.get_task(f"card-{card.id}") or {}
+            tokens = int(row.get("total_tokens") or 0)
+        except Exception:
+            tokens = 0
+        try:
+            from entropy.agents import session_budget
+
+            session_budget.note_run(
+                card.agent, (card.provider or default_provider()).lower(),
+                tokens=tokens, vault_path=self.vault_path,
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Oturum sayacı işlenemedi", exc_info=True)
+
+    def _run_board_tools(self, tool_calls, card: TaskCard) -> TaskCard:
+        """
+        Ajanın pano araçlarını yürütür ve kartın güncel hâlini döndürür.
+
+        Hata YÜKSELTMEZ: bir aracın patlaması kapanmış kartı geri alamaz.
+        """
+        if not tool_calls:
+            return card
+        try:
+            from entropy.agents import board_tool_exec
+
+            results = board_tool_exec.execute(
+                tool_calls, board=self, card=card,
+                actor=card.agent or "", actor_kind=board_tool_exec.ACTOR_AGENT,
+                vault_path=self.vault_path,
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Pano araçları yürütülemedi", exc_info=True)
+            return card
+        for res in results:
+            updated = res.get("card")
+            if updated is not None:
+                card = updated
+            if not res.get("ok"):
+                logging.getLogger(__name__).info(
+                    "Pano aracı reddedildi (%s / %s): %s",
+                    card.id, res.get("tool"), res.get("error"),
+                )
+        return card
 
     def _apply_amplification_lock(self, card: TaskCard, summary: str,
                                   ok: bool) -> TaskCard:
@@ -1812,6 +1939,21 @@ class TaskBoard:
 # ---------------------------------------------------------------------------
 
 FOLLOWUP_NOTE_PREFIX = "Takip turu"
+
+
+def _strip_tool_blocks(text: str) -> str:
+    """
+    Araç/etiket bloklarını özetten temizler (Faz 12-B, karar 2).
+
+    Modül yoksa metin OLDUĞU GİBİ döner: temizlik bir kolaylıktır, kartın
+    kapanmasının önkoşulu değildir.
+    """
+    try:
+        from entropy.agents.board_tools import strip_tool_blocks
+
+        return strip_tool_blocks(text or "")
+    except Exception:
+        return (text or "").strip()
 
 
 def _board_tool_results(text: str):

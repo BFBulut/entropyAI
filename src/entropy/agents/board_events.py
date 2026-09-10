@@ -49,6 +49,9 @@ ROTATE_BYTES = 4 * 1024 * 1024
 
 # Projeksiyonda kart başına taşınan alanlar. Karma bu kümeye göre hesaplandığı
 # için liste SÖZLEŞMEDİR: alan eklemek eski karmaları geçersiz kılar.
+#: Ayrışma satırının işareti (emoji değil: pano düz metin olarak da okunuyor).
+DRIFT_MARK = "[!]"
+
 PROJECTED_FIELDS = (
     "status", "agent", "title", "provider", "model", "effort", "priority",
     "attempt", "claimed_by", "checkpoint", "proof", "report_path", "office",
@@ -234,6 +237,9 @@ class BoardEventLog:
             if not task_id:
                 continue
             action = str(ev.get("action") or "")
+            if action in board_fsm.INFO_EVENTS:
+                # Gözlem olayı: durum değiştirmez, kart da doğurmaz.
+                continue
             payload = dict(ev.get("payload") or {})
             payload.setdefault("actor", ev.get("actor") or "")
             card = cards.get(task_id)
@@ -303,7 +309,8 @@ class BoardEventLog:
         view = view if view is not None else self.project()
         rows = cards if cards is not None else list((view.get("cards") or {}).values())
         text = render_taskboard_text(rows, last_seq=int(view.get("last_seq") or 0),
-                                     projection_hash=str(view.get("projection_hash") or ""))
+                                     projection_hash=str(view.get("projection_hash") or ""),
+                                     drift=int(view.get("drift") or 0))
         try:
             self.taskboard_path.parent.mkdir(parents=True, exist_ok=True)
             self.taskboard_path.write_text(text, encoding="utf-8")
@@ -313,7 +320,7 @@ class BoardEventLog:
 
 
 def render_taskboard_text(cards: Iterable[dict], last_seq: int = 0,
-                          projection_hash: str = "") -> str:
+                          projection_hash: str = "", drift: int = 0) -> str:
     """Kart görünümünden insan panosunu üretir (saf fonksiyon; test edilebilir)."""
     by_status: Dict[str, List[dict]] = {s: [] for s in board_fsm.STATUSES}
     for card in cards:
@@ -327,6 +334,12 @@ def render_taskboard_text(cards: Iterable[dict], last_seq: int = 0,
         f"Son olay: `{last_seq}` · Projeksiyon karması: `{projection_hash[:16]}`",
         "",
     ]
+    if drift:
+        # Ayrışma satırı (Faz 12-B, K-C2): kart dosyası elle düzenlendiğinde
+        # ya da bir yazım kaybolduğunda iki görünüm birbirini tutmaz. Pano
+        # bunu SÖYLER; sessiz ayrışma "hangi gerçek doğru" sorusunu doğurur.
+        lines += [f"> {DRIFT_MARK} ayrışma: {int(drift)} kart "
+                  f"(kart dosyaları ile olay projeksiyonu birbirini tutmuyor)", ""]
     for status in board_fsm.STATUSES:
         rows = by_status.get(status) or []
         lines.append(f"## {status} ({len(rows)})")
@@ -348,6 +361,37 @@ def render_taskboard_text(cards: Iterable[dict], last_seq: int = 0,
             lines.append(f"- `{card.get('id')}` {title}{suffix}{link}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def board_drift(cards, view: dict) -> List[dict]:
+    """
+    Kart DOSYALARI ile olay projeksiyonunun ayrıştığı kartlar.
+
+    Dönüş: `[{"id", "card", "projection"}]`. Projeksiyonda hiç görünmeyen kart
+    ayrışma SAYILMAZ: kart elle (dosya kopyalayarak) eklenmiş olabilir ve
+    olay günlüğü onu hiç görmemiştir — bu bir tutarsızlık değil, eksik geçmiş.
+    Ters yön (projeksiyonda var, dosyası yok) ayrışmadır: bir yazım kaybolmuş.
+    """
+    projected = dict((view or {}).get("cards") or {})
+    out: List[dict] = []
+    seen = set()
+    for card in cards or []:
+        cid = str(getattr(card, "id", "") or "")
+        if not cid:
+            continue
+        seen.add(cid)
+        row = projected.get(cid)
+        if not row:
+            continue
+        want = str(row.get("status") or "")
+        have = str(getattr(card, "status", "") or "")
+        if want and have and want != have:
+            out.append({"id": cid, "card": have, "projection": want})
+    for cid, row in projected.items():
+        if cid not in seen:
+            out.append({"id": cid, "card": "(dosya yok)",
+                        "projection": str(row.get("status") or "")})
+    return sorted(out, key=lambda d: d["id"])
 
 
 def canonical_json(data) -> str:
@@ -424,7 +468,8 @@ def reset_default_log() -> None:
 
 
 __all__ = [
-    "SCHEMA_VERSION", "PROJECTED_FIELDS", "BoardEventLog", "board_event_log",
+    "SCHEMA_VERSION", "PROJECTED_FIELDS", "DRIFT_MARK", "board_drift",
+    "BoardEventLog", "board_event_log",
     "reset_default_log", "render_taskboard_text", "canonical_json",
     "projection_hash", "unmatched_runs",
 ]

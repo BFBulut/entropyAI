@@ -1814,7 +1814,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             except Exception:
                 pass
 
-        full_text = str(result.get("text", "") or "")
+        # Faz 12-B: sohbet yanıtı tek kancadan geçer — `[PANO board_create]`
+        # bloğu karta dönüşür, araç/etiket blokları metinden çıkarılır.
+        # Kaydetmeden ÖNCE: ham JSON diskteki geçmişe ve bağlam kurucuya
+        # girmemeli.
+        full_text = self.finalize_chat_text(str(result.get("text", "") or ""))
         session_id = result.get("session_id")
         if session_id:
             self.current_session_id = str(session_id)

@@ -61,6 +61,14 @@ MESSAGE_KINDS = ("instruction", "report", "question", "status")
 # Talimat ve soru yalnızca AŞAĞI yönde (Entropy → ofis) geçerlidir.
 ENTROPY_INBOX_KINDS = ("report", "status")
 
+# Faz 12-B: `board_ask` aracının anlamı "takıldım, tahmin üretmeyeyim, sor";
+# sorusu Entropy'ye ulaşmayan araç yanıtsız bir yüzeydir (araştırma C §1.3).
+# Bu yüzden Entropy'NİN KENDİ ajanı soru sorabilir — ama yön kilidi
+# GEVŞETİLMEZ: soru yalnızca AÇIK izinle (`send(..., allow_question=True)`,
+# tek çağıran `ask_entropy`) geçer ve ofis ajanından geliyorsa yine reddedilir.
+# Varsayılan davranış (izin verilmemiş çağrı) Faz 9'daki gibi RET'tir.
+ENTROPY_INBOX_AGENT_KINDS = ENTROPY_INBOX_KINDS + ("question",)
+
 # A2A görev durumları. "auth_required"/"rejected" bilerek dışarıda: Entropy'de
 # karşılığı olan bir yol yok ve şemaya yazılınca doğrulama gevşerdi.
 MESSAGE_STATUSES = (
@@ -215,6 +223,7 @@ class Mailbox:
         message: Optional[Message] = None,
         *,
         sender_office: Optional[str] = None,
+        allow_question: bool = False,
         **fields,
     ) -> Message:
         """
@@ -231,7 +240,7 @@ class Mailbox:
         # ("gossip") yön hatası değil, şema hatasıdır ve çağıran ValueError
         # bekliyor.
         self._validate(message)
-        self._check_scope(message, sender_office)
+        self._check_scope(message, sender_office, allow_question=allow_question)
 
         target = self.inbox_dir
         try:
@@ -246,7 +255,8 @@ class Mailbox:
         _notify(self.owner_kind, self.owner_name)
         return message
 
-    def _check_scope(self, message: Message, sender_office: Optional[str]) -> None:
+    def _check_scope(self, message: Message, sender_office: Optional[str],
+                     allow_question: bool = False) -> None:
         """
         Yön kilidi + ajanlar arası kapsam.
 
@@ -258,6 +268,16 @@ class Mailbox:
         (2) KAPSAM: ajanlar arası doğrudan mesaj yalnızca aynı ofis içinde.
         """
         if self.owner_kind == "entropy":
+            if message.kind == "question" and allow_question:
+                if (sender_office or "").strip():
+                    # Ofis ajanı Entropy'ye soru soramaz: orkestratör Entropy'nin
+                    # varlığını bilmiyor, sorusu kendi ofisinin içinde kalır.
+                    raise MailboxScopeError(
+                        f"'{message.from_ or '?'}' bir ofis ajanı "
+                        f"({sender_office}); Entropy'nin gelen kutusuna soru "
+                        f"yazamaz. Ofis içi soru ofisin kendi kutusuna gider."
+                    )
+                return
             if message.kind not in ENTROPY_INBOX_KINDS:
                 raise MailboxScopeError(
                     f"Entropy'nin gelen kutusuna '{message.kind}' yazılamaz: "
@@ -461,6 +481,30 @@ def instruct_office(office: str, instruction: str, task_id: str = "", vault_path
             parts=[text_part(instruction)],
             status="submitted",
         )
+    )
+
+
+def ask_entropy(agent: str, question: str, task_id: str = "",
+                sender_office: Optional[str] = None, vault_path=None) -> Message:
+    """
+    Entropy'nin AJANININ sorusunu Entropy'nin gelen kutusuna bırakır (Faz 12-B).
+
+    `board_ask` aracının tek çıkış noktası. Ofis ajanından gelen çağrı
+    `MailboxScopeError` ile reddedilir: Desk → Entropy hattı yalnızca rapordur.
+    """
+    box = entropy_mailbox(vault_path)
+    return box.send(
+        Message(
+            kind="question",
+            from_=agent or "agent",
+            to=ENTROPY_OWNER,
+            role="agent",
+            task_id=task_id,
+            parts=[text_part(question)],
+            status="input_required",
+        ),
+        sender_office=sender_office,
+        allow_question=True,
     )
 
 
