@@ -9,6 +9,12 @@ from PySide6.QtWidgets import (
 
 from entropy.core.slash_commands import SlashCommand
 
+#: Coklu secim isaretleri. Emoji/dingbat KULLANILMAZ (11-E tasarim kapisi:
+#: `scripts/ui_audit.py:EMOJI_RE` U+2600-U+27BF araligini da sayar, "V"
+#: isareti U+2713 oraya duser), ama secili/secilmemis AYIRT EDILEBILIR olmali.
+CHECK_ON = "[x]"
+CHECK_OFF = "[ ]"
+
 class SlashCommandItemWidget(QWidget):
     """Custom row widget rendering multi-select check indicator, badge, command name, description, and usage."""
 
@@ -19,8 +25,11 @@ class SlashCommandItemWidget(QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(8)
 
-        # Check Indicator for Multi-Select
-        self.check_lbl = QLabel("[]" if is_selected else "[ ]")
+        # Check Indicator for Multi-Select.
+        # Faz 11 kapanisi (regresyon): 11-E emoji temizligi "[V]" isaretini
+        # silince secili "[]" ve secilmemis "[ ]" gorsel olarak ayirt
+        # edilemez hale gelmisti. ASCII "x" hem kapiyi gecer hem okunur.
+        self.check_lbl = QLabel(CHECK_ON if is_selected else CHECK_OFF)
         self._update_check_style(is_selected)
         layout.addWidget(self.check_lbl)
 
@@ -50,14 +59,16 @@ class SlashCommandItemWidget(QWidget):
             layout.addWidget(usage_lbl)
 
     def set_checked(self, checked: bool):
-        self.check_lbl.setText("[]" if checked else "[ ]")
+        self.check_lbl.setText(CHECK_ON if checked else CHECK_OFF)
         self._update_check_style(checked)
 
     def _update_check_style(self, checked: bool):
-        if checked:
-            self.check_lbl.setProperty("role", "label")
-        else:
-            self.check_lbl.setProperty("role", "label")
+        # Renk de ayirt edici olsun: secili "accent", secilmemis "muted".
+        self.check_lbl.setProperty("role", "label")
+        self.check_lbl.setProperty("tone", "accent" if checked else "muted")
+        style = self.check_lbl.style()
+        style.unpolish(self.check_lbl)
+        style.polish(self.check_lbl)
 
 
 def effort_command_hint(bridge=None) -> str:

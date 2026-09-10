@@ -711,6 +711,10 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             ("mode_zen", "Zen kipine gec", "Ctrl+3"),
             ("mode_floating", "Floating kipine gec", ""),
             ("mode_chat", "Chat kipine gec", ""),
+            ("toggle_lock", "Öz-amplifikasyon kilidi aç/kapat",
+             "config.amplification_lock · /lock on|off"),
+            ("toggle_board_auto", "Pano otomatik dağıtım aç/kapat",
+             "config.board_auto_dispatch · /board auto on|off"),
         ]
         items = [
             {"kind": "action", "label": label, "subtitle": subtitle, "payload": key}
@@ -721,6 +725,21 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         except Exception:
             pass
         return items
+
+    def _run_setting_toggle(self, key: str) -> str:
+        """Boole ayar anahtarini cevirir (zen kipiyle ayni sozlesme)."""
+        from entropy.core.slash_commands import (
+            toggle_amplification_lock, toggle_board_auto_dispatch,
+        )
+
+        fn = (toggle_amplification_lock if key == "toggle_lock"
+              else toggle_board_auto_dispatch)
+        try:
+            _state, message = fn()
+        except Exception as exc:  # pragma: no cover - savunma
+            message = f"Ayar degistirilemedi: {exc}"
+        bus.terminal_output_received.emit(f"[Ayar] {message}\n")
+        return message
 
     def run_palette_action(self, key: str) -> bool:
         """Palet eylemi yurutur; bilinmeyen anahtar icin False doner."""
@@ -736,6 +755,8 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             self._toggle_terminal()
         elif key == "reports":
             self._open_reports_window()
+        elif key in ("toggle_lock", "toggle_board_auto"):
+            self._run_setting_toggle(key)
         elif key.startswith("mode_"):
             bus.mode_requested.emit(key.split("_", 1)[1])
         else:
@@ -1107,11 +1128,21 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.staged_pdfs.clear()
         self.attachment_bar.setVisible(False)
 
-    def _toggle_terminal(self):
-        is_vis = not self.terminal_drawer.isVisible()
-        self.terminal_drawer.setVisible(is_vis)
+    def _sync_terminal_button(self) -> None:
+        """Terminal dugmesinin metni/durumu cekmecenin GERCEK haliyle esitlenir.
+
+        Faz 11 kapanisi (regresyon): `_on_turn_started` cekmeceyi acarken
+        etiketi ayri bir yerde ve ESKI (emojili) metinle yaziyordu; 11-E
+        temizliginden sonra iki kod yolu iki farkli etiket uretiyordu.
+        Tek kaynak burasi.
+        """
+        is_vis = not self.terminal_drawer.isHidden()
         self.toggle_term_btn.setText("Terminali kapat" if is_vis else "Terminal")
         self.toggle_term_btn.setChecked(is_vis)
+
+    def _toggle_terminal(self):
+        self.terminal_drawer.setVisible(self.terminal_drawer.isHidden())
+        self._sync_terminal_button()
 
     def _on_new_chat(self):
         """Sohbeti yalnızca burada, kullanıcının açık isteğiyle sıfırlar (arşivleyerek)."""
@@ -1461,7 +1492,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.input_field.setEnabled(False)
         self._streaming_active = True
         self.terminal_drawer.setVisible(True)
-        self.toggle_term_btn.setText("▼ Terminali Kapat")
+        self._sync_terminal_button()
         self.chat_browser.append("<div style='margin-bottom:8px;'><b style='color:#00F0FF;'>Entropy AI:</b><br/></div>")
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 

@@ -230,7 +230,8 @@ def test_multi_hub_hierarchy_and_scope_filtering(qapp, tmp_path):
     # 5. Verify Scope Selector combo box
     assert widget.scope_combo.count() >= 6
     # Default item must be Galaxy view
-    assert widget.scope_combo.itemText(0) == "🌐 Tüm Hafıza (Galaksi Görünümü)"
+    # 11-E: emoji kaldirildi; kapsam kimligi (`itemData`) sozlesmedir.
+    assert widget.scope_combo.itemText(0) == "Tüm Hafıza (Galaksi Görünümü)"
     assert widget.scope_combo.itemData(0) == "all"
     assert widget.current_scope == "all"
 

@@ -269,3 +269,53 @@ def test_focusable_controls_have_accessible_names(app):
         assert missing == []
     finally:
         zen.close()
+
+
+# --------------------------------------------------------------------------
+# Faz 11 kapanışı — boole ayarların arayüz karşılığı
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("maker_name", ["_make_zen", "_make_chat"])
+def test_setting_toggles_exist_in_palette_and_work(app, monkeypatch, maker_name):
+    """`amplification_lock` ve `board_auto_dispatch` palette var ve çalışıyor.
+
+    Kayıtlı boşluk (STATE.md §2.3): iki ayarın da arayüzde hiç karşılığı yoktu.
+    Ayar kalıcılaştırma ve tetikleyici uygulaması **çağrılmaz** (monkeypatch);
+    ölçülen şey paletin doğru işlevi çağırdığıdır.
+    """
+    from entropy.core import slash_commands
+    from entropy.core.config import config as cfg
+
+    monkeypatch.setattr(slash_commands, "_apply_board_auto", lambda enabled: "")
+    monkeypatch.setattr(type(cfg), "save_settings", lambda self: None, raising=False)
+
+    win = globals()[maker_name](app)
+    try:
+        actions = [
+            item["payload"] for item in win._collect_palette_items()
+            if item.get("kind") == "action"
+        ]
+        assert "toggle_lock" in actions
+        assert "toggle_board_auto" in actions
+
+        for key, setting in (("toggle_lock", "amplification_lock"),
+                             ("toggle_board_auto", "board_auto_dispatch")):
+            before = bool(getattr(cfg, setting))
+            assert win.run_palette_action(key) is True
+            assert bool(getattr(cfg, setting)) is not before
+            # geri çevir: testler kullanıcı ayarını kalıcı değiştirmesin
+            assert win.run_palette_action(key) is True
+            assert bool(getattr(cfg, setting)) is before
+    finally:
+        win.close()
+
+
+def test_scheduled_dreaming_uses_dream_v2_module():
+    """`tasks_widget` artık eski `cog.dream_and_consolidate()` çağırmıyor."""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src/entropy/ui/widgets/tasks_widget.py"
+    text = src.read_text(encoding="utf-8")
+    assert "cog.dream_and_consolidate()" not in text, "eski 48 saat koşullu metot"
+    assert "from entropy.memory.dream import dream_and_consolidate" in text
+    assert "send_prompt=None" in text, "zamanlanmış görev kota harcamamalı"

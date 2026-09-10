@@ -299,21 +299,28 @@ class TasksWidget(QFrame):
         if task.id == "daily-dreaming":
             try:
                 cog = CognitiveMemorySystem()
-                rules = cog.dream_and_consolidate()
+                # Faz 11 kapanışı: rüya döngüsü v2 (`memory.dream`). Eski
+                # `CognitiveMemorySystem.dream_and_consolidate` 48 saat + epizodik
+                # koşuluna bağlıydı; `send_prompt=None` → KOTA HARCAMAZ.
+                from entropy.memory.dream import dream_and_consolidate
+
+                report = dream_and_consolidate(memory=cog, send_prompt=None)
+                detail = report.summary_line()
                 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
                 ovm = ObsidianVaultManager()
                 today_str = datetime.date.today().isoformat()
                 content = f"# Bilişsel Hafıza Konsolidasyonu & Rüya Raporu ({today_str})\n\n"
-                content += f"- Sentezlenen Kural Sayısı: {len(rules)}\n- Tarih: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n## Konsolide Edilen Kurallar:\n"
-                for r in rules:
-                    content += f"- {r}\n"
+                content += f"- Tarih: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                content += f"- Özet: {detail}\n\n## Adım sayaçları\n"
+                for _k, _v in report.as_dict().items():
+                    content += f"- **{_k}**: {_v}\n"
                 rep_path = ovm.save_research_report(f"Konsolide_Hafiza_{today_str}", content, tags=["dream", "consolidation"])
                 bus.cognitive_memory_updated.emit()
                 bus.knowledge_graph_updated.emit()
                 bus.task_notification.emit(task.id, task.name, str(rep_path))
                 bus.task_completed.emit(task.id, True)
                 bus.terminal_output_received.emit(
-                    f"[Task Scheduler] Bilişsel hafıza konsolidasyonu tamamlandı ({len(rules)} semantik kural sentezlendi, rapor: {rep_path.name}).\n"
+                    f"[Task Scheduler] Bilişsel hafıza konsolidasyonu tamamlandı ({detail}; rapor: {rep_path.name}).\n"
                 )
             except Exception as e:
                 bus.terminal_output_received.emit(f"[Task Scheduler Hata] Konsolidasyon hatası: {e}\n")

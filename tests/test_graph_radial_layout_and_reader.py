@@ -345,7 +345,13 @@ def test_reports_viewer_grouping_filter_and_search(qapp, tmp_path):
         for i in range(viewer.list_widget.count())
         if viewer.list_widget.item(i).data(0x0100) is None
     ]
-    assert any("📅" in h for h in date_headers)
+    # Faz 11-E emoji temizligi basliklardan takvim emojisini kaldirdi;
+    # olculen sey grubun VARLIGI ve etiketi, emoji degil.
+    assert date_headers, "tarih gruplama basligi uretmedi"
+    assert any(
+        any(w in h for w in ("Bugün", "Dün", "Bu Hafta", "Bu Ay", "20"))
+        for h in date_headers
+    ), date_headers
 
     viewer.close()
     qapp.processEvents()

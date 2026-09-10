@@ -52,6 +52,7 @@ except Exception:  # pragma: no cover - numpy pyproject'te sert bağımlılık
 
 from entropy.memory.categories import normalize_category  # noqa: E402
 from entropy.memory.gate import (  # noqa: E402
+    IDENTITY_PROVENANCE,
     LEGACY_CONFIDENCE,
     LEGACY_PROVENANCE,
     MIN_CONTENT_CHARS,
@@ -296,6 +297,14 @@ LEGACY_TAG_SQL_WHERE = (
     "   AND TRIM(COALESCE(provenance, '')) = ''"
 )
 
+# Kimlik düğümleri ayrı ele alınır: kaynakları `identity:core`, güvenleri
+# DÜŞÜRÜLMEZ (aksiyom). Uydurma kaynak değil, gerçek kaynak: bu satırlar
+# Entropy'nin kendi kimlik bildirimidir.
+IDENTITY_TAG_SQL_WHERE = (
+    " WHERE COALESCE(is_identity, 0) = 1"
+    "   AND TRIM(COALESCE(provenance, '')) = ''"
+)
+
 
 def plan_legacy_tagging(source: Path) -> Dict[str, Any]:
     """
@@ -330,6 +339,13 @@ def plan_legacy_tagging(source: Path) -> Dict[str, Any]:
             "SELECT COUNT(*) FROM cognitive_nodes" + LEGACY_TAG_SQL_WHERE
             + " AND COALESCE(access_count, 0) <= 1"
         ).fetchone()[0]
+        identity_candidates = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes" + IDENTITY_TAG_SQL_WHERE
+        ).fetchone()[0]
+        identity_tagged = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes WHERE COALESCE(provenance,'') = ?",
+            (IDENTITY_PROVENANCE,),
+        ).fetchone()[0]
     return {
         "schema": "v2",
         "nodes": total,
@@ -337,6 +353,8 @@ def plan_legacy_tagging(source: Path) -> Dict[str, Any]:
         "candidates": candidates,
         "already_tagged": already,
         "never_recalled": never_recalled,
+        "identity_candidates": identity_candidates,
+        "identity_tagged": identity_tagged,
     }
 
 
@@ -350,6 +368,22 @@ def apply_legacy_tagging(target: Path) -> int:
             " valid_from = created_at"
             + LEGACY_TAG_SQL_WHERE,
             (LEGACY_PROVENANCE, LEGACY_CONFIDENCE),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
+def apply_identity_tagging(target: Path) -> int:
+    """Kimlik düğümlerine `identity:core` kaynağını yazar. İdempotent.
+
+    Güven (`confidence`) DÜŞÜRÜLMEZ; `valid_from` yalnızca boşsa doldurulur.
+    """
+    with sqlite3.connect(target) as conn:
+        cur = conn.execute(
+            "UPDATE cognitive_nodes SET provenance = ?,"
+            " valid_from = COALESCE(valid_from, created_at)"
+            + IDENTITY_TAG_SQL_WHERE,
+            (IDENTITY_PROVENANCE,),
         )
         conn.commit()
         return int(cur.rowcount or 0)
@@ -389,6 +423,7 @@ def main() -> int:
         if args.apply:
             report["backup"] = str(backup(source))
             report["tagged"] = apply_legacy_tagging(source)
+            report["identity_tagged_now"] = apply_identity_tagging(source)
             report["after"] = plan_legacy_tagging(source)
         else:
             report["note"] = "kuru koşum: hiçbir dosya değiştirilmedi"
@@ -401,8 +436,12 @@ def main() -> int:
         print(f"Etiketlenecek  : {report.get('candidates', 0)}"
               f"  (hiç geri çağrılmamış: {report.get('never_recalled', 0)})")
         print(f"Zaten etiketli : {report.get('already_tagged', 0)}")
+        print(f"Kimlik adayı   : {report.get('identity_candidates', 0)}"
+              f"  (zaten etiketli: {report.get('identity_tagged', 0)})")
         if args.apply:
-            print(f"Etiketlendi    : {report.get('tagged', 0)}  · yedek: {report['backup']}")
+            print(f"Etiketlendi    : {report.get('tagged', 0)}"
+                  f"  · kimlik: {report.get('identity_tagged_now', 0)}"
+                  f"  · yedek: {report['backup']}")
         else:
             print("Not            : kuru koşum, hiçbir dosya değiştirilmedi")
         return 0

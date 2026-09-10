@@ -9,7 +9,7 @@
 |---|---|
 | Sürüm | **v0.8.0** (Faz 11-A sonrası etiket adayı: v0.9.0) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, **Faz 11-B QA**: hafıza göçü `--apply` uygulandı (1.544 → 711 düğüm), K1–K12 ölçüm paketi kalıcılaştı (§2.2) · **Faz 11-C**: açılış kablolaması, 11.6 öz-amplifikasyon kilidi, yeni yerel komutlar, derleme hedefi ayrıldı |
+| Son güncelleme | 2026-09-10, **Faz 11 KAPANIŞ QA** (§2.4): tam süit **2.355 passed / 0 failed / 406 s**, build exit 0 (241 s, `dist/EntropyAI`), **K12 = 0**, 11-E sözleşmeleri §3'e yazıldı, 2 sessiz arayüz regresyonu düzeltildi, 3 açık bulgu (§5.8-10) |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -65,6 +65,70 @@ Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rul
 **13 passed**.
 
 ---
+
+## 2.4 Faz 11 KAPANIŞ QA (2026-09-10) — kapanış sayıları
+
+**Tam süit:** `QT_QPA_PLATFORM=offscreen python -m pytest -q -p no:cacheprovider`
+→ **2.352 test; 2.348 passed, 4 failed, 406 s**; dört hata düzeltildikten sonra
+ikinci koşum **2.353 test; 2.352 passed, 1 failed, 427 s**. Kalan tek hata
+`tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900`:
+**bu QA'nın değişikliklerinden bağımsız** — ayrı bir `git worktree` ile HEAD
+(8b60c5e) üzerinde de aynı şekilde kırmızı. Kök nedeni bulundu ve §5.9'a
+yazıldı (Desk sayfa asgarileri sekme asgarisini eziyor). Faz 11-C/D QA'sında zaman aşımına
+giren `tests/desk/test_office_hardening.py` ve `test_office_harness.py`
+**bu koşumda yeşil** (tek başına 57 test / 25,5 sn; yük altında da geçti).
+**Yalıtım kanıtı (önce = sonra):** `tasks_ledger.db` 73.728 B / 1789012264,
+`skills_state.json` 112 B / 1788993407, `cognitive_memory.db` 7.593.984 B /
+1789015233 — üçü de değişmedi.
+
+**Build:** `python -m PyInstaller EntropyAI.spec --noconfirm` → **exit 0, 241 s**,
+`C:\EntropiAI\dist\EntropyAI\` **1.206 MB**, `EntropyAI.exe` 55.833.355 B.
+Smoke: `--help` **exit 0** (stderr 0 bayt); `--mode zen` ile 25 sn canlı koşum,
+erken çıkış yok; `.entropy/logs/entropy.log` yeni satırlarında
+`Traceback`/`CRITICAL` **0**; yeni CrashDump **yok**; exe veritabanına yazmadı.
+QtAwesome fontları pakette (`_internal/qtawesome/fonts/`, 6 aile) ve
+**ikonlar exe'de gerçekten çiziliyor** (gerçek ekran görüntüsü
+`scratch/ui/phase11e/live_exe_zen.png`: dikey gezinmenin 7 ikonu, palet
+büyüteci, model kapsülü).
+
+**Kapanışta düzeltilenler (dört süit hatası + iki sessiz regresyon):**
+
+| # | Bulgu | Ürün mü test mi | Düzeltme |
+|---|---|---|---|
+| 1 | Slash paletinde seçili `[]` ve seçilmemiş `[ ]` ayırt edilemiyordu | **ÜRÜN** (11-E emoji temizliği `[✓]`'i sildi) | `CHECK_ON="[x]"` / `CHECK_OFF="[ ]"` + `tone` rengi — `src/entropy/ui/widgets/slash_command_popup.py:12-16,26,57` |
+| 2 | Terminal düğmesi iki kod yolunda iki farklı etiket üretiyordu (`_on_turn_started` eski emojili metni yazıyordu) | **ÜRÜN** | tek kaynak `_sync_terminal_button()` — `src/entropy/ui/modes/chat_mode.py:1131-1145,1494` |
+| 3 | `test_reports_viewer_grouping_filter_and_search` `"📅"` arıyordu | **TEST** (11-E emojiyi kaldırdı, gruplama çalışıyor) | grup **varlığı** ve etiketi ölçülüyor — `tests/test_graph_radial_layout_and_reader.py:348-355` |
+| 4 | `test_multi_hub_hierarchy_and_scope_filtering` `"🌐 Tüm Hafıza…"` bekliyordu | **TEST** | `itemData` sözleşme, metin emojisiz — `tests/test_hierarchical_knowledge_graph.py:233` |
+| 5 | `reports_viewer` sıralama anahtarı `k.startswith("")` (her zaman True) | ölü kod (11-E artığı) | `src/entropy/ui/widgets/reports_viewer.py:523` |
+| 6 | Yük altında zaman aşımı: sabit `Event.wait(10)` / `_wait_until(..., 20)` | **TEST** (ürün hatası değil) | `tests/timing.budget()` — yüke göre ölçeklenen bütçe; boştaki ölçek 1,0 (davranış değişmez) |
+
+**K12 = 0 (gerçek DB, kanıt).** Kalan 2 kaynaksız L2 düğümünün ikisi de
+**kimlik düğümüydü** (`is_identity=1`): `semantic-f323b831952293b5` ("I am
+Entropy AI…", 103 çağrı) ve `semantic-69123da031675b0b` ("Entropy AI Kimlik ve
+Otonomi İlkesi…"). Uydurma kaynak yazılmadı; doğru kaynak `identity:core`
+damgalandı.
+`python scripts/memory_migrate_v2.py --tag-legacy` (kuru koşum →
+`identity_candidates: 2`) → `--apply` (yedek
+`~/.entropy/backups/cognitive_memory.pre-v2.20260910074033.db`) →
+`identity_tagged_now: 2`, ikinci koşumda `identity_candidates: 0` (idempotent).
+`python scripts/brain_metrics.py` →
+**K12 kaynaksız L2: 0** (eski etiketli 256 · kimlik 3, etiketsiz kimlik **0**);
+karar `{'K1': 'PASS', 'K7': 'PASS', 'K10': 'PASS', 'K12': 'PASS'}`.
+Düğüm sayısı 729 → 729 (yazma yok, yalnızca sütun güncellemesi).
+
+**Gerçek ekran ölçümleri** (LG ULTRAGEAR, `devicePixelRatio 2.0`;
+`scratch/ui/phase11e/live_metrics.json`, `live_zen_widths.json`, `live_dpi.json`):
+
+| Ölçüm | Hedef | Sonuç |
+|---|---|---|
+| Zen 1920×1080 üst çubuk öğesi | ≤ 4 | **4** (`brandCluster`, `modelCapsule`, `statusCluster`, `paletteButton`) |
+| Zen dikey gezinme | 7/7 | **7/7** (Raporlar & Notlar → Bildirimler) |
+| Zen taşan panel | 0 | **0** (kaydırma alanı içeriği hariç) |
+| Chat 1280×800 krom | — | başlık 49 + girdi 38 = **87 px = %10,9** |
+| Odak halkası (Tab) | her durakta ad | **6/6 durak**, hepsinde `accessibleName` |
+| Sürükleme (üst çubuk) | çalışıyor | **evet**: `FramelessWindowHelper.handle is header_frame`, sol tık **tüketildi**, `_system_drag=True` (`startSystemMove` yerel/bloklayıcı olduğu için sentetik olayla piksel ölçülemez) |
+| Desk `minimumSize` | ≤ 960×540 | **860×540** (bildirilen) |
+| Desk 1600×900 taşma | 0 | **0** |
 
 ## 2.3 QA 11-C/D — uçtan uca pano döngüsü + hafıza turları (2026-09-10)
 
@@ -455,6 +519,54 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
 - **Ölçüm paketi (kalıcı):** `tests/contracts/test_phase11_brain_metrics.py`
   (12 test, sentetik korpus) + `tests/contracts/test_phase11_memory_isolation.py`
   (11 test, yazma yolu yalıtımı). Ölçüm mantığı tek kaynak: `scripts/brain_metrics.py`.
+- **Arayüz tasarım sistemi (Faz 11-E, sözleşme):**
+  - **Tek jeton kaynağı:** `ui/design/tokens.py` → `TOKENS`. Aileler:
+    `color` (12 arayüz rengi), `space` (1..6 → 4/8/12/16/24/32),
+    `radius` (sm/md/lg), `type` (title/heading/body/…), ve **ayrı**
+    `TOKENS["viz"]` — görselleştirme paleti (`add/del/hunk/meta`,
+    `kind1..kind7`, `neutral`). `viz` arayüz renklerine KARIŞMAZ: yalnızca
+    veri kodlar (diff boyaması, graf düğüm türü, akış olayı). Gövde kodunda
+    ham hex yasak (Desk'te hex 17 → 0).
+  - **Tek QSS girişi:** `ui/design/qss.py` tüm uygulamanın stil kaynağıdır
+    (yerel stil sayfası 222 → 1). Widget'lar stil yazmaz, **Qt özelliği**
+    verir: `role` (`panel|card|title|heading|label|mono|icon|badge|toast|
+    statusDot|toolbarGroup`), `variant` (`primary|ghost|danger`),
+    `tone` (`ok|warn|danger|muted|accent`). Yeni bir görünüm gerekiyorsa
+    QSS'e seçici eklenir, widget'a `setStyleSheet` YAZILMAZ.
+  - **Üst çubuk sözleşmesi:** her kip penceresi `self.header_items` listesini
+    kurar; **öğe sayısı ≤ 4** (kapı testi). Zen'de dördü: `brand`,
+    `model_capsule`, `status_cluster`, `palette_btn`. Pencere denetimleri
+    (`window_controls`) bu sayıma girmez. Çubuktan kaldırılan HER işlevin
+    komut paletinde karşılığı olmak zorundadır (IA-9).
+  - **Dikey gezinme:** `ui/widgets/nav_list.NavList` (`QListWidget` + 
+    `QStackedWidget`). `QTabWidget` API'siyle uyumlu: `addTab(widget, label,
+    icon_name)`, `count()`, `tabText(i)`, `setCurrentIndex(i)`, sinyal
+    `currentChanged(int)`. Zen'de 7 bölüm (Raporlar, Yetenekler, Görevler,
+    MCP, Ajanlar, Bugün, Bildirimler) — palet anahtarları `nav_*` bu sırayı
+    izler.
+  - **Palet eylemleri:** `_collect_palette_items()` `{"kind": "action",
+    "label", "subtitle", "payload"}` sözlükleri döndürür; `run_palette_action(
+    key) -> bool` (bilinmeyen anahtar `False`). Zen ve Chat aynı sözleşmeyi
+    paylaşır. **Faz 11 kapanışında eklenen iki anahtar:** `toggle_lock`
+    (`config.amplification_lock`) ve `toggle_board_auto`
+    (`config.board_auto_dispatch`); ikisi de
+    `core.slash_commands.toggle_amplification_lock()` /
+    `toggle_board_auto_dispatch()` işlevlerini çağırır → `(durum, mesaj)`
+    döner, ayarı kalıcılaştırır, **model çağırmaz**. Slash karşılıkları
+    `/lock on|off` ve `/board auto on|off` aynı işlevleri kullanır.
+  - **Odak halkası:** odaklanabilir her denetimin QSS `:focus` halkası ve
+    `setAccessibleName` değeri vardır (110 erişilebilir ad, WCAG 4.1.2).
+- **Kimlik düğümü kaynağı (Faz 11 kapanışı):** `gate.IDENTITY_PROVENANCE =
+  "identity:core"`. `is_identity=1` düğümler `legacy:pre-v2` etiketi ALMAZ ve
+  güvenleri düşürülmez (kimlik dış kaynaklı bir olgu değil, aksiyomdur).
+  Etiketi `scripts/memory_migrate_v2.py --tag-legacy` koyar
+  (`apply_identity_tagging`, idempotent, `valid_from` yalnızca boşsa dolar).
+  `brain_metrics` K12 sayımı kimlik düğümlerini **kapsam dışı** bırakır ve
+  ayrı sayaçlarda raporlar: `identity_nodes`, `identity_untagged`.
+- **Test bekleme bütçeleri:** `tests/timing.budget(saniye)` — sabit duvar saati
+  yerine makinenin o anki hızıyla ölçeklenmiş bütçe (1 sn TTL'li kalibrasyon,
+  ölçek 1,0–8,0 arası; `ENTROPY_TEST_TIMEOUT_SCALE` ile ezilir). Yük altında
+  zaman aşımına giren eşzamanlılık testleri bunu kullanır.
 - **Doğuş talimatı:** `office_workspace.SPAWN_INSTRUCTION_MAX_CHARS = 1200`.
 - **Test yalıtımı:** `tests/conftest.py` gerçek kasayı ve `~/.entropy`'yi izole eder
   (`isolate_obsidian_vault`). Yeni bir yazma noktası eklersen yalıtımı da ekle — bugünkü
@@ -483,7 +595,7 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
 1. **Build doğrulaması (QA):** `pyinstaller EntropyAI.spec` → `dist_check` + `.exe` smoke test;
    `tests/test_exe.py`'nin iki testi ancak bundan sonra yeşile döner.
 2. `tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900` — önceden var
-   olan arayüz hatası, sahibi yok.
+   olan arayüz hatası; **Faz 11 kapanış QA'sında kök nedeni bulundu**, madde 9'a taşındı.
 3. `scripts/` altındaki ~60 tek seferlik betik: izlemeye mi alınacak, `scratch/`e mi taşınacak,
    silinecek mi? Karar verilmedi (silinmedi, dokunulmadı).
 4. `src/entropy/platform/autostart.py` — **tek ölü ürün modülü**: üründe içe aktaranı yok,
@@ -495,7 +607,9 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
    taşınacak (Faz 11-A'da yalnızca prototip spec'i arşivlendi).
 7. ~~Beynin yazma tarafı: `MemoryGate` yok~~ → **Faz 11-B'de kuruldu** (§3). Kalanlar:
    - ~~`--apply` koşulmadı~~ → **2026-09-10 QA'da koşuldu ve kabul edildi** (§2.2).
-   - **K12 açık:** 258 eski L2 düğümü kaynaksız (§2.2).
+   - ~~**K12 açık:** 258 eski L2 düğümü kaynaksız (§2.2).~~ → **Faz 11
+     kapanışında K12 = 0** (§2.4): 256 eski düğüm `legacy:pre-v2`, kalan 2
+     kimlik düğümü `identity:core` ile damgalandı.
    - ~~Gri bant kuyruğunu boşaltan toplu CLI turu yok~~ → **Faz 11-D:
      `memory/gray_merge.py`** (§3). Kalan: agy tarafında `/memory merge`
      komutunun köprüye bağlanması ve **gerçek koşum** (QA).
@@ -510,6 +624,47 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
      katmanı 7 yetenekten yalnızca birinde dolu; `wiki.compile_skill`in
      gerçek koşumu (QA, 11.8) sayfaları üretince beyin paketi büyüyecek.
      K5 **%38,2 ≥ %30** (kabul).
+   - ~~`tasks_widget.py` eski `dream_and_consolidate`~~ → **Faz 11 kapanışında
+     taşındı** (`ui/widgets/tasks_widget.py:301-317`, `send_prompt=None`).
+   - ~~`amplification_lock` / `board_auto_dispatch` arayüzde yok~~ →
+     **Faz 11 kapanışında palet eylemi eklendi** (§3).
+   - ~~**K12 açık**~~ → **Faz 11 kapanışında 0** (§2.4).
+8. **Zen penceresi %200 DPI'lı 1920×1080 monitörde ekrana SIĞMIYOR** (Faz 11
+   kapanış QA, gerçek ölçüm — **Faz 6'dan beri var, 11-E regresyonu değil**).
+   `ZEN_MIN_SIZE = (1100, 680)` mantıksal (`ui/modes/zen_mode.py:65`), ama
+   `minimumSizeHint` **605×845**; LG ULTRAGEAR'da Qt `devicePixelRatio 2.0`
+   bildirdiği hâlde `availableGeometry` 1920×1032 **mantıksal** döndürüyor →
+   pencere 1920×1032 mantıksal açılıyor, bu da **3840×2064 fiziksel** piksel
+   demek; panel 1920×1080. Sonuç: arayüzün **yaklaşık yarısı ekran dışında**
+   kalıyor (exe görüntüsünde durum kümesi "Claude ✓ ma…" diye kesiliyor,
+   pencere denetimlerinden yalnızca "Küçült" görünüyor). Asgari yükseklik
+   845 mantıksal = 1690 fiziksel > 1080 olduğu için pencere bu monitörde
+   **hiçbir boyutta tam sığamaz**. Kanıt: `scratch/ui/phase11e/live_dpi.json`
+   (`physical_needed: [3840, 2064]`, `fits_on_screen: true` — Qt'nin kendi
+   kıyası yanıltıcı), `live_exe_zen.png`. Sahibi: ui-engineer (asgari
+   boyutların düşürülmesi + DPI'ya duyarlı yerleşim kararı).
+9. **Desk'in bildirilen asgari boyutları gerçek değil** (Faz 11 kapanış QA;
+   `tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900`
+   bu yüzden kırmızı — **HEAD'de de kırmızı**, ayrı worktree'de doğrulandı,
+   kapanış QA'sının değişikliklerinden bağımsız).
+   *Genişlik:* bildirilen `minimumWidth` toplamı 180 + 240 + 380 = **800**,
+   ama gerçek `minimumSizeHint` toplamı **314 + 511 + 380 = 1.205 px**.
+   Kök neden: `QTabWidget.setMinimumWidth(240)` (`desk/window.py:390`)
+   sayfaların kendi sert asgarilerini EZEMEZ; `minimumSizeHint` sayfaların
+   maksimumudur. Ölçüm: `Kartlar 364 · Terminaller 507 · Projeler 852 ·
+   Bellek 576` → en darboğaz **Projeler** (`desk/projects_panel.py:125`
+   `setMinimumWidth(460)` + `:337` `setMinimumWidth(220)`).
+   *Yükseklik:* bildirilen `minimumSize` 860×540, gerçek gereksinim
+   **900×620**: 960×540 → 7 taşma, 960×580 → 3, 960×600 → 3,
+   **960×620 → 0**; 860×620 → 4, **900×620 → 0**
+   (`src/entropy/desk/board_panel.py:52` `detail_tabs.setMinimumHeight(120)`).
+   Kanıt: `scratch/ui/phase11e/live_desk_min.py` çıktısı. Sahibi: ui-engineer
+   (ya sayfa asgarileri düşürülecek ya sekmeler kaydırılabilir yapılacak).
+10. **`QFont::setPointSize: Point size <= 0 (-1)` uyarısı** exe açılışında bir
+   kez düşüyor (`.entropy/logs/entropy.log`, 08:03:25). Hata değil, uyarı;
+   kaynağı bulunamadı (`setPointSize` yalnızca `reports_viewer.py:471`'de ve
+   orada 8 ile çağrılıyor) — muhtemelen piksel boyutlu bir fontun
+   `pointSize()`'ı kopyalanıyor. Açık iş.
 
 ---
 

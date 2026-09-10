@@ -280,12 +280,12 @@ def test_chat_mode_terminal_button_no_attribute_error(qapp):
     # Click terminal button
     chat.toggle_term_btn.click()
     assert not chat.terminal_drawer.isHidden()
-    assert chat.toggle_term_btn.text() == "▼ Terminali Kapat"
+    assert chat.toggle_term_btn.text() == "Terminali kapat"
 
     # Click again to close
     chat.toggle_term_btn.click()
     assert chat.terminal_drawer.isHidden()
-    assert chat.toggle_term_btn.text() == ">_ Terminal"
+    assert chat.toggle_term_btn.text() == "Terminal"
     chat.close()
 
 
@@ -454,7 +454,8 @@ def test_chat_mode_turn_started_auto_expands_terminal(qapp):
     assert chat.terminal_drawer.isHidden()
     chat._on_turn_started("Prompt")
     assert not chat.terminal_drawer.isHidden()
-    assert chat.toggle_term_btn.text() == "▼ Terminali Kapat"
+    # Faz 11 kapanisi: iki kod yolu tek etiket kaynagini kullanir.
+    assert chat.toggle_term_btn.text() == "Terminali kapat"
     chat.close()
 
 

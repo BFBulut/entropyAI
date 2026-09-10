@@ -84,6 +84,13 @@ LEGACY_PROVENANCE = "legacy:pre-v2"
 # Etiketli düğümün güveni: kaynağı doğrulanamıyor, ama içerik hâlâ okunabilir.
 LEGACY_CONFIDENCE = 0.40
 
+# Kimlik düğümleri (`is_identity=1`) için DOĞRU kaynak: bu düğümler dış bir
+# belgeden değil, Entropy'nin kendi kimlik/otonomi bildiriminden gelir. Uydurma
+# değildir; bu yüzden `legacy:pre-v2` yerine kendi etiketini alır ve güveni
+# düşürülmez. K12 (kaynaksız L2) sayımı kimlik düğümlerini kapsam dışı bırakır:
+# kimlik bir "dış kaynaklı olgu" değil, sistemin aksiyomudur.
+IDENTITY_PROVENANCE = "identity:core"
+
 # Üretim hafızasına asla girmemesi gereken kalıplar. Hepsi denetimde gerçek
 # düğümlerden çıkarıldı (en büyük küme 322 üyeli tek bir ofis fikstürüydü).
 _FIXTURE_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (

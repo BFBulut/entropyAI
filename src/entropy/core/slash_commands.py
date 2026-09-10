@@ -1545,6 +1545,36 @@ def _handle_lock(args: str) -> str:
     )
 
 
+# -- arayüz (komut paleti) için boole anahtarlar ---------------------------
+# Faz 11 kapanışı: `amplification_lock` ve `board_auto_dispatch` ayarlarının
+# arayüzde karşılığı yoktu (yalnızca slash komutu). Palet bu iki işlevi
+# çağırır; ikisi de ayarı kalıcılaştırır ve model ÇAĞIRMAZ.
+
+def toggle_amplification_lock(value: Optional[bool] = None) -> Tuple[bool, str]:
+    """Öz-amplifikasyon kilidini çevirir (değer verilmezse tersine çevirir)."""
+    from entropy.core.config import config as cfg
+
+    new_value = (not bool(getattr(cfg, "amplification_lock", True))
+                 if value is None else bool(value))
+    _toggle_setting("amplification_lock", "on" if new_value else "off",
+                    title="Öz-amplifikasyon kilidi", usage="/lock on|off")
+    state = bool(getattr(cfg, "amplification_lock", True))
+    return state, f"Öz-amplifikasyon kilidi {'AÇIK' if state else 'KAPALI'}"
+
+
+def toggle_board_auto_dispatch(value: Optional[bool] = None) -> Tuple[bool, str]:
+    """Pano otomatik dağıtımını çevirir ve çalışan tetikleyiciye uygular."""
+    from entropy.core.config import config as cfg
+
+    new_value = (not bool(getattr(cfg, "board_auto_dispatch", True))
+                 if value is None else bool(value))
+    _toggle_setting("board_auto_dispatch", "on" if new_value else "off",
+                    title="Pano otomatik dağıtım", usage="/board auto on|off",
+                    on_change=_apply_board_auto)
+    state = bool(getattr(cfg, "board_auto_dispatch", True))
+    return state, f"Pano otomatik dağıtım {'AÇIK' if state else 'KAPALI'}"
+
+
 def _handle_board(args: str) -> str:
     """
     `/board` (özet) ve `/board pick <kart> <ajan>` (elle sahiplenme).

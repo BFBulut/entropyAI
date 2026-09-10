@@ -606,6 +606,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             ("nav_agents", "Bölüm: Ajanlar", "Sol gezinme"),
             ("nav_today", "Bölüm: Bugün", "Sol gezinme"),
             ("nav_notifications", "Bölüm: Bildirimler", "Sol gezinme"),
+            ("toggle_lock", "Öz-amplifikasyon kilidi aç/kapat",
+             "config.amplification_lock · /lock on|off"),
+            ("toggle_board_auto", "Pano otomatik dağıtım aç/kapat",
+             "config.board_auto_dispatch · /board auto on|off"),
         ]
         items = [
             {"kind": "action", "label": label, "subtitle": subtitle, "payload": key}
@@ -617,6 +621,25 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             pass
         return items
 
+    def _run_setting_toggle(self, key: str) -> str:
+        """Boole ayar anahtarını çevirir ve sonucu terminale/bildirime yazar.
+
+        Faz 11 kapanışı: `amplification_lock` ve `board_auto_dispatch` için
+        arayüz karşılığı. Model çağırmaz, ayarı kalıcılaştırır.
+        """
+        from entropy.core.slash_commands import (
+            toggle_amplification_lock, toggle_board_auto_dispatch,
+        )
+
+        fn = (toggle_amplification_lock if key == "toggle_lock"
+              else toggle_board_auto_dispatch)
+        try:
+            _state, message = fn()
+        except Exception as exc:  # pragma: no cover - savunma
+            message = f"Ayar değiştirilemedi: {exc}"
+        bus.terminal_output_received.emit(f"[Ayar] {message}\n")
+        return message
+
     def run_palette_action(self, key: str) -> bool:
         """Palet eylemi yürütür; bilinmeyen anahtar için False döner."""
         if key == "desk":
@@ -627,6 +650,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             self._on_new_chat()
         elif key == "terminal":
             self.toggle_terminal_drawer()
+        elif key in ("toggle_lock", "toggle_board_auto"):
+            self._run_setting_toggle(key)
         elif key.startswith("mode_"):
             bus.mode_requested.emit(key.split("_", 1)[1])
         elif key.startswith("nav_"):

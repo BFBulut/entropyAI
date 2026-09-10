@@ -14,7 +14,11 @@ from PySide6.QtWidgets import QWidget
 from entropy.skills.manager import SkillManager, SkillDefinition
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.core.slash_commands import SlashCommand, SlashCommandRegistry
-from entropy.ui.widgets.slash_command_popup import SlashCommandPopupWidget
+from entropy.ui.widgets.slash_command_popup import (
+    CHECK_OFF,
+    CHECK_ON,
+    SlashCommandPopupWidget,
+)
 from entropy.ui.modes.chat_mode import ChatInputField, ChatModeWindow
 from entropy.ui.modes.zen_mode import ZenModeWindow
 
@@ -296,19 +300,19 @@ def test_slash_popup_multi_selection_clicking(qapp):
     popup._on_item_clicked(item0)
     assert popup.selected_commands == ["/boost"]
     assert popup.isVisible(), "Popup MUST stay open after clicking a command for multi-selection"
-    assert popup._item_widgets["/boost"].check_lbl.text() == "[✓]"
+    assert popup._item_widgets["/boost"].check_lbl.text() == CHECK_ON
 
     # Click second item: /plan
     item1 = popup.list_widget.item(1)
     popup._on_item_clicked(item1)
     assert popup.selected_commands == ["/boost", "/plan"]
     assert popup.isVisible(), "Popup MUST stay open after clicking second command"
-    assert popup._item_widgets["/plan"].check_lbl.text() == "[✓]"
+    assert popup._item_widgets["/plan"].check_lbl.text() == CHECK_ON
 
     # Click /boost again: should deselect it
     popup._on_item_clicked(item0)
     assert popup.selected_commands == ["/plan"]
-    assert popup._item_widgets["/boost"].check_lbl.text() == "[ ]"
+    assert popup._item_widgets["/boost"].check_lbl.text() == CHECK_OFF
 
     # Confirm selection
     popup.confirm_selection()
@@ -523,3 +527,17 @@ def test_chat_input_field_preserves_unix_file_paths(qapp):
     input_field.close()
     dummy_parent.close()
 
+
+
+def test_slash_popup_check_marks_are_visually_distinct(qapp):
+    """Regresyon (11-E emoji temizligi): secili/secilmemis isaret ayni olmus.
+
+    Emoji temizligi "[V]" isaretini silince secili "[]" ve secilmemis "[ ]"
+    kaldi; kullanici hangi komutun secili oldugunu goremiyordu.
+    """
+    assert CHECK_ON != CHECK_OFF
+    assert CHECK_ON.strip("[] ") != "", "secili isaret bos olamaz"
+    # Tasarim kapisi: emoji/dingbat kullanilmaz.
+    import re
+    emoji_re = re.compile("[\U0001F300-\U0001FAFF☀-➿⬀-⯿]")
+    assert not emoji_re.search(CHECK_ON + CHECK_OFF)

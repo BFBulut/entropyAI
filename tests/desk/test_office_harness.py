@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.timing import budget
+
 from entropy.agents.compile import render_agy_agent, render_claude_agent, resolve_model
 from entropy.agents.harness import (
     GRADE_THRESHOLD,
@@ -719,7 +721,7 @@ def _wait_until(predicate, timeout=10.0, interval=0.05):
     """Koşul sağlanana kadar bekler; sağlanırsa True."""
     import time
 
-    end = time.time() + timeout
+    end = time.time() + budget(timeout)
     while time.time() < end:
         try:
             if predicate():
@@ -776,7 +778,7 @@ def test_real_bridge_path_plans_and_runs_office_chain(seeded, board, registry, o
     harness = OfficeHarness("arastirma-ofisi", board=board, registry=registry,
                             offices=offices, bridge_factory=lambda provider: bridge)
     assert harness.start(card.id) is True
-    assert finished.wait(timeout=20), "değerlendirme adımına ulaşılamadı"
+    assert finished.wait(timeout=budget(20)), "değerlendirme adımına ulaşılamadı"
     # Zincirin SONUNU beklemek şart: köprü işçi iş parçacıkları test bittikten
     # sonra da `bus.task_completed` yayınlıyor ve sonraki testin bu sinyale
     # bağladığı `threading.Event`'i erkenden tetikliyordu (testler arası sızıntı).

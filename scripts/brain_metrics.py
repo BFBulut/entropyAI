@@ -41,7 +41,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from entropy.memory.categories import CANONICAL_CATEGORIES  # noqa: E402
-from entropy.memory.gate import LEGACY_PROVENANCE  # noqa: E402
+from entropy.memory.gate import (  # noqa: E402
+    IDENTITY_PROVENANCE,
+    LEGACY_PROVENANCE,
+)
 from entropy.memory.supabase.cognitive_memory import (  # noqa: E402
     CognitiveMemorySystem,
     default_cognitive_db_path,
@@ -216,8 +219,14 @@ def unsourced_l2(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """
     hits: List[str] = []
     legacy: List[str] = []
+    identity: List[str] = []
     for r in rows:
         if r.get("category") != L2_CATEGORY:
+            continue
+        # Kimlik düğümleri (`is_identity=1`) K12 kapsamı DIŞINDA: kimlik dış
+        # kaynaklı bir olgu değil, sistemin aksiyomudur. Ayrı sayaçta görünür.
+        if int(r.get("is_identity") or 0) == 1:
+            identity.append(r["id"])
             continue
         prov = (r.get("provenance") or "").strip()
         if prov == LEGACY_PROVENANCE:
@@ -229,6 +238,15 @@ def unsourced_l2(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "sample_ids": hits[:5],
         "legacy_untagged": len(legacy),
         "legacy_sample_ids": legacy[:5],
+        "identity_nodes": len(identity),
+        # Kaynağı HİÇ olmayan kimlik düğümü (etiketlenmesi gereken):
+        # `entropy:core_identity` gibi gerçek kaynaklar sayılmaz.
+        "identity_untagged": sum(
+            1 for r in rows
+            if int(r.get("is_identity") or 0) == 1
+            and not (r.get("provenance") or "").strip()
+        ),
+        "identity_provenance": IDENTITY_PROVENANCE,
     }
 
 
@@ -372,7 +390,9 @@ def main() -> int:
     if "K11_gate_latency" in report:
         print(f"K11 kapı    : medyan {report['K11_gate_latency']['median_ms']} ms")
     print(f"K12 kaynaksız L2: {report['K12_unsourced_l2']['count']}"
-          f"  (eski etiketli: {report['K12_unsourced_l2'].get('legacy_untagged', 0)})")
+          f"  (eski etiketli: {report['K12_unsourced_l2'].get('legacy_untagged', 0)}"
+          f" · kimlik: {report['K12_unsourced_l2'].get('identity_nodes', 0)}"
+          f", etiketsiz kimlik: {report['K12_unsourced_l2'].get('identity_untagged', 0)})")
     print(f"Karar       : {report['verdict']}")
     return 0
 

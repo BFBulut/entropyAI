@@ -357,3 +357,63 @@ def test_graph_mirror_carries_provenance_into_cognitive_nodes(tmp_path, monkeypa
         ).fetchone()
     assert row is not None, "ayna cognitive_nodes'a yazmadı"
     assert (row[0] or "").strip() == "consolidate:label_propagation"
+
+
+# --------------------------------------------------------------------------
+# Faz 11 kapanışı — kimlik düğümü kaynağı (K12'nin kalan 2 düğümü)
+# --------------------------------------------------------------------------
+
+def _make_identity_db(tmp_path):
+    """Kaynaksız iki kimlik düğümü + kaynaksız bir sıradan L2 düğümü kurar."""
+    import sqlite3
+
+    db = tmp_path / "identity.db"
+    CognitiveMemorySystem(db_path=db)  # şemayı kurar
+    with sqlite3.connect(db) as conn:
+        for node_id, ident in (("id-a", 1), ("id-b", 1), ("plain", 0)):
+            conn.execute(
+                "INSERT INTO cognitive_nodes (id, category, content, importance,"
+                " created_at, last_accessed, access_count, provenance, is_identity)"
+                " VALUES (?, 'semantic', ?, 0.9, 1000.0, 1000.0, 3, '', ?)",
+                (node_id, f"Kimlik metni {node_id} " + "x" * 60, ident),
+            )
+        conn.commit()
+    return db
+
+
+def test_identity_nodes_get_identity_core_provenance(tmp_path):
+    """`--tag-legacy` kimlik düğümlerini `identity:core` ile damgalar (idempotent)."""
+    from entropy.memory.gate import IDENTITY_PROVENANCE
+
+    import sqlite3
+
+    db = _make_identity_db(tmp_path)
+    plan = memory_migrate_v2.plan_legacy_tagging(db)
+    assert plan["identity_candidates"] == 2
+    assert plan["candidates"] == 1, "kimlik dışı kaynaksız L2 ayrı sayılmalı"
+
+    assert memory_migrate_v2.apply_identity_tagging(db) == 2
+    assert memory_migrate_v2.apply_identity_tagging(db) == 0, "idempotent olmalı"
+
+    with sqlite3.connect(db) as conn:
+        rows = dict(conn.execute(
+            "SELECT id, provenance FROM cognitive_nodes").fetchall())
+    assert rows["id-a"] == IDENTITY_PROVENANCE
+    assert rows["id-b"] == IDENTITY_PROVENANCE
+    assert rows["plain"] == "", "kimlik dışı düğüme dokunulmamalı"
+
+
+def test_k12_excludes_identity_nodes_and_counts_them_separately(tmp_path):
+    """K12 kimlik düğümlerini saymaz; ayrı sayaçta görünürler."""
+    db = _make_identity_db(tmp_path)
+    before = brain_metrics.collect(db, include_recall=False, include_latency=False)
+    k12 = before["K12_unsourced_l2"]
+    assert k12["count"] == 1, "yalnızca kimlik dışı kaynaksız L2 sayılır"
+    # +1: şema kurulumunun yazdığı `ego-entropy-core` (kaynağı zaten dolu).
+    assert k12["identity_nodes"] == 3
+    assert k12["identity_untagged"] == 2
+
+    memory_migrate_v2.apply_identity_tagging(db)
+    after = brain_metrics.collect(db, include_recall=False, include_latency=False)
+    assert after["K12_unsourced_l2"]["count"] == 1
+    assert after["K12_unsourced_l2"]["identity_untagged"] == 0

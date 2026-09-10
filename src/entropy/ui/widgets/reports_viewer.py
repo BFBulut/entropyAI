@@ -521,7 +521,8 @@ class ReportsViewerWidget(QFrame):
                 key = entry["group_label"] if mode == "skill" else entry["date_label"]
                 buckets.setdefault(key, []).append(entry)
             if mode == "skill":
-                keys = sorted(buckets.keys(), key=lambda k: (k.startswith(""), k.lower()), reverse=False)
+                # (11-E artigi temizlendi: `k.startswith("")` her zaman True idi.)
+                keys = sorted(buckets.keys(), key=lambda k: k.lower())
             else:
                 # Tarih grupları yeniden eskiye
                 keys = sorted(buckets.keys(), key=lambda k: max(e.get("mtime", 0.0) for e in buckets[k]), reverse=True)

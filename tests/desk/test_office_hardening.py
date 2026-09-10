@@ -13,6 +13,8 @@ from dataclasses import replace
 
 import pytest
 
+from tests.timing import budget
+
 from entropy.agents.harness import OfficeHarness
 from entropy.agents.desk_registry import DeskOffice as OfficeSpec, DeskRegistry as OfficeRegistry
 from entropy.agents.registry import (
@@ -106,7 +108,7 @@ class _FakeProc:
         if not self._lines and self._hold is not None:
             # Son satırdan önce bekle: iki alt kartın gerçekten aynı anda
             # koştuğunu ölçebilmek için.
-            self._hold.wait(10)
+            self._hold.wait(budget(10))
             self._hold = None
         return self._lines.pop(0) if self._lines else ""
 
@@ -149,7 +151,8 @@ def _office_card(board, title="Pazar araştırması"):
 
 
 def _wait_until(predicate, timeout=15.0):
-    end = time.time() + timeout
+    # Bütçe yüke göre ölçeklenir (tests/timing.py).
+    end = time.time() + budget(timeout)
     while time.time() < end:
         try:
             if predicate():
@@ -193,12 +196,12 @@ def test_real_bridge_calls_on_result_when_lock_times_out(tmp_path, monkeypatch):
     def _hold():
         project_lock_manager.acquire_write(project)
         holder_ready.set()
-        release.wait(10)
+        release.wait(budget(10))
         project_lock_manager.release_write(project)
 
     holder = threading.Thread(target=_hold, daemon=True)
     holder.start()
-    assert holder_ready.wait(5)
+    assert holder_ready.wait(budget(5))
 
     got = {}
     done = threading.Event()
@@ -208,10 +211,10 @@ def test_real_bridge_calls_on_result_when_lock_times_out(tmp_path, monkeypatch):
             on_result=lambda t, ok: (got.update(text=t, ok=ok), done.set()),
             save_report=False, needs_write=False,
         )
-        assert done.wait(10), "kilit zaman aşımında on_result çağrılmadı"
+        assert done.wait(budget(10)), "kilit zaman aşımında on_result çağrılmadı"
     finally:
         release.set()
-        holder.join(5)
+        holder.join(budget(5))
 
     assert got["ok"] is False
     assert LOCK_TIMEOUT_MARKER in got["text"]
@@ -352,7 +355,7 @@ def test_read_intent_children_run_concurrently_in_same_project(seeded, board, re
     harness = OfficeHarness("arastirma-ofisi", board=board, registry=registry,
                             offices=offices, bridge_factory=lambda p: bridge)
     assert harness.start(card.id) is True
-    assert both_started.wait(15), "iki alt kart aynı anda koşmadı"
+    assert both_started.wait(budget(15)), "iki alt kart aynı anda koşmadı"
     hold.set()
 
     assert _wait_until(lambda: board.get(card.id).status in ("review", "failed"), 20)
