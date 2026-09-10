@@ -193,8 +193,8 @@ def populate_effort_combo(combo, provider: str, model: str = "", bridge: Any = N
 # Ofis rolleri (Faz 3 sözleşmesi): AgentSpec.role bu üç değerden biri olabilir;
 # eski ajanlarda serbest metin ("Mimari denetçi") duruyor, o zaman rozet çıkmaz.
 ROLE_LABELS = {
-    "orchestrator": "⚙ orkestratör",
-    "evaluator": "⚖ değerlendirici",
+    "orchestrator": "orkestratör",
+    "evaluator": "değerlendirici",
     "worker": "üye",
 }
 ROLE_COLORS = {
@@ -204,33 +204,6 @@ ROLE_COLORS = {
 }
 TOOLS_POLICIES = ["inherit", "read-only", "full", "none"]
 
-DIALOG_STYLE = f"""
-    QDialog {{ background-color: {RT['surface_base']}; color: {RT['text']}; }}
-    QLabel {{ color: {RT['text_body']}; font-size: {RT['font_size_body']}; }}
-    QLineEdit, QPlainTextEdit, QComboBox, QListWidget {{
-        background-color: {RT['surface_raised']};
-        border: 1px solid {RT['divider']};
-        border-radius: {RT['radius_small']};
-        padding: 7px 8px;
-        color: {RT['text']};
-        font-size: {RT['font_size_body']};
-    }}
-    QPlainTextEdit {{ font-family: {RT['font_mono']}; }}
-    QPushButton {{
-        background-color: {RT['surface_soft']};
-        color: {RT['accent']};
-        border: 1px solid {RT['divider']};
-        border-radius: {RT['radius_small']};
-        padding: 7px 16px;
-        font-size: {RT['font_size_body']};
-    }}
-    QPushButton:hover {{ border-color: {RT['accent']}; }}
-    QListWidget::item {{ padding: 2px 4px; }}
-    QListWidget::item:selected {{
-        background-color: {RT['accent_soft']};
-        color: {RT['accent']};
-    }}
-"""
 
 
 # ------------------------------------------------------------------ sözleşme
@@ -353,7 +326,6 @@ class AgentEditDialog(QDialog):
         self.bridge = bridge
         self.setWindowTitle("Ajanı Düzenle" if spec is not None else "Yeni Ajan")
         self.setMinimumWidth(560)
-        self.setStyleSheet(DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -418,12 +390,11 @@ class AgentEditDialog(QDialog):
         btn_box = QHBoxLayout()
         btn_box.addStretch()
         cancel_btn = QPushButton("İptal")
+        cancel_btn.setAccessibleName("İptal")
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
         self.save_btn = QPushButton("Kaydet")
-        self.save_btn.setStyleSheet(
-            f"background-color:{RT['accent']}; color:{RT['surface_base']}; font-weight:600;"
-        )
+        self.save_btn.setAccessibleName("Kaydet")
         self.save_btn.clicked.connect(self._on_save)
         btn_box.addWidget(self.save_btn)
         layout.addLayout(btn_box)
@@ -535,7 +506,6 @@ class AssignTaskDialog(QDialog):
         self.bridge = bridge
         self.setWindowTitle(f"Görev Ver — {agent_name}" if agent_name else "Görev Ver")
         self.setMinimumWidth(520)
-        self.setStyleSheet(DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -609,9 +579,7 @@ class AssignTaskDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
         self.start_btn = QPushButton("Görevi Başlat")
-        self.start_btn.setStyleSheet(
-            f"background-color:{RT['accent_alt']}; color:{RT['surface_base']}; font-weight:600;"
-        )
+        self.start_btn.setAccessibleName("Görevi Başlat")
         self.start_btn.clicked.connect(self._on_start)
         btn_box.addWidget(self.start_btn)
         layout.addLayout(btn_box)
@@ -719,17 +687,7 @@ class AgentCard(QFrame):
         self.panel = panel
         self.agent_name = str(spec_field(spec, "name"))
         self.setObjectName("agentCard")
-        self.setStyleSheet(
-            f"""
-            QFrame#agentCard {{
-                background-color: {RT['surface_raised']};
-                border: 1px solid {RT['divider_soft']};
-                border-radius: {RT['radius']};
-            }}
-            QFrame#agentCard:hover {{ border-color: {RT['accent']}; }}
-            QLabel {{ background: transparent; border: none; }}
-            """
-        )
+        self.setProperty("role", "panel")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 9, 10, 9)
         layout.setSpacing(10)
@@ -756,7 +714,7 @@ class AgentCard(QFrame):
         if self.agent_name in created:
             self.origin_badge = QLabel(
                 f"<span style='color:{RT['accent_alt']}; font-size:{LABEL_PX}px;'>"
-                "🤖 orkestratör oluşturdu</span>"
+                "orkestratör oluşturdu</span>"
             )
             self.origin_badge.setToolTip(
                 "Bu ajanı ofisin orkestratörü tanımladı; düzenleyebilir ya da silebilirsiniz."
@@ -786,13 +744,13 @@ class AgentCard(QFrame):
         if office_name:
             badge_parts.append(
                 f"<span style='background:{RT['accent_soft']}; color:{RT['accent']}; "
-                f"font-size:10px; padding:1px 6px; border-radius:4px;'>🏢 {office_name}</span>"
+                f"font-size:11px; padding:1px 6px; border-radius:4px;'>{office_name}</span>"
             )
         if agent_role in ROLE_LABELS:
             color = ROLE_COLORS.get(agent_role, RT["text_dim"])
             badge_parts.append(
                 f"<span style='background:{RT['surface_soft']}; color:{color}; "
-                f"font-size:10px; padding:1px 6px; border-radius:4px;'>{ROLE_LABELS[agent_role]}</span>"
+                f"font-size:11px; padding:1px 6px; border-radius:4px;'>{ROLE_LABELS[agent_role]}</span>"
             )
         if badge_parts:
             self.office_badge = QLabel(" ".join(badge_parts))
@@ -802,11 +760,11 @@ class AgentCard(QFrame):
         if skills:
             badges = " ".join(
                 f"<span style='background:{RT['accent_soft']}; color:{RT['accent']}; "
-                f"font-size:10px; padding:1px 6px; border-radius:4px;'>{s}</span>"
+                f"font-size:11px; padding:1px 6px; border-radius:4px;'>{s}</span>"
                 for s in skills[:4]
             )
             if len(skills) > 4:
-                badges += f" <span style='color:{RT['text_dim']}; font-size:10px;'>+{len(skills) - 4}</span>"
+                badges += f" <span style='color:{RT['text_dim']}; font-size:11px;'>+{len(skills) - 4}</span>"
             text_col.addWidget(QLabel(badges))
 
         self.status_label = QLabel(self._status_html())
@@ -824,6 +782,7 @@ class AgentCard(QFrame):
         session_row.addWidget(self.session_icon)
         session_row.addWidget(self.session_label)
         self.session_reset_btn = QPushButton("Oturumu yenile")
+        self.session_reset_btn.setAccessibleName("Oturumu yenile")
         self.session_reset_btn.setProperty("variant", "ghost")
         self.session_reset_btn.setToolTip(
             "Kalıcı oturum kaydını siler; ajan bir sonraki koşuda temiz oturum açar."
@@ -839,15 +798,15 @@ class AgentCard(QFrame):
 
         buttons = [
             ("assign_btn", "▶", "Görev ver", self._assign),
-            ("edit_btn", "✎", "Düzenle", self._edit),
-            ("open_btn", "📄", "Tanım dosyasını aç", self._open_file),
-            ("delete_btn", "🗑", "Sil", self._delete),
+            ("edit_btn", "", "Düzenle", self._edit),
+            ("open_btn", "", "Tanım dosyasını aç", self._open_file),
+            ("delete_btn", "", "Sil", self._delete),
         ]
         # Ofis kipinde (Agent Desk roster paneli) rol atama düğmeleri eklenir.
         if getattr(panel, "office", ""):
             buttons[1:1] = [
-                ("make_orchestrator_btn", "⚙", "Bu ofisin orkestratörü yap", self._make_orchestrator),
-                ("make_evaluator_btn", "⚖", "Bu ofisin değerlendiricisi yap", self._make_evaluator),
+                ("make_orchestrator_btn", "", "Bu ofisin orkestratörü yap", self._make_orchestrator),
+                ("make_evaluator_btn", "", "Bu ofisin değerlendiricisi yap", self._make_evaluator),
             ]
         # Dört düğme tek sıraya sığıyor; ofis kipinde altı düğme oluyor ve tek sıra
         # dar roster sütununda taşıp yatay kaydırma çubuğu çıkarıyordu. Altı
@@ -863,24 +822,9 @@ class AgentCard(QFrame):
 
         for index, (attr, glyph, tip, handler) in enumerate(buttons):
             btn = QPushButton(glyph)
-            btn.setFixedSize(28, 26)
+            btn.setProperty("role", "icon")
             btn.setToolTip(tip)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color: {RT['surface_soft']};
-                    color: {RT['text_dim']};
-                    border: 1px solid {RT['divider_soft']};
-                    border-radius: {RT['radius_small']};
-                    font-size: 13px;
-                    /* Genel yaprak stilindeki geniş dolgu 26px karede simgeyi
-                       kırpıyordu; ikon düğmelerinde dolgu sıfırlanır. */
-                    padding: 0px;
-                }}
-                QPushButton:hover {{ color: {RT['accent']}; border-color: {RT['accent']}; }}
-                """
-            )
             btn.clicked.connect(handler)
             if btn_grid is not None:
                 btn_grid.addWidget(btn, index // 3, index % 3)
@@ -930,13 +874,13 @@ class AgentCard(QFrame):
     def _status_html(self) -> str:
         card = self.panel.latest_card_for(self.agent_name)
         if card is None:
-            return f"<span style='color:{RT['text_dim']}; font-size:10px;'>son görev yok</span>"
+            return f"<span style='color:{RT['text_dim']}; font-size:11px;'>son görev yok</span>"
         status = str(spec_field(card, "status", "backlog"))
         color = STATUS_COLORS.get(status, RT["text_dim"])
         title = spec_field(card, "title", "")
         return (
-            f"<span style='color:{RT['text_dim']}; font-size:10px;'>son görev: {title} · </span>"
-            f"<span style='color:{color}; font-size:10px; font-weight:600;'>"
+            f"<span style='color:{RT['text_dim']}; font-size:11px;'>son görev: {title} · </span>"
+            f"<span style='color:{color}; font-size:11px; font-weight:600;'>"
             f"{STATUS_LABELS.get(status, status)}</span>"
         )
 
@@ -1024,32 +968,22 @@ class AgentsWidget(QFrame):
 
         header = QHBoxLayout()
         self.title_label = QLabel(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 AJANLAR</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>AJANLAR</b>"
             if not self.office
-            else f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 KADRO</b>"
+            else f"<b style='color:{RT['accent']}; font-size:13px;'>KADRO</b>"
             f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
         )
-        self.title_label.setStyleSheet("background: transparent; border: none;")
+        self.title_label.setProperty("role", "label")
         header.addWidget(self.title_label)
         header.addStretch()
         self.add_btn = QPushButton("+ Yeni Ajan")
+        self.add_btn.setAccessibleName("+ Yeni Ajan")
         self.add_btn.setToolTip("Kayıt defterine yeni alt ajan ekle")
-        self.add_btn.setFixedHeight(24)
-        self.add_btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {RT['surface_soft']}; color: {RT['accent_alt']};
-                border: 1px solid {RT['accent_alt']}; border-radius: {RT['radius_small']};
-                padding: 2px 10px; font-size: 11px; font-weight: 600;
-            }}
-            QPushButton:hover {{ background-color: {RT['accent_alt']}; color: {RT['surface_base']}; }}
-            """
-        )
         self.add_btn.clicked.connect(self.create_agent)
         header.addWidget(self.add_btn)
 
         self.refresh_btn = QPushButton("Yenile")
-        self.refresh_btn.setFixedHeight(24)
+        self.refresh_btn.setAccessibleName("Yenile")
         self.refresh_btn.setToolTip("Kayıt defterini diskten yeniden oku")
         self.refresh_btn.clicked.connect(self.refresh_agents)
         header.addWidget(self.refresh_btn)
@@ -1057,10 +991,7 @@ class AgentsWidget(QFrame):
 
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:14px 4px;"
-            " background:transparent; border:none;"
-        )
+        self.empty_label.setProperty("role", "label")
         layout.addWidget(self.empty_label)
 
         scroll = QScrollArea()
@@ -1069,10 +1000,6 @@ class AgentsWidget(QFrame):
         # Sebebi QScrollArea'nın görünüm alanı (viewport) ve içerik widget'ının
         # kendi paletlerini kullanması; yalnızca QScrollArea'ya stil vermek
         # yetmiyor. Görünüm alanı da saydam yapılır ve otomatik dolgu kapatılır.
-        scroll.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-            " QScrollArea > QWidget > QWidget { background: transparent; }"
-        )
         scroll.viewport().setAutoFillBackground(False)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         # Faz 4: saydamlık tek başına yetmiyordu — kapsayıcı stil sayfası
@@ -1085,7 +1012,6 @@ class AgentsWidget(QFrame):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list_container = QWidget()
         self.list_container.setAutoFillBackground(False)
-        self.list_container.setStyleSheet("background: transparent;")
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
         self.list_layout.setSpacing(6)
@@ -1158,10 +1084,10 @@ class AgentsWidget(QFrame):
         title = getattr(self, "title_label", None)
         if title is not None:
             title.setText(
-                f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 KADRO</b>"
+                f"<b style='color:{RT['accent']}; font-size:13px;'>KADRO</b>"
                 f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
                 if self.office
-                else f"<b style='color:{RT['accent']}; font-size:13px;'>🤖 AJANLAR</b>"
+                else f"<b style='color:{RT['accent']}; font-size:13px;'>AJANLAR</b>"
             )
         self.refresh_agents()
 

@@ -32,12 +32,14 @@ from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
 
+#: Faz 11-E adim 3: emoji ikon yasagi. Satirin basindaki simge sutunu yerine
+#: turun ADI yazilir; anlam metinle tasinir (ekran okuyucu da okur).
 KIND_ICONS = {
-    "task": "⏰",
-    "report": "📄",
-    "handoff": "🪢",
-    "office": "🏢",
-    "board": "🗂",
+    "task": "",
+    "report": "",
+    "handoff": "",
+    "office": "",
+    "board": "",
 }
 
 KIND_LABELS = {
@@ -217,10 +219,10 @@ def collect_timeline(
 
 
 def format_event(event: Dict[str, Any]) -> str:
-    """Olayı tek satırlık okunur metne çevirir: `14:32  📄 Rapor — başlık`."""
+    """Olayı tek satırlık okunur metne çevirir: `14:32  Rapor — başlık`."""
     ts = float(event.get("ts") or 0.0)
     clock = dt.datetime.fromtimestamp(ts).strftime("%H:%M") if ts else "--:--"
-    icon = KIND_ICONS.get(str(event.get("kind")), "•")
+    icon = KIND_ICONS.get(str(event.get("kind")), "")
     label = KIND_LABELS.get(str(event.get("kind")), "Olay")
     line = f"{clock}  {icon} {label} — {event.get('title', '')}"
     detail = str(event.get("detail") or "")
@@ -247,11 +249,7 @@ class TimelinePanel(QFrame):
         self._now = now
         self._events: List[Dict[str, Any]] = []
 
-        self.setStyleSheet(
-            f"QFrame#timelinePanel {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']}; }}"
-            " QLabel { background:transparent; border:none; }"
-        )
+        self.setProperty("role", "panel")
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(5)
@@ -262,25 +260,14 @@ class TimelinePanel(QFrame):
         head.addWidget(self.header_label)
         head.addStretch()
         self.refresh_btn = QPushButton("Yenile")
-        self.refresh_btn.setFixedHeight(22)
+        self.refresh_btn.setAccessibleName("Yenile")
         self.refresh_btn.setToolTip("Bugünün olaylarını yeniden topla")
-        self.refresh_btn.setStyleSheet(
-            f"QPushButton {{ background:transparent; border:1px solid {RT['divider_soft']};"
-            f" border-radius:{RT['radius_small']}; color:{RT['text_dim']};"
-            f" font-size:{LABEL_PX}px; padding:1px 10px; }}"
-            f" QPushButton:hover {{ color:{RT['accent']}; border-color:{RT['accent']}; }}"
-        )
+        self.refresh_btn.setProperty("variant", "ghost")
         self.refresh_btn.clicked.connect(self.refresh)
         head.addWidget(self.refresh_btn)
         root.addLayout(head)
 
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            f"QListWidget {{ background:transparent; border:none;"
-            f" color:{RT['text_body']}; font-size:{BODY_PX}px; }}"
-            f" QListWidget::item {{ padding:3px 4px; border-radius:4px; }}"
-            f" QListWidget::item:selected {{ background:{RT['accent_soft']}; color:{RT['accent']}; }}"
-        )
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         root.addWidget(self.list_widget, 1)
 
@@ -311,7 +298,7 @@ class TimelinePanel(QFrame):
             self.list_widget.addItem(row)
         day = dt.datetime.fromtimestamp(self._now or time.time()).strftime("%d.%m.%Y")
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>🗓 BUGÜN</b>"
+            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>BUGÜN</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"{day} · {len(self._events)} olay</span>"
         )

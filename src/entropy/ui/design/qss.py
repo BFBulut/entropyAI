@@ -126,6 +126,48 @@ QPushButton[role="icon"], QPushButton#iconButton, QToolButton {{
 QToolButton:hover {{ background-color: {c['surface.raised']}; border-radius: {r['sm']}px; }}
 QToolButton:focus {{ border: {ct['border']}px solid {c['accent']}; outline: {ring}px solid {c['accent']}; }}
 
+/* ===== Üst çubuk grupları (Faz 11-E adım 2: 18 öğe -> 4) ===== */
+QFrame[role="toolbarGroup"], QFrame#windowControls, QFrame#brandCluster,
+QFrame#modelCapsule, QFrame#statusCluster {{
+    background-color: transparent; border: none;
+}}
+QPushButton#modelCapsuleButton {{
+    background-color: {c['surface']};
+    border-color: {c['line']};
+    padding: 0 {s['3']}px;
+    font-family: {f['mono']}; font-size: {ty['label']['size']}px;
+}}
+QPushButton#modelCapsuleButton:hover {{ border-color: {c['accent']}; }}
+QPushButton#paletteButton {{
+    color: {c['text.muted']}; border-color: {c['line']};
+    font-family: {f['mono']}; font-size: {ty['label']['size']}px;
+}}
+QPushButton[role="icon"][variant="danger"]:hover {{ background-color: {c['danger']}; color: {c['accent.ink']}; }}
+
+/* ===== Sol gezinme bölgesi ===== */
+QWidget#navRegion, QStackedWidget#navStack {{ background-color: transparent; }}
+
+/* ===== Durum tonlu ikon düğmesi (ör. yordam damıtma) ===== */
+QPushButton[tone="ok"]     {{ color: {c['ok']};     border-color: {c['ok']}; }}
+QPushButton[tone="warn"]   {{ color: {c['warn']};   border-color: {c['warn']}; }}
+QPushButton[tone="danger"] {{ color: {c['danger']}; border-color: {c['danger']}; }}
+QPushButton[tone="muted"]  {{ color: {c['text.muted']}; border-color: {c['line']}; }}
+QPushButton[tone="ok"]:disabled, QPushButton[tone="warn"]:disabled,
+QPushButton[tone="muted"]:disabled {{ color: {c['text.muted']}; border-color: {c['line']}; }}
+QLabel[role="badge"][tone="muted"] {{ color: {c['text.muted']}; }}
+
+/* ===== Diyalog / ilerleme çubuğu (pencere kendi stilini yazmaz) ===== */
+QDialog {{ background-color: {c['surface']}; color: {c['text']}; }}
+QProgressBar {{
+    background-color: {c['bg']}; border: 1px solid {c['line']};
+    border-radius: {r['sm']}px; text-align: center;
+    color: {c['text.muted']}; font-size: {ty['label']['size']}px;
+    min-height: {s['4']}px; max-height: {s['4']}px;
+}}
+QProgressBar::chunk {{ background-color: {c['accent']}; border-radius: {r['sm'] - 2}px; }}
+QScrollArea {{ background-color: transparent; border: none; }}
+QCheckBox:disabled {{ color: {c['text.muted']}; }}
+
 /* ===== Input / SearchInput ===== */
 QLineEdit, QPlainTextEdit, QTextEdit {{
     background-color: {c['bg']};
@@ -247,7 +289,8 @@ QTextBrowser[role="reader"], QTextBrowser#reader {{
 }}
 
 /* ===== Terminal ===== */
-QPlainTextEdit[role="terminal"], QTextEdit[role="terminal"], QWidget#terminal {{
+QPlainTextEdit[role="terminal"], QTextEdit[role="terminal"],
+QTextBrowser[role="terminal"], QWidget#terminal {{
     background-color: {c['terminal']}; color: {c['text']};
     font-family: {f['mono']}; font-size: {ty['mono']['size']}px;
     border: 1px solid {c['line']}; border-radius: {r['sm']}px;

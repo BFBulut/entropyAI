@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import (
-    DIALOG_STYLE, build_dataclass, call_contract, spec_field,
+    build_dataclass, call_contract, spec_field,
 )
 from entropy.ui.widgets.ui_polish import (
     BODY_PX, apply_list_polish, apply_no_hscroll, icon_button_style, set_item_text,
@@ -118,7 +118,7 @@ class OfficeEditDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Ofis Düzenle" if office is not None else "Yeni Ofis")
         self.setMinimumWidth(520)
-        self.setStyleSheet(DIALOG_STYLE)
+        # Faz 11-E adım 6: diyalog stili uygulama düzeyi QSS'ten gelir.
         self._agent_registry = agent_registry
 
         form = QFormLayout(self)
@@ -143,7 +143,7 @@ class OfficeEditDialog(QDialog):
             self.template_combo.addItem(str(tpl.get("name", "")))
         self.template_preview = QLabel("")
         self.template_preview.setWordWrap(True)
-        self.template_preview.setStyleSheet("color:#8B949E; font-size:11px;")
+        self.template_preview.setProperty("role", "label")
         self.template_combo.currentTextChanged.connect(self._on_template_changed)
         if office is None:
             form.addRow("Şablon", self.template_combo)
@@ -336,9 +336,10 @@ class OfficesPanel(QFrame):
         layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel(f"<b style='color:{RT['accent']}; font-size:13px;'>🏢 OFİSLER</b>"))
+        header.addWidget(QLabel(f"<b style='color:{RT['accent']}; font-size:13px;'>OFİSLER</b>"))
         header.addStretch()
         self.create_btn = QPushButton("+ Ofis")
+        self.create_btn.setAccessibleName("+ Ofis")
         self.create_btn.setFixedHeight(24)
         self.create_btn.setToolTip("Yeni ofis oluştur")
         self.create_btn.clicked.connect(self.create_office)
@@ -347,28 +348,10 @@ class OfficesPanel(QFrame):
 
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:6px 2px;"
-            " background:transparent; border:none;"
-        )
+        self.empty_label.setProperty("role", "label")
         layout.addWidget(self.empty_label)
 
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            f"""
-            QListWidget {{
-                background-color:{RT['surface_base']};
-                border:1px solid {RT['divider_soft']};
-                border-radius:{RT['radius']};
-                color:{RT['text']};
-                font-size:{BODY_PX}px;
-            }}
-            QListWidget::item {{ padding:8px 10px; }}
-            QListWidget::item:selected {{
-                background-color:{RT['accent_soft']}; color:{RT['accent']};
-            }}
-            """
-        )
         # Uzun ofis amacı yatay kaydırma çubuğu doğurmasın; sağdan kırpılır.
         apply_list_polish(self.list_widget)
         self.list_widget.currentItemChanged.connect(self._on_current_changed)
@@ -379,16 +362,15 @@ class OfficesPanel(QFrame):
         actions = QHBoxLayout()
         actions.setSpacing(6)
         for attr, label, tip, handler in (
-            ("edit_btn", "✏️ Düzenle", "Seçili ofisi düzenle", self.edit_current),
-            ("delete_btn", "📦 Arşivle",
+            ("edit_btn", "Düzenle", "Seçili ofisi düzenle", self.edit_current),
+            ("delete_btn", "Arşivle",
              "Seçili ofisi arşive taşı (silinmez; kartlar, sorgular ve posta arşive gider)",
              self.delete_current),
-            ("refresh_btn", "🔄 Yenile", "Ofis listesini yeniden oku", self.refresh_offices),
+            ("refresh_btn", "Yenile", "Ofis listesini yeniden oku", self.refresh_offices),
         ):
             btn = QPushButton(label)
             btn.setToolTip(tip)
             btn.setFixedHeight(28)
-            btn.setStyleSheet(icon_button_style())
             btn.clicked.connect(handler)
             setattr(self, attr, btn)
             actions.addWidget(btn)

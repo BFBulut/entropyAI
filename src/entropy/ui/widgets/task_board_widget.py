@@ -214,18 +214,7 @@ class TaskCardWidget(QFrame):
         self.setObjectName("taskCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         accent = STATUS_COLORS.get(self.status, RT["text_dim"])
-        self.setStyleSheet(
-            f"""
-            QFrame#taskCard {{
-                background-color: {RT['surface_raised']};
-                border: 1px solid {RT['divider_soft']};
-                border-left: 3px solid {accent};
-                border-radius: {RT['radius_small']};
-            }}
-            QFrame#taskCard:hover {{ border-color: {RT['accent']}; }}
-            QLabel {{ background: transparent; border: none; }}
-            """
-        )
+        self.setProperty("role", "panel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(9, 7, 9, 7)
         layout.setSpacing(3)
@@ -234,7 +223,7 @@ class TaskCardWidget(QFrame):
         header = title_text
         if self.status == "failed":
             header = (
-                f"<span style='background:#4A1A1F; color:#FF6B6B; font-size:9px; "
+                f"<span style='background:#4A1A1F; color:#FF6B6B; font-size:11px; "
                 f"padding:1px 5px; border-radius:3px;'>BAŞARISIZ</span> {title_text}"
             )
         self.title_label = QLabel(
@@ -322,9 +311,7 @@ class TaskDetailPanel(QFrame):
         self.body_label = QLabel("Bir görev kartı seçin.")
         self.body_label.setWordWrap(True)
         self.body_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        self.body_label.setStyleSheet(
-            f"color:{RT['text_body']}; font-size:12px; background:transparent; border:none;"
-        )
+        self.body_label.setProperty("role", "label")
         layout.addWidget(self.body_label)
 
         # Faz 10-B: "Kaldığı yer" (kontrol noktası) ve "Kanıt" bölümleri.
@@ -335,9 +322,7 @@ class TaskDetailPanel(QFrame):
         self.checkpoint_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextBrowserInteraction
         )
-        self.checkpoint_label.setStyleSheet(
-            f"color:{RT['text_body']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.checkpoint_label.setProperty("role", "label")
         self.checkpoint_label.setVisible(False)
         layout.addWidget(self.checkpoint_label)
 
@@ -346,9 +331,7 @@ class TaskDetailPanel(QFrame):
         self.proof_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextBrowserInteraction
         )
-        self.proof_label.setStyleSheet(
-            f"color:{RT['text_body']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.proof_label.setProperty("role", "label")
         self.proof_label.setVisible(False)
         layout.addWidget(self.proof_label)
 
@@ -364,9 +347,11 @@ class TaskDetailPanel(QFrame):
         settings = QHBoxLayout()
         settings.setSpacing(4)
         self.provider_combo = QComboBox()
+        self.provider_combo.setAccessibleName("Sağlayıcı (boş = ajanın varsayılanı)")
         self.provider_combo.addItems(["", "agy", "claude"])
         self.provider_combo.setToolTip("Sağlayıcı (boş = ajanın varsayılanı)")
         self.model_combo = QComboBox()
+        self.model_combo.setAccessibleName("Model (boş = oturumun modelini miras al)")
         self.model_combo.setEditable(True)
         self.model_combo.setToolTip("Model (boş = oturumun modelini miras al)")
         # Faz 9: model listesi seçili sağlayıcıya bağlı. Kutuda her iki
@@ -374,16 +359,19 @@ class TaskDetailPanel(QFrame):
         # modeli yazıyor, koşu geçersiz `--model` ile başlıyordu.
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self.effort_combo = QComboBox()
+        self.effort_combo.setAccessibleName("Efor düzeyi")
         self.effort_combo.addItems(["", "low", "medium", "high"])
         self.effort_combo.setToolTip("Efor düzeyi")
         # HOTFIX v0.7.1: efor seçenekleri sağlayıcı + modele bağlı (agy'de efor
         # model adının son ekidir, ayrı bayrak değil).
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.budget_input = QLineEdit()
+        self.budget_input.setAccessibleName("Kart token bütçesi (0 = ofis bütçesi)")
         self.budget_input.setPlaceholderText("bütçe")
         self.budget_input.setFixedWidth(72)
         self.budget_input.setToolTip("Kart token bütçesi (0 = ofis bütçesi)")
         self.apply_btn = QPushButton("Uygula")
+        self.apply_btn.setAccessibleName("Uygula")
         self.apply_btn.setToolTip("Koşum ayarlarını karta yaz")
         self.apply_btn.clicked.connect(self._on_apply_settings)
         for widget in (self.provider_combo, self.model_combo, self.effort_combo,
@@ -397,26 +385,31 @@ class TaskDetailPanel(QFrame):
         actions = QHBoxLayout()
         actions.setSpacing(6)
         self.run_btn = QPushButton("▶ Çalıştır")
+        self.run_btn.setAccessibleName("▶ Çalıştır")
         self.run_btn.setToolTip("Kartı ajana gönder")
         self.run_btn.clicked.connect(self._on_run)
         actions.addWidget(self.run_btn)
 
         self.stop_btn = QPushButton("■ Durdur")
+        self.stop_btn.setAccessibleName("■ Durdur")
         self.stop_btn.setToolTip("Çalışan görevi sonlandır")
         self.stop_btn.clicked.connect(self._on_stop)
         actions.addWidget(self.stop_btn)
 
-        self.done_btn = QPushButton("✓ Bitti")
+        self.done_btn = QPushButton("Bitti")
+        self.done_btn.setAccessibleName("Bitti")
         self.done_btn.setToolTip("Görevi bitti olarak işaretle")
         self.done_btn.clicked.connect(self._on_done)
         actions.addWidget(self.done_btn)
 
-        self.contract_btn = QPushButton("📄 Sözleşme")
+        self.contract_btn = QPushButton("Sözleşme")
+        self.contract_btn.setAccessibleName("Sözleşme")
         self.contract_btn.setToolTip("Kartın sözleşme dosyasını rapor okuyucuda aç")
         self.contract_btn.clicked.connect(self._on_open_contract)
         actions.addWidget(self.contract_btn)
 
-        self.delete_btn = QPushButton("🗑 Sil")
+        self.delete_btn = QPushButton("Sil")
+        self.delete_btn.setAccessibleName("Sil")
         self.delete_btn.setToolTip("Kartı panodan sil")
         self.delete_btn.clicked.connect(self._on_delete)
         actions.addWidget(self.delete_btn)
@@ -462,7 +455,7 @@ class TaskDetailPanel(QFrame):
                 widget.deleteLater()
         if not has_card:
             self.title_label.setText(
-                f"<b style='color:{RT['accent']}; font-size:12px;'>GÖREV DETAYI</b>"
+                f"<b style='color:{RT['accent']}; font-size:13px;'>GÖREV DETAYI</b>"
             )
             self.body_label.setText("Bir görev kartı seçin.")
             self.checkpoint_label.setVisible(False)
@@ -493,7 +486,7 @@ class TaskDetailPanel(QFrame):
             f"<b>Kabul ölçütleri:</b>{criteria_html}"
         )
         for out in list(spec_field(card, "output_paths", []) or []):
-            btn = QPushButton(f"📄 {Path(str(out)).name}")
+            btn = QPushButton(f"{Path(str(out)).name}")
             btn.setToolTip(str(out))
             btn.setProperty("output_path", str(out))
             btn.clicked.connect(self._on_open_output)
@@ -724,25 +717,25 @@ class TaskBoardWidget(QFrame):
 
         header = QHBoxLayout()
         self.title_label = QLabel(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>🗂 AJAN GÖREV PANOSU</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>AJAN GÖREV PANOSU</b>"
             + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
                if self.office else "")
         )
-        self.title_label.setStyleSheet("background: transparent; border: none;")
+        self.title_label.setProperty("role", "label")
         header.addWidget(self.title_label)
         header.addStretch()
         # Faz 11-C: `TASKBOARD.md` türetilmiş panonun kendisi; kullanıcı
         # ajanların gördüğü metni doğrudan okuyabilmeli.
         self.taskboard_btn = QPushButton("Pano dosyası")
+        self.taskboard_btn.setAccessibleName("Pano dosyası")
         self.taskboard_btn.setProperty("variant", "ghost")
-        self.taskboard_btn.setFixedHeight(22)
         self.taskboard_btn.setToolTip(
             "Entropy/Board/TASKBOARD.md — ajanların okuduğu türetilmiş pano"
         )
         self.taskboard_btn.clicked.connect(self.open_taskboard_file)
         header.addWidget(self.taskboard_btn)
         self.refresh_btn = QPushButton("Yenile")
-        self.refresh_btn.setFixedHeight(22)
+        self.refresh_btn.setAccessibleName("Yenile")
         self.refresh_btn.clicked.connect(self.refresh_cards)
         header.addWidget(self.refresh_btn)
         root.addLayout(header)
@@ -755,24 +748,17 @@ class TaskBoardWidget(QFrame):
         columns_layout.setSpacing(6)
         for key, label in COLUMNS:
             column = QFrame()
-            column.setStyleSheet(
-                f"background-color:{RT['surface_base']}; border:1px solid {RT['divider_soft']};"
-                f" border-radius:{RT['radius']};"
-            )
+            column.setProperty("role", "panel")
             col_layout = QVBoxLayout(column)
             col_layout.setContentsMargins(6, 6, 6, 6)
             col_layout.setSpacing(5)
             head = QLabel("")
-            head.setStyleSheet("background:transparent; border:none;")
+            head.setProperty("role", "label")
             col_layout.addWidget(head)
             self.column_headers[key] = head
 
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
-            scroll.setStyleSheet(
-                "QScrollArea { border:none; background:transparent; }"
-                " QScrollArea > QWidget > QWidget { background: transparent; }"
-            )
             # Kartlar sütun genişliğine uyar; yatay çubuk sütunun altında
             # gereksiz bir şerit bırakıyordu (Faz 2 kozmetik notu).
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -801,7 +787,6 @@ class TaskBoardWidget(QFrame):
         self.columns_scroll = QScrollArea()
         self.columns_scroll.setWidgetResizable(True)
         self.columns_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.columns_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
         self.columns_scroll.setWidget(columns_host)
         self.columns_scroll.setMinimumWidth(200)
         splitter.addWidget(self.columns_scroll)
@@ -901,7 +886,7 @@ class TaskBoardWidget(QFrame):
         self.selected_id = ""
         self.project_filter = ""
         self.title_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>🗂 AJAN GÖREV PANOSU</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>AJAN GÖREV PANOSU</b>"
             + (f" <span style='color:{RT['text_dim']}; font-size:11px;'>{self.office}</span>"
                if self.office else "")
         )
@@ -983,7 +968,7 @@ class TaskBoardWidget(QFrame):
             self.column_headers[key].setText(
                 f"<span style='color:{RT['text_dim']}; font-size:11px; font-weight:600; "
                 f"letter-spacing:0.4px;'>{label.upper()}</span>"
-                f" <span style='color:{RT['text_dim']}; font-size:10px;'>({len(column_cards)})</span>"
+                f" <span style='color:{RT['text_dim']}; font-size:11px;'>({len(column_cards)})</span>"
             )
             for card in self.ordered_cards(column_cards):
                 widget = TaskCardWidget(card, self)
@@ -1145,7 +1130,7 @@ class CompactTaskListWidget(QFrame):
 
         head = QHBoxLayout()
         head.addWidget(QLabel(
-            f"<b style='color:{RT['accent']}; font-size:12px;'>🗂 AJAN GÖREVLERİ</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>AJAN GÖREVLERİ</b>"
         ))
         head.addStretch()
         self.count_badge = QLabel("")
@@ -1159,7 +1144,6 @@ class CompactTaskListWidget(QFrame):
         self.list_layout.setSpacing(3)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
         # Kompakt listede satırlar zaten sütun genişliğine sığar; yatay çubuk
         # yalnızca listenin altında gereksiz bir şerit bırakıyordu.
         apply_no_hscroll(scroll)
@@ -1210,7 +1194,7 @@ class CompactTaskListWidget(QFrame):
                 f"<span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
                 f"{spec_field(card, 'agent', '')} · {STATUS_LABELS.get(status, status)}</span>"
             )
-            row.setStyleSheet("background:transparent; border:none;")
+            row.setProperty("role", "label")
             row.setToolTip(
                 f"{title_text}\n"
                 f"{spec_field(card, 'agent', '')} · {STATUS_LABELS.get(status, status)}"
@@ -1221,5 +1205,5 @@ class CompactTaskListWidget(QFrame):
                 f"<span style='color:{RT['text_dim']}; font-size:{BODY_PX}px;'>"
                 "Ajan görevi yok. Bir ajana görev verdiğinizde kartlar burada listelenir.</span>"
             )
-            empty.setStyleSheet("background:transparent; border:none;")
+            empty.setProperty("role", "label")
             self.list_layout.addWidget(empty)

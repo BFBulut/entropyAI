@@ -74,6 +74,24 @@ DARK_TOKENS: Dict[str, Any] = {
         # Vurgunun soluk zemini (seçili satır, chip dolgusu)
         "accent.soft": "#12293A",
     },
+    # Görselleştirme ailesi (`viz.*`): graf tuvali, diff boyaması ve akış
+    # olayları. Bu aile arayüzün 12 rengine KARIŞMAZ; yalnızca veri kodlar
+    # (denetim §3.1). Kroma bilerek düşük tutulur, "neon" imzası yoktur.
+    "viz": {
+        "add": "#57D9A3",       # diff: eklenen satır (ok ile aynı)
+        "del": "#F0787A",       # diff: silinen satır (danger ile aynı)
+        "hunk": "#4CC2FF",      # diff: bölüm başlığı (accent)
+        "meta": "#9AAABE",      # diff: üstbilgi (text.muted)
+        # Düğüm/olay türleri — ayırt edilebilir ama düşük kromalı yedi ton.
+        "kind1": "#8E9BF0",     # ofis
+        "kind2": "#4CC2FF",     # ajan
+        "kind3": "#57D9A3",     # rapor
+        "kind4": "#E8B84B",     # karar
+        "kind5": "#D9B26A",     # bulgu
+        "kind6": "#D98BC0",     # görev
+        "kind7": "#6FB6E8",     # proje
+        "neutral": "#9AAABE",   # bilinmeyen tür
+    },
     "space": {"1": 4, "2": 8, "3": 12, "4": 16, "5": 24, "6": 32},
     "radius": {"sm": 6, "md": 10, "lg": 14},
     "type": {

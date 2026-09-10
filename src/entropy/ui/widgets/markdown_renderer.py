@@ -229,7 +229,7 @@ class MermaidSvgGenerator:
         svg = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">',
             f'<rect width="{w}" height="{h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="13" font-weight="bold">📊 {_escape(title)}</text>'
+            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="13" font-weight="bold">{_escape(title)}</text>'
         ]
 
         # Draw wedges
@@ -311,7 +311,7 @@ class MermaidSvgGenerator:
             '  </marker>',
             '</defs>',
             f'<rect width="{total_w}" height="{total_h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">⚡ Durum Makinesi (State Transition Flow)</text>'
+            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Durum Makinesi (State Transition Flow)</text>'
         ]
 
         y = 55
@@ -353,7 +353,7 @@ class MermaidSvgGenerator:
         svg = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">',
             f'<rect width="{total_w}" height="{total_h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">🔄 Sıralı İletişim (Sequence Flow)</text>'
+            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Sıralı İletişim (Sequence Flow)</text>'
         ]
 
         part_x = {}
@@ -389,7 +389,7 @@ class MermaidSvgGenerator:
         svg = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">',
             f'<rect width="{w}" height="{h}" rx="8" fill="#070A0F" stroke="#00F0FF" stroke-width="1.2"/>',
-            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI" font-size="13" font-weight="bold">📊 {title}</text>'
+            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI" font-size="13" font-weight="bold">{title}</text>'
         ]
         y = 55
         for l in lines[:10]:
@@ -458,13 +458,13 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
 
                 info_line = []
                 if date_text:
-                    info_line.append(f"📅 {date_text}")
+                    info_line.append(f"{date_text}")
                 if agent_text:
-                    info_line.append(f"🤖 {agent_text}")
+                    info_line.append(f"{agent_text}")
                 if proj_text:
-                    info_line.append(f"📁 Proje: {proj_text}")
+                    info_line.append(f"Proje: {proj_text}")
                 if skill_text:
-                    info_line.append(f"🎯 Yetenek: {skill_text}")
+                    info_line.append(f"Yetenek: {skill_text}")
                 meta_info = " &nbsp;|&nbsp; ".join(info_line)
 
                 metadata_banner_html = (
@@ -473,7 +473,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
                 if title_text:
                     metadata_banner_html += f'<div style="color:{RT["text"]}; font-size:18px; font-weight:600; margin-bottom:6px;">{_escape(title_text)}</div>'
                 if meta_info:
-                    metadata_banner_html += f'<div style="color:{RT["text_dim"]}; font-size:12px; margin-bottom:8px;">{meta_info}</div>'
+                    metadata_banner_html += f'<div style="color:{RT["text_dim"]}; font-size:13px; margin-bottom:8px;">{meta_info}</div>'
                 if tags_pills:
                     metadata_banner_html += f'<div style="margin-top:6px;">{tags_pills}</div>'
                 metadata_banner_html += '</div>'
@@ -508,7 +508,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
             f' margin:{RT["block_margin"]} 0; padding:12px 16px;">'
             f'<div style="margin-bottom:8px;">'
             f'<span style="background-color:{RT["accent_soft"]}; color:{RT["accent"]};'
-            f' border-radius:10px; padding:2px 10px; font-size:10px; font-weight:600;'
+            f' border-radius:10px; padding:2px 10px; font-size:11px; font-weight:600;'
             f' letter-spacing:0.6px; font-family:{RT["font_mono"]};">{_escape(lang.upper())}</span>'
             f'</div>'
             f'<pre style="margin:0; font-family:{RT["font_mono"]}; font-size:{RT["font_size_mono"]};'
@@ -524,7 +524,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
         formula = match.group(1).strip()
         return (
             f'<div style="background-color:{RT["surface_raised"]}; border-left:3px solid {RT["accent_alt"]}; border-radius:{RT["radius"]}; padding:10px 18px; margin:{RT["block_margin"]} 0; text-align:center;">'
-            f'<span style="color:{RT["accent_alt"]}; font-family:Cambria Math, Georgia, serif; font-size:15px; font-style:italic;">{_escape(formula)}</span>'
+            f'<span style="color:{RT["accent_alt"]}; font-family:Cambria Math, Georgia, serif; font-size:14px; font-style:italic;">{_escape(formula)}</span>'
             f'</div>'
         )
 
@@ -563,9 +563,9 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
     text = '\n'.join(processed_lines)
 
     # 7. Başlık hiyerarşisi: renk yerine boyut/ağırlık farkı, üstte nefes payı.
-    text = re.sub(r'^#\s+(.+)$', rf'<h1 style="color:{RT["text"]}; font-size:22px; font-weight:600; border-bottom:1px solid {RT["divider"]}; padding-bottom:8px; margin-top:22px; margin-bottom:12px;">\1</h1>', text, flags=re.MULTILINE)
+    text = re.sub(r'^#\s+(.+)$', rf'<h1 style="color:{RT["text"]}; font-size:18px; font-weight:600; border-bottom:1px solid {RT["divider"]}; padding-bottom:8px; margin-top:22px; margin-bottom:12px;">\1</h1>', text, flags=re.MULTILINE)
     text = re.sub(r'^##\s+(.+)$', rf'<h2 style="color:{RT["text"]}; font-size:18px; font-weight:600; margin-top:20px; margin-bottom:8px;">\1</h2>', text, flags=re.MULTILINE)
-    text = re.sub(r'^###\s+(.+)$', rf'<h3 style="color:{RT["accent"]}; font-size:15px; font-weight:600; margin-top:16px; margin-bottom:6px;">\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^###\s+(.+)$', rf'<h3 style="color:{RT["accent"]}; font-size:14px; font-weight:600; margin-top:16px; margin-bottom:6px;">\1</h3>', text, flags=re.MULTILINE)
     text = re.sub(r'^####\s+(.+)$', rf'<h4 style="color:{RT["text_dim"]}; font-size:13px; font-weight:600; letter-spacing:0.4px; margin-top:14px; margin-bottom:4px;">\1</h4>', text, flags=re.MULTILINE)
 
     # 8. Blockquotes: dolgu yok, yalnızca sol şerit.
@@ -684,7 +684,7 @@ def build_command_card_html(body_html: str) -> str:
         f" background-color:{RT['surface_raised']};"
         f" border-left:3px solid {RT['accent_warn']};"
         f" border-radius:{RT['radius_small']};'>"
-        f"<div style='color:{RT['accent_warn']}; font-size:10px; font-weight:600;"
+        f"<div style='color:{RT['accent_warn']}; font-size:11px; font-weight:600;"
         f" letter-spacing:1px; margin-bottom:4px;'>KOMUT ÇIKTISI</div>"
         f"<div style='color:{RT['text_body']}; font-size:{RT['font_size_body']};"
         f" line-height:{RT['line_height']};'>{body_html}</div>"
@@ -709,7 +709,7 @@ def build_chat_bubble_html(sender: str, text: str, is_system: bool = False) -> s
 
     is_user = sender in ("Siz", "Sen")
     stripe = RT["accent_alt"] if is_user else RT["accent"]
-    label = "SİZ" if is_user else "ENTROPY AI"
+    label = "Siz" if is_user else "Entropy AI"
     body = text if is_user else _render_markdown_body(text)
     # Kullanıcı mesajı yüzeyden bir kademe yükseltilir; asistan mesajı arka planla
     # aynı kalır. Kenarlık/dolgu yığmadan iki taraf ayırt edilir.
@@ -717,7 +717,7 @@ def build_chat_bubble_html(sender: str, text: str, is_system: bool = False) -> s
     return (
         f"<div style='margin:0 0 14px 0; padding:8px 12px 8px 14px;{surface}"
         f" border-left:3px solid {stripe}; border-radius:{RT['radius_small']};'>"
-        f"<div style='color:{stripe}; font-size:10px; font-weight:600; letter-spacing:1px;"
+        f"<div style='color:{stripe}; font-size:11px; font-weight:600; letter-spacing:1px;"
         f" margin-bottom:4px;'>{label}</div>"
         f"<div style='color:{RT['text_body']}; font-size:{RT['font_size_body']};"
         f" line-height:{RT['line_height']};'>{body}</div>"

@@ -25,27 +25,6 @@ from typing import List, Optional, Sequence, Tuple
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QComboBox, QWidget
 
-EFFORT_COMBO_STYLE = """
-    QComboBox {
-        background-color: #0E1420;
-        color: #FFB300;
-        border: 1px solid #1F2B42;
-        border-radius: 4px;
-        padding: 2px 8px;
-        font-size: 10px;
-        font-weight: bold;
-    }
-    QComboBox:hover { border-color: #FFB300; }
-    QComboBox:disabled { color: #5A6474; border-color: #161E2C; }
-    QComboBox::drop-down { border: none; width: 16px; }
-    QComboBox QAbstractItemView {
-        background-color: #0E1420;
-        color: #F0F6FC;
-        border: 1px solid #FFB300;
-        selection-background-color: #1F2B42;
-        selection-color: #FFB300;
-    }
-"""
 
 # Yerel yedek seviye kümeleri (core sözleşmesi yoksa).
 CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
@@ -224,7 +203,6 @@ class EffortSelector(QComboBox):
         self.model_combo = model_combo
         self._applying = False
         self.setObjectName("effortCombo")
-        self.setStyleSheet(EFFORT_COMBO_STYLE)
         self.setFixedHeight(24)
         self.currentTextChanged.connect(self._on_effort_changed)
         self.refresh()

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.event_bus import bus
+from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 
 # Bölmede tutulan en fazla olay: uzun koşu belleği şişirmesin.
@@ -44,11 +45,11 @@ SPLIT_LIMIT = 3
 KIND_STYLE: Dict[str, tuple] = {
     "thinking": (RT["text_dim"], True, "…"),
     "text": (RT["text_body"], False, ""),
-    "tool_call": ("#FFC24D", False, "⚙"),
+    "tool_call": (TOKENS["color"]["warn"], False, ""),
     "tool_result": (RT["text_dim"], False, "↩"),
     "status": (RT["text_dim"], False, "•"),
-    "result": ("#3DE8A8", False, "✓"),
-    "error": ("#EF4444", False, "✗"),
+    "result": (TOKENS["color"]["ok"], False, ""),
+    "error": (TOKENS["color"]["danger"], False, ""),
 }
 KIND_FALLBACK = (RT["text_body"], False, "")
 
@@ -133,25 +134,13 @@ class AgentTerminalPane(QFrame):
         layout.setSpacing(4)
 
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("background: transparent; border: none;")
+        self.title_label.setProperty("role", "label")
         self.title_label.setWordWrap(True)
         layout.addWidget(self.title_label)
 
         self.view = QTextBrowser()
         self.view.setOpenExternalLinks(False)
-        self.view.setStyleSheet(
-            f"""
-            QTextBrowser {{
-                background-color:{RT['surface_base']};
-                border:1px solid {RT['divider_soft']};
-                border-radius:{RT['radius']};
-                color:{RT['text_body']};
-                font-family:{RT['font_mono']};
-                font-size:{RT['font_size_mono']};
-                padding:8px;
-            }}
-            """
-        )
+        self.view.setProperty("role", "terminal")
         layout.addWidget(self.view, 1)
 
         row = QHBoxLayout()
@@ -161,6 +150,7 @@ class AgentTerminalPane(QFrame):
         self.input.returnPressed.connect(self.send_followup)
         row.addWidget(self.input, 1)
         self.send_btn = QPushButton("Gönder")
+        self.send_btn.setAccessibleName("Gönder")
         self.send_btn.setFixedHeight(24)
         self.send_btn.clicked.connect(self.send_followup)
         row.addWidget(self.send_btn)
@@ -168,6 +158,7 @@ class AgentTerminalPane(QFrame):
         # Görünürlüğü beklemeye bağlıdır; koşan bir ajanı yanlışlıkla kapatma
         # düğmesi her zaman ekranda durmasın.
         self.close_btn = QPushButton("Kapat")
+        self.close_btn.setAccessibleName("Kapat")
         self.close_btn.setFixedHeight(24)
         self.close_btn.setToolTip("Etkileşimli koşuyu kapatır; bölme arşive gider.")
         self.close_btn.clicked.connect(self._on_close_clicked)
@@ -176,7 +167,7 @@ class AgentTerminalPane(QFrame):
         layout.addLayout(row)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("background: transparent; border: none;")
+        self.status_label.setProperty("role", "label")
         layout.addWidget(self.status_label)
 
         self._refresh_header()
@@ -186,9 +177,9 @@ class AgentTerminalPane(QFrame):
 
     def _refresh_header(self) -> None:
         color = {
-            "thinking": "#FFC24D",
-            "working": "#3DE8A8",
-            "error": "#EF4444",
+            "thinking": TOKENS["color"]["warn"],
+            "working": TOKENS["color"]["ok"],
+            "error": TOKENS["color"]["danger"],
         }.get(self.state, RT["text_dim"])
         bits = [
             f"<b style='color:{RT['text']}; font-size:12px;'>"
@@ -203,7 +194,7 @@ class AgentTerminalPane(QFrame):
             # Bekleme rozeti durum etiketinin YERİNE geçer: "boşta" yazmak
             # kullanıcıya "koşu bitti" izlenimi veriyordu.
             bits.append(
-                f"<span style='color:#FFC24D; font-size:11px; font-weight:600;'>"
+                f"<span style='color:{TOKENS['color']['warn']}; font-size:11px; font-weight:600;'>"
                 f"⏸ {WAITING_BADGE}</span>"
             )
         else:
@@ -470,9 +461,7 @@ class TerminalsPanel(QFrame):
             "Koşan ajan yok. Bir ajan çalışmaya başlayınca terminali burada açılır."
         )
         self.placeholder.setWordWrap(True)
-        self.placeholder.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:12px; background:transparent; border:none;"
-        )
+        self.placeholder.setProperty("role", "label")
         layout.addWidget(self.placeholder)
 
         self.stack = QStackedWidget()
@@ -484,9 +473,7 @@ class TerminalsPanel(QFrame):
         layout.addWidget(self.stack, 1)
 
         self.archive_label = QLabel("")
-        self.archive_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.archive_label.setProperty("role", "label")
         layout.addWidget(self.archive_label)
         self.archive_tabs = QTabWidget()
         self.archive_tabs.setDocumentMode(True)
@@ -587,7 +574,7 @@ class TerminalsPanel(QFrame):
             pane.setVisible(True)
         self.archive_tabs.setVisible(bool(archived))
         self.archive_label.setText(
-            f"🗄 Arşiv · {len(archived)} biten koşu" if archived else ""
+            f"Arşiv · {len(archived)} biten koşu" if archived else ""
         )
         self.archive_label.setVisible(bool(archived))
         if self._focused:

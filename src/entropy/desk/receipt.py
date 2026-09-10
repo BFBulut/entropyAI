@@ -34,14 +34,14 @@ RECEIPT_SECTIONS: Tuple[str, ...] = (
 
 # Bölüm başına ikon: katlanabilir başlıkta göz taraması kolaylaşsın.
 SECTION_ICONS: Dict[str, str] = {
-    "Plan": "🗺",
+    "Plan": "",
     "İlerleme": "⏳",
-    "Değerlendirme": "⚖",
-    "Kanıt": "🔬",
-    "Değişiklikler": "📝",
-    "PR": "🔀",
-    "Maliyet": "💰",
-    "Yorumlar": "💬",
+    "Değerlendirme": "",
+    "Kanıt": "",
+    "Değişiklikler": "",
+    "PR": "",
+    "Maliyet": "",
+    "Yorumlar": "",
 }
 
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
@@ -227,8 +227,14 @@ def receipt_html(sections: Dict[str, str], tokens: Optional[Dict[str, str]] = No
     kullanır). `tokens` verilmezse okuma teması yüklenir; tema yoksa yalın
     renkler kullanılır (widget'sız testlerde de çalışsın).
     """
-    css = {"body": "#C9D1D9", "dim": "#8B949E", "line": "#1F2B42",
-           "accent": "#58A6FF", "text": "#F0F6FC"}
+    # Faz 11-E adım 6: yedek renkler de belirteçten gelir (düz hex yok).
+    from entropy.ui.design import TOKENS as _T
+
+    css = {
+        "body": _T["color"]["text"], "dim": _T["color"]["text.muted"],
+        "line": _T["color"]["line"], "accent": _T["color"]["accent"],
+        "text": _T["color"]["text"],
+    }
     if tokens:
         css.update(tokens)
     else:
@@ -245,14 +251,14 @@ def receipt_html(sections: Dict[str, str], tokens: Optional[Dict[str, str]] = No
     parts = [f"<div style='font-family:sans-serif;'>"]
     badges = []
     badges.append(
-        "🔬 kanıt var" if summary["has_proof"] else "🔬 kanıt yok"
+        "kanıt var" if summary["has_proof"] else "kanıt yok"
     )
     if summary["change_count"]:
-        badges.append(f"📝 {summary['change_count']} değişiklik")
+        badges.append(f"{summary['change_count']} değişiklik")
     if summary["pr_url"]:
-        badges.append("🔀 PR")
+        badges.append("PR")
     if summary["cost_text"]:
-        badges.append(f"💰 {summary['cost_text'][:40]}")
+        badges.append(f"{summary['cost_text'][:40]}")
     parts.append(
         f"<div style='color:{css['dim']}; font-size:11px; margin-bottom:6px;'>"
         + " · ".join(html.escape(b) for b in badges)

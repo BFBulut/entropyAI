@@ -222,14 +222,9 @@ class CoreVisualizerWidget(QWidget):
     def build_mode_menu(self) -> QMenu:
         """Mod geçiş menüsü; test edilebilir olması için ayrı kurulur."""
         menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color:#0E1420; color:#F0F6FC; border:1px solid #1F2B42;"
-            " border-radius:6px; padding:4px; }"
-            "QMenu::item:selected { background-color:#1A263C; color:#00F0FF; }"
-        )
         for label, mode in (
-            ("🧘 Zen Moda Geç", "zen"),
-            ("💬 Chat Modunu Aç", "chat"),
+            ("Zen Moda Geç", "zen"),
+            ("Chat Modunu Aç", "chat"),
             ("◎ Floating Moda Geç", "floating"),
         ):
             act = QAction(label, menu)

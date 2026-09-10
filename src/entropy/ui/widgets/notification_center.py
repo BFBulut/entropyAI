@@ -36,19 +36,19 @@ HISTORY_LIMIT = 50
 # Olay türü → (ikon, okunur ad, hedef yorumu). Hedef yorumu, tıklamanın nereye
 # götüreceğini çağıran tarafa anlatır.
 EVENT_META = {
-    "report": ("📄", "Rapor", "report"),
-    "task_done": ("✅", "Görev", "task"),
-    "task_failed": ("❌", "Görev", "task"),
-    "mailbox": ("📬", "Posta kutusu", "mailbox"),
-    "office": ("🏢", "Ofis", "office"),
-    "skill": ("🎯", "Yetenek", "skill"),
-    "playbook": ("📘", "Yordam", "skill"),
-    "agents": ("🤖", "Ajanlar", "agent"),
-    "provider": ("🔑", "Sağlayıcı", "provider"),
-    "graph": ("🌐", "Bellek", "graph"),
+    "report": ("", "Rapor", "report"),
+    "task_done": ("", "Görev", "task"),
+    "task_failed": ("", "Görev", "task"),
+    "mailbox": ("", "Posta kutusu", "mailbox"),
+    "office": ("", "Ofis", "office"),
+    "skill": ("", "Yetenek", "skill"),
+    "playbook": ("", "Yordam", "skill"),
+    "agents": ("", "Ajanlar", "agent"),
+    "provider": ("", "Sağlayıcı", "provider"),
+    "graph": ("", "Bellek", "graph"),
     # Faz 10-D: sessiz bellek istisnaları artık görünür. Tıklama Bellek
     # denetçisine ("memory" hedefi) götürür.
-    "memory": ("⚠️", "Bellek uyarısı", "memory"),
+    "memory": ("", "Bellek uyarısı", "memory"),
 }
 
 
@@ -97,11 +97,7 @@ class NotificationCenter(QFrame):
         self.log = NotificationLog(limit)
         self._unseen = 0
 
-        self.setStyleSheet(
-            f"QFrame#notificationCenter {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']}; }}"
-            " QLabel { background:transparent; border:none; }"
-        )
+        self.setProperty("role", "panel")
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(5)
@@ -112,25 +108,14 @@ class NotificationCenter(QFrame):
         head.addWidget(self.header_label)
         head.addStretch()
         self.clear_btn = QPushButton("Temizle")
-        self.clear_btn.setFixedHeight(22)
+        self.clear_btn.setAccessibleName("Temizle")
         self.clear_btn.setToolTip("Bildirim geçmişini temizle (olaylar diskte değil, yalnızca bu oturumda)")
-        self.clear_btn.setStyleSheet(
-            f"QPushButton {{ background:transparent; border:1px solid {RT['divider_soft']};"
-            f" border-radius:{RT['radius_small']}; color:{RT['text_dim']};"
-            f" font-size:{LABEL_PX}px; padding:1px 10px; }}"
-            f" QPushButton:hover {{ color:{RT['accent']}; border-color:{RT['accent']}; }}"
-        )
+        self.clear_btn.setProperty("variant", "ghost")
         self.clear_btn.clicked.connect(self.clear)
         head.addWidget(self.clear_btn)
         root.addLayout(head)
 
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            f"QListWidget {{ background:transparent; border:none;"
-            f" color:{RT['text_body']}; font-size:{BODY_PX}px; }}"
-            f" QListWidget::item {{ padding:3px 4px; border-radius:4px; }}"
-            f" QListWidget::item:selected {{ background:{RT['accent_soft']}; color:{RT['accent']}; }}"
-        )
         self.list_widget.itemClicked.connect(self._on_item_clicked)
         root.addWidget(self.list_widget, 1)
 
@@ -245,7 +230,7 @@ class NotificationCenter(QFrame):
             row.setToolTip(str(item.get("target") or ""))
             self.list_widget.addItem(row)
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>🔔 BİLDİRİMLER</b>"
+            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>BİLDİRİMLER</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"son {len(items)} olay (en fazla {self.log.limit})</span>"
         )

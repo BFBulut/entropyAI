@@ -13,29 +13,6 @@ from entropy.core.event_bus import bus
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
-DIALOG_STYLE = """
-    QDialog {
-        background-color: #0E1420;
-        color: #F0F6FC;
-    }
-    QLabel { color: #F0F6FC; font-size: 12px; }
-    QLineEdit, QPlainTextEdit {
-        background-color: #05070A;
-        border: 1px solid #1F2B42;
-        border-radius: 4px;
-        padding: 6px;
-        color: #F0F6FC;
-    }
-    QPushButton {
-        background-color: #141C2C;
-        color: #00F0FF;
-        border: 1px solid #1F2B42;
-        border-radius: 4px;
-        padding: 6px 12px;
-    }
-    QPushButton:hover { border-color: #00F0FF; }
-    QRadioButton { color: #F0F6FC; }
-"""
 
 
 def parse_env_text(text: str) -> Dict[str, str]:
@@ -72,7 +49,6 @@ class MCPServerDialog(QDialog):
         self.existing = server or None
         self.setWindowTitle("MCP Sunucusunu Düzenle" if server else "Yeni MCP Sunucusu Ekle")
         self.setMinimumWidth(460)
-        self.setStyleSheet(DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -111,7 +87,7 @@ class MCPServerDialog(QDialog):
         layout.addLayout(form)
 
         hint = QLabel(
-            "<span style='color:#8B949E; font-size:10px;'>Kayıt agy'nin "
+            "<span style='color:#8B949E; font-size:11px;'>Kayıt agy'nin "
             "<code>~/.gemini/config/mcp_config.json</code> dosyasına yazılır; "
             "bir sonraki ajan turunda etkin olur.</span>"
         )
@@ -123,11 +99,12 @@ class MCPServerDialog(QDialog):
         btn_box.addStretch()
 
         cancel_btn = QPushButton("İptal")
+        cancel_btn.setAccessibleName("İptal")
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
 
         save_btn = QPushButton("Kaydet" if server else "Sunucuyu Ekle")
-        save_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._on_save)
         btn_box.addWidget(save_btn)
 
@@ -183,48 +160,21 @@ class MCPDrawerWidget(QFrame):
 
         # Header bar
         header_layout = QHBoxLayout()
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>🔌 MCP ARAÇ VE PROTOKOL MERKEZİ</b>")
+        title_label = QLabel("MCP sunucuları")
+        title_label.setProperty("role", "heading")
         header_layout.addWidget(title_label)
 
         header_layout.addStretch()
 
         add_btn = QPushButton("+ Yeni MCP Ekle")
-        add_btn.setFixedHeight(24)
-        add_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
+        add_btn.setAccessibleName("+ Yeni MCP Ekle")
+        add_btn.setProperty("variant", "primary")
         add_btn.clicked.connect(self._open_add_dialog)
         header_layout.addWidget(add_btn)
 
         self.sync_btn = QPushButton("Yenile")
-        self.sync_btn.setFixedHeight(24)
-        self.sync_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 4px;
-                padding: 2px 14px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00F0FF;
-                color: #080B10;
-            }
-        """)
+        self.sync_btn.setAccessibleName("Yenile")
+        self.sync_btn.setProperty("variant", "primary")
         self.sync_btn.clicked.connect(self.refresh_servers)
         header_layout.addWidget(self.sync_btn)
 
@@ -233,23 +183,7 @@ class MCPDrawerWidget(QFrame):
         # Scroll Area for Server Cards
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                background: #05070A;
-                width: 6px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical {
-                background: #1F2B42;
-                border-radius: 3px;
-            }
-        """)
         container = QWidget()
-        container.setStyleSheet("background: transparent;")
         self.servers_layout = QVBoxLayout(container)
         self.servers_layout.setContentsMargins(0, 4, 0, 4)
         self.servers_layout.setSpacing(6)
@@ -263,22 +197,6 @@ class MCPDrawerWidget(QFrame):
 
     def _small_button(self, text: str, color: str, bg: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFixedHeight(26)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {bg};
-                color: {color};
-                border: 1px solid {color};
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-size: 11px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {color};
-                color: #080B10;
-            }}
-        """)
         return btn
 
     def refresh_servers(self):
@@ -290,36 +208,27 @@ class MCPDrawerWidget(QFrame):
         servers = self.mcp_manager.list_servers(force_refresh=True)
         for s in servers:
             card = QFrame()
-            card.setStyleSheet("""
-                QFrame {
-                    background-color: #0E1420;
-                    border: 1px solid #1F2B42;
-                    border-radius: 6px;
-                }
-                QFrame:hover {
-                    border-color: #00F0FF;
-                }
-            """)
+            card.setProperty("role", "panel")
             card_layout = QHBoxLayout(card)
             card_layout.setContentsMargins(12, 8, 12, 8)
             card_layout.setSpacing(12)
 
-            icon = "🌐" if s["type"] == "http" else "💻"
+            icon = "" if s["type"] == "http" else ""
             icon_lbl = QLabel(f"<span style='font-size:18px;'>{icon}</span>")
-            icon_lbl.setStyleSheet("background: transparent; border: none;")
+            icon_lbl.setProperty("role", "label")
             card_layout.addWidget(icon_lbl)
 
             info_layout = QVBoxLayout()
             info_layout.setContentsMargins(0, 0, 0, 0)
             info_layout.setSpacing(3)
 
-            status_badge = "<span style='color:#00FF9D; font-size:10px; font-weight:bold;'>● AKTİF</span>" if s["status"].lower() == "enabled" else "<span style='color:#8B949E; font-size:10px;'>○ PASİF</span>"
+            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s["status"].lower() == "enabled" else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
             name_lbl = QLabel(f"<b style='color:#F0F6FC; font-size:13px;'>{s['name']}</b> &nbsp; <span style='color:#8B949E; font-size:11px;'>({s['type']})</span> &nbsp; {status_badge}")
-            name_lbl.setStyleSheet("background: transparent; border: none;")
+            name_lbl.setProperty("role", "label")
 
             target_val = s.get('target', '')
-            target_lbl = QLabel(f"<code style='background:#05070A; color:#8B949E; border:1px solid #1F2B42; border-radius:3px; padding:2px 6px; font-family:Consolas; font-size:10px;'>{target_val[:80]}</code>")
-            target_lbl.setStyleSheet("background: transparent; border: none;")
+            target_lbl = QLabel(f"<code style='background:#05070A; color:#8B949E; border:1px solid #1F2B42; border-radius:3px; padding:2px 6px; font-family:Consolas; font-size:11px;'>{target_val[:80]}</code>")
+            target_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)
             info_layout.addWidget(target_lbl)
@@ -328,18 +237,17 @@ class MCPDrawerWidget(QFrame):
 
             # Toggle checkbox
             cb = QCheckBox("Etkin")
-            cb.setStyleSheet("color:#00FF9D; font-weight:bold; font-size:11px; background:transparent;")
             cb.setChecked(s["status"].lower() == "enabled")
             cb.toggled.connect(lambda checked, s_name=s["name"], box=cb: self._on_toggle(s_name, checked, box))
             card_layout.addWidget(cb)
 
             # Edit server button
-            edit_btn = self._small_button("✏️ Düzenle", "#00F0FF", "#141C2C")
+            edit_btn = self._small_button("Düzenle", "#00F0FF", "#141C2C")
             edit_btn.clicked.connect(lambda _, s_name=s["name"]: self._open_edit_dialog(s_name))
             card_layout.addWidget(edit_btn)
 
             # Remove server button
-            del_btn = self._small_button("🗑️ Kaldır", "#FF4D4D", "#261418")
+            del_btn = self._small_button("Kaldır", "#FF4D4D", "#261418")
             del_btn.clicked.connect(lambda _, s_name=s["name"]: self._on_remove_server(s_name))
             card_layout.addWidget(del_btn)
 

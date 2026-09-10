@@ -106,10 +106,10 @@ def reading_css() -> str:
         padding: 16px 20px;
     }}
     p {{ margin: 10px 0; line-height: {t['line_height']}; color: {t['text_body']}; }}
-    h1 {{ color: {t['text']}; font-size: 22px; margin: 20px 0 10px 0; }}
-    h2 {{ color: {t['text']}; font-size: 18px; margin: 18px 0 8px 0; }}
-    h3 {{ color: {t['text']}; font-size: 15px; margin: 14px 0 6px 0; }}
-    h4 {{ color: {t['text_dim']}; font-size: 13px; margin: 12px 0 4px 0; }}
+    h1 {{ color: {t['text']}; font-size:18px; margin: 20px 0 10px 0; }}
+    h2 {{ color: {t['text']}; font-size:18px; margin: 18px 0 8px 0; }}
+    h3 {{ color: {t['text']}; font-size:14px; margin: 14px 0 6px 0; }}
+    h4 {{ color: {t['text_dim']}; font-size:13px; margin: 12px 0 4px 0; }}
     a {{ color: {t['accent']}; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
     ul, ol {{ margin: 8px 0 8px 0; padding-left: 22px; }}

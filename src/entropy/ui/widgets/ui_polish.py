@@ -222,10 +222,7 @@ def empty_state_label(message: str, parent: Optional[QWidget] = None) -> QLabel:
     label = QLabel(message, parent)
     label.setWordWrap(True)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet(
-        f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:18px 12px;"
-        " background:transparent; border:none;"
-    )
+    label.setProperty("role", "label")
     return label
 
 

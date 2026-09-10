@@ -84,7 +84,7 @@ class FloatingModeWidget(QWidget):
         """)
 
         # 1. Pin / Always on top toggle
-        pin_text = "📌 Sabitlemeyi Kaldır" if self.is_pinned_on_top else "📌 Ekrana Sabitle (Always On Top)"
+        pin_text = "Sabitlemeyi Kaldır" if self.is_pinned_on_top else "Ekrana Sabitle (Always On Top)"
         action_pin = QAction(pin_text, self)
         action_pin.triggered.connect(self._toggle_pin)
         menu.addAction(action_pin)
@@ -92,19 +92,19 @@ class FloatingModeWidget(QWidget):
         menu.addSeparator()
 
         # 2. Switch to Zen Mode
-        action_zen = QAction("🧘 Zen Moda Geç", self)
+        action_zen = QAction("Zen Moda Geç", self)
         action_zen.triggered.connect(lambda: bus.mode_requested.emit("zen"))
         menu.addAction(action_zen)
 
         # 3. Switch to Chat Mode
-        action_chat = QAction("💬 Chat Modunu Aç", self)
+        action_chat = QAction("Chat Modunu Aç", self)
         action_chat.triggered.connect(lambda: bus.mode_requested.emit("chat"))
         menu.addAction(action_chat)
 
         menu.addSeparator()
 
         # 4. Exit
-        action_exit = QAction("❌ Kapat / Çıkış", self)
+        action_exit = QAction("Kapat / Çıkış", self)
         action_exit.triggered.connect(self.close)
         menu.addAction(action_exit)
 

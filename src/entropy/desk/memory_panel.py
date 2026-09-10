@@ -30,19 +30,21 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
+from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 
-# Düğüm türü -> renk. Bilinmeyen tür gri.
+# Düğüm türü -> renk. Faz 11-E adım 6: `viz.*` belirteç ailesi; bilinmeyen
+# tür nötr. Renk yalnızca türü kodlar, vurgu görevi görmez.
 KIND_COLORS: Dict[str, str] = {
-    "ofis": "#7C5CFF",
-    "ajan": "#00D4FF",
-    "rapor": "#00FF9D",
-    "karar": "#FFB347",
-    "bulgu": "#E3B341",
-    "gorev": "#FF7ED4",
-    "proje": "#5CC8FF",
+    "ofis": TOKENS["viz"]["kind1"],
+    "ajan": TOKENS["viz"]["kind2"],
+    "rapor": TOKENS["viz"]["kind3"],
+    "karar": TOKENS["viz"]["kind4"],
+    "bulgu": TOKENS["viz"]["kind5"],
+    "gorev": TOKENS["viz"]["kind6"],
+    "proje": TOKENS["viz"]["kind7"],
 }
-KIND_FALLBACK = "#8B949E"
+KIND_FALLBACK = TOKENS["viz"]["neutral"]
 
 NODE_RADIUS = 7.0
 HIT_RADIUS = 12.0
@@ -242,9 +244,7 @@ class OfficeMemoryPanel(QFrame):
         graph_layout.setContentsMargins(0, 0, 0, 0)
         graph_layout.setSpacing(2)
         self.graph_title = QLabel("Ofis bellek grafı")
-        self.graph_title.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{RT['font_size_small']}; background:transparent;"
-        )
+        self.graph_title.setProperty("role", "label")
         self.canvas = MiniGraphCanvas(self)
         self.canvas.node_clicked.connect(self._on_node_clicked)
         graph_layout.addWidget(self.graph_title)
@@ -253,13 +253,13 @@ class OfficeMemoryPanel(QFrame):
 
         self.note_view = QTextBrowser()
         self.note_view.setMinimumWidth(140)
-        self.note_view.setStyleSheet(self._text_style())
+        self.note_view.setProperty("role", "reader")
         top.addWidget(self.note_view)
         top.setSizes([420, 260])
         self.split.addWidget(top)
 
         self.memory_view = QTextBrowser()
-        self.memory_view.setStyleSheet(self._text_style())
+        self.memory_view.setProperty("role", "reader")
         self.split.addWidget(self.memory_view)
 
         # Faz 10-B: kural adayları bölümü. Ajanın keşfettiği kural burada

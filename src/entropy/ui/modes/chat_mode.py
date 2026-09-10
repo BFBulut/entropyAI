@@ -23,8 +23,13 @@ from entropy.ui.widgets.report_card_bridge import ReportCardMixin
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.platform.clipboard import ClipboardImageHandler
 from entropy.skills.manager import SkillManager
-from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, STYLESHEET, reading_css
+from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, reading_css
+from entropy.ui.design import TOKENS
 from entropy.ui.widgets.command_palette import install_command_palette
+from entropy.ui.widgets.header_bar import (
+    BrandCluster, ModelCapsule, PaletteButton, StatusCluster,
+    context_badge_tone, make_icon_button, repolish as _repolish,
+)
 from entropy.ui.widgets.focus_mode import install_focus_mode
 from entropy.ui.widgets.notification_center import NotificationCenter
 from entropy.ui.widgets.flow_layout import FlowHeaderFrame, fit_combo_to_contents
@@ -232,7 +237,8 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.staged_images: List[str] = []
         self.staged_pdfs: List[str] = []
 
-        self.setStyleSheet(STYLESHEET)
+        # Faz 11-E adım 2: stil uygulama düzeyinde tek girişten gelir
+        # (`ui/manager.py` -> `apply_design_system(app)`).
         self.setWindowTitle("Entropy AI Chat")
         # Faz 6: sabit 540x700 yerine kullanilabilir alana gore boyut; kucuk
         # ekranlarda pencere gorev cubugunun altina tasmasin.
@@ -252,199 +258,116 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.layout.setContentsMargins(10, 8, 10, 8)
         self.layout.setSpacing(6)
 
-        # 1. Header
-        # Faz 8: tek satirlik QHBoxLayout + yatay QScrollArea yerine akan
-        # (wrap eden) yerlesim. Eskiden cubugun ortuk genisligi ~2450 px'ti ve
-        # kaydirma alani sagdaki dugmeleri (Zen, rozetler) gorunmez kiliyordu.
+        # 1. Üst çubuk — Faz 11-E adım 2/4: 15+ öğe → 4 (+ pencere yok, Chat
+        # sistem başlık çubuğunu kullanır). Kaldırılan düğmeler (Desk, Proje,
+        # Yeni, Raporlar, Panel, Zen) komut paletine taşındı.
         header = FlowHeaderFrame(margins=(10, 6, 10, 6))
         h_layout = header.flow()
 
-        # Faz 8: baslik kisaltildi (221 -> ~110 px); tam ad ipucunda.
-        title = QLabel("<b style='color:#00F0FF;'>💬 Entropy</b>")
-        title.setToolTip("Entropy AI Chat")
-        h_layout.addWidget(title)
-
-        # Agent Desk düğmesi: başlığın hemen sağında (Zen ile parite).
-        # Faz 8: 238 -> ~90 px. Tam ad ipucunda kalir.
-        self.desk_btn = QPushButton("🏢 Desk")
-        self.desk_btn.setFixedHeight(24)
-        self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
-        self.desk_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #C084FC;
-                border: 1px solid #3B2A57;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover { border-color: #C084FC; background-color: #1A2438; }
-        """)
-        self.desk_btn.clicked.connect(self.open_agent_desk)
-        h_layout.addWidget(self.desk_btn)
+        # (1) Marka + durum noktası + kip anahtarı
+        self.brand = BrandCluster(current_mode="chat")
+        h_layout.addWidget(self.brand)
+        # Zen'deki `state_badge` karşılığı: durum artık tek noktada.
+        self.state_badge = self.brand.status_dot
 
         h_layout.addStretch()
 
-        # Project Selector Button
-        self.project_btn = QPushButton(f"📁 {self.bridge.active_project_dir.name}")
-        self.project_btn.setFixedHeight(24)
-        self.project_btn.setToolTip(f"Aktif Proje: {self.bridge.active_project_dir}\nDeğiştirmek için tıklayın.")
-        self.project_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                border-color: #00F0FF;
-                background-color: #1A2438;
-            }
-        """)
-        self.project_btn.clicked.connect(self._select_project_dir)
-        h_layout.addWidget(self.project_btn)
-
-        # Sağlayıcı seçici: hangi CLI'ın konuştuğunu belirler (agy / claude).
-        # Model listesi sağlayıcıya bağlı olduğu için seçim değişince aşağıdaki
-        # model combo'su da yeniden doldurulur (refresh_provider_ui).
+        # (2) Sağlayıcı / model / efor / yetenek tek kapsülde
+        self.model_capsule = ModelCapsule()
         self.provider_combo = QComboBox()
+        self.provider_combo.setAccessibleName("Sağlayıcı (CLI): agy = Antigravity, claude = Claude Code")
         self.provider_combo.setToolTip("Sağlayıcı (CLI): agy = Antigravity, claude = Claude Code")
         from entropy.core.provider import PROVIDERS as _PROVIDERS
         for p in _PROVIDERS:
             self.provider_combo.addItem(p)
         self.provider_combo.setCurrentText(getattr(self.bridge, "provider_name", "agy"))
         self.provider_combo.currentTextChanged.connect(self._on_provider_selected)
-        h_layout.addWidget(self.provider_combo)
 
-        # Dynamic Model Selector Combo (RULE: agent-ui-models)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         models = self.bridge.fetch_available_models()
         for m in models:
             self.model_combo.addItem(m)
         self.model_combo.setCurrentText(self.bridge.selected_model)
-        # Boş model kutusu "Model:" etiketinin yanında kopuk bir ayraç gibi
-        # duruyordu; boşken ne anlama geldiğini yazan yer tutucu konur.
         apply_model_placeholder(self.model_combo, models)
         self.model_combo.currentTextChanged.connect(self._on_model_selected)
-        # Faz 9: 170 px'lik ust sinir "claude-opus-5"i bile kirpiyordu. Kutu
-        # artik en uzun model adina gore olculur; dar pencerede akan yerlesim
-        # kutuyu alt satira tasir, metni kesmez.
         fit_combo_to_contents(self.model_combo)
-        h_layout.addWidget(self.model_combo)
         fit_combo_to_contents(self.provider_combo)
 
-        # Faz 6: Efor secici (koprude effort_levels() varsa gorunur).
+        self.model_capsule.add_row("Sağlayıcı", self.provider_combo)
+        self.model_capsule.add_row("Model", self.model_combo)
+        _effort_row = self.model_capsule.popup_layout.count()
         self.effort_combo = install_effort_selector(
-            h_layout, self.bridge, self, model_combo=self.model_combo
+            self.model_capsule.popup_layout, self.bridge, self,
+            model_combo=self.model_combo,
         )
+        if self.effort_combo is not None:
+            self.model_capsule.insert_caption(_effort_row, "Efor")
+            self.effort_combo.setAccessibleName("Efor")
 
-        # Dynamic Skill Selector Combo
         self.skill_combo = QComboBox()
-        self.skill_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #05070A;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-        """)
         self._populate_skills_combo()
-        # Faz 8: 274 -> 150 px (bkz. model combo gerekcesi).
-        self.skill_combo.setMaximumWidth(150)
-        self.skill_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.skill_combo.setMinimumContentsLength(8)
-        h_layout.addWidget(self.skill_combo)
+        self.model_capsule.add_row("Yetenek", self.skill_combo)
+        self.model_capsule.popup.adjustSize()
+        self._sync_model_capsule()
+        h_layout.addWidget(self.model_capsule)
 
+        # (3) Durum rozetleri: token + bağlam + gelen kutusu + kimlik
+        self.status_cluster = StatusCluster()
         self.tokens_badge = QLabel("0 tokens")
-        self.tokens_badge.setStyleSheet("color:#00FF9D; font-family:'Consolas'; font-size:11px; font-weight:bold;")
-        h_layout.addWidget(self.tokens_badge)
+        self.tokens_badge.setProperty("role", "badge")
+        self.tokens_badge.setProperty("tone", "ok")
+        self.tokens_badge.setAccessibleName("Token kullanımı")
+        self.status_cluster.add(self.tokens_badge, secondary=True)
 
-        # Bağlam doluluk rozeti (Zen ile aynı biçimlendirici).
         self.context_badge = QLabel("Bağlam: %0")
-        h_layout.addWidget(self.context_badge)
+        self.context_badge.setProperty("role", "badge")
+        self.context_badge.setAccessibleName("Bağlam doluluğu")
+        self.status_cluster.add(self.context_badge, secondary=True)
         self._apply_context_badge()
 
-        # Durum rozeti: Zen'deki çekirdek durum etiketiyle aynı bus sinyaline bağlı.
-        # Arka plan görevi / damıtma haberleri de buraya düşer, böylece Chat modunda
-        # da "arkada ne çalışıyor?" sorusu yanıtsız kalmaz.
-        self.state_badge = QLabel(f"{emoji_or_text('🟢', '●')} HAZIR")
-        self.state_badge.setToolTip("Entropy AI çekirdek durumu")
-        self.state_badge.setStyleSheet(
-            "color:#00FF9D; background:#05070A; border:1px solid #1F2B42; border-radius:4px;"
-            " padding:2px 8px; font-size:10px; font-weight:bold;"
-        )
-        h_layout.addWidget(self.state_badge)
-
-        btn_new_chat = QPushButton("+ Yeni")
-        btn_new_chat.setFixedHeight(24)
-        btn_new_chat.setStyleSheet("background-color:#141C2C; color:#00F0FF; border:1px solid #00F0FF; font-weight:bold;")
-        btn_new_chat.clicked.connect(self._on_new_chat)
-        h_layout.addWidget(btn_new_chat)
-
-        btn_reports = QPushButton("📚 Raporlar")
-        btn_reports.setFixedHeight(24)
-        btn_reports.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
-        btn_reports.clicked.connect(self._open_reports_window)
-        h_layout.addWidget(btn_reports)
-
-        # Görev & yetenek paneli açma düğmesi (Zen'deki sekmelerin kompakt karşılığı)
-        self.panel_btn = QPushButton("🧩 Panel")
-        self.panel_btn.setFixedHeight(24)
-        self.panel_btn.setToolTip("Görevler ve Yetenekler panelini aç/kapat")
-        self.panel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
-        self.panel_btn.clicked.connect(self.toggle_side_panel)
-        h_layout.addWidget(self.panel_btn)
-
-        # Rapor Merkezi rozeti — Zen üst çubuğundakiyle aynı bileşen (parite).
         self.inbox_badge = InboxBadge()
-        h_layout.addWidget(self.inbox_badge)
+        self.status_cluster.add(self.inbox_badge)
         bus.report_inbox_unread.connect(self._on_inbox_unread)
 
-        # Saglayici durum rozeti — Zen ust cubugundakiyle ayni bilesen (parite).
         self.provider_badge = ProviderStatusBadge()
         self.provider_badge.login_requested.connect(self._on_provider_login_requested)
-        h_layout.addWidget(self.provider_badge)
+        self.status_cluster.add(self.provider_badge)
+        h_layout.addWidget(self.status_cluster)
 
-        btn_zen = QPushButton("🧘 Zen")
-        btn_zen.setFixedHeight(24)
-        btn_zen.clicked.connect(lambda: bus.mode_requested.emit("zen"))
-        h_layout.addWidget(btn_zen)
+        # (4) Komut paleti
+        self.palette_btn = PaletteButton(on_open=self.open_command_palette)
+        h_layout.addWidget(self.palette_btn)
 
-        # Faz 8: cubuk artik dogrudan duzene girer; dar pencerede satir atlar.
-        # `header_frame` testler ve olcumler icin acikta tutulur.
+        #: Kapı ölçümü: üst çubuk öğe sayısı ≤ 4.
+        self.header_items = [
+            self.brand, self.model_capsule, self.status_cluster, self.palette_btn,
+        ]
+
+        # Çubuktan kaldırılan düğmeler nesne olarak korunur (testler ve
+        # palet eylemleri bunları çağırır); artık üst çubukta yer kaplamazlar.
+        self.desk_btn = QPushButton("Desk")
+        self.desk_btn.setProperty("variant", "ghost")
+        self.desk_btn.setAccessibleName("Agent Desk")
+        self.desk_btn.setToolTip("Ofis masasını aç (ajan ofisleri, kanban, canlı akış)")
+        self.desk_btn.clicked.connect(self.open_agent_desk)
+
+        self.project_btn = QPushButton(self.bridge.active_project_dir.name)
+        self.project_btn.setProperty("variant", "ghost")
+        self.project_btn.setAccessibleName("Proje klasörü")
+        self.project_btn.setToolTip(
+            f"Aktif proje: {self.bridge.active_project_dir}\nDeğiştirmek için tıklayın."
+        )
+        self.project_btn.clicked.connect(self._select_project_dir)
+
+        self.panel_btn = QPushButton("Panel")
+        self.panel_btn.setProperty("variant", "ghost")
+        self.panel_btn.setAccessibleName("Görev ve yetenek paneli")
+        self.panel_btn.setToolTip("Görevler ve yetenekler panelini aç/kapat")
+        self.panel_btn.clicked.connect(self.toggle_side_panel)
+
+        # Faz 8: çubuk doğrudan düzene girer, dar pencerede satır atlar.
+        # `header_frame` testler ve ölçümler için açıkta tutulur.
         self.header_frame = header
         header.setMinimumWidth(180)
         self.layout.addWidget(header)
@@ -452,54 +375,31 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         # Report quick notification bar (shown when a report is created)
         self.report_bar = QFrame()
         self.report_bar.setVisible(False)
-        self.report_bar.setStyleSheet("""
-            QFrame {
-                background-color: #0E1420;
-                border: 1px solid #00F0FF;
-                border-radius: 5px;
-            }
-        """)
+        self.report_bar.setProperty("role", "toast")
         rb_layout = QHBoxLayout(self.report_bar)
         rb_layout.setContentsMargins(8, 4, 8, 4)
-        self.report_bar_lbl = QLabel("<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Araştırma Raporu Hazır</span>")
+        self.report_bar_lbl = QLabel("Yeni araştırma raporu hazır")
         rb_layout.addWidget(self.report_bar_lbl)
         rb_layout.addStretch()
 
-        self.btn_view_report = QPushButton("Ayrı Ekranda Oku ↗")
-        self.btn_view_report.setFixedHeight(22)
-        self.btn_view_report.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
+        self.btn_view_report = QPushButton("Raporu aç")
+        self.btn_view_report.setProperty("variant", "primary")
+        self.btn_view_report.setAccessibleName("Raporu ayrı pencerede aç")
         self.btn_view_report.clicked.connect(self._open_latest_report)
         rb_layout.addWidget(self.btn_view_report)
 
-        btn_dismiss_report = QPushButton("✕")
-        btn_dismiss_report.setFixedSize(20, 20)
-        btn_dismiss_report.setStyleSheet("background: transparent; color: #8B949E; border: none; font-weight: bold;")
-        btn_dismiss_report.clicked.connect(lambda: self.report_bar.setVisible(False))
+        btn_dismiss_report = make_icon_button("close", "Bildirimi kapat", "Kapat", self.report_bar)
+        btn_dismiss_report.clicked.connect(self.dismiss_report_bar)
         rb_layout.addWidget(btn_dismiss_report)
 
         self.layout.addWidget(self.report_bar)
 
-        # Multi-notification Stack: Stackable pills for reports and tasks with [✕]
+        # Multi-notification Stack: Stackable pills for reports and tasks with []
         self.notification_scroll = QScrollArea()
         self.notification_scroll.setWidgetResizable(True)
-        self.notification_scroll.setMaximumHeight(100)
-        self.notification_scroll.setStyleSheet("""
-            QScrollArea {
-                background: #080B10;
-                border: 1px dashed #1F2B42;
-                border-radius: 6px;
-            }
-            QScrollBar:vertical {
-                width: 6px;
-                background: #080B10;
-            }
-            QScrollBar::handle:vertical {
-                background: #00F0FF;
-                border-radius: 3px;
-            }
-        """)
+        # Faz 11-E adım 4: krom payı; tepsi 100 -> 72 px.
+        self.notification_scroll.setMaximumHeight(72)
         self.notification_stack_widget = QWidget()
-        self.notification_stack_widget.setStyleSheet("background: transparent;")
         self.notification_stack_layout = QVBoxLayout(self.notification_stack_widget)
         self.notification_stack_layout.setContentsMargins(4, 4, 4, 4)
         self.notification_stack_layout.setSpacing(4)
@@ -519,17 +419,9 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.chat_browser.anchorClicked.connect(self._on_anchor_clicked)
         # Faz 11-C: `task_report_ready` → sohbette rapor kartı + "Sohbete al".
         self.install_report_cards()
-        self.chat_browser.setStyleSheet(f"""
-            QTextBrowser {{
-                background-color: {RT['surface_base']};
-                border: 1px solid {RT['divider_soft']};
-                border-radius: 10px;
-                padding: 14px 16px;
-                color: {RT['text_body']};
-                font-family: {RT['font_body']};
-                font-size: {RT['font_size_body']};
-            }}
-        """)
+        # Faz 11-E: yerel stil yerine rol sınıfı (QSS QTextBrowser[role="reader"]).
+        self.chat_browser.setProperty("role", "reader")
+        self.chat_browser.setAccessibleName("Sohbet akışı")
         # Faz 4 (2d/2f): sohbet gövdesi rapor okuyucu ve Agent Desk akış
         # paneliyle aynı tipografiyi kullanır. Belge stil sayfası verilmezse
         # komut kartı içindeki çıplak <table> (ör. /lint, /wiki çıktıları) Qt
@@ -557,11 +449,12 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.attach_layout = QHBoxLayout(self.attachment_bar)
         self.attach_layout.setContentsMargins(4, 2, 4, 2)
         self.attach_label = QLabel()
-        self.attach_label.setStyleSheet("color:#00F0FF; font-size:11px;")
+        self.attach_label.setProperty("role", "label")
         self.attach_layout.addWidget(self.attach_label)
         self.attach_layout.addStretch()
-        remove_attach_btn = QPushButton("✕ Kaldır")
-        remove_attach_btn.setFixedHeight(20)
+        remove_attach_btn = QPushButton("Kaldır")
+        remove_attach_btn.setProperty("variant", "ghost")
+        remove_attach_btn.setAccessibleName("Ekleri kaldır")
         remove_attach_btn.clicked.connect(self._clear_staged_images)
         self.attach_layout.addWidget(remove_attach_btn)
         self.layout.addWidget(self.attachment_bar)
@@ -569,31 +462,36 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         # 4. Input layout
         input_bar = QHBoxLayout()
         self.input_field = ChatInputField(self)
-        self.input_field.setPlaceholderText("Mesajınızı yazın veya Ctrl+V ile görsel yapıştırın...")
+        self.input_field.setPlaceholderText("Mesajınızı yazın veya Ctrl+V ile görsel yapıştırın…")
+        self.input_field.setAccessibleName("Mesaj alanı")
         self.input_field.returnPressed.connect(self._on_send)
         input_bar.addWidget(self.input_field)
 
-        self.pdf_btn = QPushButton("📎 PDF")
-        self.pdf_btn.setToolTip("Finansal Rapor veya PDF Belgesi Yükle")
-        self.pdf_btn.setFixedHeight(28)
-        self.pdf_btn.setStyleSheet("background-color:#141C2C; color:#00FF9D; border:1px solid #00FF9D; font-weight:bold; padding:2px 8px; border-radius:4px;")
+        self.pdf_btn = QPushButton("PDF")
+        self.pdf_btn.setToolTip("Finansal rapor ya da PDF belgesi yükle")
+        self.pdf_btn.setAccessibleName("PDF ekle")
         self.pdf_btn.clicked.connect(self._select_pdf_file)
         input_bar.addWidget(self.pdf_btn)
 
         self.send_btn = QPushButton("Gönder")
-        self.send_btn.setStyleSheet("background-color:#00F0FF; color:#080B10; font-weight:bold;")
+        self.send_btn.setProperty("variant", "primary")
+        self.send_btn.setAccessibleName("Gönder")
+        self.send_btn.setToolTip("Mesajı gönder (Ctrl+Enter)")
         self.send_btn.clicked.connect(self._on_send)
         input_bar.addWidget(self.send_btn)
 
-        self.toggle_term_btn = QPushButton(">_ Terminal")
+        self.toggle_term_btn = QPushButton("Terminal")
+        self.toggle_term_btn.setProperty("variant", "ghost")
+        self.toggle_term_btn.setAccessibleName("Terminal çekmecesi")
+        self.toggle_term_btn.setToolTip("Terminal çekmecesini aç/kapat (Ctrl+`)")
         self.toggle_term_btn.clicked.connect(self._toggle_terminal)
         input_bar.addWidget(self.toggle_term_btn)
 
         self.layout.addLayout(input_bar)
 
         # 5. Collapsible Terminal Drawer
-        self.terminal_drawer = TerminalPaneWidget(title="Canlı AGY Akış Konsolu")
-        self.terminal_drawer.setFixedHeight(190)
+        self.terminal_drawer = TerminalPaneWidget(title="Canlı akış konsolu")
+        self.terminal_drawer.setMaximumHeight(190)
         self.terminal_drawer.setVisible(False)
         self.layout.addWidget(self.terminal_drawer)
 
@@ -607,7 +505,32 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             primary=self.chat_browser,
             secondary=[self.side_panel_container, self.terminal_drawer],
         )
-        install_command_palette(self, on_activated=self._on_palette_activated)
+        install_command_palette(
+            self, on_activated=self._on_palette_activated,
+            loader=self._collect_palette_items,
+        )
+        self._install_shortcuts()
+
+    def _apply_header_density(self) -> None:
+        """Pencere darsa üst çubuğu sıkıştırır (aşamalı açığa çıkarma).
+
+        Eşik 620 px: bunun altında token/bağlam rozetleri gizlenir ve model
+        kapsülü kısa ada döner; ikisi de ipucunda ve komut paletinde durur.
+        """
+        compact = self.width() < 620
+        cluster = getattr(self, "status_cluster", None)
+        if cluster is not None:
+            cluster.set_compact(compact)
+        capsule = getattr(self, "model_capsule", None)
+        if capsule is not None:
+            capsule.set_compact(compact)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        try:
+            self._apply_header_density()
+        except Exception:
+            pass
 
     def _connect_signals(self):
         # Faz 8: closeEvent her cagrildiginda 15 sinyali kosulsuz cozuyordu.
@@ -642,36 +565,25 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
     @Slot(str)
     def _update_state_badge(self, state: str):
         """Çekirdek durumunu başlıktaki rozete yansıtır (Zen'deki core_status_lbl karşılığı)."""
-        mapping = {
-            # Faz 9: emoji TEK BASINA durum tasimaz; glif cizilemezse (tofu)
-            # geriye bos kutu kaliyordu. `emoji_or_text` fontu yoksa monokrom
-            # daireye duser, metin ve renk her durumda okunur kalir.
-            "thinking": (f"{emoji_or_text('🔵', '●')} DÜŞÜNÜYOR", "#00F0FF"),
-            "executing": (f"{emoji_or_text('🟡', '●')} YÜRÜTÜLÜYOR", "#FFB300"),
-            "error": (f"{emoji_or_text('🔴', '●')} HATA", "#FF4D4D"),
-            "idle": (f"{emoji_or_text('🟢', '●')} HAZIR", "#00FF9D"),
-        }
-        text, color = mapping.get(state, mapping["idle"])
-        self.state_badge.setText(text)
-        self.state_badge.setStyleSheet(
-            f"color:{color}; background:#05070A; border:1px solid #1F2B42; border-radius:4px;"
-            " padding:2px 8px; font-size:10px; font-weight:bold;"
-        )
+        # Faz 11-E: durum tek noktada (marka kümesindeki çekirdek noktası);
+        # metin ipucuna iner, renk `tone` belirtecinden gelir.
+        self.brand.set_state(state)
 
     @Slot(str, str)
     def _on_task_triggered(self, task_id: str, task_name: str):
-        self.state_badge.setText(f"{emoji_or_text('⏰', '⏱')} GÖREV: {task_name[:18]}")
+        self.brand.set_state("executing")
         self.state_badge.setToolTip(f"Arka plan görevi çalışıyor: {task_name} ({task_id})")
 
     @Slot(str, bool)
     def _on_task_completed(self, task_id: str, success: bool):
-        dot = emoji_or_text("🟢", "●") if success else emoji_or_text("🔴", "●")
-        self.state_badge.setText(f"{dot} HAZIR" if success else f"{dot} GÖREV HATASI")
-        self.state_badge.setToolTip("Entropy AI çekirdek durumu")
+        self.brand.set_state("idle" if success else "error")
+        self.state_badge.setToolTip(
+            "Entropy AI çekirdek durumu" if success else "Arka plan görevi hata verdi"
+        )
 
     @Slot(str, int, int)
     def _on_distill_progress(self, skill_name: str, done: int, total: int):
-        self.state_badge.setText(f"{emoji_or_text('📘', '▤')} DAMITMA {done}/{total}")
+        self.brand.set_state("executing")
         self.state_badge.setToolTip(f"'{skill_name}' için yordam damıtma sürüyor: {done}/{total} rapor")
 
     # ------------------------------------------------ görev & yetenek paneli
@@ -691,10 +603,10 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             self.skills_widget = SkillsWidget(bridge=self.bridge)
             self.agents_widget = AgentsWidget(bridge=self.bridge, compact=True)
             self.agent_tasks_widget = CompactTaskListWidget()
-            self.side_panel.addTab(self.tasks_widget, "⏰ Görevler")
-            self.side_panel.addTab(self.skills_widget, "🎯 Yetenekler")
-            self.side_panel.addTab(self.agents_widget, "🤖 Ajanlar")
-            self.side_panel.addTab(self.agent_tasks_widget, "🗂 Ajan Görevleri")
+            self.side_panel.addTab(self.tasks_widget, "Görevler")
+            self.side_panel.addTab(self.skills_widget, "Yetenekler")
+            self.side_panel.addTab(self.agents_widget, "Ajanlar")
+            self.side_panel.addTab(self.agent_tasks_widget, "Ajan Görevleri")
 
             # Kompakt "Gelen" listesi: Zen'deki şeridin aynısı, Chat panelinde.
             # Chat'te rapor okuyucu yok; girdiler kasadan doğrudan toplanır ve
@@ -715,24 +627,24 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             self.report_center.report_opened.connect(self._open_inbox_report)
             self.report_center.unread_changed.connect(self._on_inbox_unread_changed)
             self.report_center.orchestrator_answer.connect(self._on_orchestrator_answer)
-            self.side_panel.addTab(self.report_center, "📥 Gelen")
+            self.side_panel.addTab(self.report_center, "Gelen")
 
             self.timeline_panel = TimelinePanel()
             self.timeline_panel.event_activated.connect(self._on_timeline_activated)
-            self.side_panel.addTab(self.timeline_panel, "🗓 Bugun")
+            self.side_panel.addTab(self.timeline_panel, "Bugun")
 
             self.notification_center = NotificationCenter()
             self.notification_center.notification_activated.connect(
                 self._on_notification_activated
             )
-            self.side_panel.addTab(self.notification_center, "🔔 Bildirimler")
+            self.side_panel.addTab(self.notification_center, "Bildirimler")
             self.side_panel_layout.addWidget(self.side_panel)
         return self.side_panel
 
     @Slot(str, str)
     def _on_orchestrator_answer(self, office: str, body: str):
         """
-        "Orkestratore sor" yaniti sohbete "🏢 <ofis>" balonuyla duser.
+        "Orkestratore sor" yaniti sohbete "<ofis>" balonuyla duser.
 
         Yanit sohbete yazilir cunku bu bir diyalogdur: kullanicinin sorusu ve
         ofisin cevabi ayni akista kalmali, kartin icinde kaybolmamali.
@@ -740,7 +652,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         from entropy.ui.widgets.markdown_renderer import build_chat_bubble_html
 
         self.chat_browser.append(
-            build_chat_bubble_html(f"🏢 {office}", str(body or ""))
+            build_chat_bubble_html(f"Ofis: {office}", str(body or ""))
         )
 
     @Slot(str, str, str)
@@ -749,8 +661,114 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         if kind == "report":
             self._open_inbox_report(payload)
             return
+        if kind == "action":
+            self.run_palette_action(payload)
+            return
         self.input_field.setText(payload if payload.endswith(" ") else payload + " ")
         self.input_field.setFocus()
+
+    def _sync_model_capsule(self) -> None:
+        """Kapsul metnini kopruden tazeler (tek kaynak)."""
+        capsule = getattr(self, "model_capsule", None)
+        if capsule is None:
+            return
+        effort = ""
+        combo = getattr(self, "effort_combo", None)
+        if combo is not None:
+            try:
+                effort = combo.currentText()
+            except Exception:
+                effort = ""
+        capsule.set_summary(
+            str(getattr(self.bridge, "provider_name", "") or ""),
+            str(getattr(self.bridge, "selected_model", "") or ""),
+            effort,
+        )
+
+    @Slot()
+    def open_command_palette(self) -> None:
+        """Komut paletini acar (ust cubuk dugmesi ve Ctrl+K ayni yol)."""
+        opener = getattr(self, "_open_command_palette", None)
+        if callable(opener):
+            opener()
+
+    @Slot()
+    def dismiss_report_bar(self) -> None:
+        """Rapor bildirim seridini kapatir (alici QObject slotu, lambda degil)."""
+        self.report_bar.setVisible(False)
+
+    def _collect_palette_items(self):
+        """Palet kaynaklari + ust cubuktan tasinan pencere eylemleri (IA-9)."""
+        from entropy.ui.widgets.command_palette import collect_palette_items
+
+        actions = [
+            ("desk", "Agent Desk'i ac", "Ofis masasi: ajan ofisleri, kanban, canli akis"),
+            ("project", "Proje klasorunu degistir", "Aktif proje dizini"),
+            ("new_chat", "Yeni sohbet", "Mevcut sohbeti arsivler"),
+            ("panel", "Gorev ve yetenek panelini ac/kapat", "Ctrl+1"),
+            ("terminal", "Terminal cekmecesini ac/kapat", "Ctrl+`"),
+            ("reports", "Raporlar penceresini ac", "Ctrl+2"),
+            ("mode_zen", "Zen kipine gec", "Ctrl+3"),
+            ("mode_floating", "Floating kipine gec", ""),
+            ("mode_chat", "Chat kipine gec", ""),
+        ]
+        items = [
+            {"kind": "action", "label": label, "subtitle": subtitle, "payload": key}
+            for key, label, subtitle in actions
+        ]
+        try:
+            items += collect_palette_items(project_dir=self.bridge.active_project_dir)
+        except Exception:
+            pass
+        return items
+
+    def run_palette_action(self, key: str) -> bool:
+        """Palet eylemi yurutur; bilinmeyen anahtar icin False doner."""
+        if key == "desk":
+            self.open_agent_desk()
+        elif key == "project":
+            self._select_project_dir()
+        elif key == "new_chat":
+            self._on_new_chat()
+        elif key == "panel":
+            self.toggle_side_panel()
+        elif key == "terminal":
+            self._toggle_terminal()
+        elif key == "reports":
+            self._open_reports_window()
+        elif key.startswith("mode_"):
+            bus.mode_requested.emit(key.split("_", 1)[1])
+        else:
+            return False
+        return True
+
+    def _install_shortcuts(self) -> None:
+        """Klavye kisayollari (denetim D-20)."""
+        from PySide6.QtGui import QShortcut
+
+        self._shortcuts = []
+        for seq, key in (
+            ("Ctrl+1", "panel"),
+            ("Ctrl+2", "reports"),
+            ("Ctrl+3", "mode_zen"),
+            ("Ctrl+`", "terminal"),
+            ("Ctrl+N", "new_chat"),
+        ):
+            shortcut = QShortcut(QKeySequence(seq), self)
+            shortcut.setProperty("action_key", key)
+            shortcut.activated.connect(self._on_shortcut)
+            self._shortcuts.append(shortcut)
+        send = QShortcut(QKeySequence("Ctrl+Return"), self)
+        send.activated.connect(self._on_send)
+        self._shortcuts.append(send)
+
+    @Slot()
+    def _on_shortcut(self) -> None:
+        """Kisayol alicisi: lambda degil QObject slotu."""
+        sender = self.sender()
+        if sender is None:
+            return
+        self.run_palette_action(str(sender.property("action_key") or ""))
 
     @Slot(str, str)
     def _on_timeline_activated(self, kind: str, target: str):
@@ -806,7 +824,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         if will_show:
             self.ensure_side_panel()
         self.side_panel_container.setVisible(will_show)
-        self.panel_btn.setText("▼ Paneli Kapat" if will_show else "🧩 Panel")
+        self.panel_btn.setText("Paneli kapat" if will_show else "Panel")
         return will_show
 
     def add_notification_pill(self, title: str, path_or_content: str, is_task: bool = False):
@@ -851,17 +869,17 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             return
         self._recent_notifications[norm_key] = now
 
-        self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>📑 Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
+        self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
         self.report_bar.setVisible(True)
         # Zen ile aynı davranış: rapor da yığılabilir bir bildirim pili üretir.
         self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
             f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
-            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>📑 Yeni Araştırma Raporu Oluşturuldu</div>"
+            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>Yeni Araştırma Raporu Oluşturuldu</div>"
             f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
             f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
-            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Raporu Aç ve Oku ↗</a>"
+            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Raporu Aç ve Oku ↗</a>"
             f"</div>"
         )
         self.chat_browser.append(card_html)
@@ -889,7 +907,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         )
         if path_or_content.endswith(".md"):
             p = Path(path_or_content)
-            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>📖 Görev Raporunu Aç ↗</a>"
+            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Görev Raporunu Aç ↗</a>"
         card_html += "</div>"
         self.chat_browser.append(card_html)
 
@@ -951,7 +969,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
 
         if body is None:
             body = (
-                "<b style='color:#C084FC;'>🏢 Agent Desk</b><br/>"
+                "<b style='color:#C084FC;'>Agent Desk</b><br/>"
                 + ("Ofis penceresi açıldı.<br/>" if opened else "")
                 + "<span style='color:#8B949E;'>Kullanım: "
                 "<code>/desk</code> pencereyi açar · "
@@ -979,7 +997,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
 
     def _on_project_changed(self, new_dir: str):
         if hasattr(self, "project_btn"):
-            self.project_btn.setText(f"📁 {Path(new_dir).name}")
+            self.project_btn.setText(f"{Path(new_dir).name}")
             self.project_btn.setToolTip(f"Aktif Proje: {new_dir}\nDeğiştirmek için tıklayın.")
         self._populate_skills_combo()
 
@@ -987,12 +1005,12 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         curr = self.skill_combo.currentData() if hasattr(self, "skill_combo") else "auto"
         self.skill_combo.blockSignals(True)
         self.skill_combo.clear()
-        self.skill_combo.addItem("🎯 Yetenek: Otomatik", "auto")
+        self.skill_combo.addItem("Yetenek: Otomatik", "auto")
         try:
             sm = SkillManager(project_dir=self.bridge.active_project_dir)
             for s in sm.list_skills():
                 if s.enabled:
-                    self.skill_combo.addItem(f"🎯 {s.name}", s.name)
+                    self.skill_combo.addItem(f"{s.name}", s.name)
         except Exception:
             pass
         idx = self.skill_combo.findData(curr)
@@ -1027,9 +1045,9 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                 except Exception:
                     pass
                 pdf_descs.append(f"<b>{p.name}</b>{page_info}")
-            parts.append(f"📄 Eklenen PDF: " + ", ".join(pdf_descs))
+            parts.append(f"Eklenen PDF: " + ", ".join(pdf_descs))
         if self.staged_images:
-            parts.append(f"📎 Eklenen Görsel: " + ", ".join([f"<b>{Path(p).name}</b>" for p in self.staged_images]))
+            parts.append(f"Eklenen Görsel: " + ", ".join([f"<b>{Path(p).name}</b>" for p in self.staged_images]))
         if parts:
             self.attach_label.setText(" | ".join(parts))
             self.attachment_bar.setVisible(True)
@@ -1060,7 +1078,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                         idx = self.skill_combo.findData(imported.name)
                         if idx >= 0:
                             self.skill_combo.setCurrentIndex(idx)
-                        self._append_message("Entropy AI", f"🎯 <b>Yetenek Başarıyla Yüklendi:</b> '{imported.name}' sisteme entegre edildi.", is_system=True)
+                        self._append_message("Entropy AI", f"<b>Yetenek Başarıyla Yüklendi:</b> '{imported.name}' sisteme entegre edildi.", is_system=True)
 
         elif event.mimeData().hasText():
             text = event.mimeData().text().strip()
@@ -1072,7 +1090,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                     idx = self.skill_combo.findData(imported.name)
                     if idx >= 0:
                         self.skill_combo.setCurrentIndex(idx)
-                    self._append_message("Entropy AI", f"🎯 <b>Yetenek URL'den Yüklendi:</b> '{imported.name}' sisteme entegre edildi.", is_system=True)
+                    self._append_message("Entropy AI", f"<b>Yetenek URL'den Yüklendi:</b> '{imported.name}' sisteme entegre edildi.", is_system=True)
 
     def try_paste_image(self) -> bool:
         """Handle Ctrl+V image detection and staging."""
@@ -1092,7 +1110,8 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
     def _toggle_terminal(self):
         is_vis = not self.terminal_drawer.isVisible()
         self.terminal_drawer.setVisible(is_vis)
-        self.toggle_term_btn.setText("▼ Terminali Kapat" if is_vis else ">_ Terminal")
+        self.toggle_term_btn.setText("Terminali kapat" if is_vis else "Terminal")
+        self.toggle_term_btn.setChecked(is_vis)
 
     def _on_new_chat(self):
         """Sohbeti yalnızca burada, kullanıcının açık isteğiyle sıfırlar (arşivleyerek)."""
@@ -1263,9 +1282,9 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         )
         self.context_badge.setText(text)
         self.context_badge.setToolTip(tip)
-        self.context_badge.setStyleSheet(
-            f"color:{color}; font-family:'Consolas'; font-size:11px; font-weight:bold;"
-        )
+        # Faz 11-E: renk yerel QSS ile degil `tone` belirteciyle gelir.
+        self.context_badge.setProperty("tone", context_badge_tone(color))
+        _repolish(self.context_badge)
 
     def _on_send(self):
         import html
@@ -1284,7 +1303,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                 idx = self.skill_combo.findData(imported.name)
                 if idx >= 0:
                     self.skill_combo.setCurrentIndex(idx)
-                self._append_message("Entropy AI", f"🎯 <b>Yetenek Sisteme Kuruldu:</b> '{imported.name}' başarıyla kuruldu ve seçildi.", is_system=True)
+                self._append_message("Entropy AI", f"<b>Yetenek Sisteme Kuruldu:</b> '{imported.name}' başarıyla kuruldu ve seçildi.", is_system=True)
 
         # Check slash command handling (supports multiple slash commands in prompt)
         matched_cmds = []
@@ -1325,12 +1344,12 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                     all_c = reg.get_all_commands(self.bridge.active_project_dir)
                     help_html = [
                         "<div style='border:1px solid #1F2B42; background:#0A0E17; border-radius:6px; padding:10px; margin:6px 0;'>",
-                        "<b style='color:#00F0FF; font-size:12px;'>⚡ KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
+                        "<b style='color:#00F0FF; font-size:13px;'>KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
                     ]
                     for c in all_c:
                         help_html.append(
                             f"<div style='margin-bottom:4px;'>"
-                            f"<span style='background-color:{c.color}22; color:{c.color}; border:1px solid {c.color}55; border-radius:3px; padding:1px 5px; font-size:9px; font-weight:bold;'>{c.badge}</span> "
+                            f"<span style='background-color:{c.color}22; color:{c.color}; border:1px solid {c.color}55; border-radius:3px; padding:1px 5px; font-size:11px; font-weight:bold;'>{c.badge}</span> "
                             f"<b style='color:#F0F6FC; font-family:Consolas;'>{c.name}</b>: "
                             f"<span style='color:#8B949E; font-size:11px;'>{c.description}</span>"
                             f"</div>"
@@ -1376,12 +1395,12 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         if matched_cmds:
             for mc in matched_cmds:
                 badge_spans.append(
-                    f"<span style='background:#0E1420; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:10px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
+                    f"<span style='background:#0E1420; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
                 )
         skill_already_badged = any(mc.category == "skill" and (mc.metadata.get("skill_name") == chosen_skill or mc.name.lstrip("/") == chosen_skill) for mc in matched_cmds)
         if chosen_skill and chosen_skill != "auto" and not skill_already_badged:
             badge_spans.append(
-                f"<span style='background:#0E1420; color:#00FF9D; border:1px solid #1F2B42; border-radius:3px; padding:2px 8px; font-size:10px; font-weight:bold; margin-right:4px;'>🎯 Yetenek: {html.escape(chosen_skill)}</span>"
+                f"<span style='background:#0E1420; color:#00FF9D; border:1px solid #1F2B42; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>Yetenek: {html.escape(chosen_skill)}</span>"
             )
         if badge_spans:
             badge_html = f"<div style='margin-bottom:4px;'>{' '.join(badge_spans)}</div>"
@@ -1412,7 +1431,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                 # Yalnızca "/<yetenek>" yazıldı: iş yok, sadece yeteneği seç.
                 self._append_message(
                     "Entropy AI",
-                    f"🎯 <b>Yetenek etkin:</b> {html.escape(str(chosen_skill or skill_tokens_used[0]))}"
+                    f"<b>Yetenek etkin:</b> {html.escape(str(chosen_skill or skill_tokens_used[0]))}"
                     " — şimdi ne yapmasını istediğinizi yazın.",
                     is_system=True,
                 )

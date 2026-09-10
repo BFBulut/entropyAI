@@ -324,7 +324,6 @@ class InboxBadge(QLabel):
         self.count = 0
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setVisible(False)
-        self.setStyleSheet("background: transparent; border: none;")
 
     def set_count(self, count: int) -> None:
         self.count = max(0, int(count or 0))
@@ -336,7 +335,7 @@ class InboxBadge(QLabel):
         self.setText(
             f"<span style='background:{RT['accent_soft']}; color:{RT['accent_warn']};"
             f" border-radius:9px; padding:2px 9px; font-size:{LABEL_PX}px;"
-            f" font-weight:600;'>📥 {self.count}</span>"
+            f" font-weight:600;'>{self.count}</span>"
         )
         self.setToolTip(
             f"Son {INBOX_WINDOW_HOURS} saatte gelen {self.count} okunmamış rapor."
@@ -359,18 +358,7 @@ class InboxItemWidget(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         unread = not entry.get("read", False)
         accent = RT["accent_warn"] if unread else RT["divider"]
-        self.setStyleSheet(
-            f"""
-            QFrame#inboxItem {{
-                background-color:{RT['surface_raised']};
-                border:1px solid {RT['divider_soft']};
-                border-left:3px solid {accent};
-                border-radius:{RT['radius_small']};
-            }}
-            QFrame#inboxItem:hover {{ border-color:{RT['accent']}; }}
-            QLabel {{ background: transparent; border: none; }}
-            """
-        )
+        self.setProperty("role", "panel")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 6, 6)
         layout.setSpacing(6)
@@ -379,29 +367,25 @@ class InboxItemWidget(QFrame):
         weight = "600" if unread else "400"
         color = RT["text"] if unread else RT["text_dim"]
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet(
-            f"color:{color}; font-size:{BODY_PX}px; font-weight:{weight};"
-            " background:transparent; border:none;"
-        )
+        self.title_label.setProperty("role", "label")
         # Uzun rapor başlıkları şeridi genişletmesin; kırpma + tam metin ipucu.
         self.title_label.setMaximumWidth(280)
         self.title_label.setTextFormat(Qt.TextFormat.PlainText)
         self.title_label.setToolTip(f"{title}\n{self.path}")
         layout.addWidget(self.title_label, 1)
 
-        self.pin_btn = QPushButton("📌")
-        self.pin_btn.setFixedSize(24, 24)
+        self.pin_btn = QPushButton("")
+        self.pin_btn.setProperty("role", "icon")
         self.pin_btn.setToolTip(
             "Sabitlemeyi kaldır" if entry.get("pinned") else "Sabitle (24 saat dolsa da listede kalsın)"
         )
-        self.pin_btn.setStyleSheet(self._btn_style(entry.get("pinned", False)))
         self.pin_btn.clicked.connect(self._on_pin)
         layout.addWidget(self.pin_btn)
 
-        self.archive_btn = QPushButton("🗄")
-        self.archive_btn.setFixedSize(24, 24)
+        self.archive_btn = QPushButton("")
+        self.archive_btn.setAccessibleName("Arşivle (şeritten kaldır; rapor listesinde kalır)")
+        self.archive_btn.setProperty("role", "icon")
         self.archive_btn.setToolTip("Arşivle (şeritten kaldır; rapor listesinde kalır)")
-        self.archive_btn.setStyleSheet(self._btn_style(False))
         self.archive_btn.clicked.connect(self._on_archive)
         layout.addWidget(self.archive_btn)
 
@@ -446,10 +430,7 @@ class ReportInboxStrip(QFrame):
         self._entries: List[Dict[str, Any]] = []
         self._now_override: Optional[float] = None
 
-        self.setStyleSheet(
-            f"QFrame#inboxStrip {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']}; }}"
-        )
+        self.setProperty("role", "panel")
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(5)
@@ -457,21 +438,16 @@ class ReportInboxStrip(QFrame):
         head = QHBoxLayout()
         head.setSpacing(8)
         self.header_label = QLabel("")
-        self.header_label.setStyleSheet("background: transparent; border: none;")
+        self.header_label.setProperty("role", "label")
         # Zengin metin başlığın doğal minimumu (~540 px) şeridi ve onu barındıran
         # Zen sol sekmesini dar panelde kırpıyordu; daralmaya izin ver.
         self.header_label.setMinimumWidth(110)
         head.addWidget(self.header_label, 1)
         head.addStretch()
         self.mark_all_btn = QPushButton("Tümünü okundu say")
-        self.mark_all_btn.setFixedHeight(24)
+        self.mark_all_btn.setAccessibleName("Tümünü okundu say")
         self.mark_all_btn.setToolTip("Gelen şeridindeki bütün raporları okundu işaretle")
-        self.mark_all_btn.setStyleSheet(
-            f"QPushButton {{ background:transparent; border:1px solid {RT['divider_soft']};"
-            f" border-radius:{RT['radius_small']}; color:{RT['text_dim']};"
-            f" font-size:{LABEL_PX}px; padding:2px 10px; }}"
-            f" QPushButton:hover {{ color:{RT['accent']}; border-color:{RT['accent']}; }}"
-        )
+        self.mark_all_btn.setProperty("variant", "ghost")
         self.mark_all_btn.clicked.connect(self.mark_all_read)
         head.addWidget(self.mark_all_btn)
         root.addLayout(head)
@@ -480,10 +456,6 @@ class ReportInboxStrip(QFrame):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setFixedHeight(48)
-        self.scroll.setStyleSheet(
-            "QScrollArea { border:none; background:transparent; }"
-            " QScrollArea > QWidget > QWidget { background: transparent; }"
-        )
         self.scroll.viewport().setAutoFillBackground(False)
         # Şerit yatay: burada dikey çubuk gereksiz, yatay çubuk gerekli.
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -496,10 +468,7 @@ class ReportInboxStrip(QFrame):
         root.addWidget(self.scroll)
 
         self.empty_label = QLabel("")
-        self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:4px 2px;"
-            " background:transparent; border:none;"
-        )
+        self.empty_label.setProperty("role", "label")
         root.addWidget(self.empty_label)
 
         self.item_widgets: List[InboxItemWidget] = []
@@ -535,7 +504,7 @@ class ReportInboxStrip(QFrame):
         visible = self.visible_entries()
         unread = sum(1 for e in visible if not e["read"])
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>📥 GELEN</b>"
+            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>GELEN</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"son {INBOX_WINDOW_HOURS} saat · {len(visible)} rapor"
             + (f" · {unread} okunmadı" if unread else "") + "</span>"

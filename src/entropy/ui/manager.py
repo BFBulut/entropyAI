@@ -8,6 +8,7 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.core.provider import create_bridge, switch_provider
+from entropy.ui.design import apply_design_system
 from entropy.ui.modes.chat_mode import CHAT_MIN_SIZE, CHAT_SCREEN_RATIO, ChatModeWindow
 from entropy.ui.modes.floating_mode import FloatingModeWidget
 from entropy.ui.modes.zen_mode import ZEN_MIN_SIZE, ZEN_SCREEN_RATIO, ZenModeWindow
@@ -30,6 +31,15 @@ class EntropyUIManager(QObject):
         # ulaşmak zorunda; pencerelere yönetici başvurusu geçirmek yerine tek
         # örnek burada yayınlanır (uygulamada zaten tek yönetici var).
         EntropyUIManager.instance = self
+
+        # Faz 11-E adım 2: tasarım sistemi TEK giriş noktasından uygulanır.
+        # Neden `main.py` değil de burada: stil arayüz kapsamıdır ve pencereler
+        # burada kuruluyor; stil pencerelerden ÖNCE uygulanmalı ki hiçbir
+        # pencere kendi stil sayfasını yazmak zorunda kalmasın (eski
+        # `setStyleSheet(STYLESHEET)` çağrıları kaldırıldı).
+        app = QApplication.instance()
+        if app is not None:
+            self.design_qss = apply_design_system(app)
 
         # Initialize windows
         self.floating_widget = FloatingModeWidget()
@@ -99,7 +109,7 @@ class EntropyUIManager(QObject):
 
         # Context Menu
         menu = QMenu()
-        zen_act = QAction("🧘 Zen Mode", self)
+        zen_act = QAction("Zen Mode", self)
         zen_act.triggered.connect(lambda: self.switch_mode("zen"))
         menu.addAction(zen_act)
 
@@ -107,12 +117,12 @@ class EntropyUIManager(QObject):
         float_act.triggered.connect(lambda: self.switch_mode("floating"))
         menu.addAction(float_act)
 
-        chat_act = QAction("💬 Chat Mode", self)
+        chat_act = QAction("Chat Mode", self)
         chat_act.triggered.connect(lambda: self.switch_mode("chat"))
         menu.addAction(chat_act)
 
         menu.addSeparator()
-        exit_act = QAction("❌ Exit", self)
+        exit_act = QAction("Exit", self)
         exit_act.triggered.connect(self.quit_app)
         menu.addAction(exit_act)
 

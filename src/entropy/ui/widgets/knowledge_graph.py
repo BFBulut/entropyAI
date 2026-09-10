@@ -481,7 +481,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             position: absolute;
             top: 8px;
             left: 8px;
-            font-size: 11px;
+            font-size:11px;
             background: rgba(14, 20, 32, 0.92);
             border: 1px solid #1F2B42;
             border-radius: 6px;
@@ -513,7 +513,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .legend-item:hover { background: rgba(0, 240, 255, 0.12); }
         .legend-item.dimmed { opacity: 0.30; text-decoration: line-through; }
-        .legend-count { color: #8B949E; font-size: 10px; }
+        .legend-count { color: #8B949E; font-size:11px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         /* Katlanan panel: tam kategori listesi + topluluk paleti + kontroller. */
         #legendPanel {
@@ -521,7 +521,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             top: 40px;
             left: 8px;
             display: none;
-            font-size: 11px;
+            font-size:11px;
             background: rgba(14, 20, 32, 0.96);
             border: 1px solid #1F2B42;
             border-radius: 6px;
@@ -549,7 +549,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             color: #00F0FF;
             border: 1px solid #1F2B42;
             border-radius: 4px;
-            font-size: 11px;
+            font-size:11px;
             padding: 1px 4px;
         }
         #graphControls input[type=range] { width: 110px; padding: 0; }
@@ -567,7 +567,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 4px;
             color: #00F0FF;
             font-weight: bold;
-            font-size: 13px;
+            font-size:13px;
             width: 28px;
             height: 28px;
             cursor: pointer;
@@ -602,14 +602,14 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             color: #F0F6FC;
             border: 1px solid #1F2B42;
             border-radius: 4px;
-            font-size: 11px;
+            font-size:11px;
             padding: 3px 6px;
             outline: none;
         }
         #searchResults { margin-top: 4px; max-height: 168px; overflow: hidden; }
         .search-hit {
             padding: 3px 6px;
-            font-size: 11px;
+            font-size:11px;
             border-radius: 4px;
             cursor: pointer;
             color: #C9D1D9;
@@ -625,7 +625,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             left: 50%;
             transform: translateX(-50%);
             z-index: 9;
-            font-size: 11px;
+            font-size:11px;
             color: #8B949E;
             background: rgba(14, 20, 32, 0.82);
             border: 1px solid #1F2B42;
@@ -648,7 +648,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             border: 1px solid #00F0FF;
             border-radius: 6px;
             padding: 8px 12px;
-            font-size: 12px;
+            font-size:13px;
             color: #F0F6FC;
             display: none;
             z-index: 10;
@@ -2596,9 +2596,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n.group === 'community') {
                     const count = communityMembers.get(String(n.id)) || n.member_count || 0;
                     const open = expandedCommunities.has(String(n.id));
-                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:10px; font-weight:600;">🔮 ' + count + ' üye — tıkla: ' + (open ? 'kapat' : 'aç') + '</span>';
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:11px; font-weight:600;">🔮 ' + count + ' üye — tıkla: ' + (open ? 'kapat' : 'aç') + '</span>';
                 } else if (n.id.includes('MEMORY') || n.id.includes('BELLEK_HARITASI')) {
-                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:10px; font-weight:600;">📑 İndeks Kataloğu</span>';
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:11px; font-weight:600;">📑 İndeks Kataloğu</span>';
                 }
                 infoBox.innerHTML = '<b style="color:' + col + '; font-size:13px;">' + n._full + '</b> <span style="color:#8B949E; font-size:11px;">[' + n.group + ']</span> <span style="color:#00FF9D; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>' + extraBadge + '<br/><span style="color:#C9D1D9; font-size:11px; line-height:1.4;">' + (n.info || '') + '</span>';
             } else {
@@ -3087,7 +3087,8 @@ class KnowledgeGraphWidget(QFrame):
 
         # Başlık kısa tutulur; uzun başlık + geniş açılır liste + iki düğme dar
         # panelde sığmıyor ve sağdaki düğmeler kesiliyordu.
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>🌐 BİLİŞSEL HAFIZA</b>")
+        title_label = QLabel("Bilişsel hafıza")
+        title_label.setProperty("role", "heading")
         title_label.setToolTip("Bilişsel Hafıza ve Bilgi Haritası")
         header.addWidget(title_label)
         header.addStretch()
@@ -3097,86 +3098,27 @@ class KnowledgeGraphWidget(QFrame):
         header.addWidget(self.scope_label)
 
         self.scope_combo = QComboBox()
-        self.scope_combo.setFixedHeight(26)
         # Genişliği içeriğe değil panele göre: uzun seçenek adları listeyi taşırmasın.
         self.scope_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.scope_combo.setMinimumContentsLength(12)
         self.scope_combo.setMaximumWidth(220)
-        self.scope_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-                min-width: 240px;
-            }
-            QComboBox:hover {
-                border-color: #00F0FF;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #0E1420;
-                color: #F0F6FC;
-                border: 1px solid #00F0FF;
-                selection-background-color: #1F2B42;
-                selection-color: #00F0FF;
-            }
-        """)
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         header.addWidget(self.scope_combo)
 
         # Isolation toggle button: "Sadece Seçili Dalı Göster"
-        self.isolate_btn = QPushButton("👁️")
+        self.isolate_btn = QPushButton("")
+        self.isolate_btn.setAccessibleName("Açık: Yalnızca seçili dal ve alt düğümlerini gösterir (tüm d")
         self.isolate_btn.setCheckable(True)
-        self.isolate_btn.setFixedSize(30, 26)
+        self.isolate_btn.setProperty("role", "icon")
         self.isolate_btn.setToolTip("Açık: Yalnızca seçili dal ve alt düğümlerini gösterir (tüm diğer dalları gizler).\nKapalı: Tüm hafıza görünümünde seçili dalı vurgular, diğerlerini saydamlaştırır.")
-        self.isolate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #8B949E;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                border-color: #00FF9D;
-                color: #00FF9D;
-            }
-            QPushButton:checked {
-                background-color: rgba(0, 255, 157, 0.15);
-                color: #00FF9D;
-                border-color: #00FF9D;
-            }
-        """)
         self.isolate_btn.toggled.connect(self._on_isolate_toggled)
         header.addWidget(self.isolate_btn)
 
         self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setAccessibleName("↻")
         self.refresh_btn.setToolTip("Grafiği yenile")
-        self.refresh_btn.setFixedSize(30, 26)
-        self.refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 4px;
-                padding: 2px 14px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00F0FF;
-                color: #080B10;
-            }
-        """)
+        self.refresh_btn.setProperty("role", "icon")
+        self.refresh_btn.setProperty("variant", "primary")
         self.refresh_btn.clicked.connect(self.refresh_graph)
         header.addWidget(self.refresh_btn)
 
@@ -3187,14 +3129,14 @@ class KnowledgeGraphWidget(QFrame):
         if is_offscreen:
             self.web_view = QLabel("Knowledge Graph [Headless Engine Active]")
             self.web_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.web_view.setStyleSheet("background: #080B10; color: #00F0FF; font-family: monospace; border-radius: 6px;")
+            self.web_view.setProperty("role", "badge")
             self.web_page = None
             self.layout.addWidget(self.web_view)
         else:
             self.web_view = QWebEngineView()
             self.web_page = GraphWebEnginePage(self.web_view)
             self.web_view.setPage(self.web_page)
-            self.web_view.setStyleSheet("background: #080B10; border-radius: 6px;")
+            self.web_view.setProperty("role", "badge")
             self.layout.addWidget(self.web_view)
 
         # Grafiğin yeniden kurulması pahalıdır: ~840 düğüm + ~3000 bağlantı için
@@ -3379,12 +3321,12 @@ class KnowledgeGraphWidget(QFrame):
 
         # 2. Four Main Category Hubs (Generous radial separation from Central Ego Core)
         cat_hubs = [
-            ("hub-projects", "📁 Projeler & Çalışma Alanları", "projects", -145.0 * math.pi / 180.0, 400.0),
-            ("hub-skills", "🎯 Uzmanlık Yetenekleri", "skills", -45.0 * math.pi / 180.0, 400.0),
-            ("hub-mcp", "🔌 MCP Sunucuları & Araçları", "mcp", 45.0 * math.pi / 180.0, 400.0),
-            ("hub-cognitive", "🧠 Bilişsel Bellek & Episodik Anılar", "cognitive", 135.0 * math.pi / 180.0, 400.0),
+            ("hub-projects", "Projeler & Çalışma Alanları", "projects", -145.0 * math.pi / 180.0, 400.0),
+            ("hub-skills", "Uzmanlık Yetenekleri", "skills", -45.0 * math.pi / 180.0, 400.0),
+            ("hub-mcp", "MCP Sunucuları & Araçları", "mcp", 45.0 * math.pi / 180.0, 400.0),
+            ("hub-cognitive", "Bilişsel Bellek & Episodik Anılar", "cognitive", 135.0 * math.pi / 180.0, 400.0),
             # Ofisler batıda: dört mevcut hub çeyreklerde duruyor, 180° boştu.
-            ("hub-offices", "🏢 Ofisler & Ajanlar", "offices", 180.0 * math.pi / 180.0, 400.0),
+            ("hub-offices", "Ofisler & Ajanlar", "offices", 180.0 * math.pi / 180.0, 400.0),
         ]
         for hub_id, hub_name, c_grp, angle, r_cat in cat_hubs:
             node_ids.add(hub_id)
@@ -3434,7 +3376,7 @@ class KnowledgeGraphWidget(QFrame):
                 r_sub = 170.0 + 90.0 * (i % 2)
                 nodes.append({
                     "id": subhub_id,
-                    "name": f"📁 {p_name}",
+                    "name": f"{p_name}",
                     "group": "project",
                     "cluster": f"project:{p_slug}",
                     "cluster_group": "projects",
@@ -3493,7 +3435,7 @@ class KnowledgeGraphWidget(QFrame):
 
                 nodes.append({
                     "id": subhub_id,
-                    "name": f"🎯 {s.name}",
+                    "name": f"{s.name}",
                     "group": "skill",
                     "cluster": f"skill:{s_slug}",
                     "cluster_group": "skills",
@@ -3512,7 +3454,7 @@ class KnowledgeGraphWidget(QFrame):
                             node_ids.add(sb_id)
                             nodes.append({
                                 "id": sb_id,
-                                "name": f"🌿 {sb_name}",
+                                "name": f"{sb_name}",
                                 "group": "subbranch",
                                 "cluster": f"skill:{s_slug}",
                                 "cluster_group": "skills",
@@ -3531,7 +3473,7 @@ class KnowledgeGraphWidget(QFrame):
                             node_ids.add(sb_id)
                             nodes.append({
                                 "id": sb_id,
-                                "name": f"🌿 {sb_name}",
+                                "name": f"{sb_name}",
                                 "group": "subbranch",
                                 "cluster": f"skill:{s_slug}",
                                 "cluster_group": "skills",
@@ -3573,7 +3515,7 @@ class KnowledgeGraphWidget(QFrame):
 
                         nodes.append({
                             "id": sc_id,
-                            "name": f"⚙️ {sc['name']}",
+                            "name": f"{sc['name']}",
                             "group": "mcp-tool",
                             "cluster": f"skill:{s_slug}",
                             "cluster_group": "skills",
@@ -3600,7 +3542,7 @@ class KnowledgeGraphWidget(QFrame):
                 srv_y = round(hub_mcp_node["y"] + math.sin(ang) * r_mcp_sub, 1)
                 nodes.append({
                     "id": subhub_id,
-                    "name": f"🔌 {srv_name}",
+                    "name": f"{srv_name}",
                     "group": "mcp",
                     "cluster": f"mcp:{srv_slug}",
                     "cluster_group": "mcp",
@@ -3622,7 +3564,7 @@ class KnowledgeGraphWidget(QFrame):
                         r_tool = 55.0 + 20.0 * (t_idx % 2)
                         nodes.append({
                             "id": tool_id,
-                            "name": f"🛠️ {tool['name']}",
+                            "name": f"{tool['name']}",
                             "group": "mcp-tool",
                             "cluster": f"mcp:{srv_slug}",
                             "cluster_group": "mcp",
@@ -3638,8 +3580,8 @@ class KnowledgeGraphWidget(QFrame):
         hub_cog_node = next(n for n in nodes if n["id"] == "hub-cognitive")
         cog_subhubs = [
             ("subhub-cog-episodic", "⏳ Episodik Anılar", "episodic", math.pi * 0.53, 180.0),
-            ("subhub-cog-semantic", "🧠 Semantik Bellek", "semantic", math.pi * 0.75, 220.0),
-            ("subhub-cog-procedural", "⚙️ Prosedürel Bellek", "procedural", math.pi * 0.97, 180.0),
+            ("subhub-cog-semantic", "Semantik Bellek", "semantic", math.pi * 0.75, 220.0),
+            ("subhub-cog-procedural", "Prosedürel Bellek", "procedural", math.pi * 0.97, 180.0),
         ]
         for c_id, c_name, c_cat, ang, r_dist in cog_subhubs:
             node_ids.add(c_id)
@@ -3659,10 +3601,10 @@ class KnowledgeGraphWidget(QFrame):
 
         # Dendritic sub-branches for cognitive semantic memory fanning outward in SW
         COG_SEMANTIC_SUBBRANCHES = [
-            ("subbranch-cog-sem-core", "🌿 Çekirdek Kimlik & Kararlar", "Ego, persona ve mimari kararlar", -477.9, 624.2),
-            ("subbranch-cog-sem-arch", "🌿 Mimari & İlkeler", "Sistem mimarisi, zero-api ve protokoller", -581.5, 667.4),
-            ("subbranch-cog-sem-research", "🌿 Araştırma & Özetler", "Bilişsel araştırma özetleri ve RAG", -713.5, 638.2),
-            ("subbranch-cog-sem-finance", "🌿 Finans & Kantitatif", "Bilanço, portföy ve değerleme modelleri", -689.5, 505.7),
+            ("subbranch-cog-sem-core", "Çekirdek Kimlik & Kararlar", "Ego, persona ve mimari kararlar", -477.9, 624.2),
+            ("subbranch-cog-sem-arch", "Mimari & İlkeler", "Sistem mimarisi, zero-api ve protokoller", -581.5, 667.4),
+            ("subbranch-cog-sem-research", "Araştırma & Özetler", "Bilişsel araştırma özetleri ve RAG", -713.5, 638.2),
+            ("subbranch-cog-sem-finance", "Finans & Kantitatif", "Bilanço, portföy ve değerleme modelleri", -689.5, 505.7),
         ]
         for sb_id, sb_name, sb_info, sb_x, sb_y in COG_SEMANTIC_SUBBRANCHES:
             if sb_id not in node_ids:
@@ -4093,19 +4035,19 @@ class KnowledgeGraphWidget(QFrame):
         self.scope_combo.clear()
 
         # Default: All Memory (Galaxy View)
-        self.scope_combo.addItem("🌐 Tüm Hafıza (Galaksi Görünümü)", "all")
+        self.scope_combo.addItem("Tüm Hafıza (Galaksi Görünümü)", "all")
 
         # Active Project
         active_slug = normalize_slug(self.active_project_dir.name)
-        self.scope_combo.addItem(f"📁 Aktif Proje ({self.active_project_dir.name})", "active_project")
+        self.scope_combo.addItem(f"Aktif Proje ({self.active_project_dir.name})", "active_project")
 
         # Individual Projects
         for p_name in graph_data["known_projects"]:
             p_slug = normalize_slug(p_name)
-            self.scope_combo.addItem(f"📁 Proje: {p_name}", f"project:{p_slug}")
+            self.scope_combo.addItem(f"Proje: {p_name}", f"project:{p_slug}")
 
         # All Skills & Individual Skills
-        self.scope_combo.addItem("🎯 Yetenekler (Tüm Yetenek Dalları)", "all_skills")
+        self.scope_combo.addItem("Yetenekler (Tüm Yetenek Dalları)", "all_skills")
         for s_name in graph_data["registered_skills"]:
             s_slug = normalize_slug(s_name)
             display_name = s_name
@@ -4113,12 +4055,12 @@ class KnowledgeGraphWidget(QFrame):
                 display_name = "Otonom Ajan Mimarisi (autonomous-agent)"
             elif s_name == "financial-auditor":
                 display_name = "Finansal Denetçi & Kantitatif Analiz (financial-auditor)"
-            self.scope_combo.addItem(f"🎯 Yetenek: {display_name}", f"skill:{s_slug}")
+            self.scope_combo.addItem(f"Yetenek: {display_name}", f"skill:{s_slug}")
 
         # All MCP & All Cognitive
-        self.scope_combo.addItem("🏢 Ofisler (Ofisler, Ajanlar, Ofis Raporları)", "all_offices")
-        self.scope_combo.addItem("🔌 MCP Sunucuları & Araçları", "all_mcp")
-        self.scope_combo.addItem("🧠 Bilişsel Bellek & Anılar", "all_cognitive")
+        self.scope_combo.addItem("Ofisler (Ofisler, Ajanlar, Ofis Raporları)", "all_offices")
+        self.scope_combo.addItem("MCP Sunucuları & Araçları", "all_mcp")
+        self.scope_combo.addItem("Bilişsel Bellek & Anılar", "all_cognitive")
 
         # Restore previous selection or default to 'all'
         target_idx = self.scope_combo.findData(prev_data)

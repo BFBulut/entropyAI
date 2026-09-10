@@ -1,7 +1,7 @@
 """Slash komutlarının istem metninden ayıklanması (Faz 9).
 
 Sorun (kullanıcı, gerçek koşu): `/media-agency-soldier reklam metni yaz` yazınca
-üst çubukta "🎯 YETENEK: /media-agency-soldier" çipi belirdi ama sağlayıcı CLI'ı
+üst çubukta "YETENEK: /media-agency-soldier" çipi belirdi ama sağlayıcı CLI'ı
 `Unknown command: /media-agency-soldier` döndürdü. Kök neden: arayüz yetenek
 slash'ını tanıyıp yeteneği etkinleştiriyor, ama token'ı istemden **çıkarmıyordu**;
 ham metin CLI'a gidiyor, CLI kendi ad alanında bulamıyordu
@@ -69,7 +69,7 @@ CLI_PASSTHROUGH = {
 def unknown_slash_html(token: str, suggestions: Optional[List[str]] = None) -> str:
     """Bilinmeyen slash için Entropy'nin kendi hata metni (CLI'a gitmez)."""
     body = (
-        f"❓ <b>Bilinmeyen komut:</b> <code>/{token}</code><br/>"
+        f"<b>Bilinmeyen komut:</b> <code>/{token}</code><br/>"
         "Bu komut Entropy'nin kayıtlı komutları, yetenekleri ve MCP araçları"
         " arasında yok; sağlayıcıya da gönderilmedi."
     )

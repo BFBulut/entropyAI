@@ -22,16 +22,13 @@ class TerminalPaneWidget(QFrame):
         # Header bar
         self.header_layout = QHBoxLayout()
         self.title_label = QLabel(f"<b>[>_] {title}</b>")
-        self.title_label.setStyleSheet(
-            f"color: {READING_TOKENS['accent']}; font-family: {READING_TOKENS['font_mono']};"
-            " font-size: 12px; letter-spacing: 0.5px;"
-        )
+        self.title_label.setProperty("role", "label")
         self.header_layout.addWidget(self.title_label)
 
         self.header_layout.addStretch()
 
         self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setFixedHeight(24)
+        self.clear_btn.setAccessibleName("Clear")
         self.clear_btn.clicked.connect(self.clear_terminal)
         self.header_layout.addWidget(self.clear_btn)
 
@@ -46,16 +43,7 @@ class TerminalPaneWidget(QFrame):
         if not mono.exactMatch():
             mono = QFont("Consolas", 11)
         self.text_area.setFont(mono)
-        self.text_area.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {READING_TOKENS['surface_base']};
-                color: {READING_TOKENS['text_body']};
-                border: 1px solid {READING_TOKENS['divider_soft']};
-                border-radius: 8px;
-                padding: 10px 12px;
-                selection-background-color: {READING_TOKENS['accent_soft']};
-            }}
-        """)
+        self.text_area.setProperty("role", "reader")
         _block_fmt = QTextBlockFormat()
         _block_fmt.setLineHeight(140, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         _cursor = self.text_area.textCursor()

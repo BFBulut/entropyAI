@@ -47,10 +47,11 @@ class StreamPanel(QFrame):
 
         header = QHBoxLayout()
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("background: transparent; border: none;")
+        self.title_label.setProperty("role", "label")
         header.addWidget(self.title_label)
         header.addStretch()
         self.clear_btn = QPushButton("Temizle")
+        self.clear_btn.setAccessibleName("Temizle")
         self.clear_btn.setFixedHeight(22)
         self.clear_btn.clicked.connect(self.clear_stream)
         header.addWidget(self.clear_btn)
@@ -58,19 +59,7 @@ class StreamPanel(QFrame):
 
         self.view = QTextBrowser()
         self.view.setOpenExternalLinks(False)
-        self.view.setStyleSheet(
-            f"""
-            QTextBrowser {{
-                background-color:{RT['surface_base']};
-                border:1px solid {RT['divider_soft']};
-                border-radius:{RT['radius']};
-                color:{RT['text_body']};
-                font-family:{RT['font_mono']};
-                font-size:{RT['font_size_mono']};
-                padding:10px;
-            }}
-            """
-        )
+        self.view.setProperty("role", "terminal")
         # Faz 4 (2d): akış paneli, rapor okuyucu ve sohbet balonu tek tipografi
         # kaynağını paylaşır. `reading_css()` belge stil sayfası olarak
         # verilince başlık/tablo/liste ölçüleri üç yüzeyde de aynı olur.
@@ -95,14 +84,14 @@ class StreamPanel(QFrame):
         self._buffer = ""
         if not self.agent:
             self.title_label.setText(
-                f"<b style='color:{RT['accent']}; font-size:13px;'>📡 AKIŞ</b>"
+                f"<b style='color:{RT['accent']}; font-size:13px;'>AKIŞ</b>"
                 f" <span style='color:{RT['text_dim']}; font-size:11px;'>"
                 f"sahnedeki bir masaya tıklayın</span>"
             )
             self.view.setHtml(self._placeholder_html())
             return
         self.title_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>📡 AKIŞ</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>AKIŞ</b>"
             f" <span style='color:{RT['text']}; font-size:11px;'>{html.escape(self.agent)}</span>"
         )
         self.view.setHtml(self._summary_html())

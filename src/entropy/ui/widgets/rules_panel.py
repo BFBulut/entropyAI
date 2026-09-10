@@ -69,7 +69,7 @@ class RuleCandidatesPanel(QFrame):
         layout.setSpacing(4)
 
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("background: transparent; border: none;")
+        self.title_label.setProperty("role", "label")
         layout.addWidget(self.title_label)
 
         self.scroll = QScrollArea()
@@ -88,9 +88,7 @@ class RuleCandidatesPanel(QFrame):
         self.approved_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextBrowserInteraction
         )
-        self.approved_label.setStyleSheet(
-            f"color:{RT['text_body']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.approved_label.setProperty("role", "label")
         layout.addWidget(self.approved_label)
 
         signal = getattr(bus, "rules_updated", None)
@@ -144,7 +142,7 @@ class RuleCandidatesPanel(QFrame):
         candidates = self.candidates()
         label = "Entropy" if self.office == "entropy" else (self.office or "—")
         self.title_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:12px;'>⚖ KURAL ADAYLARI</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>KURAL ADAYLARI</b>"
             f" <span style='color:{RT['text_dim']}; font-size:11px;'>· {html.escape(label)}"
             f" · {len(candidates)} aday</span>"
         )
@@ -153,9 +151,7 @@ class RuleCandidatesPanel(QFrame):
                 "Bekleyen kural adayı yok. Ajan bir kural keşfedince burada sorulur."
             )
             empty.setWordWrap(True)
-            empty.setStyleSheet(
-                f"color:{RT['text_dim']}; font-size:11px; background:transparent; border:none;"
-            )
+            empty.setProperty("role", "label")
             self.body_layout.addWidget(empty)
         for rule in candidates:
             self.body_layout.addWidget(self._make_row(rule))
@@ -181,19 +177,13 @@ class RuleCandidatesPanel(QFrame):
         rule_id = str(rule_field(rule, "id", ""))
         row = QFrame()
         row.setObjectName("ruleRow")
-        row.setStyleSheet(
-            f"QFrame#ruleRow {{ background-color:{RT['surface_raised']};"
-            f" border:1px solid {RT['divider_soft']};"
-            f" border-left:3px solid {RT['accent_warn']};"
-            f" border-radius:{RT['radius_small']}; }}"
-            f" QLabel {{ background: transparent; border: none; }}"
-        )
+        row.setProperty("role", "panel")
         box = QVBoxLayout(row)
         box.setContentsMargins(8, 6, 8, 6)
         box.setSpacing(3)
 
         text = QLabel(
-            f"<span style='color:{RT['text']}; font-size:12px;'>"
+            f"<span style='color:{RT['text']}; font-size:13px;'>"
             f"{html.escape(str(rule_field(rule, 'text', '')))}</span>"
         )
         text.setWordWrap(True)
@@ -207,7 +197,7 @@ class RuleCandidatesPanel(QFrame):
         if scope and scope != "office":
             meta_bits.append(scope)
         meta = QLabel(
-            f"<span style='color:{RT['text_dim']}; font-size:10px;'>"
+            f"<span style='color:{RT['text_dim']}; font-size:11px;'>"
             f"{html.escape(' · '.join(meta_bits))}</span>"
         )
         meta.setWordWrap(True)
@@ -216,13 +206,13 @@ class RuleCandidatesPanel(QFrame):
         actions = QHBoxLayout()
         actions.setSpacing(4)
         promote_btn = QPushButton("Kalıcı yap")
-        promote_btn.setFixedHeight(22)
+        promote_btn.setAccessibleName("Kalıcı yap")
         promote_btn.setToolTip("Kural onaylanır ve ajanların sistem istemine girer.")
         promote_btn.setProperty("rule_id", rule_id)
         promote_btn.clicked.connect(self._on_promote_clicked)
         actions.addWidget(promote_btn)
         reject_btn = QPushButton("Reddet")
-        reject_btn.setFixedHeight(22)
+        reject_btn.setAccessibleName("Reddet")
         reject_btn.setToolTip("Kural isteme girmez; aynı aday tekrar sorulmaz.")
         reject_btn.setProperty("rule_id", rule_id)
         reject_btn.clicked.connect(self._on_reject_clicked)

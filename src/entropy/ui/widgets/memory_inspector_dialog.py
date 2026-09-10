@@ -82,7 +82,7 @@ class MemoryErrorsSection(QFrame):
     boşsa bölüm gizlenir.
     """
 
-    TITLE = "⚠️ Son hatalar"
+    TITLE = "Son hatalar"
 
     def __init__(self, mem: Any = None, parent=None, limit: int = MAX_SHOWN_ERRORS):
         super().__init__(parent)
@@ -94,10 +94,7 @@ class MemoryErrorsSection(QFrame):
         layout.addWidget(self.title_label)
         self.body = QTextBrowser()
         self.body.setMaximumHeight(120)
-        self.body.setStyleSheet(
-            "background-color:#0E1420; color:#F0F6FC; border:1px solid #3A2A18;"
-            " border-radius:4px; font-size:11px;"
-        )
+        self.body.setProperty("role", "reader")
         layout.addWidget(self.body)
         self.set_memory(mem)
 
@@ -114,6 +111,15 @@ class MemoryErrorsSection(QFrame):
 class MemoryInspectorDialog(QDialog):
     """Rich interactive modal showing node content, cognitive metrics, and related memories."""
 
+
+    def _section_label(self, text: str, small: bool = False):
+        """Bolum basligi: dort kademeli tipografi (BUYUK HARF ve gomulu renk yok)."""
+        from PySide6.QtWidgets import QLabel as _QLabel
+
+        lbl = _QLabel(text)
+        lbl.setProperty("role", "label" if small else "heading")
+        return lbl
+
     def __init__(self, node_id: str, parent=None):
         super().__init__(parent)
         self.node_id = node_id
@@ -129,22 +135,6 @@ class MemoryInspectorDialog(QDialog):
         self.resize(780, 620)
         self.setMinimumSize(560, 440)
         self.setSizeGripEnabled(True)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #080B10;
-                color: #F0F6FC;
-                border: 1px solid #00F0FF;
-                border-radius: 8px;
-            }
-            QLabel {
-                background: transparent;
-                color: #F0F6FC;
-            }
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-        """)
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(16, 14, 16, 14)
@@ -247,7 +237,7 @@ class MemoryInspectorDialog(QDialog):
     def _render_cognitive_node(self, node: CognitiveMemoryNode):
         # Header
         hdr = QHBoxLayout()
-        title_lbl = QLabel(f"<b style='color:#00F0FF; font-size:14px;'>🧠 {node.id}</b>")
+        title_lbl = QLabel(f"<b style='color:#00F0FF; font-size:14px;'>{node.id}</b>")
         hdr.addWidget(title_lbl)
         hdr.addStretch()
 
@@ -257,9 +247,9 @@ class MemoryInspectorDialog(QDialog):
         self.layout.addLayout(hdr)
 
         # Content Box
-        self.layout.addWidget(QLabel("<b style='color:#8B949E; font-size:11px;'>Düğüm İçeriği / Hatırlanan Bilgi:</b>"))
+        self.layout.addWidget(self._section_label("Düğüm içeriği", small=True))
         content_box = QTextBrowser()
-        content_box.setStyleSheet("background-color: #0E1420; border: 1px solid #1F2B42; color: #F0F6FC; padding: 8px; font-size: 12px; border-radius: 4px;")
+        content_box.setProperty("role", "reader")
         content_box.setFixedHeight(120)
         content_box.setMarkdown(node.content)
         self.layout.addWidget(content_box)
@@ -280,21 +270,10 @@ class MemoryInspectorDialog(QDialog):
         pbar.setValue(int(ebbinghaus * 100))
         pbar.setFixedHeight(8)
         pbar.setTextVisible(False)
-        pbar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                background: #0E1420;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00F0FF, stop:1 #00FF9D);
-                border-radius: 3px;
-            }
-        """)
         self.layout.addWidget(pbar)
 
         # Related Knowledge / Bağlantılı Bilgiler
-        self.layout.addWidget(QLabel("<b style='color:#00F0FF; font-size:12px;'>🔗 Bu Hafızayla İlişkili Düğümler & Bilgiler:</b>"))
+        self.layout.addWidget(self._section_label("İlişkili düğümler"))
         related_scroll = QScrollArea()
         related_scroll.setFixedHeight(140)
         related_widget = QWidget()
@@ -307,22 +286,7 @@ class MemoryInspectorDialog(QDialog):
             filtered = [r for r in recalled if r.id != node.id]
             if filtered:
                 for rel in filtered:
-                    btn = QPushButton(f"🧠 [{rel.category.upper()}] {rel.content[:65]}... (Skor: {rel.calculate_ebbinghaus_strength():.2f})")
-                    btn.setStyleSheet("""
-                        QPushButton {
-                            background-color: #0E1420;
-                            color: #E6EDF3;
-                            border: 1px solid #1F2B42;
-                            border-radius: 4px;
-                            padding: 4px 8px;
-                            text-align: left;
-                            font-size: 11px;
-                        }
-                        QPushButton:hover {
-                            border-color: #00F0FF;
-                            color: #00F0FF;
-                        }
-                    """)
+                    btn = QPushButton(f"[{rel.category.upper()}] {rel.content[:65]}... (Skor: {rel.calculate_ebbinghaus_strength():.2f})")
                     btn.clicked.connect(lambda _, rid=rel.id: self._switch_to_node(rid))
                     related_layout.addWidget(btn)
             else:
@@ -337,19 +301,19 @@ class MemoryInspectorDialog(QDialog):
 
         # Actions
         btn_box = QHBoxLayout()
-        export_btn = QPushButton("📄 Obsidian Kasasına Aktar")
-        export_btn.setStyleSheet("background-color: #141C2C; color: #00FF9D; border: 1px solid #00FF9D; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        export_btn = QPushButton("Obsidian Kasasına Aktar")
+        export_btn.setAccessibleName("Obsidian Kasasına Aktar")
         export_btn.clicked.connect(lambda: self._export_to_obsidian(node))
         btn_box.addWidget(export_btn)
 
-        del_btn = QPushButton("🗑️ Hafızadan Sil")
-        del_btn.setStyleSheet("background-color: #261418; color: #FF4D4D; border: 1px solid #FF4D4D; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        del_btn = QPushButton("Hafızadan Sil")
+        del_btn.setAccessibleName("Hafızadan Sil")
         del_btn.clicked.connect(lambda: self._delete_cog_node(node.id))
         btn_box.addWidget(del_btn)
 
         btn_box.addStretch()
         close_btn = QPushButton("Kapat")
-        close_btn.setStyleSheet("background-color: #1A263C; color: #F0F6FC; border: 1px solid #1F2B42; padding: 6px 16px; border-radius: 4px;")
+        close_btn.setAccessibleName("Kapat")
         close_btn.clicked.connect(self.accept)
         btn_box.addWidget(close_btn)
 
@@ -369,81 +333,50 @@ class MemoryInspectorDialog(QDialog):
 
         # Modern Header Card with distinct styling and no badge overlapping
         hdr_frame = QFrame()
-        hdr_frame.setStyleSheet("""
-            QFrame {
-                background-color: #0E1420;
-                border: 1px solid #1F2B42;
-                border-left: 4px solid #BC8CFF;
-                border-radius: 6px;
-                padding: 6px 12px;
-            }
-        """)
+        hdr_frame.setProperty("role", "panel")
         hdr_vbox = QVBoxLayout(hdr_frame)
         hdr_vbox.setContentsMargins(4, 4, 4, 4)
         hdr_vbox.setSpacing(4)
 
         top_row = QHBoxLayout()
         folder_name = p.parent.name if p.parent else "Obsidian"
-        cat_tag = QLabel(f"📂 {folder_name}")
-        cat_tag.setStyleSheet("color: #8B949E; font-size: 11px; font-weight: bold;")
+        cat_tag = QLabel(f"{folder_name}")
+        cat_tag.setProperty("role", "label")
         top_row.addWidget(cat_tag)
         top_row.addStretch()
 
-        self.btn_max = QPushButton("⛶ Büyüt")
-        self.btn_max.setFixedHeight(22)
+        self.btn_max = QPushButton("Büyüt")
+        self.btn_max.setAccessibleName("Büyüt")
         self.btn_max.setToolTip("Pencereyi Büyüt / Normal Boyuta Döndür")
-        self.btn_max.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 1px 8px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                border-color: #00F0FF;
-                background-color: #1A263C;
-            }
-        """)
         self.btn_max.clicked.connect(self._toggle_maximize)
         top_row.addWidget(self.btn_max)
 
-        badge = QLabel("OBSİDİAN DOSYASI")
-        badge.setStyleSheet("""
-            background-color: #1A1429;
-            color: #BC8CFF;
-            border: 1px solid #9D00FF;
-            border-radius: 4px;
-            padding: 3px 8px;
-            font-size: 10px;
-            font-weight: bold;
-        """)
+        badge = QLabel("Obsidian dosyası")
+        badge.setProperty("role", "badge")
         top_row.addWidget(badge)
         hdr_vbox.addLayout(top_row)
 
         display_title = meta.get("title") or p.stem.replace("_", " ")
-        title_lbl = QLabel(f"📄 {display_title}")
+        title_lbl = QLabel(f"{display_title}")
         title_lbl.setWordWrap(True)
-        title_lbl.setStyleSheet("color: #BC8CFF; font-size: 14px; font-weight: bold; padding: 2px 0;")
+        title_lbl.setProperty("role", "heading")
         hdr_vbox.addWidget(title_lbl)
 
         # Metadata row
         meta_items = []
         if meta.get("date"):
-            meta_items.append(f"📅 {meta['date']}")
+            meta_items.append(f"{meta['date']}")
         if meta.get("project"):
-            meta_items.append(f"📁 Proje: {meta['project']}")
+            meta_items.append(f"Proje: {meta['project']}")
         if meta.get("skill"):
-            meta_items.append(f"🎯 Yetenek: {meta['skill']}")
+            meta_items.append(f"Yetenek: {meta['skill']}")
 
         if meta_items or meta.get("tags"):
             meta_row = QHBoxLayout()
             meta_row.setSpacing(6)
             for item_text in meta_items:
                 lbl = QLabel(item_text)
-                lbl.setStyleSheet("color: #8B949E; font-size: 10px; font-weight: bold;")
+                lbl.setProperty("role", "label")
                 meta_row.addWidget(lbl)
             if meta.get("tags"):
                 tags_list = meta["tags"] if isinstance(meta["tags"], list) else [str(meta["tags"])]
@@ -451,7 +384,7 @@ class MemoryInspectorDialog(QDialog):
                     t_str = str(t).strip()
                     if t_str:
                         t_lbl = QLabel(f"#{t_str}")
-                        t_lbl.setStyleSheet("background-color: #141C2C; color: #00F0FF; border: 1px solid #1F2B42; border-radius: 3px; padding: 1px 6px; font-size: 10px;")
+                        t_lbl.setProperty("role", "badge")
                         meta_row.addWidget(t_lbl)
             meta_row.addStretch()
             hdr_vbox.addLayout(meta_row)
@@ -459,21 +392,10 @@ class MemoryInspectorDialog(QDialog):
         self.layout.addWidget(hdr_frame)
 
         # Content Box - expandable with rich cyber HTML rendering
-        self.layout.addWidget(QLabel("<b style='color:#8B949E; font-size:11px;'>Not Özeti ve İçerik:</b>"))
+        self.layout.addWidget(self._section_label("Not özeti", small=True))
         content_box = QTextBrowser()
         content_box.setOpenExternalLinks(True)
-        content_box.setStyleSheet("""
-            QTextBrowser {
-                background-color: #0E1420;
-                border: 1px solid #1F2B42;
-                border-radius: 6px;
-                color: #F0F6FC;
-                padding: 12px 16px;
-                font-size: 13px;
-                line-height: 1.6;
-                font-family: 'Segoe UI', -apple-system, sans-serif;
-            }
-        """)
+        content_box.setProperty("role", "reader")
         content_box.setMinimumHeight(160)
         from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
         rendered_html = render_markdown_to_html(body[:5000] + ("..." if len(body) > 5000 else ""), base_dir=p.parent)
@@ -482,7 +404,7 @@ class MemoryInspectorDialog(QDialog):
         self.layout.addWidget(content_box, 1)
 
         # Related Knowledge / Wikilinks & Semantic Nodes
-        self.layout.addWidget(QLabel("<b style='color:#00F0FF; font-size:12px;'>🔗 Bu Notla İlişkili Bilgi ve Bağlantılar:</b>"))
+        self.layout.addWidget(self._section_label("İlişkili bilgi ve bağlantılar"))
         related_scroll = QScrollArea()
         related_scroll.setFixedHeight(120)
         related_widget = QWidget()
@@ -496,8 +418,7 @@ class MemoryInspectorDialog(QDialog):
         if wikilinks:
             for wl in set(wikilinks[:5]):
                 target = wl.split("|")[0].strip()
-                btn = QPushButton(f"📑 [[{target}]] (Obsidian Bağlantısı)")
-                btn.setStyleSheet("background-color:#0E1420; color:#9D00FF; border:1px solid #1F2B42; border-radius:4px; padding:3px 8px; text-align:left; font-size:11px;")
+                btn = QPushButton(f"[[{target}]] (Obsidian Bağlantısı)")
                 btn.clicked.connect(lambda _, t=target: self._switch_to_node(f"o-{t}"))
                 related_layout.addWidget(btn)
 
@@ -507,8 +428,7 @@ class MemoryInspectorDialog(QDialog):
             query_str = paragraphs[0][:150] if paragraphs else body[:100]
             recalled = self.cog.hybrid_recall(query_str, limit=3)
             for rel in recalled:
-                btn = QPushButton(f"🧠 [Bilişsel Bellek] {rel.content[:60]}...")
-                btn.setStyleSheet("background-color:#0E1420; color:#00FF9D; border:1px solid #1F2B42; border-radius:4px; padding:3px 8px; text-align:left; font-size:11px;")
+                btn = QPushButton(f"[Bilişsel Bellek] {rel.content[:60]}...")
                 btn.clicked.connect(lambda _, rid=rel.id: self._switch_to_node(rid))
                 related_layout.addWidget(btn)
         except Exception:
@@ -521,19 +441,17 @@ class MemoryInspectorDialog(QDialog):
 
         # Actions
         btn_box = QHBoxLayout()
-        open_btn = QPushButton("📖 Ayrı Ekranda Oku")
-        open_btn.setStyleSheet("background-color: #141C2C; color: #00F0FF; border: 1px solid #00F0FF; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        open_btn = QPushButton("Ayrı Ekranda Oku")
+        open_btn.setAccessibleName("Ayrı Ekranda Oku")
         open_btn.clicked.connect(lambda: self._open_standalone_report(str(p)))
         btn_box.addWidget(open_btn)
 
-        del_btn = QPushButton("🗑️ Notu Sil")
-        del_btn.setStyleSheet("background-color: #261418; color: #FF4D4D; border: 1px solid #FF4D4D; padding: 6px 12px; border-radius: 4px; font-weight: bold;")
+        del_btn = QPushButton("Notu Sil")
         del_btn.clicked.connect(lambda: self._delete_report_file(p))
         btn_box.addWidget(del_btn)
 
         btn_box.addStretch()
         close_btn = QPushButton("Kapat")
-        close_btn.setStyleSheet("background-color: #1A263C; color: #F0F6FC; border: 1px solid #1F2B42; padding: 6px 16px; border-radius: 4px;")
         close_btn.clicked.connect(self.accept)
         btn_box.addWidget(close_btn)
 
@@ -544,14 +462,14 @@ class MemoryInspectorDialog(QDialog):
         if self.isMaximized():
             self.showNormal()
             if hasattr(self, "btn_max"):
-                self.btn_max.setText("⛶ Büyüt")
+                self.btn_max.setText("Büyüt")
         else:
             self.showMaximized()
             if hasattr(self, "btn_max"):
-                self.btn_max.setText("🗗 Küçült")
+                self.btn_max.setText("Küçült")
 
     def _render_generic_node(self):
-        self.layout.addWidget(QLabel(f"<b style='color:#00F0FF; font-size:14px;'>🌐 Düğüm: {self.node_id}</b>"))
+        self.layout.addWidget(QLabel(f"<b style='color:#00F0FF; font-size:14px;'>Düğüm: {self.node_id}</b>"))
         self.layout.addWidget(QLabel("<span style='color:#8B949E;'>Bu düğüm için kayıtlı ek metin detayı bulunmuyor.</span>"))
         self.layout.addStretch()
         close_btn = QPushButton("Kapat")

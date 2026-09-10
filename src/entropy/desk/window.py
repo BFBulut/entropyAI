@@ -225,14 +225,9 @@ class AgentDeskWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
-        central.setStyleSheet(
-            f"QWidget {{ background-color:{RT['surface_base']}; color:{RT['text']}; }}"
-            f" QFrame#cardFrame {{ background-color:{RT['surface_raised']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']}; }}"
-        )
 
         self.header_label = QLabel("")
-        self.header_label.setStyleSheet("background: transparent; border: none;")
+        self.header_label.setProperty("role", "label")
         header = QHBoxLayout()
         header.setContentsMargins(4, 0, 4, 0)
         header.addWidget(self.header_label)
@@ -240,7 +235,7 @@ class AgentDeskWindow(QMainWindow):
 
         # Faz 7: harcama rozeti (veri yoksa gizli) + iki sağlayıcı kimlik rozeti.
         self.spend_label = QLabel("")
-        self.spend_label.setStyleSheet("background: transparent; border: none;")
+        self.spend_label.setProperty("role", "label")
         self.spend_label.setVisible(False)
         header.addWidget(self.spend_label)
 
@@ -257,7 +252,7 @@ class AgentDeskWindow(QMainWindow):
         self.orphan_btn.setVisible(False)
         header.addWidget(self.orphan_btn)
         self.orphan_status = QLabel("")
-        self.orphan_status.setStyleSheet("background: transparent; border: none;")
+        self.orphan_status.setProperty("role", "label")
         self.orphan_status.setVisible(False)
         header.addWidget(self.orphan_status)
         try:
@@ -284,6 +279,7 @@ class AgentDeskWindow(QMainWindow):
         self.instruct_input.returnPressed.connect(self.send_instruction)
         instruct.addWidget(self.instruct_input, 1)
         self.instruct_btn = QPushButton("Talimat gönder")
+        self.instruct_btn.setAccessibleName("Talimat gönder")
         self.instruct_btn.setFixedHeight(26)
         self.instruct_btn.setToolTip(
             "Talimatı seçili ofisin posta kutusuna bırakır; koşu başlatmaz."
@@ -291,11 +287,11 @@ class AgentDeskWindow(QMainWindow):
         self.instruct_btn.clicked.connect(self.send_instruction)
         instruct.addWidget(self.instruct_btn)
         self.instruct_badge = QLabel("")
-        self.instruct_badge.setStyleSheet("background: transparent; border: none;")
+        self.instruct_badge.setProperty("role", "label")
         self.instruct_badge.setToolTip("Ofisin okunmamış mesaj sayısı")
         instruct.addWidget(self.instruct_badge)
         self.instruct_status = QLabel("")
-        self.instruct_status.setStyleSheet("background: transparent; border: none;")
+        self.instruct_status.setProperty("role", "label")
         self.instruct_status.setWordWrap(False)
         instruct.addWidget(self.instruct_status)
         root.addLayout(instruct)
@@ -434,7 +430,7 @@ class AgentDeskWindow(QMainWindow):
         self.refresh_unread()
         title = self.current_office or "ofis seçilmedi"
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:15px;'>🏢 ENTROPY AGENT DESK</b>"
+            f"<b style='color:{RT['accent']}; font-size:15px;'>ENTROPY AGENT DESK</b>"
             f" <span style='color:{RT['text_dim']}; font-size:12px;'>· {title}</span>"
         )
         # Faz 7: başlık her yerde aynı biçimde ("· <ofis>"), pencere adı ile
@@ -457,7 +453,7 @@ class AgentDeskWindow(QMainWindow):
         spent = int(info.get("spent_tokens", info.get("tokens", 0)) or 0)
         budget = int(info.get("budget_tokens", info.get("budget", 0)) or 0)
         running = len(info.get("running", []) or [])
-        text = f"⛽ {spent:,} token".replace(",", ".")
+        text = f"{spent:,} token".replace(",", ".")
         if budget:
             text += f" / {budget:,}".replace(",", ".")
         if running:
@@ -503,7 +499,7 @@ class AgentDeskWindow(QMainWindow):
         """
         count = self.orphan_count(info)
         if count > 0:
-            self.orphan_btn.setText(f"🧹 {count} yetim çalışma ağacı · temizle")
+            self.orphan_btn.setText(f"{count} yetim çalışma ağacı · temizle")
         self.orphan_btn.setVisible(count > 0)
         if not count and not keep_status:
             self.orphan_status.setVisible(False)
@@ -594,7 +590,7 @@ class AgentDeskWindow(QMainWindow):
             return
         self.instruct_badge.setText(
             f"<span style='color:{RT['accent_warn']}; font-size:11px; font-weight:600;'>"
-            f"✉ {count} okunmamış</span>"
+            f"{count} okunmamış</span>"
         )
         self.instruct_badge.setVisible(True)
 

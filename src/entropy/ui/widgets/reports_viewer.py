@@ -159,7 +159,8 @@ class ReportsViewerWidget(QFrame):
 
         # Header
         header = QHBoxLayout()
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>📚 ARAŞTIRMA VE BELLEK DOSYALARI</b>")
+        title_label = QLabel("Raporlar ve notlar")
+        title_label.setProperty("role", "heading")
         # Başlık dar panelde daralabilsin; yoksa üstteki araç çubuğu satırı
         # panelin minimumunu ~676 px'e çıkarıp Zen sol sekmesini kırpıyor.
         title_label.setMinimumWidth(100)
@@ -168,43 +169,15 @@ class ReportsViewerWidget(QFrame):
 
         header.addStretch()
 
-        open_file_btn = QPushButton("📂 Dosya Aç...")
-        open_file_btn.setFixedHeight(24)
-        open_file_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
+        open_file_btn = QPushButton("Dosya Aç...")
+        open_file_btn.setAccessibleName("Dosya Aç...")
+        open_file_btn.setProperty("variant", "primary")
         open_file_btn.clicked.connect(self._open_custom_file)
         header.addWidget(open_file_btn)
 
         self.refresh_btn = QPushButton("Yenile")
-        self.refresh_btn.setFixedHeight(24)
-        self.refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 4px;
-                padding: 2px 14px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00F0FF;
-                color: #080B10;
-            }
-        """)
+        self.refresh_btn.setAccessibleName("Yenile")
+        self.refresh_btn.setProperty("variant", "primary")
         self.refresh_btn.clicked.connect(self.refresh_reports)
         header.addWidget(self.refresh_btn)
 
@@ -241,43 +214,21 @@ class ReportsViewerWidget(QFrame):
         left_layout.setSpacing(4)
 
         # Gruplama ve yetenek/proje filtresi
-        combo_style = """
-            QComboBox {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 6px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            QComboBox:hover { border-color: #00F0FF; }
-            QComboBox::drop-down { border: none; width: 16px; }
-            QComboBox QAbstractItemView {
-                background-color: #0E1420;
-                color: #F0F6FC;
-                border: 1px solid #00F0FF;
-                selection-background-color: #1F2B42;
-                selection-color: #00F0FF;
-            }
-        """
         combo_row = QHBoxLayout()
         combo_row.setSpacing(4)
 
         self.group_combo = QComboBox()
-        self.group_combo.setFixedHeight(24)
+        self.group_combo.setAccessibleName("Rapor listesini yeteneğe ya da tarihe göre grupla")
         self.group_combo.setToolTip("Rapor listesini yeteneğe ya da tarihe göre grupla")
-        self.group_combo.setStyleSheet(combo_style)
-        self.group_combo.addItem("🎯 Yeteneğe Göre", "skill")
-        self.group_combo.addItem("📅 Tarihe Göre", "date")
-        self.group_combo.addItem("📄 Düz Liste", "flat")
+        self.group_combo.addItem("Yeteneğe Göre", "skill")
+        self.group_combo.addItem("Tarihe Göre", "date")
+        self.group_combo.addItem("Düz Liste", "flat")
         self.group_combo.currentIndexChanged.connect(self._rebuild_list)
         combo_row.addWidget(self.group_combo, 1)
 
         self.filter_combo = QComboBox()
-        self.filter_combo.setFixedHeight(24)
+        self.filter_combo.setAccessibleName("Yalnızca seçili yetenek / proje raporlarını göster")
         self.filter_combo.setToolTip("Yalnızca seçili yetenek / proje raporlarını göster")
-        self.filter_combo.setStyleSheet(combo_style)
         self.filter_combo.addItem("Tümü", "")
         self.filter_combo.currentIndexChanged.connect(self._rebuild_list)
         combo_row.addWidget(self.filter_combo, 1)
@@ -285,42 +236,16 @@ class ReportsViewerWidget(QFrame):
         left_layout.addLayout(combo_row)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Başlık / etiket ara...")
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #F0F6FC;
-                font-size: 11px;
-            }
-            QLineEdit:focus {
-                border-color: #00F0FF;
-            }
-        """)
+        self.search_input.setPlaceholderText("Başlık / etiket ara...")
         self.search_input.textChanged.connect(self._filter_reports)
         left_layout.addWidget(self.search_input)
 
         self.list_count_lbl = QLabel("")
-        self.list_count_lbl.setStyleSheet("color:#8B949E; font-size:10px; padding:0 2px;")
+        self.list_count_lbl.setProperty("role", "label")
         left_layout.addWidget(self.list_count_lbl)
 
         self.list_widget = QListWidget()
         self.list_widget.setMinimumWidth(120)
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {CYBER_THEME['bg_terminal']};
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 4px;
-                color: {CYBER_THEME['text_primary']};
-            }}
-            QListWidget::item:selected {{
-                background-color: #1A263C;
-                color: {CYBER_THEME['accent_cyan']};
-                font-weight: bold;
-            }}
-        """)
         # Uzun rapor basliklari yatay kaydirma cubugu dogurmasin; sagdan
         # kirpilir, tam metin girdinin ipucunda kalir (bkz. _rebuild_list).
         apply_list_polish(self.list_widget)
@@ -331,43 +256,16 @@ class ReportsViewerWidget(QFrame):
         list_action_bar = QHBoxLayout()
         list_action_bar.setSpacing(4)
 
-        self.btn_read_report = QPushButton("📖 Raporu Oku")
-        self.btn_read_report.setFixedHeight(26)
+        self.btn_read_report = QPushButton("Raporu Oku")
+        self.btn_read_report.setAccessibleName("Raporu Oku")
         self.btn_read_report.setToolTip("Seçili raporu sağ taraftaki okuma panelinde görüntüle")
-        self.btn_read_report.setStyleSheet("""
-            QPushButton {
-                background-color: #00F0FF;
-                color: #080B10;
-                font-weight: bold;
-                font-size: 11px;
-                border-radius: 4px;
-                padding: 2px 8px;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-            }
-        """)
+        self.btn_read_report.setProperty("variant", "primary")
         self.btn_read_report.clicked.connect(self._read_selected_report)
         list_action_bar.addWidget(self.btn_read_report)
 
-        self.btn_open_standalone = QPushButton("🔍 Ayrı Aç ↗")
-        self.btn_open_standalone.setFixedHeight(26)
+        self.btn_open_standalone = QPushButton("Ayrı Aç ↗")
+        self.btn_open_standalone.setAccessibleName("Ayrı Aç ↗")
         self.btn_open_standalone.setToolTip("Raporu tam ekran ayrı pencerede aç")
-        self.btn_open_standalone.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                font-weight: bold;
-                font-size: 11px;
-                border-radius: 4px;
-                padding: 2px 6px;
-            }
-            QPushButton:hover {
-                border-color: #00F0FF;
-                background-color: #1A263C;
-            }
-        """)
         self.btn_open_standalone.clicked.connect(self._open_current_standalone)
         list_action_bar.addWidget(self.btn_open_standalone)
         left_layout.addLayout(list_action_bar)
@@ -385,175 +283,79 @@ class ReportsViewerWidget(QFrame):
 
         # RAG / Memory Status & Reading Tools Banner
         self.rag_status_bar = QFrame()
-        # Okuma araç çubuğu (durum + A+/A-/🔗/📁) doğal olarak ~514 px istiyordu;
+        # Okuma araç çubuğu (durum + A+/A-//) doğal olarak ~514 px istiyordu;
         # dar panelde çubuğun kendisi kırpılsın, panel genişlemesin.
         self.rag_status_bar.setMinimumWidth(200)
-        self.rag_status_bar.setStyleSheet("""
-            QFrame {
-                background-color: #141C2C;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 6px;
-            }
-        """)
+        self.rag_status_bar.setProperty("role", "panel")
         bar_layout = QHBoxLayout(self.rag_status_bar)
         bar_layout.setContentsMargins(6, 2, 6, 2)
         bar_layout.setSpacing(6)
 
-        self.reader_status_lbl = QLabel("<span style='color:#00F0FF; font-weight:bold; font-size:11px;'>📖 Bilişsel Okuyucu</span>")
+        self.reader_status_lbl = QLabel("<span style='color:#00F0FF; font-weight:bold; font-size:11px;'>Bilişsel Okuyucu</span>")
         bar_layout.addWidget(self.reader_status_lbl)
         bar_layout.addStretch()
 
         # Zoom Controls with clear typography scaling
         zoom_in_btn = QPushButton("A+")
-        zoom_in_btn.setFixedSize(30, 22)
+        zoom_in_btn.setAccessibleName("A+")
+        zoom_in_btn.setProperty("role", "icon")
         zoom_in_btn.setToolTip("Yazı Boyutunu Büyüt (A+)")
-        zoom_in_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 3px;
-                font-weight: bold;
-                font-size: 11px;
-                padding: 0;
-            }
-            QPushButton:hover { background-color: #00F0FF; color: #080B10; }
-        """)
+        zoom_in_btn.setProperty("variant", "primary")
         zoom_in_btn.clicked.connect(self._zoom_in_text)
         bar_layout.addWidget(zoom_in_btn)
 
         zoom_out_btn = QPushButton("A-")
-        zoom_out_btn.setFixedSize(30, 22)
+        zoom_out_btn.setAccessibleName("A-")
+        zoom_out_btn.setProperty("role", "icon")
         zoom_out_btn.setToolTip("Yazı Boyutunu Küçült (A-)")
-        zoom_out_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 3px;
-                font-weight: bold;
-                font-size: 11px;
-                padding: 0;
-            }
-            QPushButton:hover { background-color: #00F0FF; color: #080B10; border-color: #00F0FF; }
-        """)
+        zoom_out_btn.setProperty("variant", "primary")
         zoom_out_btn.clicked.connect(self._zoom_out_text)
         bar_layout.addWidget(zoom_out_btn)
 
-        self.btn_open_obsidian = QPushButton("🔗")
-        self.btn_open_obsidian.setFixedSize(26, 22)
+        self.btn_open_obsidian = QPushButton("")
+        self.btn_open_obsidian.setAccessibleName("Obsidian — seçili raporu Obsidian kasasında açar")
+        self.btn_open_obsidian.setProperty("role", "icon")
         self.btn_open_obsidian.setToolTip("Obsidian — seçili raporu Obsidian kasasında açar")
-        self.btn_open_obsidian.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #BC8CFF;
-                border: 1px solid #BC8CFF;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-                padding: 1px 6px;
-            }
-            QPushButton:hover { background-color: #BC8CFF; color: #080B10; }
-        """)
         self.btn_open_obsidian.clicked.connect(self._open_in_obsidian)
         bar_layout.addWidget(self.btn_open_obsidian)
 
-        self.btn_open_folder = QPushButton("📁")
-        self.btn_open_folder.setFixedSize(26, 22)
+        self.btn_open_folder = QPushButton("")
+        self.btn_open_folder.setAccessibleName("Klasör — raporun bulunduğu klasörü dosya yöneticisinde açar")
+        self.btn_open_folder.setProperty("role", "icon")
         self.btn_open_folder.setToolTip("Klasör — raporun bulunduğu klasörü dosya yöneticisinde açar")
-        self.btn_open_folder.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #E3B341;
-                border: 1px solid #1F2B42;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-                padding: 1px 6px;
-            }
-            QPushButton:hover { border-color: #E3B341; color: #E3B341; }
-        """)
         self.btn_open_folder.clicked.connect(self._open_containing_folder)
         bar_layout.addWidget(self.btn_open_folder)
 
-        copy_btn = QPushButton("📋")
-        copy_btn.setFixedSize(26, 22)
+        copy_btn = QPushButton("")
+        copy_btn.setAccessibleName("Kopyala — rapor metnini panoya alır")
+        copy_btn.setProperty("role", "icon")
         copy_btn.setToolTip("Kopyala — rapor metnini panoya alır")
-        copy_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #F0F6FC;
-                border: 1px solid #1F2B42;
-                border-radius: 3px;
-                font-size: 10px;
-                padding: 1px 6px;
-            }
-            QPushButton:hover { background-color: #00F0FF; color: #080B10; border-color: #00F0FF; }
-        """)
+        copy_btn.setProperty("variant", "primary")
         copy_btn.clicked.connect(self._copy_content)
         bar_layout.addWidget(copy_btn)
 
         expand_btn = QPushButton("↗")
-        expand_btn.setFixedSize(26, 22)
+        expand_btn.setAccessibleName("↗")
+        expand_btn.setProperty("role", "icon")
         expand_btn.setToolTip("Tam ekran — raporu ayrı pencerede açar")
-        expand_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-                padding: 1px 6px;
-            }
-            QPushButton:hover { background-color: #00F0FF; color: #080B10; }
-        """)
+        expand_btn.setProperty("variant", "primary")
         expand_btn.clicked.connect(self._open_current_standalone)
         bar_layout.addWidget(expand_btn)
 
-        distill_btn = QPushButton("🧠")
-        distill_btn.setFixedSize(26, 22)
+        distill_btn = QPushButton("")
+        distill_btn.setProperty("role", "icon")
         distill_btn.setToolTip(
             "Bu araştırma raporu otomatik olarak bilişsel belleğe alınmıştır.\n"
             "Harici veya elle düzenlenmiş notları belleğe ve RAG indeksine yeniden sentezlemek için kullanabilirsiniz."
         )
-        distill_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1A263C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 3px;
-                padding: 1px 6px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
+        distill_btn.setProperty("variant", "primary")
         distill_btn.clicked.connect(self._distill_current_report)
         bar_layout.addWidget(distill_btn)
 
-        delete_btn = QPushButton("🗑️")
-        delete_btn.setFixedSize(26, 22)
+        delete_btn = QPushButton("")
+        delete_btn.setAccessibleName("Sil — seçili raporu diskten ve hafızadan kaldırır")
+        delete_btn.setProperty("role", "icon")
         delete_btn.setToolTip("Sil — seçili raporu diskten ve hafızadan kaldırır")
-        delete_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #261418;
-                color: #FF4D4D;
-                border: 1px solid #FF4D4D;
-                border-radius: 3px;
-                padding: 1px 6px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #FF4D4D;
-                color: #080B10;
-            }
-        """)
         delete_btn.clicked.connect(self._delete_current_report)
         bar_layout.addWidget(delete_btn)
 
@@ -563,17 +365,7 @@ class ReportsViewerWidget(QFrame):
         self.meta_panel = QLabel("")
         self.meta_panel.setWordWrap(True)
         self.meta_panel.setTextFormat(Qt.TextFormat.RichText)
-        self.meta_panel.setStyleSheet(f"""
-            QLabel {{
-                background-color: {RT['surface_raised']};
-                border: none;
-                border-left: 3px solid {RT['accent']};
-                border-radius: {RT['radius_small']};
-                padding: 8px 12px;
-                color: {RT['text_dim']};
-                font-size: {RT['font_size_small']};
-            }}
-        """)
+        self.meta_panel.setProperty("role", "label")
         self.meta_panel.setVisible(False)
         right_layout.addWidget(self.meta_panel)
 
@@ -582,18 +374,7 @@ class ReportsViewerWidget(QFrame):
         self.content_browser.setMinimumWidth(200)
         self.content_browser.setOpenExternalLinks(True)
         # Rapor okuma yuzeyi: sohbet balonlariyla ayni tasarim belirtecleri.
-        self.content_browser.setStyleSheet(f"""
-            QTextBrowser {{
-                background-color: {RT['surface_base']};
-                border: 1px solid {RT['divider_soft']};
-                border-radius: 10px;
-                color: {RT['text_body']};
-                padding: 18px 22px;
-                font-size: {RT['font_size_body']};
-                font-family: {RT['font_body']};
-                selection-background-color: {RT['accent_soft']};
-            }}
-        """)
+        self.content_browser.setProperty("role", "reader")
         right_layout.addWidget(self.content_browser)
         self.splitter.addWidget(right_container)
 
@@ -740,7 +521,7 @@ class ReportsViewerWidget(QFrame):
                 key = entry["group_label"] if mode == "skill" else entry["date_label"]
                 buckets.setdefault(key, []).append(entry)
             if mode == "skill":
-                keys = sorted(buckets.keys(), key=lambda k: (k.startswith("📌"), k.lower()), reverse=False)
+                keys = sorted(buckets.keys(), key=lambda k: (k.startswith(""), k.lower()), reverse=False)
             else:
                 # Tarih grupları yeniden eskiye
                 keys = sorted(buckets.keys(), key=lambda k: max(e.get("mtime", 0.0) for e in buckets[k]), reverse=True)
@@ -782,7 +563,7 @@ class ReportsViewerWidget(QFrame):
         text = self.content_browser.toPlainText()
         if text:
             QApplication.clipboard().setText(text)
-            bus.terminal_output_received.emit("[📚 Rapor Merkezi] Rapor metni panoya kopyalandı.\n")
+            bus.terminal_output_received.emit("[Rapor Merkezi] Rapor metni panoya kopyalandı.\n")
 
     def _open_custom_file(self):
         """Allow user to browse and view any markdown file from disk."""
@@ -794,7 +575,7 @@ class ReportsViewerWidget(QFrame):
         )
         if filename:
             p = Path(filename)
-            entry = self._make_entry(p, "📄", forced_group="📂 Dışarıdan Açılan")
+            entry = self._make_entry(p, "", forced_group="Dışarıdan Açılan")
             self._entries.insert(0, entry)
             if self.filter_combo.findData(entry["group_key"]) < 0:
                 self.filter_combo.addItem(entry["group_label"], entry["group_key"])
@@ -833,7 +614,7 @@ class ReportsViewerWidget(QFrame):
         indexer = ProjectIndexer(active_proj)
         indexer.scan_and_index(max_files=150)
 
-        bus.terminal_output_received.emit(f"\n[🧠 Hafıza & RAG] '{p.name}' raporu başarıyla bilişsel belleğe sentezlendi ve RAG indeksine eklendi.\n")
+        bus.terminal_output_received.emit(f"\n[Hafıza & RAG] '{p.name}' raporu başarıyla bilişsel belleğe sentezlendi ve RAG indeksine eklendi.\n")
         bus.report_created.emit(str(p))
 
     def _delete_current_report(self):
@@ -925,7 +706,7 @@ class ReportsViewerWidget(QFrame):
         if not opened:
             # Obsidian kurulu değilse dosyayı varsayılan uygulamayla aç
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
-        bus.terminal_output_received.emit(f"[📚 Rapor Merkezi] Obsidian'da açılıyor: {p.name}\n")
+        bus.terminal_output_received.emit(f"[Rapor Merkezi] Obsidian'da açılıyor: {p.name}\n")
 
     def _open_containing_folder(self):
         """Seçili raporun klasörünü dosya yöneticisinde açar."""
@@ -934,7 +715,7 @@ class ReportsViewerWidget(QFrame):
             QMessageBox.information(self, "Seçim Yapılmadı", "Önce bir rapor seçin.")
             return
         reveal_in_file_manager(p)
-        bus.terminal_output_received.emit(f"[📚 Rapor Merkezi] Klasör açıldı: {p.parent}\n")
+        bus.terminal_output_received.emit(f"[Rapor Merkezi] Klasör açıldı: {p.parent}\n")
 
     def _selected_path(self):
         """Seçili liste satırının dosya yolu (grup başlıkları atlanır)."""
@@ -1011,13 +792,13 @@ class ReportsViewerWidget(QFrame):
             group_label = forced_group
             group_key = forced_group
         elif meta["skill"]:
-            group_label = f"🎯 {meta['skill']}"
+            group_label = f"{meta['skill']}"
             group_key = f"skill:{meta['skill']}"
         elif meta["project"]:
-            group_label = f"📁 {meta['project']}"
+            group_label = f"{meta['project']}"
             group_key = f"project:{meta['project']}"
         else:
-            group_label = "🗂️ Genel Raporlar"
+            group_label = "Genel Raporlar"
             group_key = "general"
 
         date_str = str(meta.get("date") or "")[:10]
@@ -1026,17 +807,17 @@ class ReportsViewerWidget(QFrame):
             today = datetime.date.today()
             delta = (today - d).days
             if delta <= 0:
-                date_label = "📅 Bugün"
+                date_label = "Bugün"
             elif delta == 1:
-                date_label = "📅 Dün"
+                date_label = "Dün"
             elif delta < 7:
-                date_label = "📅 Bu Hafta"
+                date_label = "Bu Hafta"
             elif delta < 31:
-                date_label = "📅 Bu Ay"
+                date_label = "Bu Ay"
             else:
-                date_label = f"📅 {d.strftime('%Y-%m')}"
+                date_label = f"{d.strftime('%Y-%m')}"
         except ValueError:
-            date_label = "📅 Tarihsiz"
+            date_label = "Tarihsiz"
 
         meta.update({
             "label": f"{icon} {meta['title']}",
@@ -1069,8 +850,8 @@ class ReportsViewerWidget(QFrame):
 
         # Global hafıza dosyası her zaman en üstte kendi grubunda
         if self.vault_manager.memory_file.exists():
-            mem = self._make_entry(self.vault_manager.memory_file, "📌", forced_group="📌 Global Hafıza")
-            mem["label"] = "📌 Global Hafıza (MEMORY.md)"
+            mem = self._make_entry(self.vault_manager.memory_file, "", forced_group="Global Hafıza")
+            mem["label"] = "Global Hafıza (MEMORY.md)"
             mem["title"] = "Global Hafıza (MEMORY.md)"
             entries.append(mem)
             seen.add(str(self.vault_manager.memory_file))
@@ -1080,7 +861,7 @@ class ReportsViewerWidget(QFrame):
             if str(p) in seen or not p.exists():
                 continue
             seen.add(str(p))
-            entries.append(self._make_entry(p, "📄"))
+            entries.append(self._make_entry(p, ""))
 
         # Also look in project reports/ and docs/
         active_proj = getattr(self, "active_project_dir", None) or config.default_project_path
@@ -1091,9 +872,9 @@ class ReportsViewerWidget(QFrame):
                     if str(f) in seen:
                         continue
                     seen.add(str(f))
-                    entry = self._make_entry(f, "📑")
+                    entry = self._make_entry(f, "")
                     if entry["group_key"] == "general":
-                        entry["group_label"] = f"📁 {Path(active_proj).name} / {subfolder}"
+                        entry["group_label"] = f"{Path(active_proj).name} / {subfolder}"
                         entry["group_key"] = f"project:{Path(active_proj).name}"
                     entries.append(entry)
 
@@ -1131,7 +912,7 @@ class ReportsViewerWidget(QFrame):
             from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
             self.content_browser.setHtml(
                 render_markdown_to_html(
-                    "### 📚 Araştırma ve Hafıza Arşivi\n\n"
+                    "### Araştırma ve Hafıza Arşivi\n\n"
                     "Henüz kaydedilmiş bir araştırma raporu bulunmuyor.\n\n"
                     "Zen mod komut satırından yapay zekaya *'... konusunu derinlemesine araştır ve rapor hazırla'* "
                     "talimatı verdiğinizde, üretilen tüm teknik raporlar otomatik olarak buraya ve Obsidian kasanıza kaydedilecektir."
@@ -1172,14 +953,14 @@ class ReportsViewerWidget(QFrame):
         chips = []
         if meta.get("skill"):
             chips.append(
-                f"<span style='color:#00FF9D;'>🎯 {meta['skill']}</span>"
+                f"<span style='color:#00FF9D;'>{meta['skill']}</span>"
             )
         if meta.get("project"):
-            chips.append(f"<span style='color:#58A6FF;'>📁 {meta['project']}</span>")
+            chips.append(f"<span style='color:#58A6FF;'>{meta['project']}</span>")
         if meta.get("date"):
-            chips.append(f"<span style='color:#E3B341;'>📅 {meta['date']}</span>")
+            chips.append(f"<span style='color:#E3B341;'>{meta['date']}</span>")
         if meta.get("modified"):
-            chips.append(f"<span style='color:#8B949E;'>🕒 {meta['modified']}</span>")
+            chips.append(f"<span style='color:#8B949E;'>{meta['modified']}</span>")
         tags = [t for t in (meta.get("tags") or []) if not t.lower().startswith(("skill:", "project:"))]
         tag_html = ""
         if tags:
@@ -1188,7 +969,7 @@ class ReportsViewerWidget(QFrame):
                 for t in tags[:10]
             )
         self.meta_panel.setText(
-            f"<b style='color:#F0F6FC; font-size:12px;'>{meta.get('title', path.stem)}</b><br/>"
+            f"<b style='color:#F0F6FC; font-size:13px;'>{meta.get('title', path.stem)}</b><br/>"
             + " &nbsp;·&nbsp; ".join(chips)
             + tag_html
         )

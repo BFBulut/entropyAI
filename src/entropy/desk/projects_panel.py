@@ -141,6 +141,7 @@ class ProjectEditDialog(QDialog):
         self.repo_input.textChanged.connect(self._on_repo_changed)
         repo_row.addWidget(self.repo_input, 1)
         self.repo_browse_btn = QPushButton("…")
+        self.repo_browse_btn.setAccessibleName("…")
         self.repo_browse_btn.setFixedWidth(30)
         self.repo_browse_btn.setToolTip("Klasör seç")
         self.repo_browse_btn.clicked.connect(self.browse_repo)
@@ -164,7 +165,8 @@ class ProjectEditDialog(QDialog):
 
         self.hint_label = QLabel("")
         self.hint_label.setWordWrap(True)
-        self.hint_label.setStyleSheet("color:#F85149; font-size:11px;")
+        self.hint_label.setProperty("role", "label")
+        self.hint_label.setProperty("tone", "danger")
         self.hint_label.setVisible(False)
         layout.addWidget(self.hint_label)
         layout.addWidget(QLabel("Kapsam / notlar:"))
@@ -175,9 +177,11 @@ class ProjectEditDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addStretch()
         cancel = QPushButton("İptal")
+        cancel.setAccessibleName("İptal")
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
         self.save_btn = QPushButton("Oluştur")
+        self.save_btn.setAccessibleName("Oluştur")
         self.save_btn.clicked.connect(self._on_save)
         buttons.addWidget(self.save_btn)
         layout.addLayout(buttons)
@@ -278,27 +282,25 @@ class ProjectsPanel(QFrame):
 
         head = QHBoxLayout()
         self.title_label = QLabel("")
-        self.title_label.setStyleSheet("background:transparent; border:none;")
+        self.title_label.setProperty("role", "label")
         head.addWidget(self.title_label)
         head.addStretch()
         self.add_btn = QPushButton("+ Proje")
+        self.add_btn.setAccessibleName("+ Proje")
         self.add_btn.clicked.connect(self.create_project)
         head.addWidget(self.add_btn)
         self.filter_btn = QPushButton("Kartları süz")
+        self.filter_btn.setAccessibleName("Kartları süz")
         self.filter_btn.setToolTip("Kartlar sekmesini seçili projeye süz")
         self.filter_btn.clicked.connect(self.apply_filter)
         head.addWidget(self.filter_btn)
         self.clear_btn = QPushButton("Süzgeci kaldır")
+        self.clear_btn.setAccessibleName("Süzgeci kaldır")
         self.clear_btn.clicked.connect(self.clear_filter)
         head.addWidget(self.clear_btn)
         layout.addLayout(head)
 
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            f"QListWidget {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; font-size:{RT['font_size_small']}; }}"
-        )
         layout.addWidget(self.list_widget, 1)
 
         # --- Faz 10-B: "Çalışma belleği" hızlı görüntüleyici -----------------
@@ -308,10 +310,7 @@ class ProjectsPanel(QFrame):
         ws_head = QHBoxLayout()
         ws_head.setSpacing(4)
         ws_title = QLabel("Çalışma belleği:")
-        ws_title.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{RT['font_size_small']};"
-            f" background:transparent; border:none;"
-        )
+        ws_title.setProperty("role", "label")
         ws_head.addWidget(ws_title)
         self.workspace_buttons: Dict[str, QPushButton] = {}
         for key, label in (("board", "BOARD.md"),
@@ -331,12 +330,7 @@ class ProjectsPanel(QFrame):
         self.workspace_view.setReadOnly(True)
         self.workspace_view.setOpenExternalLinks(False)
         self.workspace_view.setMaximumHeight(200)
-        self.workspace_view.setStyleSheet(
-            f"QTextBrowser {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; padding:8px;"
-            f" font-size:{RT['font_size_small']}; }}"
-        )
+        self.workspace_view.setProperty("role", "reader")
         self.workspace_view.setVisible(False)
         layout.addWidget(self.workspace_view)
 
@@ -449,7 +443,7 @@ class ProjectsPanel(QFrame):
             self.list_widget.addItem(item)
         suffix = f" · süzgeç: {self.filtered_project}" if self.filtered_project else ""
         self.title_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:13px;'>📁 PROJELER</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>PROJELER</b>"
             f" <span style='color:{RT['text_dim']}; font-size:11px;'>"
             f"{self.office or 'ofis seçilmedi'} · {len(projects)} proje{suffix}</span>"
         )

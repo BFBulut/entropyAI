@@ -153,13 +153,31 @@ def fit_combo_to_contents(combo, min_width: int = 60, extra: int = 0) -> int:
 
     Dönen değer uygulanan piksel genişliğidir.
     """
-    metrics = combo.fontMetrics()
     texts = [combo.itemText(i) for i in range(combo.count())]
     texts.append(combo.currentText())
     line_edit = combo.lineEdit() if combo.isEditable() else None
     if line_edit is not None:
         texts.append(line_edit.placeholderText())
-    widest = max((metrics.horizontalAdvance(t or "") for t in texts), default=0)
+
+    # Faz 11-E: ölçü, kutunun O ANKİ fontuyla değil, tasarım sisteminin gövde
+    # fontuyla da hesaplanır ve büyüğü alınır. Uygulama düzeyi stil sayfası
+    # (`apply_design_system`) kutu kurulduktan SONRA uygulandığında yazı tipi
+    # büyüyor ve daha önce sabitlenmiş genişlik metni kırpıyordu.
+    from PySide6.QtGui import QFontMetrics
+
+    candidates = [combo.fontMetrics()]
+    try:
+        from entropy.ui.design import TOKENS
+
+        design_font = combo.font()
+        design_font.setPixelSize(int(TOKENS["type"]["body"]["size"]))
+        candidates.append(QFontMetrics(design_font))
+    except Exception:
+        pass
+    widest = max(
+        (m.horizontalAdvance(t or "") for m in candidates for t in texts),
+        default=0,
+    )
     # Çerçeve + iç dolgu + açılır ok payı (stil sayfasından bağımsız güvenli pay).
     chrome = 44 + extra
     width = max(min_width, widest + chrome)

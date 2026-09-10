@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.event_bus import bus
+from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import spec_field
 
@@ -35,11 +36,11 @@ from entropy.ui.widgets.agents_widget import spec_field
 # dosyası farkı QPlainTextEdit'i dakikalarca meşgul ediyordu.
 DIFF_MAX_BYTES = 200 * 1024
 
-# Diff satır renkleri (okuma teması tonlarına yakın, yüksek kontrast).
-COLOR_ADD = "#3FB950"
-COLOR_DEL = "#F85149"
-COLOR_HUNK = "#58A6FF"
-COLOR_META = "#8B949E"
+# Diff satır renkleri — Faz 11-E adım 6: `viz.*` belirteç ailesi (tek kaynak).
+COLOR_ADD = TOKENS["viz"]["add"]
+COLOR_DEL = TOKENS["viz"]["del"]
+COLOR_HUNK = TOKENS["viz"]["hunk"]
+COLOR_META = TOKENS["viz"]["meta"]
 
 
 def _module(name: str) -> Optional[Any]:
@@ -200,14 +201,16 @@ class ChangesPanel(QFrame):
         self.branch_label = QLabel("")
         self.branch_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.branch_label.setOpenExternalLinks(True)
-        self.branch_label.setStyleSheet("background:transparent; border:none;")
+        self.branch_label.setProperty("role", "label")
         head.addWidget(self.branch_label)
         head.addStretch()
-        self.push_btn = QPushButton("⬆ Dalı gönder (onaylı)")
+        self.push_btn = QPushButton("Dalı gönder (onaylı)")
+        self.push_btn.setAccessibleName("Dalı gönder (onaylı)")
         self.push_btn.setToolTip("Kartın dalını uzak depoya gönderir; önce onay sorar.")
         self.push_btn.clicked.connect(self._on_push)
         head.addWidget(self.push_btn)
-        self.pr_btn = QPushButton("🔀 Taslak PR aç")
+        self.pr_btn = QPushButton("Taslak PR aç")
+        self.pr_btn.setAccessibleName("Taslak PR aç")
         self.pr_btn.setToolTip("Dal için taslak PR açar (gh gerekir).")
         self.pr_btn.clicked.connect(self._on_draft_pr)
         head.addWidget(self.pr_btn)
@@ -215,9 +218,7 @@ class ChangesPanel(QFrame):
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.status_label.setProperty("role", "label")
         layout.addWidget(self.status_label)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -225,25 +226,13 @@ class ChangesPanel(QFrame):
         self.file_list.setMinimumWidth(160)
         # Qt varsayılanı beyaz zemindir; okuma temasında liste diff görünümüyle
         # aynı yüzeyde durmalı (offscreen görüntüde beyaz sütun olarak çıkıyordu).
-        self.file_list.setStyleSheet(
-            f"QListWidget {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; font-size:11px; padding:4px; }}"
-            f" QListWidget::item:selected {{ background-color:{RT['divider_soft']};"
-            f" color:{RT['text']}; }}"
-        )
         self.file_list.currentItemChanged.connect(self._on_file_changed)
         splitter.addWidget(self.file_list)
 
         self.diff_view = QPlainTextEdit()
         self.diff_view.setReadOnly(True)
+        self.diff_view.setProperty("role", "terminal")
         self.diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.diff_view.setStyleSheet(
-            f"QPlainTextEdit {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; font-family:{RT['font_mono']};"
-            f" font-size:{RT['font_size_mono']}; padding:6px; }}"
-        )
         self.highlighter = DiffHighlighter(self.diff_view.document())
         splitter.addWidget(self.diff_view)
         splitter.setSizes([220, 520])
@@ -267,7 +256,7 @@ class ChangesPanel(QFrame):
             pr_url = str(self._review.get("pr_url") or "")
         bits = []
         if branch:
-            bits.append(f"<b style='color:{RT['text']};'>🌿 {branch}</b>")
+            bits.append(f"<b style='color:{RT['text']};'>{branch}</b>")
         headline = review_headline(self._review)
         if headline:
             bits.append(
@@ -425,7 +414,7 @@ class ChangesPanel(QFrame):
         url = str(result.get("url") or result.get("pr_url") or "")
         if url:
             self.branch_label.setText(
-                f"<b style='color:{RT['text']};'>🌿 {branch_of(self.card)}</b>"
+                f"<b style='color:{RT['text']};'>{branch_of(self.card)}</b>"
                 f" · <a href='{url}' style='color:{RT['accent']};'>PR</a>"
             )
             self.status_label.setText(f"Taslak PR: {url}")

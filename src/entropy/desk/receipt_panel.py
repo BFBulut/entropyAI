@@ -48,21 +48,14 @@ class CollapsibleSection(QWidget):
         self.toggle.setText(f"{SECTION_ICONS.get(title, '▪')}  {title}")
         self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
-        self.toggle.setStyleSheet(
-            f"QToolButton {{ color:{RT['accent']}; background:transparent; border:none;"
-            f" font-size:12px; font-weight:600; text-align:left; padding:2px 0; }}"
-        )
+        self.toggle.setProperty("variant", "ghost")
         self.toggle.toggled.connect(self._on_toggled)
         layout.addWidget(self.toggle)
 
         self.body = QTextBrowser()
         self.body.setOpenExternalLinks(True)
         self.body.setHtml(body_html)
-        self.body.setStyleSheet(
-            f"QTextBrowser {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']};"
-            f" color:{RT['text_body']}; font-size:11px; padding:6px; }}"
-        )
+        self.body.setProperty("role", "reader")
         self.body.setMinimumHeight(48)
         self.body.setMaximumHeight(220)
         self.body.setVisible(expanded)
@@ -104,13 +97,12 @@ class ReceiptPanel(QFrame):
         self.header_label.setWordWrap(True)
         self.header_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.header_label.setOpenExternalLinks(True)
-        self.header_label.setStyleSheet("background:transparent; border:none;")
+        self.header_label.setProperty("role", "label")
         layout.addWidget(self.header_label)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
         self.container = QWidget()
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setContentsMargins(0, 0, 0, 0)
@@ -128,15 +120,14 @@ class ReceiptPanel(QFrame):
         self.comment_input.returnPressed.connect(self.send_comment)
         comment.addWidget(self.comment_input, 1)
         self.comment_btn = QPushButton("Yorum ekle")
+        self.comment_btn.setAccessibleName("Yorum ekle")
         self.comment_btn.clicked.connect(self.send_comment)
         comment.addWidget(self.comment_btn)
         self.comment_row = comment
         layout.addLayout(comment)
 
         self.comment_status = QLabel("")
-        self.comment_status.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:11px; background:transparent; border:none;"
-        )
+        self.comment_status.setProperty("role", "label")
         layout.addWidget(self.comment_status)
 
         if read_only:
@@ -190,19 +181,19 @@ class ReceiptPanel(QFrame):
         self._clear()
         if not self.sections:
             self.header_label.setText(
-                f"<b style='color:{RT['accent']}; font-size:13px;'>🧾 MAKBUZ</b>"
+                f"<b style='color:{RT['accent']}; font-size:13px;'>MAKBUZ</b>"
                 f" <span style='color:{RT['text_dim']}; font-size:11px;'>"
                 "bu kart için ofis raporu bulunamadı</span>"
             )
             return
         summary = receipt_summary(self.sections)
-        badges = ["🔬 kanıt var" if summary["has_proof"] else "🔬 kanıt yok"]
+        badges = ["kanıt var" if summary["has_proof"] else "kanıt yok"]
         if summary["change_count"]:
-            badges.append(f"📝 {summary['change_count']} değişiklik")
+            badges.append(f"{summary['change_count']} değişiklik")
         if summary["cost_text"]:
-            badges.append(f"💰 {summary['cost_text'][:32]}")
+            badges.append(f"{summary['cost_text'][:32]}")
         head = (
-            f"<b style='color:{RT['accent']}; font-size:13px;'>🧾 MAKBUZ</b>"
+            f"<b style='color:{RT['accent']}; font-size:13px;'>MAKBUZ</b>"
             f" <span style='color:{RT['text']}; font-size:11px;'>{title}</span><br/>"
             f"<span style='color:{RT['text_dim']}; font-size:11px;'>"
             + " · ".join(badges) + "</span>"

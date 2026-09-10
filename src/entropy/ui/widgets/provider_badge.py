@@ -119,10 +119,7 @@ class ProviderStatusBadge(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("providerBadge")
-        self.setStyleSheet(
-            "QFrame#providerBadge { background:transparent; border:none; }"
-            " QLabel { background:transparent; border:none; }"
-        )
+        self.setProperty("role", "panel")
         self.statuses: Dict[str, Dict[str, Any]] = {}
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

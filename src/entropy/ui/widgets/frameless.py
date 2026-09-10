@@ -3,7 +3,7 @@
 Sorun (kullanıcı, v0.5.1 exe): Zen penceresi `FramelessWindowHint` ile
 açılıyordu ama hiçbir fare olayı işlenmiyordu. Başlık çubuğu olmadığı için
 pencere **taşınamıyor**, kenarlarından **boyutlandırılamıyor**, küçültme /
-maksimize düğmesi de yoktu. Tek çıkış yolu ✕ idi.
+maksimize düğmesi de yoktu. Tek çıkış yolu idi.
 
 Çözüm (en az riskli seçenek): çerçeveyi geri getirmek yerine — geri getirmek
 tüm tema/köşe yuvarlaması düzenini bozardı — Qt'nin **sistem** taşıma ve

@@ -31,10 +31,10 @@ from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
 # Palette bölümleri ve rozetleri: kullanıcı sonucun nereden geldiğini görsün.
 KIND_BADGES = {
     "command": ("⌘", "Komut", "#00F0FF"),
-    "skill": ("🎯", "Yetenek", "#00FF9D"),
-    "agent": ("🤖", "Ajan", "#2DD4BF"),
-    "office": ("🏢", "Ofis", "#FFB000"),
-    "report": ("📄", "Rapor", "#C792EA"),
+    "skill": ("", "Yetenek", "#00FF9D"),
+    "agent": ("", "Ajan", "#2DD4BF"),
+    "office": ("", "Ofis", "#FFB000"),
+    "report": ("", "Rapor", "#C792EA"),
 }
 
 MAX_RESULTS = 40
@@ -241,10 +241,6 @@ class CommandPalette(QDialog):
         self._items: List[Dict[str, Any]] = list(items) if items is not None else []
         self._visible: List[Dict[str, Any]] = []
 
-        self.setStyleSheet(
-            f"QDialog {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['accent']}; border-radius:{RT['radius']}; }}"
-        )
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
@@ -253,31 +249,16 @@ class CommandPalette(QDialog):
         self.search_input.setPlaceholderText(
             "Komut, yetenek, ajan, ofis ya da rapor ara…  (↑↓ gez · Enter aç · Esc kapat)"
         )
-        self.search_input.setStyleSheet(
-            f"QLineEdit {{ background:{RT['surface_raised']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius_small']};"
-            f" padding:8px 10px; color:{RT['text']}; font-size:{BODY_PX}px; }}"
-            f" QLineEdit:focus {{ border-color:{RT['accent']}; }}"
-        )
         self.search_input.textChanged.connect(self.apply_filter)
         root.addWidget(self.search_input)
 
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            f"QListWidget {{ background:transparent; border:none;"
-            f" color:{RT['text_body']}; font-size:{BODY_PX}px; }}"
-            f" QListWidget::item {{ padding:5px 6px; border-radius:4px; }}"
-            f" QListWidget::item:selected {{ background:{RT['accent_soft']};"
-            f" color:{RT['accent']}; }}"
-        )
         self.list_widget.itemActivated.connect(self._on_item_chosen)
         self.list_widget.itemClicked.connect(self._on_item_chosen)
         root.addWidget(self.list_widget, 1)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{LABEL_PX}px; background:transparent; border:none;"
-        )
+        self.status_label.setProperty("role", "label")
         root.addWidget(self.status_label)
 
         # Enter, giriş satırındayken de listedeki seçimi açsın.

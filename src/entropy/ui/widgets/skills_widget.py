@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from entropy.core.config import config
 from entropy.core.event_bus import bus
+from entropy.ui.widgets.header_bar import repolish
 from entropy.skills.manager import SkillManager, SkillDefinition
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
@@ -23,30 +24,6 @@ class AddSkillDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Yeni Yetenek (Skill) Oluştur")
         self.setFixedSize(500, 420)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0E1420;
-                color: #F0F6FC;
-            }
-            QLabel { color: #F0F6FC; font-size: 12px; }
-            QLineEdit, QTextEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px;
-                color: #F0F6FC;
-                font-family: 'Segoe UI', Consolas;
-            }
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -75,11 +52,13 @@ class AddSkillDialog(QDialog):
         btn_box.addStretch()
 
         cancel_btn = QPushButton("İptal")
+        cancel_btn.setAccessibleName("İptal")
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
 
         save_btn = QPushButton("Yeteneği Kaydet")
-        save_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        save_btn.setAccessibleName("Yeteneği Kaydet")
+        save_btn.setProperty("variant", "primary")
         save_btn.clicked.connect(self._on_save)
         btn_box.addWidget(save_btn)
 
@@ -104,29 +83,6 @@ class DownloadSkillDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("İnternetten Skill (SKILL.md) İndir")
         self.setFixedSize(480, 200)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0E1420;
-                color: #F0F6FC;
-            }
-            QLabel { color: #F0F6FC; font-size: 12px; }
-            QLineEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px;
-                color: #F0F6FC;
-            }
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -154,7 +110,8 @@ class DownloadSkillDialog(QDialog):
         btn_box.addWidget(cancel_btn)
 
         dl_btn = QPushButton("İndir ve Yükle")
-        dl_btn.setStyleSheet("background-color: #00FF9D; color: #080B10; font-weight: bold;")
+        dl_btn.setAccessibleName("İndir ve Yükle")
+        dl_btn.setProperty("variant", "primary")
         dl_btn.clicked.connect(self._on_download)
         btn_box.addWidget(dl_btn)
 
@@ -178,28 +135,6 @@ class SkillEditorDialog(QDialog):
         self.skill_path = Path(skill_path)
         self.setWindowTitle(f"Yetenek Düzenle: {skill_name or self.skill_path.name}")
         self.resize(720, 560)
-        self.setStyleSheet("""
-            QDialog { background-color: #0E1420; color: #F0F6FC; }
-            QLabel { color: #8B949E; font-size: 11px; }
-            QTextEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 8px;
-                color: #F0F6FC;
-                font-family: 'Consolas', 'Courier New';
-                font-size: 12px;
-            }
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 6px 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
@@ -216,7 +151,8 @@ class SkillEditorDialog(QDialog):
         layout.addWidget(self.editor)
 
         btn_box = QHBoxLayout()
-        self.system_btn = QPushButton("🖊️ Sistem Editöründe Aç")
+        self.system_btn = QPushButton("Sistem Editöründe Aç")
+        self.system_btn.setAccessibleName("Sistem Editöründe Aç")
         self.system_btn.clicked.connect(self.open_in_system_editor)
         btn_box.addWidget(self.system_btn)
         btn_box.addStretch()
@@ -226,7 +162,8 @@ class SkillEditorDialog(QDialog):
         btn_box.addWidget(cancel_btn)
 
         self.save_btn = QPushButton("Kaydet")
-        self.save_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        self.save_btn.setAccessibleName("Kaydet")
+        self.save_btn.setProperty("variant", "primary")
         self.save_btn.clicked.connect(self._on_save)
         btn_box.addWidget(self.save_btn)
 
@@ -277,63 +214,24 @@ class SkillsWidget(QFrame):
 
         # Header bar
         header_layout = QHBoxLayout()
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>🎯 YETENEKLER & ARAÇ KÜTÜPHANESİ</b>")
+        title_label = QLabel("Yetenekler")
+        title_label.setProperty("role", "heading")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
-        dl_btn = QPushButton("📥 URL'den İndir")
-        dl_btn.setFixedHeight(24)
-        dl_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
+        dl_btn = QPushButton("URL'den İndir")
+        dl_btn.setProperty("variant", "primary")
         dl_btn.clicked.connect(self._open_download_dialog)
         header_layout.addWidget(dl_btn)
 
         add_btn = QPushButton("+ Yeni Yetenek")
-        add_btn.setFixedHeight(24)
-        add_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00F0FF;
-                color: #080B10;
-            }
-        """)
+        add_btn.setAccessibleName("+ Yeni Yetenek")
+        add_btn.setProperty("variant", "primary")
         add_btn.clicked.connect(self._open_add_dialog)
         header_layout.addWidget(add_btn)
 
         self.sync_btn = QPushButton("Yenile")
-        self.sync_btn.setFixedHeight(24)
-        self.sync_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #F0F6FC;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 2px 12px;
-                font-size: 11px;
-            }
-            QPushButton:hover { border-color: #00F0FF; }
-        """)
+        self.sync_btn.setAccessibleName("Yenile")
         self.sync_btn.clicked.connect(self.refresh_skills)
         header_layout.addWidget(self.sync_btn)
 
@@ -341,40 +239,14 @@ class SkillsWidget(QFrame):
 
         # Search Bar
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 Yetenek ara (örn: pdf, finans, medya)...")
-        self.search_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #05070A;
-                border: 1px solid #1F2B42;
-                border-radius: 4px;
-                padding: 4px 8px;
-                color: #F0F6FC;
-                font-size: 11px;
-            }
-        """)
+        self.search_input.setPlaceholderText("Yetenek ara (örn: pdf, finans, medya)...")
         self.search_input.textChanged.connect(self._filter_skills)
         self.layout.addWidget(self.search_input)
 
         # Scroll Area for Skill Cards
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                background: #05070A;
-                width: 6px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical {
-                background: #1F2B42;
-                border-radius: 3px;
-            }
-        """)
         container = QWidget()
-        container.setStyleSheet("background: transparent;")
         self.skills_layout = QVBoxLayout(container)
         self.skills_layout.setContentsMargins(0, 4, 0, 4)
         self.skills_layout.setSpacing(6)
@@ -450,37 +322,28 @@ class SkillsWidget(QFrame):
                 continue
 
             card = QFrame()
-            card.setStyleSheet("""
-                QFrame {
-                    background-color: #0E1420;
-                    border: 1px solid #1F2B42;
-                    border-radius: 6px;
-                }
-                QFrame:hover {
-                    border-color: #00F0FF;
-                }
-            """)
+            card.setProperty("role", "panel")
             card_layout = QHBoxLayout(card)
             card_layout.setContentsMargins(12, 8, 12, 8)
             card_layout.setSpacing(12)
 
-            icon_lbl = QLabel("<span style='font-size:18px;'>🎯</span>")
-            icon_lbl.setStyleSheet("background: transparent; border: none;")
+            icon_lbl = QLabel("<span style='font-size:18px;'></span>")
+            icon_lbl.setProperty("role", "label")
             card_layout.addWidget(icon_lbl)
 
             info_layout = QVBoxLayout()
             info_layout.setContentsMargins(0, 0, 0, 0)
             info_layout.setSpacing(3)
 
-            status_badge = "<span style='color:#00FF9D; font-size:10px; font-weight:bold;'>● AKTİF</span>" if s.enabled else "<span style='color:#8B949E; font-size:10px;'>○ PASİF</span>"
-            script_badge = f"<span style='background:#05070A; color:#00F0FF; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; font-size:10px;'>💻 {len(s.scripts)} Araç</span>" if s.scripts else ""
+            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s.enabled else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
+            script_badge = f"<span style='background:#05070A; color:#00F0FF; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; font-size:11px;'>{len(s.scripts)} Araç</span>" if s.scripts else ""
             
             title_text = f"<b style='color:#F0F6FC; font-size:13px;'>{s.name}</b> &nbsp; {status_badge} &nbsp; {script_badge}"
             name_lbl = QLabel(title_text)
-            name_lbl.setStyleSheet("background: transparent; border: none;")
+            name_lbl.setProperty("role", "label")
 
             desc_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{s.description[:85]}</span>")
-            desc_lbl.setStyleSheet("background: transparent; border: none;")
+            desc_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)
             info_layout.addWidget(desc_lbl)
@@ -489,7 +352,6 @@ class SkillsWidget(QFrame):
 
             # Active toggle
             cb = QCheckBox("Etkin")
-            cb.setStyleSheet("color:#00FF9D; font-weight:bold; font-size:11px; background:transparent;")
             cb.setChecked(s.enabled)
             cb.toggled.connect(lambda checked, s_name=s.name: self._on_toggle(s_name, checked))
             card_layout.addWidget(cb)
@@ -500,55 +362,58 @@ class SkillsWidget(QFrame):
             pb_state = self._playbook_states.get(s.name, {})
             state = pb_state.get("state", "kaynak-yok")
             n_src = pb_state.get("source_count", 0)
+            # Faz 11-E: renk artık düz onaltılık değil, anlamsal `tone`
+            # belirteci. Eşleme aynı: guncel -> ok (yeşil), kismi/bayat/yok ->
+            # warn (turuncu), kaynak-yok -> nötr (gri).
             if state == "guncel":
-                pb_color, pb_bg, pb_tip = "#00FF9D", "#0F2A1E", f"Yordam güncel ({pb_state.get('distilled_from', 0)} rapordan)"
+                pb_tone = "ok"
+                pb_tip = f"Yordam güncel ({pb_state.get('distilled_from', 0)} rapordan)"
             elif state in ("bayat", "hafif-degisim"):
-                pb_color, pb_bg, pb_tip = "#FFB300", "#2A1F0A", f"Yordam bayat: {n_src} rapor var, yeniden damıtılabilir"
+                pb_tone = "warn"
+                pb_tip = f"Yordam bayat: {n_src} rapor var, yeniden damıtılabilir"
             elif state == "yok":
-                pb_color, pb_bg, pb_tip = "#FFB300", "#2A1F0A", f"Yordam yok, {n_src} rapor damıtılmayı bekliyor"
+                pb_tone = "warn"
+                pb_tip = f"Yordam yok, {n_src} rapor damıtılmayı bekliyor"
             elif state == "kismi":
                 # Kısmi damıtma (ya da yeni/değişmiş rapor): turuncu; önceden bu durum
                 # "kaynak yok" dalına düşüp gri görünüyor, düğme kapalı sanılıyordu.
-                pb_color, pb_bg, pb_tip = (
-                    "#FFB300", "#2A1F0A",
-                    f"Yordam kısmi: {pb_state.get('distilled_from', 0)}/{n_src} rapor okundu; damıtma kaldığı yerden sürer",
+                pb_tone = "warn"
+                pb_tip = (
+                    f"Yordam kısmi: {pb_state.get('distilled_from', 0)}/{n_src}"
+                    " rapor okundu; damıtma kaldığı yerden sürer"
                 )
             else:
-                pb_color, pb_bg, pb_tip = "#8B949E", "#141C2C", "Kaynak rapor yok; damıtılacak bir şey yok"
+                pb_tone = "muted"
+                pb_tip = "Kaynak rapor yok; damıtılacak bir şey yok"
 
             # İki ayrı eylem. "Damıt" artımlıdır: yalnızca okunmamış raporları
             # işler. Okunmamış yoksa düğme kapanır ve kullanıcı "Tazele"yi bilerek
             # seçer — tek düğme olduğunda "Damıt" sessizce tüm arşivi yeniden
             # okutuyordu (513 raporda ~20 tur AGY kotası).
             unread = max(0, n_src - pb_state.get("distilled_from", 0))
-            btn_style = (
-                f"QPushButton {{ background-color:{pb_bg}; color:{pb_color}; border:1px solid {pb_color}; border-radius:4px; }}"
-                f"QPushButton:hover {{ background-color:{pb_color}; color:#080B10; }}"
-                "QPushButton:disabled { color:#3A4556; border-color:#1F2B42; background-color:#0E1420; }"
-            )
-
-            pb_btn = QPushButton("📘" if not unread else f"📘 {unread}")
+            pb_btn = QPushButton("" if not unread else f"{unread}")
             pb_btn.setObjectName(f"distill_btn_{s.name}")
-            pb_btn.setFixedHeight(26)
             pb_btn.setMinimumWidth(26)
             pb_btn.setToolTip(
                 f"{pb_tip}\n"
                 + (f"Tıkla: {unread} yeni raporu damıt (artımlı, AGY kotası harcar)"
-                   if unread else "Okunmamış rapor yok; tazelemek için ♻ düğmesini kullan")
+                   if unread else "Okunmamış rapor yok; tazelemek için düğmesini kullan")
             )
-            pb_btn.setStyleSheet(btn_style)
+            pb_btn.setProperty("role", "icon")
+            pb_btn.setProperty("tone", pb_tone)
             pb_btn.setEnabled(self.bridge is not None and unread > 0)
             pb_btn.clicked.connect(lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc))
             card_layout.addWidget(pb_btn)
 
-            rf_btn = QPushButton("♻")
+            rf_btn = QPushButton("")
             rf_btn.setObjectName(f"refresh_btn_{s.name}")
-            rf_btn.setFixedSize(26, 26)
+            rf_btn.setProperty("role", "icon")
             rf_btn.setToolTip(
                 f"Tazele: '{s.name}' için {n_src} raporun TAMAMI yeniden okunur.\n"
                 "Pahalıdır; yalnızca yordamın bozulduğunu düşünüyorsan kullan."
             )
-            rf_btn.setStyleSheet(btn_style)
+            rf_btn.setProperty("role", "icon")
+            rf_btn.setProperty("tone", pb_tone)
             rf_btn.setEnabled(self.bridge is not None and n_src > 0)
             rf_btn.clicked.connect(
                 lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc, refresh=True)
@@ -562,44 +427,33 @@ class SkillsWidget(QFrame):
                 counter = QLabel(f"{done}/{n_src}")
                 counter.setObjectName(f"distill_counter_{s.name}")
                 counter.setToolTip("Damıtılan rapor / toplam rapor")
-                counter.setStyleSheet(f"color:{pb_color}; font-size:10px; font-weight:bold; background:transparent; border:none; min-width:44px;")
+                counter.setProperty("role", "badge")
+                counter.setProperty("tone", pb_tone)
                 card_layout.addWidget(counter)
 
             # Edit button: SKILL.md'yi uygulama içi editörde açar
-            edit_btn = QPushButton("✏️")
+            edit_btn = QPushButton("")
+            edit_btn.setAccessibleName("SKILL.md dosyasını düzenle (uygulama içi editör / sistem edi")
             edit_btn.setObjectName(f"skill_edit_{s.name}")
-            edit_btn.setFixedSize(26, 26)
+            edit_btn.setProperty("role", "icon")
             edit_btn.setToolTip("SKILL.md dosyasını düzenle (uygulama içi editör / sistem editörü)")
-            edit_btn.setStyleSheet("background-color:#141C2C; color:#00F0FF; border:1px solid #1F2B42; border-radius:4px;")
             edit_btn.clicked.connect(lambda _, s_name=s.name, s_path=s.path: self._on_edit_skill(s_name, s_path))
             card_layout.addWidget(edit_btn)
 
             # Open folder button
-            folder_btn = QPushButton("📂")
+            folder_btn = QPushButton("")
+            folder_btn.setAccessibleName("Yetenek Klasörünü Aç")
             folder_btn.setObjectName(f"skill_folder_{s.name}")
-            folder_btn.setFixedSize(26, 26)
+            folder_btn.setProperty("role", "icon")
             folder_btn.setToolTip("Yetenek Klasörünü Aç")
-            folder_btn.setStyleSheet("background-color:#141C2C; color:#F0F6FC; border:1px solid #1F2B42; border-radius:4px;")
             folder_btn.clicked.connect(lambda _, s_path=s.path: self._open_folder(Path(s_path).parent))
             card_layout.addWidget(folder_btn)
 
             # Delete button
-            del_btn = QPushButton("🗑️")
-            del_btn.setFixedSize(26, 26)
+            del_btn = QPushButton("")
+            del_btn.setAccessibleName("Yeteneği Sil")
+            del_btn.setProperty("role", "icon")
             del_btn.setToolTip("Yeteneği Sil")
-            del_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #261418;
-                    color: #FF4D4D;
-                    border: 1px solid #FF4D4D;
-                    border-radius: 4px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #FF4D4D;
-                    color: #080B10;
-                }
-            """)
             del_btn.clicked.connect(lambda _, s_name=s.name: self._on_delete(s_name))
             card_layout.addWidget(del_btn)
 
@@ -614,8 +468,8 @@ class SkillsWidget(QFrame):
         """
         Seçilen yetenek için yordam damıtmayı arka planda başlatır.
 
-        refresh=False (📘): yalnızca okunmamış raporlar işlenir.
-        refresh=True  (♻): tüm arşiv yeniden okunur — ayrı ve açık bir eylem.
+        refresh=False (): yalnızca okunmamış raporlar işlenir.
+        refresh=True  (): tüm arşiv yeniden okunur — ayrı ve açık bir eylem.
         """
         if self.bridge is None:
             QMessageBox.information(self, "Yordam Damıtma", "Damıtma için AGY köprüsü gerekli; bu panel köprüsüz açılmış.")
@@ -640,7 +494,7 @@ class SkillsWidget(QFrame):
                 self,
                 "Yordam Damıtma",
                 f"'{skill_name}' için okunmamış rapor yok ({plan['sources_total']} rapor işlenmiş).\n\n"
-                "Tüm arşivi yeniden okutmak istiyorsan ♻ (Tazele) düğmesini kullan.",
+                "Tüm arşivi yeniden okutmak istiyorsan (Tazele) düğmesini kullan.",
             )
             return
 
@@ -693,8 +547,9 @@ class SkillsWidget(QFrame):
         counter = self.findChild(QLabel, f"distill_counter_{skill_name}")
         if counter is not None:
             counter.setText(f"{done}/{total}")
-            color = "#00FF9D" if done >= total else "#FFB300"
-            counter.setStyleSheet(f"color:{color}; font-size:10px; font-weight:bold; background:transparent; border:none; min-width:44px;")
+            counter.setProperty("role", "badge")
+            counter.setProperty("tone", "ok" if done >= total else "warn")
+            repolish(counter)
 
     def _on_toggle(self, skill_name: str, enabled: bool):
         self.skill_manager.toggle_skill(skill_name, enabled)

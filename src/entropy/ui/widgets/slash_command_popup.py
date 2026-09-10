@@ -20,32 +20,24 @@ class SlashCommandItemWidget(QWidget):
         layout.setSpacing(8)
 
         # Check Indicator for Multi-Select
-        self.check_lbl = QLabel("[✓]" if is_selected else "[ ]")
+        self.check_lbl = QLabel("[]" if is_selected else "[ ]")
         self._update_check_style(is_selected)
         layout.addWidget(self.check_lbl)
 
         # Badge Pill
         badge_lbl = QLabel(command.badge)
         badge_color = command.color or "#00F0FF"
-        badge_lbl.setStyleSheet(f"""
-            background-color: {badge_color}18;
-            color: {badge_color};
-            border: 1px solid {badge_color}55;
-            border-radius: 3px;
-            padding: 2px 6px;
-            font-size: 9px;
-            font-weight: bold;
-        """)
+        badge_lbl.setProperty("role", "badge")
         layout.addWidget(badge_lbl)
 
         # Command Name (bold neon monospace)
         name_lbl = QLabel(command.name)
-        name_lbl.setStyleSheet("color: #F0F6FC; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; font-weight: bold;")
+        name_lbl.setProperty("role", "label")
         layout.addWidget(name_lbl)
 
         # Description (muted)
         desc_lbl = QLabel(command.description)
-        desc_lbl.setStyleSheet("color: #8B949E; font-size: 11px;")
+        desc_lbl.setProperty("role", "label")
         desc_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         layout.addWidget(desc_lbl)
 
@@ -54,18 +46,18 @@ class SlashCommandItemWidget(QWidget):
         # Usage hint (subtle)
         if command.usage:
             usage_lbl = QLabel(command.usage)
-            usage_lbl.setStyleSheet("color: #484F58; font-family: 'Consolas', monospace; font-size: 10px;")
+            usage_lbl.setProperty("role", "label")
             layout.addWidget(usage_lbl)
 
     def set_checked(self, checked: bool):
-        self.check_lbl.setText("[✓]" if checked else "[ ]")
+        self.check_lbl.setText("[]" if checked else "[ ]")
         self._update_check_style(checked)
 
     def _update_check_style(self, checked: bool):
         if checked:
-            self.check_lbl.setStyleSheet("color: #00FF9D; font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold;")
+            self.check_lbl.setProperty("role", "label")
         else:
-            self.check_lbl.setStyleSheet("color: #30363D; font-family: 'Consolas', monospace; font-size: 11px;")
+            self.check_lbl.setProperty("role", "label")
 
 
 def effort_command_hint(bridge=None) -> str:
@@ -117,45 +109,7 @@ class SlashCommandPopupWidget(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setObjectName("slashPopupFrame")
 
-        self.setStyleSheet("""
-            QFrame#slashPopupFrame {
-                background-color: #0A0E17;
-                border: 1px solid #00F0FF;
-                border-radius: 6px;
-            }
-            QListWidget {
-                background-color: #080B10;
-                border: none;
-                border-radius: 4px;
-                outline: none;
-            }
-            QListWidget::item {
-                border-radius: 4px;
-                padding: 1px;
-                margin: 1px 2px;
-                border: 1px solid transparent;
-            }
-            QListWidget::item:selected {
-                background-color: #162238;
-                border: 1px solid #00F0FF;
-            }
-            QListWidget::item:hover:!selected {
-                background-color: #101826;
-            }
-            QScrollBar:vertical {
-                background: #080B10;
-                width: 6px;
-                margin: 0px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical {
-                background: #1F2B42;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #00F0FF;
-            }
-        """)
+        self.setProperty("role", "panel")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -164,17 +118,18 @@ class SlashCommandPopupWidget(QFrame):
         # Header Bar
         header = QHBoxLayout()
         header.setContentsMargins(4, 2, 4, 2)
-        title_lbl = QLabel("<b style='color:#00F0FF; font-size:10px;'>⚡ KOMUT & YETENEK TAMAMLAYICI</b>")
+        title_lbl = QLabel("Komut ve yetenek tamamlayıcı")
+        title_lbl.setProperty("role", "label")
         header.addWidget(title_lbl)
         header.addStretch()
-        hints_lbl = QLabel("<span style='color:#8B949E; font-size:9px;'>[Tıkla]: Ekle/Kaldır &nbsp; [Tab/Enter]: Tamamla &nbsp; [Esc]: Kapat</span>")
+        hints_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>[Tıkla]: Ekle/Kaldır &nbsp; [Tab/Enter]: Tamamla &nbsp; [Esc]: Kapat</span>")
         header.addWidget(hints_lbl)
         layout.addLayout(header)
 
         # Divider
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet("background-color: #1F2B42;")
+        divider.setProperty("role", "panel")
         layout.addWidget(divider)
 
         # List Widget
@@ -188,42 +143,19 @@ class SlashCommandPopupWidget(QFrame):
         # Bottom Multi-Select Actions Bar
         bottom_bar = QHBoxLayout()
         bottom_bar.setContentsMargins(4, 3, 4, 2)
-        self.chips_lbl = QLabel("<span style='color:#8B949E; font-size:10px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
+        self.chips_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
         bottom_bar.addWidget(self.chips_lbl)
         bottom_bar.addStretch()
 
         self.clear_btn = QPushButton("Temizle")
-        self.clear_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #8B949E;
-                border: 1px solid #1F2B42;
-                border-radius: 3px;
-                padding: 2px 8px;
-                font-size: 10px;
-            }
-            QPushButton:hover {
-                color: #FF0055;
-                border-color: #FF0055;
-            }
-        """)
+        self.clear_btn.setAccessibleName("Temizle")
+        self.clear_btn.setProperty("variant", "ghost")
         self.clear_btn.clicked.connect(self.clear_selection)
         bottom_bar.addWidget(self.clear_btn)
 
-        self.apply_btn = QPushButton("✔ Tamamla")
-        self.apply_btn.setStyleSheet("""
-            QPushButton {
-                background: #00F0FF;
-                color: #080B10;
-                font-weight: bold;
-                border-radius: 3px;
-                padding: 3px 12px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background: #00FF9D;
-            }
-        """)
+        self.apply_btn = QPushButton("Tamamla")
+        self.apply_btn.setAccessibleName("Tamamla")
+        self.apply_btn.setProperty("variant", "primary")
         self.apply_btn.clicked.connect(self.confirm_selection)
         bottom_bar.addWidget(self.apply_btn)
 
@@ -268,9 +200,9 @@ class SlashCommandPopupWidget(QFrame):
     def _update_footer(self):
         if self.selected_commands:
             chips = " ".join(self.selected_commands)
-            self.chips_lbl.setText(f"<b style='color:#00FF9D; font-size:10px;'>Seçilenler:</b> <span style='color:#F0F6FC; font-family:Consolas; font-size:10px;'>{chips}</span>")
+            self.chips_lbl.setText(f"<b style='color:#00FF9D; font-size:11px;'>Seçilenler:</b> <span style='color:#F0F6FC; font-family:Consolas; font-size:11px;'>{chips}</span>")
         else:
-            self.chips_lbl.setText("<span style='color:#8B949E; font-size:10px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
+            self.chips_lbl.setText("<span style='color:#8B949E; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
 
     def select_next(self):
         """Move selection to next item."""

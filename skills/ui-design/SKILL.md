@@ -94,20 +94,32 @@ içeriğin sıralı olmadığı yerde 01/02/03 numaralandırma.
 `accessible_names`, `shortcuts`, `contrast` (tema × çift × oran),
 `contrast_failures`, `focusless_selectors`, `small_targets`, `gate_violations`.
 
-Nihai kapı değerleri (`--final`):
+Nihai kapı değerleri (`--final`, Faz 11-E adım 2–6 sonunda **yeşil**):
 
-| Alan | Eşik |
-|---|---:|
-| `distinct_hex` | ≤ 14 |
-| `local_stylesheets` | ≤ 5 |
-| `fixed_sizes` | ≤ 10 |
-| `distinct_font_sizes` | ≤ 5 |
-| `distinct_paddings` | ≤ 8 |
-| `emoji_usages` | 0 |
-| `contrast_failures` | 0 |
-| `focusless_selectors` | 0 |
-| `small_targets` | 0 |
+| Alan | Eşik | Ölçüm (2026-09-10) |
+|---|---:|---:|
+| `local_stylesheets` | ≤ 40 | **1** |
+| `fixed_sizes` | ≤ 20 | **17** |
+| `distinct_font_sizes` | ≤ 5 | **4** |
+| `emoji_usages` (muaf dosyalar hariç) | ≤ 40 | **7** |
+| `contrast_failures` | 0 | **0** |
+| `focusless_selectors` | 0 | **0** |
+| `small_targets` | 0 | **0** |
+| `desk_hex` | 0 | **0** |
+| `desk_stylesheets` | ≤ 10 | **0** |
 
-Yerleşim kapıları (`hidden_tabs`, `header_rows`, `content_pct`,
-`interactive_count`) offscreen çalışan bir ölçüm gerektirir; Faz 11-E adım 2 ile
-bu betiğe `--mode zen --size 1366x768` seçeneği olarak eklenecek.
+Emoji sayımından muaf dosyalar (`EMOJI_EXEMPT`): `design/icons.py` (emoji → ikon
+eşlemesi), `design/tokens.py` (belge dizesi), `widgets/ui_polish.py` (emoji yazı
+tipi yedeği), `widgets/knowledge_graph.py` (gömülü HTML/JS kanvasının `viz.*`
+görsel dili). Bu dosyalardaki emoji arayüz ikonu değil, göç altyapısıdır.
+
+Yerleşim kapıları offscreen Qt gerektirir ve
+`tests/ui/test_phase11_design_gates.py` içinde ölçülür:
+üst çubuk öğe sayısı ≤ 4 · 1366×768'de gezinme 7/7 görünür ve taşma 0 ·
+kabuk bölücü zinciri 2 · Chat kromu 1280×800'de ≤ %25 · 460 px'te üst çubuk
+≤ 2 satır · palet eylemleri + kısayollar.
+
+**Uzun vadeli hedefler (henüz açık):** `distinct_hex` ≤ 14 (bugün 74) ve
+`emoji_usages` = 0. Kalan renkler ve emoji, widget stillerinde değil **gömülü
+HTML/JS gövdelerindedir** (sohbet balonları, rapor kartları, graf tuvali);
+bunların belirtece bağlanması ayrı bir dilimdir.

@@ -44,69 +44,27 @@ class TasksWidget(QFrame):
 
         # Header
         header = QHBoxLayout()
-        title_label = QLabel("<b style='color:#00F0FF; font-size:13px;'>⏰ OTONOM ARKA PLAN GÖREVLERİ</b>")
+        title_label = QLabel("Arka plan görevleri")
+        title_label.setProperty("role", "heading")
         header.addWidget(title_label)
         header.addStretch()
 
         add_btn = QPushButton("+ Görev Ekle")
-        add_btn.setFixedHeight(24)
-        add_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00FF9D;
-                border: 1px solid #00FF9D;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00FF9D;
-                color: #080B10;
-            }
-        """)
+        add_btn.setAccessibleName("+ Görev Ekle")
+        add_btn.setProperty("variant", "primary")
         add_btn.clicked.connect(self._show_add_dialog)
         header.addWidget(add_btn)
 
         # Kayıt defteri (tasks_ledger.db) temizliği: bitmiş görev satırlarını siler.
-        self.clear_ledger_btn = QPushButton("🧹 Kayıt Defteri")
-        self.clear_ledger_btn.setFixedHeight(24)
+        self.clear_ledger_btn = QPushButton("Kayıt Defteri")
+        self.clear_ledger_btn.setAccessibleName("Kayıt Defteri")
         self.clear_ledger_btn.setToolTip("Kayıt defterindeki bitmiş görev kayıtlarını (başarılı/hatalı/iptal) temizle")
-        self.clear_ledger_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #FFB300;
-                border: 1px solid #FFB300;
-                border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #FFB300;
-                color: #080B10;
-            }
-        """)
         self.clear_ledger_btn.clicked.connect(self._on_clear_ledger)
         header.addWidget(self.clear_ledger_btn)
 
         refresh_btn = QPushButton("Yenile")
-        refresh_btn.setFixedHeight(24)
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #141C2C;
-                color: #00F0FF;
-                border: 1px solid #00F0FF;
-                border-radius: 4px;
-                padding: 2px 14px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00F0FF;
-                color: #080B10;
-            }
-        """)
+        refresh_btn.setAccessibleName("Yenile")
+        refresh_btn.setProperty("variant", "primary")
         refresh_btn.clicked.connect(self.refresh_tasks)
         header.addWidget(refresh_btn)
 
@@ -114,19 +72,6 @@ class TasksWidget(QFrame):
 
         # Task list
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {CYBER_THEME['bg_terminal']};
-                border: 1px solid {CYBER_THEME['border']};
-                border-radius: 4px;
-                color: {CYBER_THEME['text_primary']};
-                padding: 4px;
-            }}
-            QListWidget::item {{
-                border-bottom: 1px solid #1F2B42;
-                padding: 6px;
-            }}
-        """)
         self.layout.addWidget(self.list_widget)
 
         # Connect signals
@@ -170,16 +115,6 @@ class TasksWidget(QFrame):
 
             row_widget = QWidget()
             row_widget.setMinimumHeight(62)
-            row_widget.setStyleSheet("""
-                QWidget {
-                    background-color: #0E1420;
-                    border: 1px solid #1F2B42;
-                    border-radius: 6px;
-                }
-                QWidget:hover {
-                    border-color: #00F0FF;
-                }
-            """)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(10, 6, 10, 6)
             row_layout.setSpacing(10)
@@ -198,16 +133,16 @@ class TasksWidget(QFrame):
 
             is_running = t_id in running_ids
             title_color = "#00F0FF" if task.enabled else "#8B949E"
-            status_badge = "<span style='color:#00FF9D; font-size:10px; font-weight:bold;'>● AKTİF</span>" if task.enabled else "<span style='color:#8B949E; font-size:10px;'>○ PASİF</span>"
+            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if task.enabled else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
             if is_running:
-                status_badge += " <span style='color:#FFB300; font-size:10px; font-weight:bold;'>▶ ÇALIŞIYOR</span>"
-            name_lbl = QLabel(f"<b style='color:{title_color}; font-size:12px;'>{task.name}</b> &nbsp; {status_badge}")
-            name_lbl.setStyleSheet("background: transparent; border: none;")
+                status_badge += " <span style='color:#FFB300; font-size:11px; font-weight:bold;'>▶ ÇALIŞIYOR</span>"
+            name_lbl = QLabel(f"<b style='color:{title_color}; font-size:13px;'>{task.name}</b> &nbsp; {status_badge}")
+            name_lbl.setProperty("role", "label")
 
             interval_str = f"Periyot: {task.interval_type} ({task.interval_value})"
             next_str = datetime.datetime.fromtimestamp(task.next_run).strftime("%H:%M:%S") if task.next_run else "Planlanmadı"
             status_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{interval_str} | Sonraki: <span style='color:#00FF9D;'>{next_str}</span></span>")
-            status_lbl.setStyleSheet("background: transparent; border: none;")
+            status_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)
             info_layout.addWidget(status_lbl)
@@ -216,90 +151,32 @@ class TasksWidget(QFrame):
 
             # Run Now button
             run_btn = QPushButton("▶ Çalıştır")
-            run_btn.setFixedHeight(26)
-            run_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #141C2C;
-                    color: #00FF9D;
-                    border: 1px solid #00FF9D;
-                    border-radius: 4px;
-                    padding: 2px 10px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #00FF9D;
-                    color: #080B10;
-                }
-            """)
+            run_btn.setAccessibleName("▶ Çalıştır")
+            run_btn.setProperty("variant", "primary")
             run_btn.clicked.connect(lambda _, t=task: self._run_task_now(t))
             row_layout.addWidget(run_btn)
 
             # Stop button: yalnızca görev arka planda sürerken etkin
             stop_btn = QPushButton("⏹ Durdur")
+            stop_btn.setAccessibleName("⏹ Durdur")
             stop_btn.setObjectName(f"task_stop_{t_id}")
-            stop_btn.setFixedHeight(26)
             stop_btn.setToolTip("Süren arka plan görevini iptal et")
             stop_btn.setEnabled(is_running)
-            stop_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2A1F0A;
-                    color: #FFB300;
-                    border: 1px solid #FFB300;
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #FFB300;
-                    color: #080B10;
-                }
-                QPushButton:disabled {
-                    color: #3A4556;
-                    border-color: #1F2B42;
-                    background-color: #0E1420;
-                }
-            """)
             stop_btn.clicked.connect(lambda _, tid=t_id, tname=task.name: self._on_cancel_task(tid, tname))
             row_layout.addWidget(stop_btn)
 
             # Edit button: ad / periyot / talimat düzenleme
-            edit_btn = QPushButton("✏️")
+            edit_btn = QPushButton("")
+            edit_btn.setAccessibleName("Zamanlanmış görevi düzenle (ad, periyot, talimat)")
             edit_btn.setObjectName(f"task_edit_{t_id}")
-            edit_btn.setFixedSize(28, 26)
+            edit_btn.setProperty("role", "icon")
             edit_btn.setToolTip("Zamanlanmış görevi düzenle (ad, periyot, talimat)")
-            edit_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #141C2C;
-                    color: #00F0FF;
-                    border: 1px solid #1F2B42;
-                    border-radius: 4px;
-                    font-size: 11px;
-                }
-                QPushButton:hover { border-color: #00F0FF; }
-            """)
             edit_btn.clicked.connect(lambda _, t=task: self._show_edit_dialog(t))
             row_layout.addWidget(edit_btn)
 
             # Delete button
-            del_btn = QPushButton("🗑️ Sil")
-            del_btn.setFixedHeight(26)
-            del_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #24141A;
-                    color: #FF4D4D;
-                    border: 1px solid #FF4D4D;
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #FF4D4D;
-                    color: #080B10;
-                }
-            """)
+            del_btn = QPushButton("Sil")
+            del_btn.setAccessibleName("Sil")
             del_btn.clicked.connect(lambda _, tid=t_id, tname=task.name: self._on_delete_task(tid, tname))
             row_layout.addWidget(del_btn)
 
@@ -583,7 +460,6 @@ class TasksWidget(QFrame):
         dialog = QDialog(self)
         dialog.setWindowTitle("Otonom Görevi Düzenle" if is_edit else "Yeni Otonom Görev Ekle")
         dialog.setFixedWidth(400)
-        dialog.setStyleSheet("background-color: #0E1420; color: #F0F6FC;")
 
         d_layout = QVBoxLayout(dialog)
 
@@ -637,8 +513,10 @@ class TasksWidget(QFrame):
 
         btn_box = QHBoxLayout()
         ok_btn = QPushButton("Kaydet")
-        ok_btn.setStyleSheet("background-color: #00F0FF; color: #080B10; font-weight: bold;")
+        ok_btn.setAccessibleName("Kaydet")
+        ok_btn.setProperty("variant", "primary")
         cancel_btn = QPushButton("İptal")
+        cancel_btn.setAccessibleName("İptal")
 
         def on_save():
             name = name_input.text().strip()

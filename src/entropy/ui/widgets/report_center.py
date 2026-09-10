@@ -715,18 +715,7 @@ class DigestCardWidget(QFrame):
         # Kart daralabilsin; metin kendi içinde kırpılır/sarılır.
         self.setMinimumWidth(180)
         accent =RT["accent_warn"] if card.get("unread") else RT["divider"]
-        self.setStyleSheet(
-            f"""
-            QFrame#digestCard {{
-                background-color:{RT['surface_raised']};
-                border:1px solid {RT['divider_soft']};
-                border-left:3px solid {accent};
-                border-radius:{RT['radius_small']};
-            }}
-            QFrame#digestCard:hover {{ border-color:{RT['accent']}; }}
-            QLabel {{ background:transparent; border:none; }}
-            """
-        )
+        self.setProperty("role", "panel")
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(4)
@@ -736,9 +725,7 @@ class DigestCardWidget(QFrame):
         self.title_label = QLabel(str(card.get("title", "")))
         self.title_label.setTextFormat(Qt.TextFormat.PlainText)
         self.title_label.setWordWrap(True)
-        self.title_label.setStyleSheet(
-            f"color:{RT['text']}; font-size:{BODY_PX}px; font-weight:600;"
-        )
+        self.title_label.setProperty("role", "label")
         self.title_label.setToolTip(str(card.get("path", "")))
         head.addWidget(self.title_label, 1)
 
@@ -761,11 +748,11 @@ class DigestCardWidget(QFrame):
         if card.get("unread"):
             meta_bits.append(f"{card['unread']} okunmadı")
         if card.get("office"):
-            meta_bits.append(f"🏢 {card['office']}")
+            meta_bits.append(f"{card['office']}")
         if card.get("card"):
-            meta_bits.append(f"🗂 {card['card']}")
+            meta_bits.append(f"{card['card']}")
         self.meta_label = QLabel(" · ".join(meta_bits))
-        self.meta_label.setStyleSheet(f"color:{RT['text_dim']}; font-size:{LABEL_PX}px;")
+        self.meta_label.setProperty("role", "label")
         root.addWidget(self.meta_label)
 
         findings = card.get("findings") or []
@@ -775,20 +762,16 @@ class DigestCardWidget(QFrame):
         )
         self.findings_label.setWordWrap(True)
         self.findings_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.findings_label.setStyleSheet(
-            f"color:{RT['text_body']}; font-size:{LABEL_PX}px;"
-        )
+        self.findings_label.setProperty("role", "label")
         root.addWidget(self.findings_label)
 
         decision = card.get("decision") or ""
         self.decision_label = QLabel(
-            f"➤ {decision}" if decision else "➤ Karar önerisi yok (raporda öneri/sonuç başlığı bulunmadı)."
+            f"{decision}" if decision else "Karar önerisi yok (raporda öneri/sonuç başlığı bulunmadı)."
         )
         self.decision_label.setWordWrap(True)
         self.decision_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.decision_label.setStyleSheet(
-            f"color:{RT['accent']}; font-size:{LABEL_PX}px; font-weight:600;"
-        )
+        self.decision_label.setProperty("role", "label")
         root.addWidget(self.decision_label)
 
         actions = QHBoxLayout()
@@ -798,7 +781,7 @@ class DigestCardWidget(QFrame):
         actions.addWidget(self.open_btn)
 
         self.ask_btn = self._action_btn(
-            "🏢 Orkestratöre sor",
+            "Orkestratöre sor",
             "Bu kümenin ofisine `/ask <ofis> ...` ile revizyon/açıklama isteği gönderir",
         )
         self.ask_btn.clicked.connect(self._on_ask)
@@ -809,11 +792,11 @@ class DigestCardWidget(QFrame):
         self.read_btn.clicked.connect(self._on_read)
         actions.addWidget(self.read_btn)
 
-        self.pin_btn = self._action_btn("📌", "Sabitle / sabitlemeyi kaldır")
+        self.pin_btn = self._action_btn("", "Sabitle / sabitlemeyi kaldır")
         self.pin_btn.clicked.connect(self._on_pin)
         actions.addWidget(self.pin_btn)
 
-        self.archive_btn = self._action_btn("🗄", "Kümeyi arşivle")
+        self.archive_btn = self._action_btn("", "Kümeyi arşivle")
         self.archive_btn.clicked.connect(self._on_archive)
         actions.addWidget(self.archive_btn)
         actions.addStretch()
@@ -822,16 +805,9 @@ class DigestCardWidget(QFrame):
     @staticmethod
     def _action_btn(text: str, tip: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFixedHeight(22)
         btn.setToolTip(tip)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton {{ background:transparent; border:1px solid {RT['divider_soft']};"
-            f" border-radius:{RT['radius_small']}; color:{RT['text_dim']};"
-            f" font-size:{LABEL_PX}px; padding:1px 9px; }}"
-            f" QPushButton:hover {{ color:{RT['accent']}; border-color:{RT['accent']}; }}"
-            f" QPushButton:disabled {{ color:{RT['divider']}; border-color:{RT['divider_soft']}; }}"
-        )
+        btn.setProperty("variant", "ghost")
         return btn
 
     # ---------------------------------------------------------- eylemler
@@ -904,10 +880,7 @@ class ReportCenterWidget(QFrame):
         self._reload_timer.setSingleShot(True)
         self._reload_timer.timeout.connect(self._start_background_reload)
 
-        self.setStyleSheet(
-            f"QFrame#reportCenter {{ background-color:{RT['surface_base']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius']}; }}"
-        )
+        self.setProperty("role", "panel")
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 6, 8, 6)
         root.setSpacing(5)
@@ -916,7 +889,7 @@ class ReportCenterWidget(QFrame):
         head.setSpacing(8)
         self.header_label = QLabel("")
         self.header_label.setTextFormat(Qt.TextFormat.RichText)
-        self.header_label.setStyleSheet("background:transparent; border:none;")
+        self.header_label.setProperty("role", "label")
         # Zengin metin başlık tek satırda ~666 px minimumSizeHint üretiyordu; bu da
         # Rapor Merkezi'nin (ve onu barındıran Zen sol sekmesinin) minimumunu
         # 1400 px'in üstüne çıkarıp dar panelde araç çubuğunu kırpıyordu. Açık
@@ -941,17 +914,10 @@ class ReportCenterWidget(QFrame):
         # Güven eşiği ayarı doğrudan panelde: tasarımdaki risk maddesi "yanlış
         # sessiz arşiv kararı"nı kullanıcının anında düzeltebilmesini istiyor.
         self.threshold_combo = QComboBox()
-        self.threshold_combo.setFixedHeight(22)
         self.threshold_combo.setToolTip(
             "Güven eşiği (report_center_quiet_threshold): bu değerin üstünde"
             " güvene sahip kümeler sessiz bölüme katlanır. Düşürmek daha çok"
             " raporu öne çıkarır."
-        )
-        self.threshold_combo.setStyleSheet(
-            f"QComboBox {{ background:{RT['surface_raised']};"
-            f" border:1px solid {RT['divider_soft']}; border-radius:{RT['radius_small']};"
-            f" color:{RT['text_dim']}; font-size:{LABEL_PX}px; padding:1px 6px; }}"
-            f" QComboBox:hover {{ border-color:{RT['accent']}; color:{RT['accent']}; }}"
         )
         for value in (0.50, 0.65, 0.75, 0.85, 0.95, 1.01):
             label = "kapalı" if value > 1.0 else f"eşik {value:.2f}"
@@ -962,10 +928,6 @@ class ReportCenterWidget(QFrame):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setStyleSheet(
-            "QScrollArea { border:none; background:transparent; }"
-            " QScrollArea > QWidget > QWidget { background: transparent; }"
-        )
         self.scroll.viewport().setAutoFillBackground(False)
         self.cards_host = QWidget()
         self.cards_layout = QVBoxLayout(self.cards_host)
@@ -990,7 +952,7 @@ class ReportCenterWidget(QFrame):
         # acar ve tam rapor listesini gosteren yuzeyi (Raporlar sekmesi ya da
         # bagimsiz pencere) ister.
         self.show_all_btn = DigestCardWidget._action_btn(
-            "🗂 Tümü", "Sessiz bölümü aç ve tam rapor listesine geç"
+            "Tümü", "Sessiz bölümü aç ve tam rapor listesine geç"
         )
         self.show_all_btn.clicked.connect(self._on_show_all_clicked)
         self.show_all_btn.setMinimumWidth(80)
@@ -1001,10 +963,7 @@ class ReportCenterWidget(QFrame):
 
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet(
-            f"color:{RT['text_dim']}; font-size:{BODY_PX}px; padding:4px 2px;"
-            " background:transparent; border:none;"
-        )
+        self.empty_label.setProperty("role", "label")
         root.addWidget(self.empty_label)
 
         self.card_widgets: List[DigestCardWidget] = []
@@ -1187,7 +1146,7 @@ class ReportCenterWidget(QFrame):
 
         unread = self.unread_count()
         self.header_label.setText(
-            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>📥 RAPOR MERKEZİ</b>"
+            f"<b style='color:{RT['accent']}; font-size:{BODY_PX}px;'>RAPOR MERKEZİ</b>"
             f" <span style='color:{RT['text_dim']}; font-size:{LABEL_PX}px;'>"
             f"Toplam {self._result['total']} rapor ·"
             f" {len(self._result['cards'])} öne çıkan"
@@ -1204,7 +1163,7 @@ class ReportCenterWidget(QFrame):
             f" Eşik (report_center_quiet_threshold): {self.quiet_threshold:.2f}"
         )
         self.quiet_btn.setVisible(quiet_count > 0)
-        self.show_all_btn.setText(f"🗂 Tümü ({self._result['total']} rapor)")
+        self.show_all_btn.setText(f"Tümü ({self._result['total']} rapor)")
         self.show_all_btn.setVisible(self._result["total"] > 0)
         if not visible and not quiet_count:
             self.empty_label.setText(
