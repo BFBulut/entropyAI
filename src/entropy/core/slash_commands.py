@@ -3,7 +3,7 @@
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -126,11 +126,27 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
     ),
     SlashCommand(
         name="/model",
-        description="Aktif LLM modelini görüntüler veya yeni bir modele geçiş yapar.",
+        description="Entropy'nin kendi modelini görüntüler veya değiştirir (kalıcı ayar).",
         category="builtin",
-        badge="⚡ AGY",
+        badge="⚡ Yerel",
         color="#00F0FF",
         usage="/model <model_adı>",
+    ),
+    SlashCommand(
+        name="/board",
+        description="Pano özeti: durum sayıları, sahiplenmeler, son olaylar. `pick` ile kartı ajana verir.",
+        category="builtin",
+        badge="⚡ Yerel",
+        color="#00FF9D",
+        usage="/board [pick <kart> <ajan>]",
+    ),
+    SlashCommand(
+        name="/memory",
+        description="Hafıza bakımı: gri bant kuyruğunu birleştirir (merge) ya da rüya döngüsünü koşar (dream).",
+        category="builtin",
+        badge="⚡ Yerel",
+        color="#9D00FF",
+        usage="/memory merge|dream",
     ),
     SlashCommand(
         name="/effort",
@@ -523,14 +539,19 @@ def _handle_tasks(args: str) -> str:
 
 def _handle_task(args: str) -> str:
     """
-    `/task <ajan> <başlık> :: <hedef>` — kart oluşturur ve hemen çalıştırır.
+    `/task <ajan> <başlık> :: <hedef>` — kartı YALNIZCA oluşturur.
     `/task stop <id>` — süren kartı keser.
+
+    Faz 11-C'de davranış değişti: komut artık `board.run()` ÇAĞIRMAZ. Kart
+    `assigned` olarak panoya düşer ve koşturmayı `BoardDispatcher` yapar.
+    Neden: kart oluşturulduğu satırda başlatıldığı sürece `backlog` durumu hiç
+    beklemiyordu, yani pano bir kuyruk değil bir kayıt defteriydi; sahiplenme,
+    öncelik, eşzamanlılık tavanı ve kurtarma gibi kavramların hiçbiri
+    çalışamıyordu.
 
     Ayırıcı `::` kasıtlı: başlık ve hedefin ikisi de boşluk içerir, tek boşlukla
     ayırmak "hangi kelimeden sonrası hedef" sorusunu tahmine bırakırdı.
     """
-    from dataclasses import replace as _replace
-
     from entropy.agents.registry import AgentRegistry
     from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
 
@@ -548,9 +569,19 @@ def _handle_task(args: str) -> str:
         card = board.get(card_id)
         if card is None:
             return f"<b>📋 Görev</b><br/>'{_html_escape(card_id)}' kimlikli kart yok."
-        if card.status != "running":
+        if card.status not in ("running", "taken", "assigned"):
             return (f"<b>📋 Görev</b><br/>'{_html_escape(card_id)}' çalışmıyor "
                     f"(durum: {_html_escape(card.status)}).")
+        if card.status != "running":
+            # Henüz süreç doğmamış kart: iptal geçişi yeter, öldürülecek bir
+            # şey yok.
+            try:
+                board.apply_event(card_id, "task.canceled", actor="user",
+                                  payload={"summary": "Kullanıcı iptal etti."})
+            except Exception as exc:
+                return f"<b>📋 Görev</b><br/>İptal edilemedi: {_html_escape(exc)}"
+            return (f"<b>📋 Görev İptal Edildi</b><br/>{_html_escape(card.title)} "
+                    f"(süreç başlamamıştı).")
         killed = board.stop(card_id)
         return (f"<b>📋 Görev Durduruldu</b><br/>{_html_escape(card.title)} "
                 f"({'süreç sonlandırıldı' if killed else 'kart kapatıldı'}).")
@@ -586,17 +617,36 @@ def _handle_task(args: str) -> str:
     except Exception as exc:
         return f"<b>📋 Görev</b><br/>Kart yazılamadı: {_html_escape(exc)}"
 
-    task_id = board.run(card.id)
-    if not task_id:
-        board.update(_replace(card, status="failed", summary="Köprü başlatılamadı."))
-        return (f"<b>📋 Görev</b><br/>Kart oluşturuldu ama başlatılamadı: "
-                f"<code>{_html_escape(card.id)}</code>")
+    # Kart panoya "atanmış" olarak düşer; sahiplenme ve başlatma tetikleyicinin
+    # işidir. Geçiş durum makinesinden geçtiği için olay günlüğüne de yazılır.
+    try:
+        card = board.apply_event(card.id, "task.assigned", actor="user",
+                                 payload={"agent": spec.name}) or card
+    except Exception as exc:
+        return (f"<b>📋 Görev</b><br/>Kart oluşturuldu ama panoya alınamadı: "
+                f"{_html_escape(exc)}")
+
+    dispatched = False
+    try:
+        from entropy.agents.dispatcher import board_dispatcher
+
+        dispatcher = board_dispatcher()
+        if dispatcher is not None:
+            dispatcher.start()
+            dispatched = True
+    except Exception:
+        dispatched = False
+
+    hint = ("Pano sıradaki turda ajanı uyandıracak"
+            if dispatched else
+            "Tetikleyici kapalı: kart panoda bekliyor")
     return (
-        f"<b>📋 Görev Devredildi</b><br/>"
+        f"<b>📋 Görev Panoya Düştü</b><br/>"
         f"🤖 {_html_escape(spec.name)} → {_html_escape(card.title)}<br/>"
         f"<span style='color:#8B949E;font-size:11px;'>Hedef: {_html_escape(card.goal)}<br/>"
-        f"Kart: <code>{_html_escape(str(card.path))}</code><br/>"
-        f"Arka planda çalışıyor; bitince kart <b>review</b> olur. "
+        f"Kart: <code>{_html_escape(str(card.path))}</code> "
+        f"(durum: <b>{_html_escape(card.status)}</b>)<br/>"
+        f"{hint}; bitince kart <b>review</b> olur. "
         f"Durdurmak için: <code>/task stop {_html_escape(card.id)}</code></span>"
     )
 
@@ -1213,6 +1263,10 @@ def _handle_wiki(args: str) -> str:
     """
     from entropy.memory.wiki import ingest_playbook_to_wiki
 
+    parts = (args or "").split()
+    if parts and parts[0].lower() == "compile":
+        return _handle_wiki_compile(parts[1:])
+
     name = (args or "").split()[0] if (args or "").strip() else ""
     if not name:
         return "<b>📗 Wiki</b><br/>Kullanım: <code>/wiki &lt;yetenek&gt;</code>"
@@ -1235,6 +1289,323 @@ def _handle_wiki(args: str) -> str:
         f"{_html_escape(', '.join(entities[:6])) or '-'}<br/>"
         f"İndeks: <code>{_html_escape(str(res.get('index') or '-'))}</code></span>"
     )
+
+
+def _handle_wiki_compile(parts: List[str]) -> str:
+    """
+    `/wiki compile <yetenek> [--turns N]`: wiki sayfalarını çok turlu derler.
+
+    Derleyici hafıza ajanının modülüdür (`memory.wiki.compile_skill`); henüz
+    yoksa komut bunu söyler. `--turns` tavanı KULLANICININ verdiği kota
+    tavanıdır: derleme model çağırabilir, bu yüzden varsayılan 1'dir.
+    """
+    args = [p for p in parts if p]
+    turns = 1
+    name = ""
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token in ("--turns", "-n") and i + 1 < len(args):
+            try:
+                turns = max(1, int(args[i + 1]))
+            except ValueError:
+                pass
+            i += 2
+            continue
+        if token.startswith("--turns="):
+            try:
+                turns = max(1, int(token.split("=", 1)[1]))
+            except ValueError:
+                pass
+            i += 1
+            continue
+        if not name:
+            name = token
+        i += 1
+    if not name:
+        return ("<b>📗 Wiki Derleme</b><br/>Kullanım: "
+                "<code>/wiki compile &lt;yetenek&gt; [--turns N]</code>")
+    try:
+        from entropy.memory.wiki import compile_skill  # type: ignore
+    except Exception:
+        return ("<b>📗 Wiki Derleme</b><br/>Derleyici "
+                "(<code>memory.wiki.compile_skill</code>) henüz kurulu değil.")
+    try:
+        res = compile_skill(name, turns=turns)
+    except TypeError:
+        res = compile_skill(name)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Derleme başarısız: {_html_escape(e)}</span>"
+    detail = res if isinstance(res, dict) else {"sonuç": res}
+    rows = "".join(
+        f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
+        f"<td>{_html_escape(v)}</td></tr>" for k, v in detail.items()
+    )
+    return (f"<b>📗 Wiki Derlendi — {_html_escape(name)}</b> ({turns} tur)"
+            f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>")
+
+
+def _handle_model(args: str, bridge) -> str:
+    """
+    `/model [<ad>]`: **Entropy'nin kendi** model ayarını gösterir/değiştirir.
+
+    Eskiden bu komut yerel değildi ve olduğu gibi CLI'a gidiyordu: kullanıcı
+    `/model claude-opus-5` yazdığında Entropy'nin üst çubuğu değişmiyor, yalnız
+    o turluk alt süreç etkileniyordu. Artık köprüye yazılır ve ayara
+    kalıcılaşır (`bridge.set_model`), yani /effort ile aynı sözleşme.
+    """
+    name = (args or "").strip()
+    provider = getattr(bridge, "provider_name", "") or "-"
+    if not name:
+        models = []
+        try:
+            models = list(bridge.fetch_available_models())
+        except Exception:
+            models = []
+        return (
+            "<b>Model</b><br/>"
+            f"Sağlayıcı: <b>{_html_escape(provider)}</b><br/>"
+            f"Aktif: <code>{_html_escape(getattr(bridge, 'selected_model', '') or '-')}</code><br/>"
+            + (f"Geçerli: <code>{_html_escape(', '.join(models[:12]))}</code><br/>" if models else "")
+            + "<i>Değiştirmek için: /model &lt;ad&gt;</i>"
+        )
+    name = name.split()[0]
+    try:
+        from entropy.core.config import is_valid_model_for
+
+        if not is_valid_model_for(provider, name):
+            return (f"<span style='color:#e06c75;'>'{_html_escape(name)}' "
+                    f"{_html_escape(provider)} sağlayıcısının modeli değil.</span>")
+    except Exception:
+        pass
+    try:
+        bridge.set_model(name)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Model ayarlanamadı: {_html_escape(e)}</span>"
+    try:
+        from entropy.core.event_bus import bus
+
+        bus.provider_status_updated.emit(provider, {"model": getattr(
+            bridge, "selected_model", name)})
+    except Exception:
+        pass
+    return (f"<b>Model</b> artık <code>"
+            f"{_html_escape(getattr(bridge, 'selected_model', name) or name)}</code> "
+            f"({_html_escape(provider)}).")
+
+
+def _handle_agent_setting(args: str) -> str:
+    """
+    `/agent effort <ad> <seviye>` ve `/agent model <ad> <model>`.
+
+    Kaynak tek: kasadaki `AGENT.md`. Yazıldıktan sonra ajan iki sağlayıcı
+    biçimine YENİDEN DERLENİR ve **oturumu tazelenir**: oturum imzası
+    `sha1(istem|model|efor)` olduğu için model/efor değişimi eski oturumu
+    geçersiz kılar; tazelenmezse ajan bir sonraki turda hâlâ eski modelle
+    konuşurdu.
+    """
+    from entropy.agents.registry import AgentRegistry
+
+    parts = (args or "").split()
+    verb = parts[0].lower() if parts else ""
+    if len(parts) < 3:
+        return ("<b>🤖 Ajan Ayarı</b><br/>Kullanım: "
+                "<code>/agent effort &lt;ad&gt; &lt;seviye&gt;</code> · "
+                "<code>/agent model &lt;ad&gt; &lt;model&gt;</code>")
+    name, value = parts[1], parts[2]
+    registry = AgentRegistry()
+    spec = registry.get(name)
+    if spec is None:
+        known = ", ".join(s.name for s in registry.list()) or "(yok)"
+        return (f"<b>🤖 Ajan Ayarı</b><br/>'{_html_escape(name)}' adında ajan yok.<br/>"
+                f"Mevcut: {_html_escape(known)}")
+
+    if verb == "effort":
+        from entropy.core.provider import effort_levels_for
+
+        level = value.lower()
+        levels = []
+        try:
+            levels = list(effort_levels_for(spec.provider, spec.model))
+        except Exception:
+            levels = []
+        if levels and level not in levels:
+            return (f"<span style='color:#e06c75;'>Bilinmeyen efor "
+                    f"'{_html_escape(level)}'. Geçerli: "
+                    f"{_html_escape(', '.join(levels))}.</span>")
+        updated = replace(spec, effort=level)
+        field_note = f"Çaba: <b>{_html_escape(level)}</b>"
+    else:
+        from entropy.agents.compile import normalize_model_text
+
+        model, effort_hint = normalize_model_text(value, spec.provider)
+        updated = replace(spec, model=model or value,
+                          effort=effort_hint or spec.effort)
+        field_note = f"Model: <code>{_html_escape(updated.model)}</code>"
+
+    try:
+        registry.update(updated)
+        from entropy.agents.compile import compile_agent
+
+        compiled = compile_agent(updated)
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Ajan güncellenemedi: {_html_escape(e)}</span>"
+    refreshed = _refresh_agent_session(updated.name)
+    return (
+        f"<b>🤖 {_html_escape(updated.name)}</b> güncellendi — {field_note}"
+        f"<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
+        f"Derlendi: <code>{_html_escape(str((compiled or {}).get('agy', '-')))}</code>"
+        + ("<br/>Oturum tazelendi (imza değişti): ajan bir sonraki turda yeni "
+           "modelle/eforla başlar." if refreshed else "")
+        + "</div>"
+    )
+
+
+def _refresh_agent_session(name: str) -> bool:
+    """Ajanın kalıcı oturumunu düşürür; imza değiştiği için yeniden kurulur."""
+    try:
+        from entropy.core.identity import AgentSessionStore
+
+        # `forget(agent)` sağlayıcı verilmediğinde ajanın TÜM oturumlarını
+        # düşürür: model değişimi sağlayıcıyı da değiştirmiş olabilir.
+        return bool(AgentSessionStore().forget(name))
+    except Exception:
+        logger.debug("Ajan oturumu tazelenemedi: %s", name, exc_info=True)
+    return False
+
+
+def _handle_board(args: str) -> str:
+    """
+    `/board` (özet) ve `/board pick <kart> <ajan>` (elle sahiplenme).
+
+    Model çağırmaz: özet kart dosyalarından ve olay günlüğünden okunur.
+    `pick` kartı ajana atar, kilidini alır ve tetikleyiciyi UYANDIRIR — kartın
+    koşmasını 3 sn'lik turu beklemeden başlatmanın tek yolu budur.
+    """
+    from entropy.agents.board_events import board_event_log
+    from entropy.agents.dispatcher import ClaimStore, board_dispatcher
+    from entropy.agents.tasks import STATUSES, TaskBoard
+
+    parts = (args or "").split()
+    board = TaskBoard()
+
+    if parts and parts[0].lower() == "pick":
+        if len(parts) < 3:
+            return ("<b>📋 Pano</b><br/>Kullanım: "
+                    "<code>/board pick &lt;kart&gt; &lt;ajan&gt;</code>")
+        card_id, agent = parts[1], parts[2]
+        card = board.get(card_id)
+        if card is None:
+            return f"<b>📋 Pano</b><br/>'{_html_escape(card_id)}' adlı kart yok."
+        try:
+            if (card.agent or "") != agent or card.status == "backlog":
+                board.apply_event(card.id, "task.assigned", actor="user",
+                                  payload={"agent": agent})
+        except Exception as e:
+            return (f"<span style='color:#e06c75;'>Kart atanamadı: "
+                    f"{_html_escape(e)}</span>")
+        core = board_dispatcher().core
+        picked = core.pick(agent)
+        if picked is None:
+            lease = ClaimStore(board.vault_path).read(card.id)
+            owner = (lease or {}).get("agent") or "-"
+            return (f"<b>📋 Pano</b><br/>'{_html_escape(card_id)}' sahiplenilemedi "
+                    f"(durum: {_html_escape(card.status)}, kilit sahibi: "
+                    f"{_html_escape(owner)}).")
+        return (
+            f"<b>📋 Pano — Sahiplenildi</b><br/>"
+            f"<code>{_html_escape(picked.id)}</code> → <b>{_html_escape(agent)}</b> "
+            f"(durum: {_html_escape(picked.status)}). Tetikleyici sıradaki turda "
+            f"başlatacak."
+        )
+
+    cards = board.list()
+    counts = {s: 0 for s in STATUSES}
+    for card in cards:
+        counts[card.status] = counts.get(card.status, 0) + 1
+    status_row = " · ".join(f"{s}: <b>{counts.get(s, 0)}</b>"
+                            for s in STATUSES if counts.get(s))
+    claims = ClaimStore(board.vault_path).list()
+    claim_rows = "".join(
+        f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>"
+        f"{_html_escape(c.get('card_id', '-'))}</td>"
+        f"<td style='padding:2px 10px 2px 0;'>{_html_escape(c.get('agent', '-'))}</td>"
+        f"<td style='padding:2px 0;color:#8B949E;'>bitiş {_html_escape(c.get('expiry', '-'))}</td></tr>"
+        for c in claims[:8]
+    )
+    try:
+        log = board_event_log(board.vault_path)
+        events = log.read()[-6:]
+        taskboard = log.taskboard_path
+    except Exception:
+        events, taskboard = [], None
+    event_rows = "".join(
+        f"<div style='color:#8B949E;font-size:11px;'>#{e.get('seq', '?')} "
+        f"{_html_escape(e.get('ts', ''))} · {_html_escape(e.get('action', ''))} · "
+        f"{_html_escape(e.get('task_id', ''))} ({_html_escape(e.get('actor', ''))})</div>"
+        for e in reversed(events)
+    )
+    return (
+        f"<b>📋 Pano</b> ({len(cards)} kart)<br/>{status_row or 'kart yok'}"
+        + (f"<div style='margin-top:4px;'><b>Sahiplenmeler</b>"
+           f"<table style='font-size:11px;'>{claim_rows}</table></div>" if claim_rows else "")
+        + (f"<div style='margin-top:4px;'><b>Son olaylar</b>{event_rows}</div>"
+           if event_rows else "")
+        + f"<div style='color:#8B949E;font-size:11px;margin-top:4px;'>Pano dosyası: "
+          f"<code>{_html_escape(str(taskboard or '-'))}</code> · Sahiplen: "
+          f"<code>/board pick &lt;kart&gt; &lt;ajan&gt;</code></div>"
+    )
+
+
+def _handle_memory(args: str, bridge) -> str:
+    """
+    `/memory merge` (gri bant toplu turu) ve `/memory dream` (rüya döngüsü).
+
+    İkisi de HAFIZA AJANININ modüllerine bağlıdır (11-D); modül henüz yoksa
+    komut kullanıcıya bunu söyler ve hata vermez — ajan katmanı hafıza
+    katmanına sert bağımlı olamaz.
+    """
+    verb = ((args or "").split() or [""])[0].lower()
+    if verb not in ("merge", "dream"):
+        return ("<b>🧠 Hafıza</b><br/>Kullanım: <code>/memory merge</code> "
+                "(gri bant kuyruğunu toplu işler) · <code>/memory dream</code> "
+                "(rüya/konsolidasyon döngüsü)")
+
+    if verb == "merge":
+        try:
+            from entropy.memory.gray_merge import run as gray_run  # type: ignore
+        except Exception:
+            return ("<b>🧠 Hafıza — Gri Bant</b><br/>Toplu birleştirme modülü "
+                    "(<code>memory/gray_merge.py</code>) henüz kurulu değil.")
+        try:
+            res = gray_run(bridge=bridge)
+        except TypeError:
+            res = gray_run()
+        except Exception as e:
+            return f"<span style='color:#e06c75;'>Birleştirme başarısız: {_html_escape(e)}</span>"
+        res = res if isinstance(res, dict) else {"sonuç": res}
+        rows = "".join(
+            f"<tr><td style='padding:2px 10px 2px 0;color:#00F0FF;'>{_html_escape(k)}</td>"
+            f"<td>{_html_escape(v)}</td></tr>" for k, v in res.items()
+        )
+        return f"<b>🧠 Gri Bant Birleştirildi</b><table style='font-size:11px;'>{rows}</table>"
+
+    try:
+        from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
+
+        cog = CognitiveMemorySystem()
+        result = cog.dream_and_consolidate()
+    except Exception as e:
+        return f"<span style='color:#e06c75;'>Rüya döngüsü koşamadı: {_html_escape(e)}</span>"
+    if isinstance(result, dict):
+        detail = ", ".join(f"{k}: {v}" for k, v in result.items())
+    elif isinstance(result, (list, tuple)):
+        detail = f"{len(result)} özet"
+    else:
+        detail = " ".join(str(getattr(result, "summary", result) or "").split())[:400]
+    return (f"<b>🧠 Rüya Döngüsü</b><br/>{_html_escape(detail) or 'sonuç yok'}"
+            "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
+            "Konsolidasyon doğrudan bilişsel belleğe yazılır.</div>")
 
 
 def _handle_lint(args: str) -> str:
@@ -1284,7 +1655,15 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
         /effort [<seviye>]       akıl yürütme eforunu gösterir/ayarlar (kalıcı)
         /login [agy|claude]      sağlayıcı giriş durumu ve giriş yönlendirmesi
         /handoff [not]           oturum devir sayfası yazar ve bağlamı sıkıştırır
+        /board                   pano özeti (durumlar, sahiplenmeler, son olaylar)
+        /board pick <kart> <ajan>  kartı ajana atar ve kilidini alır
+        /model [<ad>]            Entropy'nin KENDİ modelini gösterir/değiştirir
+        /agent effort <ad> <sev> ajanın eforunu AGENT.md'ye yazar, derler, oturumu tazeler
+        /agent model <ad> <model>  ajanın modelini AGENT.md'ye yazar, derler, oturumu tazeler
+        /memory merge            gri bant kuyruğunu toplu işler (hafıza katmanı)
+        /memory dream            rüya/konsolidasyon döngüsünü koşar
         /wiki <yetenek>          playbook'tan kavram/varlık sayfaları üretir (model yok)
+        /wiki compile <yet.> [--turns N]  wiki sayfalarını çok turlu derler
         /lint [<yetenek>|all]    wiki sağlık denetimi; wiki/lint.md yazar
 
     `distiller` testler için enjekte edilebilir; verilmezse gerçek depo kullanılır.
@@ -1318,7 +1697,18 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
     if head_low == "/agents":
         return _handle_agents(bridge)
     if head_low == "/agent":
+        # `/agent effort|model <ad> <değer>` ayarı değiştirir; tek argüman
+        # ayrıntı gösterir. Ayrım ilk sözcükte: ajan adı "effort"/"model"
+        # olamaz (kayıt defteri o adları ayırıyor).
+        if (args.split() or [""])[0].lower() in ("effort", "model"):
+            return _handle_agent_setting(args)
         return _handle_agent_detail(args)
+    if head_low == "/model":
+        return _handle_model(args, bridge)
+    if head_low == "/board":
+        return _handle_board(args)
+    if head_low == "/memory":
+        return _handle_memory(args, bridge)
     if head_low == "/tasks":
         return _handle_tasks(args)
     if head_low == "/task":

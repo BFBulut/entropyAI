@@ -11,10 +11,12 @@ birbirini tutmaz:
               ön bilgi: name, description, model, effort, tools
 
 Bu yüzden kaynak tanımı (kasa) türetilmiş tanımlardan ayrı tutulur: kullanıcı
-tek dosya düzenler, derleme iki biçimi de üretir. Çıktı İKİ köke yazılır —
-uygulama kökü (Entropy'nin kendi süreci oradan koşar) ve etkin proje kökü
-(arka plan görevleri proje dizininde koşar). Yalnızca birine yazmak, ajanın
-görevlerin yarısında "bulunamadı" olmasına yol açıyordu.
+tek dosya düzenler, derleme iki biçimi de üretir. **Kökler biçime göre ayrıdır
+(Faz 11-C):** agy biçimi etkin proje kökü + nötr çalışma alanına yazılır (agy
+ajanı yalnızca sürecin çalışma dizininden keşfediyor), claude biçimi ise
+YALNIZCA nötr çalışma alanına (`claude_compile_root`) — proje kökündeki
+`.claude/agents` kullanıcının kendi Claude Code oturumuna sızıyordu ve saf kip
+o dosyaları zaten okumuyor (kadro `--agents <json>` ile taşınır).
 
 Kaynak değişmemişse dosyaya dokunulmaz: her açılışta ve her proje değişiminde
 derleme koşuyor; içerik aynıyken yazmak dosya izleyicileri (SkillWatcher,
@@ -198,6 +200,10 @@ def render_claude_agent(spec: AgentSpec) -> str:
     if model:
         front["model"] = model
     if spec.effort:
+        # NOT (Faz 11-C): izole kipte bu satır ETKİSİZDİR — `--setting-sources ""`
+        # derlenmiş ajan dosyalarını okutmuyor. Silinmedi çünkü izolasyon
+        # kapatılırsa (config.claude_isolated=False) yeniden işe yarar; efor
+        # bugün `--effort` bayrağı ve `--agents` yüküyle taşınır.
         front["effort"] = spec.effort
     # Orkestratörde politika alanı ne yazarsa yazsın araç listesi salt-okunur:
     # yazma/komut aracı ofis sözleşmesinde alt ajanlara ait.
@@ -225,7 +231,8 @@ def claude_tools_list(spec: AgentSpec) -> List[str]:
     return [t.strip() for t in tools.split(",") if t.strip()]
 
 
-def claude_agents_json(vault_path: Optional[Path | str] = None) -> str:
+def claude_agents_json(vault_path: Optional[Path | str] = None,
+                       default_effort: str = "") -> str:
     """
     `claude --agents <json>` yükü: Entropy'nin KENDİ kadrosu.
 
@@ -262,6 +269,13 @@ def claude_agents_json(vault_path: Optional[Path | str] = None) -> str:
         model = resolve_model(spec, "claude")
         if model:
             entry["model"] = model
+        # Faz 11-C.4: efor künyeye girer. Derlenmiş `.claude/agents/<ad>.md`
+        # dosyasındaki `effort` ön bilgisi izole kipte ETKİSİZDİR
+        # (`--setting-sources ""` o dosyaları okutmuyor), yani eforun tek
+        # taşıyıcısı bu yük ve `--effort` bayrağıdır.
+        effort = (getattr(spec, "effort", "") or default_effort or "").strip().lower()
+        if effort:
+            entry["effort"] = effort
         payload[name] = entry
     if not payload:
         return ""
@@ -342,16 +356,33 @@ def compile_roots(project_dir: Optional[Path | str] = None) -> List[Path]:
 
     _add(project_dir)
     _add(getattr(config, "default_project_path", None))
-    # Claude saf kipte NÖTR çalışma dizininde koşuyor (bkz. run_cwd); agy ise
-    # ajanları çalışma dizinine göre keşfediyor. Bu kök yazılmazsa oradan
-    # başlatılan bir tur hiçbir Entropy ajanını göremiyordu.
+    _add(claude_compile_root())
+    return roots
+
+
+def claude_compile_root() -> Optional[Path]:
+    """
+    Claude biçiminin (`.claude/agents/*.md`) yazılabileceği TEK kök: nötr çalışma alanı.
+
+    **Neden proje kökü değil (Faz 11-C):** derlenen dosyalar kullanıcının kendi
+    Claude Code oturumuna alt ajan olarak sızıyordu — depoda `.claude/agents/`
+    altında Entropy'nin kadrosu (`analist`, `arastirmaci`, `degerlendirici`,
+    `orkestrator`, `yazar`) yeniden beliriyor, kullanıcının geliştirme
+    ajanlarıyla karışıyordu. Entropy'nin KENDİ turunda bu dosyalara zaten
+    ihtiyaç yok: saf kip `--setting-sources ""` ile onları okumuyor, kadro
+    `--agents <json>` yüküyle taşınıyor (`claude_agents_json`). agy tarafı
+    farklı: orada ajan yalnızca sürecin çalışma dizinindeki `.agents/agents`
+    ağacından keşfediliyor, o yüzden agy biçimi proje köklerine yazılmayı
+    sürdürür.
+    """
     try:
         from entropy.core.config import claude_workspace_path
 
-        _add(claude_workspace_path())
+        path = Path(claude_workspace_path())
+        path.mkdir(parents=True, exist_ok=True)
+        return path.resolve()
     except Exception:
-        pass
-    return roots
+        return None
 
 
 def compile_agent_to(spec: AgentSpec, root: Path | str) -> Dict[str, Path]:
@@ -379,16 +410,25 @@ def compile_agent(spec: AgentSpec, project_dir: Optional[Path | str] = None) -> 
     """
     Bir ajanı iki sağlayıcı biçimine derler.
 
-    Dönüş: {"agy": <yol>, "claude": <yol>} — ilk (uygulama) kökündeki yollar.
-    Diğer köklere de yazılır ama sözleşme tek yol döndürmeyi gerektirdiği için
-    çağıranlar uygulama kökündeki dosyayı görür.
+    Dönüş: {"agy": <yol>, "claude": <yol>} — ilk kökteki agy yolu ve nötr
+    çalışma alanındaki claude yolu.
+
+    **Biçimlerin kökleri AYRI (Faz 11-C):** agy her köke (`compile_roots`)
+    yazılır çünkü ajanı yalnızca sürecin çalışma dizininden keşfediyor; claude
+    biçimi YALNIZCA `claude_compile_root()` altına yazılır (bkz. o fonksiyonun
+    gerekçesi: proje kökündeki `.claude/agents` kullanıcının kendi CLI
+    oturumuna sızıyordu).
     """
     agy_text = render_agy_agent(spec)
     claude_text = render_claude_agent(spec)
     out: Dict[str, Path] = {}
     for root in compile_roots(project_dir):
         agy_path = _write_if_changed(root / ".agents" / "agents" / spec.name / "agent.md", agy_text)
-        claude_path = _write_if_changed(root / ".claude" / "agents" / f"{spec.name}.md", claude_text)
         if not out:
-            out = {"agy": agy_path, "claude": claude_path}
+            out = {"agy": agy_path}
+    claude_root = claude_compile_root()
+    if claude_root is not None:
+        out["claude"] = _write_if_changed(
+            claude_root / ".claude" / "agents" / f"{spec.name}.md", claude_text
+        )
     return out

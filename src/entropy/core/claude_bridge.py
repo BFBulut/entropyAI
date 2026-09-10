@@ -662,6 +662,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         model: Optional[str] = None,
         tools: Optional[List[str]] = None,
         agents_json: Optional[str] = None,
+        effort: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> List[str]:
         """
         Başsız bir Claude Code çağrısının argv'sini kurar.
@@ -802,15 +804,26 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             cmd.extend(["--resume", str(resume_id)])
         elif resume and self.current_session_id:
             cmd.extend(["--resume", self.current_session_id])
+        elif session_id:
+            # Faz 11-C.3: ajanın KALICI oturumu için kimliği önceden atıyoruz
+            # (`--session-id <uuid>`); sonraki koşu aynı kimliği `--resume` ile
+            # sürdürür. `--resume` ile birlikte VERİLMEZ: CLI ikisini bir arada
+            # kabul etmiyor ve zaten anlamsız (kimlik ya yeni ya sürdürülüyor).
+            cmd.extend(["--session-id", str(session_id)])
 
-        # Efor: prompt içindeki tek seferlik `/effort <seviye>` yazımı, kalıcı
-        # ayarı (self.selected_effort) o tur için geçersiz kılar.
+        # Efor önceliği (Faz 11-C.4): prompt'taki tek seferlik `/effort <seviye>`
+        # > bu koşuya AÇIKÇA verilen efor (ajanın/kartın eforu) > oturum eforu
+        # (üst çubuk). Ortadaki basamak Faz 11-C'de girdi: AGENT.md'deki efor
+        # buraya hiç ulaşmıyordu, her kart üst çubuğun eforuyla koşuyordu.
         effort_m = re.search(
             r"(?:^|\s)/effort\s+(low|medium|high|xhigh|max)\b", prompt, re.IGNORECASE
         )
-        effort = effort_m.group(1).lower() if effort_m else self.selected_effort
-        if effort in CLAUDE_EFFORT_LEVELS:
-            cmd.extend(["--effort", effort])
+        if effort_m:
+            run_effort = effort_m.group(1).lower()
+        else:
+            run_effort = str(effort or "").strip().lower() or self.selected_effort
+        if run_effort in CLAUDE_EFFORT_LEVELS:
+            cmd.extend(["--effort", run_effort])
         # Son süzgeç: `--bare` argv'ye ASLA girmez. Kullanıcının kimliği
         # claude.ai aboneliği; bare kip OAuth/keychain okumaz ve
         # ANTHROPIC_API_KEY ister, yani her tur ücretli API'ye kayardı.
@@ -829,7 +842,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         base.mkdir(parents=True, exist_ok=True)
         return base
 
-    def entropy_agents_json(self) -> Optional[str]:
+    def entropy_agents_json(self, effort: Optional[str] = None) -> Optional[str]:
         """
         `--agents` yükü: Entropy'nin kendi kadrosu (Desk ajanları hariç).
 
@@ -841,7 +854,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         try:
             from entropy.agents.compile import claude_agents_json
 
-            return claude_agents_json() or None
+            return claude_agents_json(default_effort=str(effort or "")) or None
         except Exception:
             # Kadro okunamadıysa tur yine de koşar: `--agents` sadece bir ek.
             return None
@@ -1865,6 +1878,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
         tools: Optional[List[str]] = None,
+        effort: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
@@ -1909,7 +1924,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
                   model, agent_spec, stream_meta, interactive,
-                  on_followup_start, on_followup_end, tools),
+                  on_followup_start, on_followup_end, tools, effort, session_id),
             daemon=True,
         ).start()
 
@@ -1976,6 +1991,25 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         """Şu an canlı olan etkileşimli kart terminalleri."""
         return self._interactive_sessions.active_ids()
 
+    def _remember_agent_session(self, agent, session_id: str) -> None:
+        """
+        Yakalanan oturum kimliğini ajanın kalıcı deposuna yazar (Faz 11-C.3).
+
+        Sessizce başarısız olur: oturum kalıcılığı bir KONFOR, kartın kapanması
+        ise sözleşme. Depo yazılamadığında bir sonraki koşu yeni oturum açar.
+        """
+        name = str(agent or "").strip()
+        if not name or not session_id:
+            return
+        try:
+            from entropy.core.identity import agent_session_store
+
+            agent_session_store().record_captured(
+                name, self.provider_name, str(session_id), cwd=os.getcwd()
+            )
+        except Exception:
+            pass
+
     def background_conversation_id(self, task_id: str) -> Optional[str]:
         """Biten arka plan görevinin Claude oturum kimliği (`--resume` girdisi)."""
         with self._lock:
@@ -2011,6 +2045,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
         tools: Optional[List[str]] = None,
+        effort: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         # Kip bayrağı ayardan; kapalıysa hiçbir çağıran değişmeden Faz 10-B
@@ -2112,9 +2148,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     if tools else self.tools_for(mode, needs_write=bool(needs_write))
                 ),
                 agents_json=(
-                    self.entropy_agents_json()
+                    self.entropy_agents_json(effort=effort)
                     if getattr(config, "claude_isolated", False) else None
                 ),
+                # Faz 11-C.4/C.3: ajanın eforu ve kalıcı oturum kimliği.
+                effort=effort,
+                session_id=session_id if not resume_id else None,
             )
 
             result: Dict[str, object] = {}
@@ -2217,6 +2256,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 if session_id:
                     with self._lock:
                         self._background_conversations[task_id] = str(session_id)
+                    # Faz 11-C.3: ajanın kalıcı oturumu diske yazılır; bellek
+                    # sözlüğü uygulama kapanınca gidiyordu.
+                    self._remember_agent_session(agent, str(session_id))
 
                 full_text = str(result.get("text", "") or "").strip()
                 success = (

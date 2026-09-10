@@ -22,6 +22,7 @@ import pytest
 
 import entropy.core.config  # noqa: F401  (sys.modules kaydı için)
 from entropy.agents.bootstrap import bootstrap_agents
+from entropy.agents.compile import claude_compile_root
 
 
 @pytest.fixture
@@ -63,9 +64,14 @@ def test_bootstrap_seeds_and_compiles_to_project_roots(isolated):
     for name in result.created:
         # Kasadaki kaynak
         assert (vault / "Entropy" / "Agents" / name / "AGENT.md").is_file()
-        # Proje kökü, her iki sağlayıcı biçimi
+        # Proje kökü: YALNIZCA agy biçimi. agy ajanı sürecin çalışma dizininden
+        # keşfediyor, o yüzden proje köküne yazılmalı.
         assert _agy(project, name).is_file(), f"{name} agy biçimi {project} altında yok"
-        assert _claude(project, name).is_file(), f"{name} claude biçimi {project} altında yok"
+        # Faz 11-C: claude biçimi proje köküne YAZILMAZ (kullanıcının kendi
+        # Claude Code oturumuna alt ajan olarak sızıyordu); tek kök nötr
+        # çalışma alanıdır ve saf kip kadroyu `--agents <json>` ile taşır.
+        assert not _claude(project, name).exists(), f"{name} claude biçimi projeye sızdı"
+        assert _claude(claude_compile_root(), name).is_file(),             f"{name} claude biçimi çalışma alanında yok"
         # APP_ROOT (kaynaktan koşarken deponun kendisi) ARTIK yazılmaz.
         assert not _agy(app_root, name).exists(), f"{name} APP_ROOT'a sızdı"
         assert not _claude(app_root, name).exists(), f"{name} APP_ROOT'a sızdı"

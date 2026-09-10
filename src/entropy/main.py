@@ -158,6 +158,16 @@ def main():
         except Exception as e:
             print(f"[{config.app_name}] Ofis zincirleri sürdürülemedi: {e}")
 
+    # Pano tetikleyicisi (Faz 11-C.2): önce UZLAŞTIR, sonra turu başlat.
+    # Uzlaştırma olmadan önceki oturumda yarım kalan `taken`/`running` kartlar
+    # sonsuza dek kilitli kalıyordu (kilidin sahibi ölü bir PID). Turun kendisi
+    # `config.board_auto_dispatch` ile kapatılabilir: her tur potansiyel bir
+    # model çağrısıdır ve kullanıcı uygulamayı "sessiz" açabilmeli.
+    from entropy.agents.bootstrap import start_board_dispatch, stop_board_dispatch
+
+    dispatch = start_board_dispatch(app)
+    print(f"[{config.app_name}] Pano: {dispatch.summary()}")
+
     scheduler = TaskScheduler.get_instance()
 
     def handle_scheduled_task(task):
@@ -250,6 +260,10 @@ def main():
             pass
         try:
             scheduler.stop()
+        except Exception:
+            pass
+        try:
+            stop_board_dispatch()
         except Exception:
             pass
 

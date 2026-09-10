@@ -153,7 +153,15 @@ def test_unrelated_command_is_not_captured():
 # ---------------------------------------------------------------------------
 
 
-def test_task_command_creates_card_and_runs_it(registry, isolated_vault, monkeypatch):
+def test_task_command_creates_card_without_running_it(registry, isolated_vault, monkeypatch):
+    """
+    Faz 11-C: `/task` artık KOŞTURMUYOR, yalnızca kart doğuruyor.
+
+    Kart oluşturulduğu satırda başlatıldığı sürece `backlog`/`assigned` hiç
+    beklemiyordu; pano bir kuyruk değil kayıt defteriydi ve sahiplenme,
+    öncelik, eşzamanlılık tavanı, kurtarma kavramlarının hiçbiri işlemiyordu.
+    Koşturmak artık `BoardDispatcher`ın işi.
+    """
     started = {}
 
     class _Recorder:
@@ -167,7 +175,7 @@ def test_task_command_creates_card_and_runs_it(registry, isolated_vault, monkeyp
     out = try_handle_local_command(
         "/task yazar Sprint raporu :: Sprint çıktısını rapora dönüştür", _Bridge()
     )
-    assert "Görev Devredildi" in out
+    assert "Panoya" in out
     assert "yazar" in out
 
     board = TaskBoard(vault_path=isolated_vault)
@@ -177,12 +185,18 @@ def test_task_command_creates_card_and_runs_it(registry, isolated_vault, monkeyp
     assert card.title == "Sprint raporu"
     assert card.goal == "Sprint çıktısını rapora dönüştür"
     assert card.agent == "yazar"
-    assert card.status == "running"
+    assert card.status == "assigned"
+    assert started == {}, "/task köprüye tek çağrı bile göndermemeli"
 
+    # Kartı tetikleyici koşturur; efor ve istem o yolda üretilir.
+    from entropy.agents.dispatcher import BoardDispatcherCore
+
+    BoardDispatcherCore(board=board, vault_path=isolated_vault).tick()
     assert started["agent"] == "yazar"
     assert started["save_report"] is True
     assert "Sprint çıktısını rapora dönüştür" in started["prompt"]
     assert "yazar ajanısın" in started["prompt"]  # ajan gövdesi prompt'a girdi
+    assert board.get(card.id).status == "running"
 
 
 def test_task_command_rejects_unknown_agent(registry):
@@ -208,14 +222,20 @@ def test_tasks_command_lists_and_filters(registry, isolated_vault):
     assert "Bilinmeyen durum" in try_handle_local_command("/tasks saçma", _Bridge())
 
 
-def test_task_stop_marks_card_failed(registry, isolated_vault):
+def test_task_stop_marks_card_canceled(registry, isolated_vault):
+    """
+    Faz 11-C: durdurulan kart `failed` değil `canceled`.
+
+    "Kullanıcı vazgeçti" ile "iş başarısız oldu" aynı sütunda durduğu sürece
+    panodaki hiçbir sayaç anlamlı değildi.
+    """
     board = TaskBoard(vault_path=isolated_vault)
     card = board.create(TaskCard(id=new_task_id("c"), title="Kart C", agent="yazar"))
     board.update(replace(card, status="running"))
 
     out = try_handle_local_command(f"/task stop {card.id}", _Bridge())
     assert "Durduruldu" in out
-    assert board.get(card.id).status == "failed"
+    assert board.get(card.id).status == "canceled"
 
     # Çalışmayan kart durdurulmaz; kullanıcıya durumu söylenir.
     assert "çalışmıyor" in try_handle_local_command(f"/task stop {card.id}", _Bridge())

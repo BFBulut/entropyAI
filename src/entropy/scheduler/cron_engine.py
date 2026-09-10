@@ -111,6 +111,30 @@ class TaskScheduler:
         self._save_tasks()
         return task
 
+    def disable_task(self, task_id: str, reason: str = "") -> bool:
+        """
+        Zamanlanmış görevi kapatır (silmez) ve kullanıcıya nedenini duyurur.
+
+        Faz 11.6 (öz-amplifikasyon kilidi): "her on dakikada aynı konuyu
+        araştır" türü bir görev yinelenen çıktı üretmeye başladığında sonsuza
+        dek koşmamalı. SİLİNMEZ çünkü kullanıcı hem nedenini görebilmeli hem
+        de isterse yeniden açabilmeli.
+        """
+        with self._lock:
+            task = self.tasks.get(task_id)
+            if task is None or not task.enabled:
+                return False
+            task.enabled = False
+            self._save_tasks()
+        try:
+            bus.terminal_output_received.emit(
+                f"[Otonom Görev] '{task.name}' durduruldu"
+                + (f": {reason}" if reason else "") + "\n"
+            )
+        except Exception:
+            pass
+        return True
+
     def remove_task(self, task_id: str) -> bool:
         """Remove a task by ID and persist changes."""
         with self._lock:

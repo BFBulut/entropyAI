@@ -350,7 +350,13 @@ def test_compiled_seed_agent_file_has_no_gemini_in_claude_format(registry, tmp_p
     (tmp_path / "app").mkdir()
     registry.ensure_defaults()
     registry.compile_all(tmp_path / "app")
-    text = (tmp_path / "app" / ".claude" / "agents" / "arastirmaci.md").read_text(encoding="utf-8")
+    # Faz 11-C: claude biçimi proje/uygulama köküne değil YALNIZCA nötr çalışma
+    # alanına yazılır (derlenmiş ajanlar kullanıcının Claude Code oturumuna
+    # sızıyordu); dosya orada aranır.
+    from entropy.agents.compile import claude_compile_root
+
+    text = (claude_compile_root() / ".claude" / "agents" / "arastirmaci.md").read_text(
+        encoding="utf-8")
     assert "gemini" not in text.lower()
     agy_text = (tmp_path / "app" / ".agents" / "agents" / "arastirmaci" / "agent.md").read_text(encoding="utf-8")
     assert "model: flash" in agy_text
@@ -610,13 +616,26 @@ def test_resume_all_replans_when_planning_never_finished(seeded, board, registry
     assert board.get("ust-2").status == "review"
 
 
-def test_resume_all_ignores_non_office_and_finished_cards(seeded, board, offices):
+def test_resume_all_recovers_entropy_cards_and_ignores_finished(seeded, board, offices):
+    """
+    Faz 11-C.12: `resume_all` artık Entropy kartlarını da UZLAŞTIRIR.
+
+    Eskiden `if not card.office: continue` yüzünden ofis kartı olmayan her şey
+    atlanıyordu; uygulama Entropy'nin kendi kartı koşarken kapanırsa kart
+    sonsuza dek `running` kalıyor ve hiçbir şey onu düzeltmiyordu. Artık kart
+    kuyruğa döner (koşu YENİDEN BAŞLATILMAZ — model çağrısı yapılmaz), biten
+    kartlara ise dokunulmaz.
+    """
     board.create(TaskCard(id="serbest", title="Ajan kartı", status="running", agent="yazar"))
     board.create(TaskCard(id="bitmis", title="Bitti", status="review",
                           office="arastirma-ofisi", children=["x"]))
     bridge = _ScriptedBridge([])
-    assert OfficeHarness.resume_all(board=board, offices=offices,
-                                    bridge_factory=lambda p: bridge) == []
+    resumed = OfficeHarness.resume_all(board=board, offices=offices,
+                                       bridge_factory=lambda p: bridge)
+    assert resumed == ["serbest"]
+    assert board.get("serbest").status == "assigned"
+    assert board.get("bitmis").status == "review"
+    # Uzlaştırma bir KOŞU değil: köprüye tek çağrı gitmez.
     assert bridge.calls == []
 
 

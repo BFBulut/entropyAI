@@ -8,6 +8,7 @@ alıntılar `claude_bridge.py` sabitlerinin yorumlarında.
 """
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -396,8 +397,16 @@ def test_card_with_foreign_model_runs_on_claude_default(tmp_path, monkeypatch, i
     bridge.active_project_dir = tmp_path
     captured = {}
 
+    # Kilit çekişmesine dayanıklı bekleme: köprünün işçi iş parçacığı proje
+    # YAZMA kilidini beklerken (tam süitte başka bir kart aynı dizinde koşuyor
+    # olabilir) 2,5 saniyelik yoklama döngüsü zaman aşımına uğruyor ve test
+    # yalnızca tam süitte kırmızıya dönüyordu. Olayla beklemek hem hızlı hem de
+    # tavanı yüksek tutmayı bedava yapıyor.
+    launched = threading.Event()
+
     def fake_popen(cmd, **kwargs):
         captured["cmd"] = list(cmd)
+        launched.set()
         return _FakeProc(_claude_lines())
 
     monkeypatch.setattr("entropy.core.claude_bridge.subprocess.Popen", fake_popen)
@@ -405,12 +414,8 @@ def test_card_with_foreign_model_runs_on_claude_default(tmp_path, monkeypatch, i
     monkeypatch.setattr("entropy.core.claude_bridge.task_ledger", ledger)
 
     board.run(card.id, bridge_factory=lambda provider: bridge)
-    # run_card iş parçacığı açmaz (köprü açar); sahte Popen eşzamanlı bitiyor.
-    for _ in range(50):
-        if "cmd" in captured:
-            break
-        import time as _t
-        _t.sleep(0.05)
+    # run_card iş parçacığı açmaz (köprü açar); sahte Popen eşzamanlı biter.
+    assert launched.wait(60), "köprü süreci 60 sn içinde başlatılmadı"
 
     cmd = captured["cmd"]
     assert cmd[cmd.index("--model") + 1] == "claude-opus-5"

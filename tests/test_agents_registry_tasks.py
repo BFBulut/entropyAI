@@ -255,9 +255,15 @@ def test_compile_writes_both_provider_formats(registry, tmp_path, monkeypatch):
     assert "Read" in cl_front["tools"] and "Write" not in cl_front["tools"]  # read-only
     assert "Kaynak göster" in cl_body
 
-    # Proje köküne de yazılmış olmalı: agy/claude ajanları çalışma dizinine göre bulur.
+    # agy biçimi proje köküne yazılır (agy ajanı çalışma dizininden keşfeder).
     assert (project / ".agents" / "agents" / "arastirmaci" / "agent.md").is_file()
-    assert (project / ".claude" / "agents" / "arastirmaci.md").is_file()
+    # Faz 11-C: claude biçimi proje köküne ARTIK YAZILMAZ — derlenmiş ajanlar
+    # kullanıcının kendi Claude Code oturumuna sızıyordu. Tek kök: nötr çalışma
+    # alanı; saf kip kadroyu `--agents <json>` ile taşıyor.
+    assert not (project / ".claude").exists(), "proje köküne .claude sızdı"
+    from entropy.agents.compile import claude_compile_root
+
+    assert claude_path.parent.parent.parent == claude_compile_root()
 
 
 def test_compile_skips_untouched_files(registry, tmp_path, monkeypatch):

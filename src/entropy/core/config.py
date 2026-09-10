@@ -340,6 +340,27 @@ class EntropyConfig(BaseModel):
     # kapatılır ve süreç sonlandırılır; kullanıcı bölmeyi açık unutsa bile CLI
     # süreci ve oturum belleği sonsuza dek yaşamaz.
     desk_interactive_idle_timeout_s: int = 600
+    # --- Entropy Board (Faz 11-C) ---
+    # Tetikleyici varsayılan AÇIK: pano ancak kendi kendine dönerse bir kuyruk,
+    # yoksa bir kayıt defteridir. Kapatma imkânı var çünkü her tur potansiyel
+    # bir model çağrısıdır ve kotasını kontrol etmek isteyen kullanıcı
+    # uygulamayı "sessiz" açabilmeli (`desk_auto_resume` ile aynı gerekçe).
+    board_auto_dispatch: bool = True
+    # Tur aralığı (sn). Kasa izleyicisinin 5 sn'lik yoklamasıyla aynı büyüklük;
+    # tur maliyeti milisaniye, iş süresi CLI'ın model gecikmesi (dakikalar).
+    board_dispatch_interval_s: int = 3
+    # Sahiplenme kirası (sn). Amaç "asılı kalanı bir gün sonra değil bir saat
+    # sonra kurtarmak"; kart adım tavanı (20) ve agy print zaman aşımı (5 dk)
+    # düşünüldüğünde bol.
+    board_claim_timeout_s: int = 3600
+    # Entropy panosunun eşzamanlı koşu tavanı. Yazma niyetli kartlar zaten
+    # proje yazma kilidinde serileşiyor; bu tavan token harcamasını sınırlar.
+    entropy_max_parallel: int = 2
+    # Faz 11.6 — öz-amplifikasyon kilidi. AÇIK: araştırma kartı beyinde
+    # yanıt varsa CLI'ya gitmez, düşük yenilikli tur aynı konudaki
+    # zamanlanmış görevi durdurur. Kapatma imkânı var çünkü kilit bir kartı
+    # model çağırmadan kapatabiliyor ve kullanıcı bunu isteyerek atlayabilmeli.
+    amplification_lock: bool = True
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
@@ -475,6 +496,11 @@ class EntropyConfig(BaseModel):
                 "desk_auto_resume": self.desk_auto_resume,
                 "desk_interactive_cards": self.desk_interactive_cards,
                 "desk_interactive_idle_timeout_s": self.desk_interactive_idle_timeout_s,
+                "board_auto_dispatch": self.board_auto_dispatch,
+                "board_dispatch_interval_s": self.board_dispatch_interval_s,
+                "board_claim_timeout_s": self.board_claim_timeout_s,
+                "entropy_max_parallel": self.entropy_max_parallel,
+                "amplification_lock": self.amplification_lock,
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
                 "claude_workspace_dir": self.claude_workspace_dir,
@@ -534,6 +560,16 @@ class EntropyConfig(BaseModel):
                 idle_s = data.get("desk_interactive_idle_timeout_s")
                 if isinstance(idle_s, int) and not isinstance(idle_s, bool) and idle_s > 0:
                     self.desk_interactive_idle_timeout_s = idle_s
+                if isinstance(data.get("board_auto_dispatch"), bool):
+                    self.board_auto_dispatch = data["board_auto_dispatch"]
+                if isinstance(data.get("amplification_lock"), bool):
+                    self.amplification_lock = data["amplification_lock"]
+                for key, floor in (("board_dispatch_interval_s", 1),
+                                   ("board_claim_timeout_s", 60),
+                                   ("entropy_max_parallel", 1)):
+                    value = data.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= floor:
+                        setattr(self, key, value)
                 if isinstance(data.get("claude_config_dir"), str):
                     self.claude_config_dir = data["claude_config_dir"]
                 if isinstance(data.get("claude_isolated"), bool):

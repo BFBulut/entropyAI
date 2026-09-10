@@ -789,6 +789,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         interactive: bool = False,
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
+        effort: Optional[str] = None,
     ):
         """
         Execute an autonomous background task without locking the interactive user chat UI.
@@ -855,7 +856,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             args=(task_id, task_name, prompt, mode, project_path, on_result,
                   save_report, agent, needs_write, conversation_id, max_steps,
                   model, agent_spec, stream_meta, interactive,
-                  on_followup_start, on_followup_end),
+                  on_followup_start, on_followup_end, effort),
             daemon=True
         )
         thread.start()
@@ -951,6 +952,25 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             return dict(usage)
         return {k: max(0, int(v or 0) - int(base.get(k, 0) or 0)) for k, v in usage.items()}
 
+    def _remember_agent_session(self, agent, session_id: str) -> None:
+        """
+        Yakalanan oturum kimliğini ajanın kalıcı deposuna yazar (Faz 11-C.3).
+
+        Sessizce başarısız olur: oturum kalıcılığı bir KONFOR, kartın kapanması
+        ise sözleşme. Depo yazılamadığında bir sonraki koşu yeni oturum açar.
+        """
+        name = str(agent or "").strip()
+        if not name or not session_id:
+            return
+        try:
+            from entropy.core.identity import agent_session_store
+
+            agent_session_store().record_captured(
+                name, self.provider_name, str(session_id), cwd=os.getcwd()
+            )
+        except Exception:
+            pass
+
     def background_conversation_id(self, task_id: str) -> Optional[str]:
         """Biten arka plan görevinin agy konuşma kimliği (`--conversation` girdisi)."""
         with self._lock:
@@ -985,6 +1005,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         interactive: bool = False,
         on_followup_start: Optional[Callable[[str], object]] = None,
         on_followup_end: Optional[Callable[[str], object]] = None,
+        effort: Optional[str] = None,
     ):
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         # Kip bayrağı köprüde değil ayarda: kullanıcı etkileşimli kartları
@@ -1079,10 +1100,16 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             # boost/teamwork sezgisi > modelin kendi son eki. agy'de efor MODEL
             # ADININ PARÇASI olduğu için ayrı bayrak değil, ad yeniden bestelenir.
             run_model = self.model_for_run(model)
+            # Faz 11-C.4: ajanın/kartın eforu agy'de AYRI BAYRAK DEĞİL, model
+            # adının son ekidir (`--effort` ile `--model` çakışıyor). Öncelik:
+            # istemdeki `/effort` > boost > çağrının eforu > modelin kendi son
+            # eki > kalıcı ayar.
             run_model = self.apply_effort_to_model(
                 run_model,
                 self.effort_for_prompt(
-                    prompt, default_effort=self._explicit_run_effort(model)
+                    prompt,
+                    default_effort=(str(effort or "").strip().lower()
+                                    or self._explicit_run_effort(model)),
                 ),
             )
             if run_model and run_model != config.model_fallback_name:
@@ -1552,6 +1579,12 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                 if conv:
                                     with self._lock:
                                         self._background_conversations[task_id] = str(conv)
+                                    # Faz 11-C.3: agy kimliği ÖNCEDEN atanamıyor
+                                    # (Claude'daki `--session-id` karşılığı yok),
+                                    # bu yüzden akıştan yakalanan kimlik ajanın
+                                    # kalıcı oturum dosyasına yazılır; sonraki
+                                    # koşu `--conversation <id>` alır.
+                                    self._remember_agent_session(agent, str(conv))
 
                                 # Her arka plan görevi yeni bir konuşma olduğundan agy'nin
                                 # kümülatif "usage" değeri doğrudan bu görevin maliyetidir.

@@ -58,6 +58,72 @@ class BootstrapResult:
         return "; ".join(parts) or "derlenecek ajan yok"
 
 
+@dataclass
+class DispatchStartResult:
+    """Açılış kablolamasının özeti (`start_board_dispatch`)."""
+
+    recovered: List[str] = field(default_factory=list)
+    started: bool = False
+    dispatcher: object = None
+    error: Optional[str] = None
+
+    def summary(self) -> str:
+        if self.error:
+            return f"Pano tetikleyicisi başlatılamadı: {self.error}"
+        parts = []
+        if self.recovered:
+            parts.append(f"asılı kalan {len(self.recovered)} kart kuyruğa alındı")
+        parts.append("tetikleyici açık" if self.started else "tetikleyici kapalı (ayar)")
+        return "; ".join(parts)
+
+
+def start_board_dispatch(app=None) -> DispatchStartResult:
+    """
+    Açılış kablolaması: **önce uzlaştır, sonra turu başlat** (Faz 11-C).
+
+    Sıra bilinçli: uzlaştırma olmadan önceki oturumda yarım kalan
+    `taken`/`running` kartlar sonsuza dek kilitli kalır (kilidin sahibi ölü bir
+    PID) ve ilk tur onları göremez. Tur `config.board_auto_dispatch` ile
+    kapatılabilir; uzlaştırma HER HÂLÜKÂRDA koşar çünkü model çağırmaz ve
+    "sessiz açılış" isteyen kullanıcı da asılı kart istemez.
+
+    `app` verilirse (QApplication) kapanış kancası `aboutToQuit`e takılır:
+    zamanlayıcı süreçten önce durmalı, yoksa kapanış sırasında yeni bir tur
+    kart başlatabilir.
+    """
+    from entropy.agents.dispatcher import board_dispatcher
+
+    result = DispatchStartResult()
+    try:
+        dispatcher = board_dispatcher()
+        result.dispatcher = dispatcher
+        result.recovered = list(dispatcher.reconcile() or [])
+        result.started = bool(dispatcher.start())
+        if app is not None:
+            about = getattr(app, "aboutToQuit", None)
+            if about is not None:
+                about.connect(dispatcher.stop)
+    except Exception as exc:
+        result.error = str(exc)
+        logger.exception("Pano tetikleyicisi başlatılamadı")
+    return result
+
+
+def stop_board_dispatch() -> bool:
+    """Kapanış: tetikleyiciyi durdurur (kanca takılamadıysa elle çağrılır)."""
+    try:
+        from entropy.agents.dispatcher import board_dispatcher
+
+        dispatcher = board_dispatcher(create=False)
+        if dispatcher is None:
+            return False
+        dispatcher.stop()
+        return True
+    except Exception:
+        logger.debug("Tetikleyici durdurulamadı", exc_info=True)
+        return False
+
+
 def bootstrap_agents(
     project_dir: Optional[Path | str] = None,
     vault_path: Optional[Path | str] = None,

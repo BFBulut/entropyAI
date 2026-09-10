@@ -497,11 +497,24 @@ class ConversationMap:
         return [flag, session]
 
     @staticmethod
-    def prompt_signature(text: str) -> str:
-        """Sistem isteminin kısa parmak izi (eşlemede saklanır)."""
+    def prompt_signature(text: str, model: str = "", effort: str = "") -> str:
+        """
+        Oturumun parmak izi: `sha1(istem | model | efor)` (Faz 11-C.12).
+
+        Kapsam Faz 11-C'de genişledi. Eskiden yalnızca istem hash'leniyordu;
+        model ya da efor değiştirilip `--resume` ile eski oturuma dönülünce
+        `--system-prompt-snapshot on` yüzünden ESKİ istem taşınıyor ve yeni
+        model/efor fiilen uygulanmıyordu. Model/efor boş geçilirse eski imza
+        (yalnız istem) birebir korunur — var olan eşlemeler düşmesin diye.
+        """
         import hashlib
 
-        return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:16]
+        material = text or ""
+        extra = "|".join(p for p in (str(model or "").strip(),
+                                     str(effort or "").strip()) if p)
+        if extra:
+            material = f"{material}|{extra}"
+        return hashlib.sha1(material.encode("utf-8", "replace")).hexdigest()[:16]
 
     def sync_prompt(self, conversation_id: str, provider: str, system_prompt: str) -> bool:
         """
@@ -567,6 +580,197 @@ class ConversationMap:
 
 
 conversation_map = ConversationMap()
+
+
+class AgentSessionStore:
+    """
+    Ajan başına KALICI oturum kimliği (`Entropy/Board/agents/<ad>/session.json`).
+
+    Neden ayrı depo, `ConversationMap` değil: eşlemenin anahtarı KONUŞMA
+    kimliği, burada ise AJAN adı. İkisini aynı dosyada birleştirmek "aynı
+    anahtar uzayında iki farklı kavram" demekti; çakışmayı önlemek için bu depo
+    kendi dosyasında durur ve `ConversationMap`e yazarken `agent:<ad>` anahtarı
+    kullanılır.
+
+    Neden diskte: Faz 11 öncesi kimlik GÖREV başına ve BELLEKTEYDİ
+    (`claude_bridge._background_conversations`); uygulama kapanınca ajanın
+    konuşması yok oluyordu. Kullanıcının isteği bunun tersi: "uygulama kapanıp
+    açılsa da aynı oturum sürsün".
+
+    Şema:
+
+        {"claude": {"session_id": "<uuid>", "signature": "<sha1[:16]>",
+                    "model": "...", "effort": "...", "cwd": "...",
+                    "updated_at": "..."},
+         "agy":    {"conversation_id": "...", ...}}
+
+    `cwd` ZORUNLU alan: Claude'un oturum deposu çalışma dizinine göre anahtarlı
+    (`~/.claude/projects/<slug(cwd)>/<uuid>.jsonl`). Kart bir worktree'de
+    koşuyorsa cwd farklıdır ve o koşu ajanın kalıcı kimliğine DOKUNMAZ — aksi
+    hâlde her worktree ajanın konuşmasını başka bir klasöre dağıtırdı.
+    """
+
+    NAMESPACE = "entropy-agent:"
+
+    def __init__(self, vault_path=None):
+        self.vault_path = vault_path
+
+    def path_for(self, agent: str) -> Path:
+        from entropy.core import paths as _paths
+
+        return _paths.agent_session_path(agent, self.vault_path)
+
+    @classmethod
+    def claude_session_id(cls, agent: str) -> str:
+        """
+        Ajanın deterministik Claude oturum kimliği.
+
+        `uuid5` seçildi çünkü CLI `--session-id <uuid>` ile kimliği BİZİM
+        atamamıza izin veriyor; böylece kimliği akıştan yakalama yarışı hiç
+        doğmuyor ve dosya silinse bile kimlik yeniden hesaplanabiliyor.
+        """
+        import uuid as _uuid
+
+        return str(_uuid.uuid5(_uuid.NAMESPACE_URL,
+                               f"{cls.NAMESPACE}{str(agent or '').strip().lower()}"))
+
+    def load(self, agent: str) -> Dict[str, dict]:
+        try:
+            data = json.loads(self.path_for(agent).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def get(self, agent: str, provider: str) -> Dict[str, object]:
+        entry = self.load(agent).get(str(provider or "").strip().lower())
+        return dict(entry) if isinstance(entry, dict) else {}
+
+    def record(self, agent: str, provider: str, session_id: str = "",
+               conversation_id: str = "", signature: str = "", model: str = "",
+               effort: str = "", cwd: str = "") -> None:
+        """Oturumu kaydeder/yeniler (atomik: geçici dosya + `os.replace`)."""
+        provider = str(provider or "").strip().lower()
+        if not agent or not provider:
+            return
+        path = self.path_for(agent)
+        data = self.load(agent)
+        entry = dict(data.get(provider) or {})
+        if session_id:
+            entry["session_id"] = str(session_id)
+        if conversation_id:
+            entry["conversation_id"] = str(conversation_id)
+        if signature:
+            entry["signature"] = str(signature)
+        entry["model"] = str(model or entry.get("model") or "")
+        entry["effort"] = str(effort or entry.get("effort") or "")
+        entry["cwd"] = str(cwd or entry.get("cwd") or os.getcwd())
+        entry["updated_at"] = _now()
+        data[provider] = entry
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".json.tmp{os.getpid()}")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            logger.warning("Ajan oturumu yazılamadı: %s", path)
+
+    def forget(self, agent: str, provider: str = "") -> bool:
+        """
+        Oturumu düşürür — model/efor/istem değişince ve ajan düzenlenince.
+
+        `provider` boşsa ajanın TÜM sağlayıcı oturumları düşer.
+        """
+        path = self.path_for(agent)
+        data = self.load(agent)
+        if not data:
+            return False
+        if provider:
+            if str(provider).strip().lower() not in data:
+                return False
+            data.pop(str(provider).strip().lower(), None)
+        else:
+            data = {}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+            return True
+        except OSError:
+            return False
+
+    def run_kwargs(self, agent: str, provider: str, model: str = "",
+                   effort: str = "", system_prompt: str = "",
+                   cwd: str = "") -> Dict[str, object]:
+        """
+        Bu koşuda köprüye geçilecek oturum kwarg'ları.
+
+        - imza aynı + kimlik var → `conversation_id` (Claude'da `--resume`,
+          agy'de `--conversation`)
+        - imza farklı ya da kimlik yok → Claude'da `session_id` (yeni oturum,
+          kimliği biz atarız), agy'de boş (kimlik akıştan yakalanacak)
+        """
+        provider = str(provider or "").strip().lower()
+        if not agent or provider not in PROVIDERS:
+            return {}
+        signature = ConversationMap.prompt_signature(system_prompt, model, effort)
+        entry = self.get(agent, provider)
+        same = str(entry.get("signature") or "") == signature and bool(entry.get("signature"))
+        if provider == "claude":
+            session_id = str(entry.get("session_id") or "") or self.claude_session_id(agent)
+            if same and entry.get("session_id"):
+                self.record(agent, provider, session_id=session_id,
+                            signature=signature, model=model, effort=effort, cwd=cwd)
+                return {"conversation_id": session_id}
+            # Yeni oturum: kimliği ÖNCEDEN atıyoruz, sonraki koşu sürdürecek.
+            self.record(agent, provider, session_id=session_id, signature=signature,
+                        model=model, effort=effort, cwd=cwd)
+            return {"session_id": session_id}
+        conversation_id = str(entry.get("conversation_id") or "")
+        if same and conversation_id:
+            return {"conversation_id": conversation_id}
+        # agy: kimlik önceden atanamıyor; imzayı şimdi yaz, kimliği koşu sonunda
+        # `record_captured` yakalayacak.
+        self.record(agent, provider, signature=signature, model=model,
+                    effort=effort, cwd=cwd)
+        self.forget_conversation(agent, provider)
+        return {}
+
+    def forget_conversation(self, agent: str, provider: str) -> None:
+        """Yalnızca yakalanmış kimliği siler; imza/model kaydı kalır."""
+        provider = str(provider or "").strip().lower()
+        data = self.load(agent)
+        entry = dict(data.get(provider) or {})
+        if not entry.pop("conversation_id", None):
+            return
+        data[provider] = entry
+        try:
+            self.path_for(agent).write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def record_captured(self, agent: str, provider: str, session_id: str,
+                        cwd: str = "") -> None:
+        """Koşu sonunda akıştan yakalanan kimliği kaydeder (agy yolu)."""
+        if not session_id:
+            return
+        self.record(agent, provider, conversation_id=str(session_id),
+                    session_id=str(session_id) if provider == "claude" else "",
+                    cwd=cwd)
+
+
+_agent_session_store = AgentSessionStore()
+
+
+def agent_session_store(vault_path=None) -> AgentSessionStore:
+    """
+    Varsayılan ajan oturum deposu. `vault_path` verilirse HER ZAMAN yeni örnek:
+    testler yalıtılmış kasada koşuyor, önbellek sızarsa fikstürler karışır.
+    """
+    if vault_path is not None:
+        return AgentSessionStore(vault_path)
+    return _agent_session_store
 
 
 # ---------------------------------------------------------------------------

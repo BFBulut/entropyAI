@@ -43,6 +43,7 @@ from typing import Callable, Dict, List, Optional
 
 from entropy.core import paths as _paths
 
+from entropy.agents import board_fsm as _board_fsm
 from entropy.agents.mailbox import emit_terminal
 from entropy.agents.registry import (
     AgentRegistry,
@@ -69,7 +70,9 @@ MIGRATION_LOG_SUBPATH = _paths.MIGRATION_LOG_SUBPATH
 # kendi işi sanmasın diye süzme artık depo düzeyinde.
 ALL_CARDS = "*"
 
-STATUSES = ("backlog", "running", "review", "done", "failed")
+# Faz 11-C: durum kümesi ve geçerli geçişler tek kaynaktan (`board_fsm`) gelir.
+# Buradaki ad geriye uyumluluk içindir: onlarca çağıran `tasks.STATUSES` diyor.
+STATUSES = _board_fsm.STATUSES
 
 # Kart gövdesindeki bölüm başlıkları; ayrıştırma ve üretme aynı listeyi kullanır.
 SECTION_GOAL = "Hedef"
@@ -200,6 +203,34 @@ class TaskCard:
     worktree: str = ""
     branch: str = ""
     pr_url: str = ""
+    # Faz 11-C (pano alanları).
+    # `effort`: ARTIK GERÇEK ALAN. Eskiden arayüz eforu `notes` içine
+    # "effort: <düzey>" satırı olarak yazıyordu ve hiçbir kod onu geri
+    # okumuyordu (üstüne `notes` içeriğini de eziyordu): kart panosundan efor
+    # değiştirmek fiilen hiçbir şey yapmıyordu.
+    effort: str = ""
+    # `priority`: sahiplenme sırası (P0 > P1 > P2 > boş). Eskiden sıralama
+    # yalnızca dosya adıydı, yani "acil" diye bir kavram yoktu.
+    priority: str = ""
+    # `input_paths`: kartın girdi sözleşmesi; ajan neyi okuyacağını hedef
+    # metninden tahmin etmek zorunda kalmasın.
+    input_paths: List[str] = field(default_factory=list)
+    # `report_path`: kartın raporu. `output_paths` içinde karışık duruyordu.
+    report_path: str = ""
+    # `claimed_by` / `claim_expiry`: atomik sahiplenme kirası (`claims/<id>.lock`
+    # ile aynı gerçeğin kart üzerindeki görünümü; kilit AYRI dosyada durur ki
+    # kart Obsidian'da açıkken de sahiplenme çalışsın).
+    claimed_by: str = ""
+    claim_expiry: str = ""
+    # `event_seq`: kartın gördüğü son pano olayının sırası (projeksiyon tutarlılığı).
+    event_seq: int = 0
+    # Faz 11.6. `kind`: kartın niteliği ("research" | "" ). Öz-amplifikasyon
+    # kilidi (agents/amplification.py) yalnızca ARAŞTIRMA kartlarına uygulanır:
+    # beyinde yanıt varsa CLI turu hiç açılmaz, rapor düşük yenilikliyse aynı
+    # konudaki zamanlanmış görev durdurulur. Alan boşsa başlık/hedef sezgisi
+    # kullanılır — sezgi dar tutulur çünkü yanlış pozitif bir geliştirme kartını
+    # beyin cevabıyla kapatmak demek.
+    kind: str = ""
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -227,6 +258,14 @@ class TaskCard:
             "worktree": self.worktree,
             "branch": self.branch,
             "pr_url": self.pr_url,
+            "effort": self.effort,
+            "priority": self.priority,
+            "input_paths": list(self.input_paths or []),
+            "report_path": self.report_path,
+            "claimed_by": self.claimed_by,
+            "claim_expiry": self.claim_expiry,
+            "event_seq": int(self.event_seq or 0),
+            "kind": self.kind,
             # Kanıt ön bilgide tek satıra sıkıştırılır: YAML çok satırlı değer
             # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
             # sonucu ikiye bölerdi.
@@ -441,6 +480,57 @@ def resolve_card_model(card: "TaskCard", agent_spec=None, provider: str = "") ->
     return resolved
 
 
+def resolve_card_effort(card: "TaskCard", agent_spec=None) -> str:
+    """
+    Kartın bu koşudaki eforu: (1) kartın `effort` alanı, (2) ajanın eforu.
+
+    Boş dönüş = "köprünün oturum eforunda kal". Faz 11-C öncesi bu yol tamamen
+    kopuktu: `AgentSpec.effort` alanı vardı, arayüz onu AGENT.md'ye yazıyordu
+    ama yürütmeye HİÇ ulaşmıyordu — Claude'da her kart üst çubuğun eforuyla
+    koşuyordu, kart panosundaki efor kutusu ise `notes` alanına yazıp kayboluyordu.
+    """
+    value = str(getattr(card, "effort", "") or "").strip().lower()
+    if not value and agent_spec is not None:
+        value = str(getattr(agent_spec, "effort", "") or "").strip().lower()
+    return value
+
+
+def agent_session_kwargs(agent: str, provider: str, model: str = "",
+                         effort: str = "", system_prompt: str = "",
+                         vault_path=None) -> Dict[str, object]:
+    """
+    Ajanın KALICI oturumu için köprüye geçilecek kwarg'lar.
+
+    İki sağlayıcı farklı yürür (CLI asimetrisi):
+
+    - **Claude** oturum kimliğini önceden atayabiliyor (`--session-id <uuid>`),
+      bu yüzden kimlik `uuid5(ad)` ile deterministik üretilir: kimlik yakalama
+      yarışı hiç doğmaz ve dosya kaybolsa bile aynı kimlik yeniden hesaplanır.
+      İlk koşu `--session-id`, sonraki koşular `--resume`.
+    - **agy** kimliği önceden atayamıyor; akıştan yakalanır ve `session.json`a
+      yazılır, sonraki koşu `--conversation <id>` alır.
+
+    İstem/model/efor/sağlayıcı değişince imza düşer ve YENİ oturum açılır:
+    `--system-prompt-snapshot` varsayılan olarak açık, yani sürdürülen bir
+    oturum eski istemi taşımaya devam ederdi.
+
+    Worktree'de koşan kart bu yolu HİÇ kullanmaz (çağıran süzer): Claude'un
+    oturum deposu çalışma dizinine göre anahtarlı, worktree ajanın kalıcı
+    konuşmasını başka bir klasöre dağıtırdı.
+    """
+    try:
+        from entropy.core.identity import agent_session_store
+    except Exception:
+        return {}
+    try:
+        store = agent_session_store(vault_path)
+        return store.run_kwargs(agent, provider, model=model, effort=effort,
+                                system_prompt=system_prompt)
+    except Exception:
+        logging.getLogger(__name__).debug("Ajan oturumu okunamadı", exc_info=True)
+        return {}
+
+
 def agent_spec_payload(agent_spec) -> Optional[dict]:
     """Ajan tanımının sistem istemine giren, sağlayıcıdan bağımsız özeti."""
     if agent_spec is None:
@@ -452,6 +542,9 @@ def agent_spec_payload(agent_spec) -> Optional[dict]:
         "prompt": getattr(agent_spec, "prompt", "") or "",
         "tools_policy": getattr(agent_spec, "tools_policy", "") or "",
         "office": getattr(agent_spec, "office", "") or "",
+        # Efor künyeye Faz 11-C'de girdi: ajanın "ne kadar düşünsün" ayarı
+        # yalnızca argv'ye değil, kartın kendi kimliğine de yazılı olsun.
+        "effort": getattr(agent_spec, "effort", "") or "",
     }
 
 
@@ -618,6 +711,13 @@ class TaskBoard:
             budget_tokens = int(str(front.get("budget_tokens") or 0).strip() or 0)
         except (TypeError, ValueError):
             budget_tokens = 0
+        inputs = front.get("input_paths") or []
+        if isinstance(inputs, str):
+            inputs = [p.strip() for p in inputs.split(",") if p.strip()]
+        try:
+            event_seq = int(str(front.get("event_seq") or 0).strip() or 0)
+        except (TypeError, ValueError):
+            event_seq = 0
         return TaskCard(
             id=str(front.get("id") or path.stem),
             title=str(front.get("title") or path.stem),
@@ -649,6 +749,14 @@ class TaskBoard:
             worktree=str(front.get("worktree") or ""),
             branch=str(front.get("branch") or ""),
             pr_url=str(front.get("pr_url") or ""),
+            effort=str(front.get("effort") or "").strip().lower(),
+            priority=str(front.get("priority") or "").strip().upper(),
+            input_paths=[str(p) for p in inputs],
+            report_path=str(front.get("report_path") or ""),
+            claimed_by=str(front.get("claimed_by") or ""),
+            claim_expiry=str(front.get("claim_expiry") or ""),
+            event_seq=event_seq,
+            kind=str(front.get("kind") or "").strip().lower(),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -664,6 +772,159 @@ class TaskBoard:
 
     def update(self, card: TaskCard) -> TaskCard:
         return self._write(card)
+
+    # -- durum makinesi + olay günlüğü (Faz 11-C) ----------------------
+
+    @property
+    def events(self):
+        """Bu kasanın pano olay günlüğü."""
+        from entropy.agents.board_events import BoardEventLog
+
+        log = getattr(self, "_event_log", None)
+        if log is None:
+            log = BoardEventLog(self.vault_path)
+            self._event_log = log
+        return log
+
+    def apply_event(self, card_id: str, event: str, payload: Optional[dict] = None,
+                    actor: str = "") -> Optional[TaskCard]:
+        """
+        Kartı durum makinesinden geçirir: DOĞRULA → GÜNLÜĞE YAZ → KARTA YAZ.
+
+        Sıra bilinçli. `transitions` kütüphanesinin bilinen tuzağı "geçiş
+        sonrası istisna geri alınmaz"dı; burada doğrulama (koruma) her şeyden
+        önce koşar, dolayısıyla reddedilen bir geçiş hiçbir yan etki üretmez.
+        Günlük karttan ÖNCE yazılır çünkü tek denetim kaynağı odur: kart
+        dosyası onun türetilmiş görünümüdür.
+
+        Geçersiz geçişte `board_fsm.InvalidTransition` yükselir — sessizce
+        yutulmaz; "neden bu kart hâlâ backlog'da" sorusunun cevabı bir
+        istisna olmalı, bir sessizlik değil.
+        """
+        card = self.get(card_id)
+        if card is None:
+            return None
+        payload = dict(payload or {})
+        payload.setdefault("actor", actor or "")
+        # Doğrulama (istisna atabilir; kart henüz DEĞİŞMEDİ).
+        row = _board_fsm.resolve_target(card, event, payload)
+        log_payload = dict(payload)
+        log_payload.setdefault("title", card.title)
+        log_payload.setdefault("agent", card.agent)
+        log_payload.setdefault("status", row.target)
+        written = self.events.append(
+            event, card.id, actor=actor or payload.get("actor") or "",
+            payload=log_payload, attempt_id=int(card.attempt or 0) + 1,
+        )
+        if written is not None:
+            payload["event_seq"] = int(written.get("seq") or 0)
+        new_card = _board_fsm.transition(card, event, payload)
+        new_card = self._write(new_card)
+        self._announce_state(new_card, event, row.target)
+        self.rewrite_taskboard()
+        return new_card
+
+    def reset_card(self, card_id: str, reason: str = "",
+                   actor: str = "system") -> Optional[TaskCard]:
+        """Asılı/başarısız kartı kuyruğa geri çeker (uzlaştırıcı kapısı)."""
+        card = self.get(card_id)
+        if card is None:
+            return None
+        new_card = _board_fsm.reset(card, reason=reason, actor=actor)
+        self.events.append("task.reset", card.id, actor=actor,
+                           payload={"reason": reason, "status": new_card.status,
+                                    "agent": card.agent},
+                           attempt_id=int(card.attempt or 0) + 1,
+                           idempotency_key=f"{card.id}-reset-{_now()}")
+        new_card = self._write(new_card)
+        self._announce_state(new_card, "task.reset", new_card.status)
+        self.rewrite_taskboard()
+        return new_card
+
+    def _advance_to_running(self, card: TaskCard, provider: str = "",
+                            model: str = "", effort: str = "") -> Optional[TaskCard]:
+        """
+        Kartı hangi durumdan gelirse gelsin `running`e taşır (uyumluluk yolu).
+
+        `run()` Faz 11-C'de bir SARMALAYICI oldu: asıl akış "dispatcher
+        sahiplenir → başlatır", ama `/desk task`, harness pompası ve arayüz
+        düğmeleri hâlâ doğrudan `run()` çağırıyor. Bu yardımcı aradaki
+        geçişleri (assign → claim → start) makineden geçirerek üretir; hiçbiri
+        atlanmaz, yani olay günlüğü kartın tam yaşam döngüsünü görür.
+
+        Geçiş reddedilirse (ör. iptal edilmiş kart) None döner ve koşu başlamaz.
+        """
+        from entropy.agents.dispatcher import ClaimStore
+
+        try:
+            if card.status in ("review", "failed"):
+                card = self.reset_card(card.id, reason="", actor="system") or card
+            if card.status == "backlog" and str(card.agent or "").strip():
+                card = self.apply_event(card.id, "task.assigned", actor="system",
+                                        payload={"agent": card.agent}) or card
+            if card.status == "backlog":
+                # Ajansız kart: makinede `backlog → running` yok. Kart panoda
+                # bekler; bu bilinçli, "kimin işi" belli olmadan koşu başlamaz.
+                return None
+            if card.status == "assigned":
+                lease = ClaimStore(self.vault_path).acquire(card.id, card.agent or "entropy")
+                if lease is None:
+                    return None
+                card = self.apply_event(
+                    card.id, "task.claimed", actor=card.agent or "system",
+                    payload={"claimed": True, "claimed_by": card.agent or "entropy",
+                             "claim_expiry": lease.get("expiry", "")},
+                ) or card
+            if card.status != "taken":
+                return None
+            return self.apply_event(
+                card.id, "run.started", actor=card.agent or "system",
+                payload={"provider": provider, "model": model, "effort": effort,
+                         "pid": os.getpid()},
+            )
+        except _board_fsm.InvalidTransition:
+            logging.getLogger(__name__).warning(
+                "Kart koşuya alınamadı (geçersiz geçiş): %s (%s)", card.id, card.status
+            )
+            return None
+
+    def rewrite_taskboard(self) -> None:
+        """
+        `TASKBOARD.md`yi kart dosyalarından yeniden üretir.
+
+        Projeksiyonun kaynağı olay günlüğüdür ama insan panosu kart
+        dosyalarından çizilir: kullanıcı Obsidian'da bir kartı elle
+        düzenlediğinde pano da onu göstermeli. İki görünümün ayrışması
+        `projection_hash` ile ayrıca ölçülebiliyor.
+        """
+        try:
+            rows = [{
+                "id": c.id, "title": c.title, "status": c.status, "agent": c.agent,
+                "effort": c.effort, "priority": c.priority,
+            } for c in self.list()]
+            view = {"last_seq": self.events.last_seq(), "projection_hash": ""}
+            self.events.render_taskboard(
+                {"cards": {r["id"]: r for r in rows}, **view}, cards=rows
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("TASKBOARD.md yazılamadı", exc_info=True)
+
+    @staticmethod
+    def _announce_state(card: TaskCard, event: str, status: str) -> None:
+        """`bus.board_state_changed` — arayüz ve sahne tek sözleşmeden beslenir."""
+        try:
+            from entropy.core.event_bus import bus
+
+            bus.board_state_changed.emit({
+                "card_id": card.id,
+                "status": status,
+                "event": event,
+                "agent": card.agent or "",
+                "office": card.office or "",
+                "title": card.title or "",
+            })
+        except Exception:
+            pass
 
     def _write(self, card: TaskCard) -> TaskCard:
         # Kartın kökü `office` alanından türer: ofis kartı ofisin kasasına,
@@ -990,6 +1251,17 @@ class TaskBoard:
         parts.append(CHECKPOINT_DISCIPLINE)
         parts.append(proof_discipline(card_needs_write(card, agent_spec=agent_spec)))
         parts.append(RULE_DISCIPLINE)
+        # Faz 11-C.5: pano araç sözleşmesi. Ofis kartına GİRMEZ — ofis tarafı
+        # harness'ın itmeli akışında koşuyor ve orada kartı ajan seçmiyor;
+        # `board_next` orada anlamsız, üstelik iki panonun sözleşmesini
+        # karıştırırdı.
+        if not card.office:
+            try:
+                from entropy.agents.board_tools import tools_section
+
+                parts.append(tools_section())
+            except Exception:
+                pass
         # Faz 10-C: worktree'li kartta ajan HANGİ dizinde olduğunu bilmeli.
         # Ölçüm: izole kipte `Bash` aracı git deposunun dışında koşuyordu ve
         # `git status` "not a git repository" diyordu; artık cwd worktree ama
@@ -1069,6 +1341,15 @@ class TaskBoard:
             or (agent_spec.provider if agent_spec else "")
             or default_provider()
         ).lower()
+        # Faz 11.6 — AÇIK TESPİTİ. Araştırma kartında koşudan ÖNCE beyne
+        # sorulur: yeterli güvende bir yanıt varsa CLI turu HİÇ açılmaz, kart
+        # "beyinden yanıtlandı" özetiyle `review`e düşer. Kilit, kotayı
+        # harcamadan kapanan tek yoldur; hata durumunda (hafıza katmanı yok,
+        # sorgu patladı) sessizce normal koşuya devam eder.
+        brain = self._brain_shortcut(card, provider=provider)
+        if brain is not None:
+            return brain
+
         bridge = self.bridge_for(provider, bridge_factory=bridge_factory)
         if bridge is None:
             return None
@@ -1080,12 +1361,22 @@ class TaskBoard:
         # ve o koşuya `model=` olarak geçirilir.
         run_model = resolve_card_model(card, agent_spec=agent_spec, provider=provider)
 
+        # EFOR (Faz 11-C.4). Kaynak tek: AGENT.md. Kartın kendi `effort` alanı
+        # ajanınkini ezer; ikisi de boşsa köprü oturum eforunda kalır.
+        run_effort = resolve_card_effort(card, agent_spec=agent_spec)
+
         prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path,
                                    lead_sections=lead_sections)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
         task_id = f"card-{card.id}"
-        card = replace(card, status="running", started_at=_now(), provider=provider)
-        self._write(card)
+        # Durum geçişi ARTIK durum makinesinden: `backlog`/`assigned` kart
+        # gerekirse otomatik olarak `taken`a taşınır (uyumluluk yolu — dispatcher
+        # kartı zaten sahiplenmiş olabilir), sonra `run.started` yayılır.
+        card = self._advance_to_running(
+            card, provider=provider, model=run_model, effort=run_effort,
+        )
+        if card is None:
+            return None
 
         def _on_result(full_text: str, ok: bool, _card_id=card.id):
             self._finish(_card_id, full_text, ok)
@@ -1115,6 +1406,10 @@ class TaskBoard:
             model=run_model or None,
             # Ajanın kimliği kartın sistem istemine girer (Faz 9.4).
             agent_spec=agent_spec_payload(agent_spec),
+            # Faz 11-C.4: ajanın/kartın eforu argv'ye ulaşır. Claude'da
+            # `--effort <düzey>`, agy'de model adının son eki olur (agy'de
+            # `--effort` ile `--model` çakışıyor; kural korunur).
+            effort=run_effort or None,
             # Faz 10-A: akış olayları kart/ofis/ajan künyesiyle etiketlenir;
             # Desk sahnesi ve terminal bölmeleri olayı bu meta ile eşler.
             stream_meta={
@@ -1145,9 +1440,21 @@ class TaskBoard:
         # imza denetimi. TypeError'ı yakalayıp yeniden denemek yanlış olurdu:
         # köprünün KENDİ gövdesinden gelen bir TypeError görevi iki kez
         # başlatırdı.
+        # Faz 11-C.3: ajanın KALICI oturumu. Claude'da kimlik önceden
+        # atanabiliyor (`--session-id <uuid>`), agy'de yalnızca akıştan
+        # yakalanıyor; iki kol da `agent_session` sözleşmesinden beslenir.
+        if card.agent and not card.worktree:
+            session_kwargs = agent_session_kwargs(
+                card.agent, provider,
+                model=run_model, effort=run_effort,
+                system_prompt=prompt, vault_path=self.vault_path,
+            )
+            kwargs.update(session_kwargs)
+
         for optional in ("needs_write", "project_path", "max_steps", "model",
                          "agent_spec", "stream_meta", "interactive",
-                         "on_followup_start", "on_followup_end"):
+                         "on_followup_start", "on_followup_end", "effort",
+                         "session_id", "conversation_id", "agent_name"):
             if optional in kwargs and not _accepts_kwarg(
                 bridge.send_background_task_async, optional
             ):
@@ -1164,10 +1471,49 @@ class TaskBoard:
             return None
         return task_id
 
+    def _brain_shortcut(self, card: TaskCard, provider: str = "") -> Optional[str]:
+        """
+        Araştırma kartı beyinden yanıtlanabiliyorsa kartı kapatır (Faz 11.6-a).
+
+        Dönüş: kart kapatıldıysa sahte görev kimliği (`brain-<id>`) — çağıranlar
+        (dispatcher, harness) bunu "kart işlendi" olarak okur ve ikinci bir tur
+        açmaz; aksi hâlde None ve normal koşu devam eder.
+
+        Ofis kartları KAPSAM DIŞI: Desk'in kendi zinciri ara çıktılara bağlı ve
+        Entropy'nin beyni Desk'e sızmamalı (tek yönlü bilgi kuralı).
+        """
+        if card.office:
+            return None
+        try:
+            from entropy.core.config import config as _config
+
+            if not getattr(_config, "amplification_lock", True):
+                return None
+        except Exception:
+            pass
+        try:
+            from entropy.agents import amplification
+
+            if not amplification.is_research_card(card):
+                return None
+            answer = amplification.brain_lookup(
+                f"{card.title or ''}\n{card.goal or ''}".strip()
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Beyin kısayolu denenemedi", exc_info=True)
+            return None
+        if not answer.has_answer or not (answer.text or "").strip():
+            return None
+        moved = self._advance_to_running(card, provider=provider or card.provider)
+        if moved is None:
+            return None
+        self._finish(moved.id, answer.note(), True)
+        return f"brain-{card.id}"
+
     def stop(self, card_id: str) -> bool:
         """Süren kartı keser; kart `failed` olur."""
         card = self.get(card_id)
-        if card is None or card.status != "running":
+        if card is None or card.status not in ("running", "taken"):
             return False
         killed = False
         for provider in ("agy", "claude"):
@@ -1189,8 +1535,22 @@ class TaskBoard:
                 killed = True
         except Exception:
             pass
-        self._write(replace(card, status="failed", finished_at=_now(),
-                            summary="Kullanıcı isteğiyle durduruldu."))
+        # Faz 11-C: durdurma artık `failed` değil `canceled`. İkisini ayırmak
+        # panonun okunabilirliği için şart: "kullanıcı vazgeçti" ile "iş
+        # başarısız oldu" aynı sütunda durduğu sürece hiçbir sayaç anlamlı
+        # değildi.
+        try:
+            self.apply_event(card.id, "task.canceled", actor="user",
+                             payload={"summary": "Kullanıcı isteğiyle durduruldu."})
+        except _board_fsm.InvalidTransition:
+            self._write(replace(card, status="failed", finished_at=_now(),
+                                summary="Kullanıcı isteğiyle durduruldu."))
+        try:
+            from entropy.agents.dispatcher import ClaimStore
+
+            ClaimStore(self.vault_path).release(card.id)
+        except Exception:
+            pass
         emit_terminal(card.id, card.office or card.agent or "entropy", "canceled",
                       "Kullanıcı isteğiyle durduruldu.", vault_path=self.vault_path)
         return killed
@@ -1217,17 +1577,67 @@ class TaskBoard:
                 outputs.append(str(page))
             self._append_agent_memory(card, summary)
 
-        card = replace(
-            card,
-            status="review" if ok else "failed",
-            finished_at=_now(),
-            # Özet KIRPILMAZ: kart artık `##` başlıklı uzun çıktıyı kayıpsız
-            # geri okuyabiliyor ve tek gerçek kaynak o. Kırpma, çıktının
-            # tüketildiği yerde (değerlendirici prompt'u) yapılır.
-            summary=summary if summary else ("Çıktı üretilmedi." if not ok else ""),
-            output_paths=outputs,
-        )
-        self._write(card)
+        # Faz 11-C.5: ajanın pano araçları. `[PANO board_finish]` bloğu varsa
+        # KANIT ondan gelir ve kanıtsız kapanış reddedilir (kart `review`de
+        # insan önüne kalır). Kanıt açıkça kırmızıysa (`green: false`) kart
+        # `failed`a düşer — close-with-proof kuralının makineleşmiş hâli.
+        tool_calls, finish_args, tool_reject = _board_tool_results(summary)
+        if ok and finish_args and tool_reject is None:
+            proof_payload = finish_args.get("proof")
+        else:
+            proof_payload = None
+        if finish_args and isinstance(finish_args.get("proof"), dict)                 and finish_args["proof"].get("green") is False:
+            ok = False
+        for extra in (finish_args or {}).get("outputs") or []:
+            if str(extra).strip() and str(extra) not in outputs:
+                outputs.append(str(extra))
+
+        # Durum geçişi durum makinesinden (`run.finished`); günlüğe de düşer.
+        payload = {
+            "ok": bool(ok),
+            "summary": summary if summary else ("Çıktı üretilmedi." if not ok else ""),
+            "finished_at": _now(),
+        }
+        if proof_payload:
+            payload["proof"] = proof_payload
+        moved = None
+        try:
+            moved = self.apply_event(card.id, "run.finished",
+                                     actor=card.agent or "system", payload=payload)
+        except _board_fsm.InvalidTransition:
+            moved = None
+        # Uyumluluk yolu: kart makinenin beklediği durumda değilse (eski kart,
+        # doğrudan `_write` ile `running` yapılmış bir çağıran) eski davranış
+        # aynen uygulanır — kart HER HÂLÜKÂRDA kapanmalı; asılı kart, kirli bir
+        # geçişten daha pahalı.
+        if moved is None:
+            card = replace(
+                card,
+                status="review" if ok else "failed",
+                finished_at=_now(),
+                # Özet KIRPILMAZ: kart artık `##` başlıklı uzun çıktıyı kayıpsız
+                # geri okuyabiliyor ve tek gerçek kaynak o. Kırpma, çıktının
+                # tüketildiği yerde (değerlendirici prompt'u) yapılır.
+                summary=payload["summary"],
+                output_paths=outputs,
+            )
+            self._write(card)
+        else:
+            card = self._write(replace(moved, summary=payload["summary"],
+                                       output_paths=outputs))
+        try:
+            from entropy.agents.dispatcher import ClaimStore
+
+            ClaimStore(self.vault_path).release(card.id)
+        except Exception:
+            pass
+        if tool_reject:
+            # Terminal olay YAYILMAZ: `emit_terminal` yalnızca son durumu
+            # (completed/failed/canceled) taşır ve kartın gerçek sonu aşağıda
+            # ayrıca yayılıyor. Ret nedeni günlüğe ve kartın özetine düşer.
+            logging.getLogger(__name__).info(
+                "board_finish reddedildi (%s): %s", card.id, tool_reject
+            )
         # TERMİNAL SÖZLEŞMESİ (A2A): kart kapandığı ANDA terminal olay yayılır.
         # `review` de bir sondur — koşu bitti, karar insanın; asılı görevle
         # bitmiş görevi ayırt edebilmenin tek yolu bu olay.
@@ -1238,6 +1648,83 @@ class TaskBoard:
             (summary or "")[:500],
             vault_path=self.vault_path,
         )
+        if not card.office:
+            # Faz 11.6-b/c: yenilik kotası + kaynak zorunluluğu. Rapor hafızaya
+            # `MemoryGate` üzerinden girer; ADD oranı eşiğin altındaysa aynı
+            # konudaki zamanlanmış araştırma durdurulur. Karta düşen not,
+            # kullanıcının "neden durdu" sorusunun tek yanıtıdır.
+            card = self._apply_amplification_lock(card, summary, ok)
+            self._report_to_entropy(card, summary, ok)
+
+    def _apply_amplification_lock(self, card: TaskCard, summary: str,
+                                  ok: bool) -> TaskCard:
+        """
+        Araştırma raporuna yenilik kotası + kaynak kuralını uygular (Faz 11.6).
+
+        Kartın `## Notlar` bölümüne tek satırlık bir ölçüm yazar; kart hiçbir
+        durumda BU YÜZDEN başarısız olmaz — kilit ölçer ve durdurur, yargılamaz.
+        """
+        if not ok or not (summary or "").strip():
+            return card
+        # "Beyinden yanıtlandı" turu ölçüme girmez: yeni bilgi üretmemiştir ve
+        # kendi çıktısını hafızaya geri yazmak tam olarak engellenen döngüdür.
+        if (summary or "").lstrip().startswith("Beyinden yanıtlandı"):
+            return card
+        try:
+            from entropy.agents import amplification
+
+            outcome = amplification.apply_report_lock(card, summary)
+        except Exception:
+            logging.getLogger(__name__).debug("Amplifikasyon kilidi koşmadı", exc_info=True)
+            return card
+        if outcome is None:
+            return card
+        note = f"[YENİLİK] {outcome.note}"
+        notes = (card.notes or "").rstrip()
+        return self._write(replace(
+            card, notes=(notes + "\n" + note).strip() if notes else note
+        ))
+
+    def _report_to_entropy(self, card: TaskCard, summary: str, ok: bool) -> None:
+        """
+        Entropy KARTININ raporunu Entropy'nin gelen kutusuna ve sohbete taşır.
+
+        Faz 11 öncesi bu yol yalnızca OFİS kartlarında vardı (`harness`);
+        Entropy'nin kendi kartı bitince sohbete düşen tek şey bir bildirim
+        hapıydı ve rapor bir sonraki turda Entropy'nin bağlamına HİÇ girmiyordu.
+        Ofis kartları buraya girmez: akış tek yönlü kalır (Desk → Entropy yolu
+        harness'ın işidir, tersi yasaktır).
+        """
+        try:
+            from entropy.agents.mailbox import report_to_entropy
+
+            report_to_entropy(
+                card.agent or "entropy",
+                card.title or card.id,
+                summary or "",
+                task_id=card.id,
+                output_paths=list(card.output_paths or []),
+                vault_path=self.vault_path,
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Rapor kutusuna düşmedi", exc_info=True)
+        try:
+            from entropy.core.event_bus import bus
+
+            # `task_report_ready`: sohbete RAPOR KARTI basan tek sözleşme.
+            # Yükün alanları arayüzün sözleşmesidir (ui-engineer bağlar).
+            bus.task_report_ready.emit({
+                "card_id": card.id,
+                "title": card.title or card.id,
+                "agent": card.agent or "",
+                "status": card.status,
+                "ok": bool(ok),
+                "summary": (summary or "")[:2000],
+                "report_path": card.report_path or "",
+                "output_paths": list(card.output_paths or []),
+            })
+        except Exception:
+            pass
 
     def _write_wiki_page(self, card: TaskCard, body: str):
         try:
@@ -1288,6 +1775,24 @@ class TaskBoard:
 # ---------------------------------------------------------------------------
 
 FOLLOWUP_NOTE_PREFIX = "Takip turu"
+
+
+def _board_tool_results(text: str):
+    """
+    Ajan çıktısındaki pano araç bloklarını ayrıştırır.
+
+    Dönüş: (çağrılar, board_finish argümanları, ret nedeni). Ret nedeni None
+    değilse kanıt sözleşmesi karşılanmamıştır ve kart `done` olamaz.
+    """
+    try:
+        from entropy.agents import board_tools
+
+        calls = board_tools.parse_tool_calls(text or "")
+        finish = next((c.args for c in calls if c.name == "board_finish"), None)
+        reject = board_tools.validate_finish(finish) if finish is not None else None
+        return calls, finish, reject
+    except Exception:
+        return [], None, None
 
 
 def followup_note_line(payload: Dict[str, object]) -> str:

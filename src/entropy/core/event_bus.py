@@ -108,6 +108,18 @@ class EntropyEventBus(QObject):
     agents_updated = Signal(str)         # ajan tanımı eklendi/değişti/silindi
     task_cards_updated = Signal(str)     # görev kartı eklendi/değişti/silindi
 
+    # Entropy Board (Faz 11-C). `task_cards_updated` "kart dosyası değişti" der;
+    # bunlar "durum makinesi bir geçiş uyguladı" ve "kart raporu hazır" der.
+    # İkisi ayrı sinyal çünkü dosya değişimi geçiş DEMEK DEĞİL (kullanıcı
+    # Obsidian'da başlığı düzeltebilir) ve arayüz ikisine farklı tepki veriyor.
+    # board_state_changed yükü:
+    #   {"card_id", "status", "event", "agent", "office", "title"}
+    # task_report_ready yükü (sohbete rapor kartı basan tek sözleşme):
+    #   {"card_id", "title", "agent", "status", "ok", "summary",
+    #    "report_path", "output_paths"}
+    board_state_changed = Signal(dict)
+    task_report_ready = Signal(dict)
+
     # Ofisler (Agent Desk): ofis tanımı değişti ve ofis zincirinin aşaması.
     # Aşama ayrı bir sinyal çünkü task_cards_updated kart başına yayılıyor ve
     # sahne "bu ofis şu an planlıyor mu, koşuyor mu" bilgisini kart akışından

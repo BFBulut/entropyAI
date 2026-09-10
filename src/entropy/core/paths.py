@@ -44,6 +44,21 @@ __all__ = [
     "DESK_TEMPLATES_SUBDIR",
     "WORKTREE_ROOT_DIRNAME",
     "MIGRATION_LOG_SUBPATH",
+    "BOARD_SUBDIR",
+    "BOARD_TASKBOARD_SUBPATH",
+    "BOARD_EVENTS_SUBPATH",
+    "BOARD_EVENTS_ARCHIVE_SUBDIR",
+    "BOARD_CLAIMS_SUBDIR",
+    "BOARD_AGENTS_SUBDIR",
+    "BOARD_PROJECTION_SUBPATH",
+    "board_root",
+    "board_events_path",
+    "board_events_archive_dir",
+    "board_taskboard_path",
+    "board_claims_dir",
+    "board_agents_dir",
+    "board_projection_path",
+    "agent_session_path",
     "LEGACY_DESK_ROOT_SUBDIRS",
     "LEGACY_DESK_SUBDIRS",
     "LEGACY_MIGRATION_LOG_SUBPATHS",
@@ -70,6 +85,20 @@ DESK_TEMPLATES_SUBDIR = "Desk/Templates"
 
 # Kart başına git worktree kökünün klasör adı; depoya KOMŞU açılır.
 WORKTREE_ROOT_DIRNAME = ".entropy-worktrees"
+
+# --- Entropy Board (Faz 11-C) ------------------------------------------------
+# Panonun ad alanı. KARTLAR TAŞINMAZ: `Entropy/Tasks/<id>.md` yerinde kalır
+# (üçüncü bir kart göçü `TasksWatcher`'ın iki kökünü, `card_file()` arama
+# sırasını ve kullanıcının Obsidian yer imlerini birden kırardı). `Board/`
+# yalnızca PANONUN kendi verisini taşır: olay günlüğü, türetilmiş insan
+# panosu, sahiplenme kiraları ve ajan oturum kimlikleri.
+BOARD_SUBDIR = "Entropy/Board"
+BOARD_TASKBOARD_SUBPATH = "Entropy/Board/TASKBOARD.md"
+BOARD_EVENTS_SUBPATH = "Entropy/Board/events.jsonl"
+BOARD_EVENTS_ARCHIVE_SUBDIR = "Entropy/Board/events"
+BOARD_CLAIMS_SUBDIR = "Entropy/Board/claims"
+BOARD_AGENTS_SUBDIR = "Entropy/Board/agents"
+BOARD_PROJECTION_SUBPATH = "Entropy/Board/projection.json"
 
 # Eski kökler. Sıra önemlidir: geçiş bunları bu sırayla tüketir.
 LEGACY_DESK_ROOT_SUBDIRS = ("Entropy/Desk",)
@@ -112,6 +141,48 @@ def migrations_log_path(vault_path: Optional[Path | str] = None) -> Path:
 def desk_templates_dir(vault_path: Optional[Path | str] = None) -> Path:
     """`<kasa>/Desk/Templates` — ekip şablonlarının kasadaki kökü (Faz 10-C)."""
     return vault_root(vault_path) / DESK_TEMPLATES_SUBDIR
+
+
+def board_root(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board` — panonun ad alanı (kartlar burada DEĞİL)."""
+    return vault_root(vault_path) / BOARD_SUBDIR
+
+
+def board_events_path(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/events.jsonl` — yalnızca eklenen olay günlüğü."""
+    return vault_root(vault_path) / BOARD_EVENTS_SUBPATH
+
+
+def board_events_archive_dir(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/events/` — aylık döndürülmüş günlük arşivi."""
+    return vault_root(vault_path) / BOARD_EVENTS_ARCHIVE_SUBDIR
+
+
+def board_taskboard_path(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/TASKBOARD.md` — TÜRETİLMİŞ pano, elle yazılmaz."""
+    return vault_root(vault_path) / BOARD_TASKBOARD_SUBPATH
+
+
+def board_claims_dir(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/claims/` — kart başına sahiplenme kirası."""
+    return vault_root(vault_path) / BOARD_CLAIMS_SUBDIR
+
+
+def board_agents_dir(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/agents/` — ajan başına kalıcı oturum kimliği."""
+    return vault_root(vault_path) / BOARD_AGENTS_SUBDIR
+
+
+def agent_session_path(agent: str, vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/agents/<ad>/session.json`."""
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "-"
+                   for ch in str(agent or "").strip()) or "agent"
+    return board_agents_dir(vault_path) / safe / "session.json"
+
+
+def board_projection_path(vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/projection.json` — son seq + projeksiyon karması."""
+    return vault_root(vault_path) / BOARD_PROJECTION_SUBPATH
 
 
 def worktree_root_for(repo_path: Path | str) -> Path:

@@ -2390,6 +2390,19 @@ class OfficeHarness:
             )
         except Exception:
             logger.warning("Yetim worktree temizliği yapılamadı.", exc_info=True)
+        # Faz 11-C.12: ENTROPY kartları da uzlaştırılır. Eskiden bu döngü ofis
+        # kartı olmayanı atlıyordu (`if not card.office: continue`), yani
+        # uygulama Entropy'nin kendi kartı koşarken kapanırsa kart sonsuza dek
+        # `status: running` kalıyor ve hiçbir şey onu düzeltmiyordu.
+        try:
+            from entropy.agents.dispatcher import BoardDispatcherCore
+
+            recovered = BoardDispatcherCore(board=board).reconcile()
+            if recovered:
+                logger.info("Entropy panosu uzlaştırıldı: %s", ", ".join(recovered))
+                resumed.extend(recovered)
+        except Exception:
+            logger.warning("Entropy panosu uzlaştırılamadı.", exc_info=True)
         try:
             # İki kök de taranır: yarım kalan zincirin üst kartı ofis kasasında.
             cards = board.list(office=ALL_CARDS)
