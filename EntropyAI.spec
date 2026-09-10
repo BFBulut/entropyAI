@@ -6,6 +6,21 @@ from pathlib import Path
 block_cipher = None
 project_root = Path.cwd()
 
+# Faz 11-E: ikon seti QtAwesome (MIT) üzerinden Codicons ailesinden gelir.
+# Bilinen paketleme sorunu (spyder-ide/qtawesome#78): font `.ttf` ve charmap
+# `.json` dosyaları paketlenmezse ikonlar boş çıkar — bu yüzden fonts klasörü
+# datas'a açıkça eklenir. QtAwesome kurulu değilse arayüz çalışmaya devam eder
+# (icons.icon() boş QIcon döndürür), o yüzden girdi koşullu.
+qtawesome_datas = []
+try:
+    import qtawesome as _qta
+
+    _qta_fonts = Path(_qta.__file__).parent / 'fonts'
+    if _qta_fonts.is_dir():
+        qtawesome_datas.append((str(_qta_fonts), 'qtawesome/fonts'))
+except Exception:
+    pass
+
 a = Analysis(
     ['run_entropy.py'],
     pathex=[str(project_root), str(project_root / 'src')],
@@ -24,7 +39,8 @@ a = Analysis(
         # Salt veri (`OFFICE.md` + `agents/*/AGENT.md`); ilk kullanımda kasadaki
         # `Desk/Templates` klasörüne KOPYALANIR, kasada varsa dokunulmaz.
         ('src/entropy/desk/templates', 'entropy/desk/templates'),
-    ],
+        # Faz 11-E: ui-design yeteneği zaten ('skills','skills') ile paketleniyor.
+    ] + qtawesome_datas,
     hiddenimports=[
         'PySide6',
         'PySide6.QtCore',
@@ -60,6 +76,13 @@ a = Analysis(
         'entropy.ui',
         'entropy.ui.manager',
         'entropy.ui.themes.cyber_theme',
+        # Faz 11-E adım 1: tasarım sistemi (belirteç → QSS → ikon).
+        'entropy.ui.design',
+        'entropy.ui.design.tokens',
+        'entropy.ui.design.qss',
+        'entropy.ui.design.icons',
+        'qtawesome',
+        'qtpy',
         'entropy.ui.widgets.core_visualizer',
         'entropy.ui.widgets.terminal_pane',
         'entropy.ui.widgets.reports_viewer',

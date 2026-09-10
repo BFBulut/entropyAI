@@ -147,7 +147,15 @@ def test_interactive_only_for_desk_office_cards(board, offices):
     bridge = RecordingBridge()
     factory = lambda provider: bridge  # noqa: E731
 
-    entropy_card = make_card(board, title="Entropy kartı")
+    # Faz 11-C durum makinesi: ajansız `backlog` kart koşmaz (backlog→running
+    # geçişi yok). Entropy kartı bu yüzden Entropy kadrosundaki bir ajana atanır.
+    from entropy.agents.registry import AgentRegistry
+
+    AgentRegistry(vault_path=board.vault_path).update(AgentSpec(
+        name="entropy-isci", role="worker", description="işçi",
+        provider="agy", tools_policy="read-only",
+    ))
+    entropy_card = make_card(board, title="Entropy kartı", agent="entropy-isci")
     board.run(entropy_card.id, bridge_factory=factory)
     assert bridge.calls[-1].get("interactive") is None
 

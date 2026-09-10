@@ -54,7 +54,11 @@ def test_cognitive_memory_ego_and_surprise_filter(temp_cognitive_db):
     ego = temp_cognitive_db.get_node("ego-entropy-core")
     assert ego is not None
     assert ego.importance == 1.0
-    assert ego.category == "ego"
+    # Faz 11.1: kategori kapalı küme (4 katman). Kimlik ayrı bir kova değil,
+    # `is_identity` bayrağıdır; ego düğümünün kimliği (`ego-entropy-core`)
+    # ve içeriği korunur.
+    assert ego.category == "semantic"
+    assert ego.is_identity == 1
 
     # Layer 2 Surprise / Novelty Filter: First insert
     node1, is_new1 = temp_cognitive_db.record_memory("episodic", "Refactored UI terminal pane", importance=0.7)

@@ -367,6 +367,16 @@ class GraphStore:
         legacy = (node.metadata or {}).get("legacy_category")
         if legacy:
             category = legacy
+        # Faz 11.1: aynalama sekizinci yazma noktasıydı ve `record_memory`yi
+        # atladığı için kategori disiplininin dışında kalıyordu ("session",
+        # "query", "report" değerleri buradan da giriyordu). Kanonik dörtlüye
+        # indirgenir; ham değer metadata'da izlenebilir kalır.
+        from entropy.memory.categories import normalize_category
+
+        resolution = normalize_category(category)
+        if resolution.mapped:
+            (node.metadata or {}).setdefault("legacy_category", category)
+        category = resolution.category
         content = node.body or node.title or ""
         if not content.strip():
             return
@@ -637,7 +647,10 @@ class GraphStore:
             except ValueError:
                 meta = {}
             node_type = CATEGORY_TO_TYPE.get((category or "").lower(), DEFAULT_NODE_TYPE)
-            meta["legacy_category"] = category
+            # Faz 11.1: yazma kapısı kategoriyi kanonik dörtlüye indirgediğinde
+            # ham değeri zaten `legacy_category`ye yazar. Burada üzerine yazmak
+            # o izi silerdi ("architecture" -> "semantic" görünürdü).
+            meta.setdefault("legacy_category", category)
             scope = meta.get("scope") or SCOPE_GENERAL
             pinned = bool(meta.get("pinned"))
             # Önem: eski değer korunur, ama kaynak türü + tekrar sayısından

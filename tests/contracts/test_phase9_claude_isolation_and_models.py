@@ -375,10 +375,19 @@ def test_background_card_argv_carries_the_roster(tmp_path, monkeypatch, isolated
 
 
 def test_card_with_foreign_model_runs_on_claude_default(tmp_path, monkeypatch, isolated_settings):
+    # Faz 11-C durum makinesi: AJANSIZ kart `backlog`ta kalır (backlog→running
+    # geçişi yok). Model çözümünü ölçmek için kart gerçek bir Entropy ajanına
+    # atanır; ajan Entropy kadrosunda olmalı (tasks.py:1308).
+    from entropy.agents.registry import AgentRegistry, AgentSpec
+
+    AgentRegistry(vault_path=tmp_path).update(AgentSpec(
+        name="modelci", role="worker", description="Model testi.",
+        prompt="Sen çalışırsın.", tools_policy="read-only",
+    ))
     board = TaskBoard(vault_path=tmp_path)
     card = board.create(TaskCard(
         id="c-model", title="Model testi", provider="claude",
-        model="gemini-3.1-pro-high", goal="dene",
+        model="gemini-3.1-pro-high", goal="dene", agent="modelci",
     ))
     # Kart modeli sağlayıcıya çevrilir: gemini-* -> "inherit" -> oturum modeli.
     assert resolve_card_model(card, provider="claude") == ""

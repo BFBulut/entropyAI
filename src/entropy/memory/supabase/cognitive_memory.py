@@ -15,6 +15,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from entropy.core.config import config
+from entropy.memory.categories import (
+    DEFAULT_RECALL_CATEGORIES,
+    EPISODIC,
+    normalize_category,
+)
+from entropy.memory.gate import (
+    ACTION_GRAY as GATE_GRAY,
+    ACTION_NOOP as GATE_NOOP,
+    ACTION_REJECT as GATE_REJECT,
+    ACTION_SUPERSEDE as GATE_SUPERSEDE,
+    MemoryGate,
+    gate_enabled,
+)
 
 # Faz 10-A: bellek katmanı loglara HİÇ yazmıyordu (teşhis notu §A.1: 363 satırlık
 # entropy.log'da "cognitive_memory", "embedding", "recall", "dream" için 0 eşleşme).
@@ -63,7 +76,10 @@ except Exception:  # pragma: no cover - numpy kurulu olmayan ortam
 @dataclass
 class CognitiveMemoryNode:
     id: str
-    category: str       # 'episodic', 'semantic', 'procedural', 'ego'
+    # Kapalı küme (Faz 11.1, memory/categories.py): working | episodic |
+    # semantic | procedural. Kimlik/kural (L4) kategori değil, `is_identity`
+    # bayrağıdır.
+    category: str
     content: str
     importance: float   # 0.0 to 1.0
     created_at: float   # epoch timestamp
@@ -71,6 +87,14 @@ class CognitiveMemoryNode:
     access_count: int = 1
     metadata: Dict[str, Any] = None
     embedding: Optional[List[float]] = None
+    # -- şema v2 alanları ------------------------------------------------
+    provenance: str = ""            # kaynak yolu / URL / görev künyesi
+    confidence: float = 0.5         # güven bandı
+    valid_from: Optional[float] = None
+    valid_to: Optional[float] = None  # None = hâlâ geçerli
+    archived: int = 0               # ölçülü unutma bayrağı (silme yok)
+    novelty: float = 1.0            # kapının verdiği yenilik puanı
+    is_identity: int = 0            # L4 kimlik / kullanıcı onaylı kural
 
     def calculate_ebbinghaus_strength(self, current_time: Optional[float] = None, decay_rate: float = 0.05) -> float:
         """Layer 5: Ebbinghaus Forgetting Curve strength calculation."""
@@ -325,6 +349,32 @@ BM25_K1 = 1.2
 BM25_B = 0.75
 BM25_AVG_DOC_LEN = 25.0
 
+# Şema v2 sütunları; `get_node` / `get_all_nodes` bunları da okur.
+V2_COLUMNS = ", provenance, confidence, valid_from, valid_to, archived, novelty, is_identity"
+
+
+def _row_to_memory_node(row) -> "CognitiveMemoryNode":
+    """Tek satır -> düğüm. Şema v2 sütunları yoksa (eski dosya) varsayılan alınır."""
+    return CognitiveMemoryNode(
+        id=row[0],
+        category=row[1],
+        content=row[2],
+        importance=row[3],
+        created_at=row[4],
+        last_accessed=row[5],
+        access_count=row[6],
+        metadata=json.loads(row[7] or "{}"),
+        embedding=json.loads(row[8]) if (len(row) > 8 and row[8]) else None,
+        provenance=(row[9] if len(row) > 9 else "") or "",
+        confidence=(row[10] if len(row) > 10 and row[10] is not None else 0.5),
+        valid_from=(row[11] if len(row) > 11 else None),
+        valid_to=(row[12] if len(row) > 12 else None),
+        archived=int(row[13] or 0) if len(row) > 13 else 0,
+        novelty=(row[14] if len(row) > 14 and row[14] is not None else 1.0),
+        is_identity=int(row[15] or 0) if len(row) > 15 else 0,
+    )
+
+
 _RECALL_COLUMNS = (
     "id, category, content, importance, created_at, last_accessed, "
     "access_count, metadata_json, embedding_json, embedding_model"
@@ -434,6 +484,11 @@ class CognitiveMemorySystem:
         self._graph_store = None
         self._graph_lock = threading.RLock()
         self._graph_sync_enabled = True
+
+        # Yazma kapısı (Faz 11.2). Tembel kurulur ki `ENTROPY_MEMORY_GATE`
+        # ve katı kip bayrağı örnek ömrü boyunca değil, ilk yazımda okunsun.
+        self._gate: Optional[MemoryGate] = None
+        self.last_gate_decision = None
 
         self._init_sqlite_db()
         self._seed_ego_identity()
@@ -568,6 +623,34 @@ class CognitiveMemorySystem:
             # döngüsünde ve açılış ısınmasında bu satırları gerçek modelle doldurur.
             if "embedding_status" not in cols:
                 cursor.execute("ALTER TABLE cognitive_nodes ADD COLUMN embedding_status TEXT DEFAULT 'ok'")
+            # -- şema v2 (Faz 11.1) --------------------------------------
+            # Hepsi idempotent ALTER: var olan veritabanı yerinde yükselir,
+            # eski satırlar varsayılan değerle doldurulur.
+            #   provenance : kaynak yolu / URL / görev künyesi. L2 anlamsal
+            #                yazımın kabul koşulu (Manufactured Confidence:
+            #                konsolidasyon kaynağı silince duyum kesin olguya
+            #                dönüşüyor).
+            #   confidence : güven bandı (0-1). Güçlü kaynak 0,75; zayıf 0,40.
+            #   valid_from / valid_to : çift zamanlı geçerlilik (Zep deseni).
+            #                `valid_to` NULL = hâlâ geçerli.
+            #   archived   : ölçülü unutma. Silme YOK; bayrak (rate-distortion).
+            #   novelty    : kapının verdiği yenilik puanı (1 - en yakın kosinüs).
+            #   is_identity: L4 kimlik/kural bayrağı. Beşinci bir kategori
+            #                açılmaz; kategori kapalı küme olarak dörtte kalır.
+            for column, ddl in (
+                ("provenance", "ALTER TABLE cognitive_nodes ADD COLUMN provenance TEXT DEFAULT ''"),
+                ("confidence", "ALTER TABLE cognitive_nodes ADD COLUMN confidence REAL DEFAULT 0.5"),
+                ("valid_from", "ALTER TABLE cognitive_nodes ADD COLUMN valid_from REAL"),
+                ("valid_to", "ALTER TABLE cognitive_nodes ADD COLUMN valid_to REAL"),
+                ("archived", "ALTER TABLE cognitive_nodes ADD COLUMN archived INTEGER DEFAULT 0"),
+                ("novelty", "ALTER TABLE cognitive_nodes ADD COLUMN novelty REAL DEFAULT 1.0"),
+                ("is_identity", "ALTER TABLE cognitive_nodes ADD COLUMN is_identity INTEGER DEFAULT 0"),
+            ):
+                if column not in cols:
+                    cursor.execute(ddl)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_archived ON cognitive_nodes (archived)"
+            )
             conn.commit()
 
     def reembed_stale(self, batch_limit: Optional[int] = None) -> Dict[str, int]:
@@ -646,15 +729,23 @@ class CognitiveMemorySystem:
             "I integrate an Obsidian exocortex with bidirectional GraphRAG, 384-dimensional local neural vector embeddings, "
             "Python AST syntax-aware codebase indexing, and background dreaming consolidation."
         )
+        # Faz 11.1: "ego" ARTIK BİR KATEGORİ DEĞİL. Kategori kapalı kümede
+        # dört değerdir; kimlik `is_identity` bayrağıyla taşınır. Düğümün
+        # kimliği (`ego-entropy-core`) korunur — arayüz grafiği ve testler
+        # bu kimliğe bağlı.
         ego_node = CognitiveMemoryNode(
             id=ego_id,
-            category="ego",
+            category="semantic",
             content=ego_content,
             importance=1.0,
             created_at=time.time(),
             last_accessed=time.time(),
             access_count=100,
-            metadata={"type": "core_identity", "immutable": True}
+            metadata={"type": "core_identity", "immutable": True},
+            provenance="entropy:core_identity",
+            confidence=1.0,
+            novelty=1.0,
+            is_identity=1,
         )
         self._save_node(ego_node)
 
@@ -703,6 +794,14 @@ class CognitiveMemorySystem:
         return f"{category}-{h}"
 
     def _save_node(self, node: CognitiveMemoryNode, embedding_status: str = ""):
+        # Kategori disiplini son savunma hattı: `_save_node` diske giden TEK
+        # yoldur (record_memory, ego tohumu, konsolidasyon hepsi buradan geçer).
+        # Serbest metin kategori burada kanonik dörtlüye indirgenir; kimlik
+        # kovası açılmaz, bayrağa çevrilir.
+        resolution = normalize_category(node.category)
+        node.category = resolution.category
+        if resolution.is_identity:
+            node.is_identity = 1
         engine = LocalEmbeddingEngine.get_instance()
         if node.embedding is None or len(node.embedding) == 0:
             node.embedding, status = engine.embed_text_status(node.content)
@@ -717,8 +816,8 @@ class CognitiveMemorySystem:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model, embedding_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model, embedding_status, provenance, confidence, valid_from, valid_to, archived, novelty, is_identity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     importance = excluded.importance,
                     last_accessed = excluded.last_accessed,
@@ -726,7 +825,13 @@ class CognitiveMemorySystem:
                     metadata_json = excluded.metadata_json,
                     embedding_json = excluded.embedding_json,
                     embedding_model = excluded.embedding_model,
-                    embedding_status = excluded.embedding_status
+                    embedding_status = excluded.embedding_status,
+                    provenance = CASE WHEN excluded.provenance != '' THEN excluded.provenance ELSE cognitive_nodes.provenance END,
+                    confidence = excluded.confidence,
+                    valid_to = excluded.valid_to,
+                    archived = excluded.archived,
+                    novelty = excluded.novelty,
+                    is_identity = excluded.is_identity
             """, (
                 node.id,
                 node.category,
@@ -739,6 +844,13 @@ class CognitiveMemorySystem:
                 json.dumps(node.embedding or []),
                 active_model,
                 status_col,
+                node.provenance or "",
+                node.confidence if node.confidence is not None else 0.5,
+                node.valid_from if node.valid_from is not None else node.created_at,
+                node.valid_to,
+                int(node.archived or 0),
+                node.novelty if node.novelty is not None else 1.0,
+                int(node.is_identity or 0),
             ))
             conn.commit()
         self._invalidate_recall_index()
@@ -870,42 +982,26 @@ class CognitiveMemorySystem:
     def get_node(self, node_id: str) -> Optional[CognitiveMemoryNode]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes WHERE id = ?", (node_id,))
+            cursor.execute(
+                "SELECT id, category, content, importance, created_at, last_accessed,"
+                " access_count, metadata_json, embedding_json" + V2_COLUMNS +
+                " FROM cognitive_nodes WHERE id = ?", (node_id,))
             row = cursor.fetchone()
             if not row:
                 return None
-            embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
-            return CognitiveMemoryNode(
-                id=row[0],
-                category=row[1],
-                content=row[2],
-                importance=row[3],
-                created_at=row[4],
-                last_accessed=row[5],
-                access_count=row[6],
-                metadata=json.loads(row[7] or "{}"),
-                embedding=embedding
-            )
+            return _row_to_memory_node(row)
 
     def get_all_nodes(self) -> List[CognitiveMemoryNode]:
         """Return all cognitive memory nodes from local SQLite persistence."""
         nodes = []
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json FROM cognitive_nodes")
+            cursor.execute(
+                "SELECT id, category, content, importance, created_at, last_accessed,"
+                " access_count, metadata_json, embedding_json" + V2_COLUMNS +
+                " FROM cognitive_nodes")
             for row in cursor.fetchall():
-                embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
-                nodes.append(CognitiveMemoryNode(
-                    id=row[0],
-                    category=row[1],
-                    content=row[2],
-                    importance=row[3],
-                    created_at=row[4],
-                    last_accessed=row[5],
-                    access_count=row[6],
-                    metadata=json.loads(row[7] or "{}"),
-                    embedding=embedding
-                ))
+                nodes.append(_row_to_memory_node(row))
         return nodes
 
     def record_memory(
@@ -913,15 +1009,89 @@ class CognitiveMemorySystem:
         category: str,
         content: str,
         importance: float = 0.5,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        provenance: str = "",
     ) -> Tuple[CognitiveMemoryNode, bool]:
         """
-        Layer 2: Surprise/Novelty Filter check.
-        If node exists, increments access count and updates recency without duplicating.
+        Yazma yolunun TEK giriş noktası (Faz 11.2).
+
+        Sıra:
+          1. Birebir kimlik (içerik özeti) eşleşmesi — eski davranış, en ucuz yol.
+          2. `MemoryGate.admit()` — kategori, fikstür, kaynak, yoğunluk, üç bant.
+             `ENTROPY_MEMORY_GATE=0` ile atlanır (geri alma bayrağı).
+
+        Döner: `(node, is_novel)`. RED kararında düğüm yazılmaz ve `node` kapının
+        ürettiği geçici (kalıcı olmayan) düğümdür — çağıranların hepsi dönüşü
+        yalnızca günlük/`bus` için kullanıyor, bu yüzden imza değişmiyor.
         """
         node_id = self._generate_node_id(category, content)
         existing = self.get_node(node_id)
         now = time.time()
+
+        if existing is None and gate_enabled():
+            decision = self.gate.admit(
+                category, content, importance=importance,
+                metadata=metadata, provenance=provenance,
+            )
+            self.last_gate_decision = decision
+            if decision.action == GATE_REJECT:
+                self._record_error("memory_gate", f"Yazma reddedildi: {decision.reason}")
+                rejected = CognitiveMemoryNode(
+                    id=node_id, category=decision.category, content=content,
+                    importance=importance, created_at=now, last_accessed=now,
+                    access_count=0, metadata=dict(metadata or {}),
+                    provenance=decision.provenance, confidence=decision.confidence,
+                    novelty=0.0, archived=1,
+                )
+                return rejected, False
+            if decision.action == GATE_NOOP and decision.nearest_id:
+                # Kopya: yeni düğüm AÇILMAZ. Mevcut düğümün erişim sayacı ve
+                # son görülme zamanı güncellenir (SAGE NOOP bandı).
+                near = self.get_node(decision.nearest_id)
+                if near is not None:
+                    near.last_accessed = now
+                    near.importance = max(near.importance, importance)
+                    if metadata:
+                        near.metadata.update(metadata)
+                    self._save_node(near)
+                    return near, False
+            # ADD / GRAY / SUPERSEDE: düğüm yazılır, kararın izi düğüme işlenir.
+            if decision.embedding_status == "fallback":
+                # Gömme motoru patladıysa düğüm KAYBEDİLMEZ: hash yedeğiyle
+                # yazılır, 'pending' işaretlenir; hata görünür kalır (Faz 10-A
+                # sözleşmesi, kapı eklendikten sonra da geçerli).
+                self._record_error(
+                    "record_memory", f"Gömme üretilemedi, düğüm 'pending' kaydedildi: {node_id}"
+                )
+            # Kapının zenginleştirdiği metadata kullanılır: eşlenen kategorinin
+            # ham değeri (`legacy_category`) orada işaretlenir.
+            metadata = dict(decision.metadata or metadata or {})
+            metadata["gate_action"] = decision.action
+            if decision.nearest_id:
+                metadata["gate_nearest"] = decision.nearest_id
+            node_id = self._generate_node_id(decision.category, content)
+            new_node = CognitiveMemoryNode(
+                id=node_id,
+                category=decision.category,
+                content=content,
+                importance=max(0.0, min(1.0, importance)),
+                created_at=now,
+                last_accessed=now,
+                access_count=1,
+                metadata=metadata,
+                embedding=decision.embedding,
+                provenance=decision.provenance,
+                confidence=decision.confidence,
+                valid_from=now,
+                novelty=decision.novelty,
+                is_identity=1 if decision.is_identity else 0,
+            )
+            self._save_node(new_node, embedding_status=decision.embedding_status)
+            if decision.action == GATE_GRAY:
+                self.gate.enqueue_gray(decision, node_id=node_id)
+            elif decision.action == GATE_SUPERSEDE and decision.nearest_id:
+                self._supersede_node(decision.nearest_id, node_id, now)
+            return new_node, True
 
         if existing:
             # Not novel: update existing node
@@ -955,11 +1125,91 @@ class CognitiveMemorySystem:
         self._save_node(new_node, embedding_status=embed_status)
         return new_node, True
 
+    # -- yazma kapısı (Faz 11.2) ------------------------------------------
+
+    @property
+    def gate(self) -> MemoryGate:
+        if self._gate is None:
+            self._gate = MemoryGate(self)
+        return self._gate
+
+    def nearest_neighbor(
+        self, content: str
+    ) -> Tuple[Optional[str], float, Optional[List[float]], str]:
+        """
+        Korpustaki en yakın komşu: `(node_id, kosinüs, gömme, gömme_durumu)`.
+
+        Kapının yoğunluk adımı budur. Gömme geri döndürülür ki `_save_node`
+        aynı metni ikinci kez gömmesin (düğüm başına ~90 ms).
+        Ham kosinüs kullanılır; `hybrid_recall`daki 0,50-1,00 → 0-1 germesi
+        BURADA UYGULANMAZ: bant eşikleri (0,80 / 0,95) ham kosinüs üzerinden
+        kalibre edildi (denetim §3.2 tablosu da ham kosinüstür).
+        """
+        text = (content or "").strip()
+        if not text:
+            return None, 0.0, None, ""
+        engine = LocalEmbeddingEngine.get_instance()
+        embedding, status = engine.embed_text_status(text)
+        if not embedding:
+            return None, 0.0, None, status
+
+        if _np is not None:
+            try:
+                idx = self._get_recall_index()
+                if idx.size == 0:
+                    return None, 0.0, embedding, status
+                arr = _np.asarray(embedding, dtype=_np.float64)
+                norm = math.sqrt(float(arr @ arr))
+                if norm <= 0.0:
+                    return None, 0.0, embedding, status
+                sims = idx.matrix @ (arr / norm)
+                best = int(_np.argmax(sims))
+                return idx.ids[best], float(max(0.0, min(1.0, sims[best]))), embedding, status
+            except Exception as exc:  # pragma: no cover - savunma
+                self._record_error("nearest_neighbor", "İndeksli komşu araması düştü", exc)
+
+        best_id, best_sim = None, 0.0
+        for node in self.get_all_nodes():
+            if not node.embedding:
+                continue
+            sim = cosine_similarity(embedding, node.embedding)
+            if sim > best_sim:
+                best_id, best_sim = node.id, sim
+        return best_id, best_sim, embedding, status
+
+    def _supersede_node(self, old_id: str, new_id: str, when: float) -> None:
+        """
+        Çelişen eski düğümü **silmez**, geçersizleştirir (Zep/Graphiti deseni).
+
+        `valid_to` kapatılır, `archived=1` ile geri çağırma kapsamından çıkar;
+        gövde ve kaynak yerinde kalır, denetlenebilirlik korunur.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE cognitive_nodes SET valid_to = ?, archived = 1 WHERE id = ?",
+                    (when, old_id),
+                )
+                conn.commit()
+            self._invalidate_recall_index()
+        except sqlite3.Error as exc:
+            self._record_error("_supersede_node", f"{old_id} geçersizleştirilemedi", exc)
+
+    def archived_count(self) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM cognitive_nodes WHERE COALESCE(archived, 0) = 1"
+            ).fetchone()
+        return int(row[0] if row else 0)
+
     def hybrid_recall(
         self,
         query: str,
         top_k: int = 5,
-        min_threshold: float = 0.15
+        min_threshold: float = 0.15,
+        categories: Optional[Tuple[str, ...]] = None,
+        include_episodic: bool = False,
+        expand_graph: bool = False,
     ) -> List[Tuple[CognitiveMemoryNode, float]]:
         """
         T2.2 & T2.3: Recollection Engine with Multi-Criteria Hybrid Scoring & Noise Pruning.
@@ -968,10 +1218,24 @@ class CognitiveMemorySystem:
 
         numpy varsa bellek içi indeks üzerinden vektörleştirilmiş yol, yoksa
         eski satır satır tarama kullanılır; iki yol da aynı sıralamayı üretir.
+
+        Faz 11.10 — kapsam süzgeci ve graf genişletmesi:
+          * `categories` verilmezse varsayılan kapsam **L2 + L3**'tür
+            (`semantic`, `procedural`). L0 çalışma belleği hiç gelmez; L1
+            epizodik yalnızca `include_episodic=True` ile gelir. Denetimdeki
+            tek kaçırma (10 sorgudan #9), 322 üyeli epizodik fikstür kümesinin
+            top-5'i işgal etmesiydi.
+          * `expand_graph=True` ise ilk sonuçlar tohum alınıp
+            `graph_store` PPR'si ile 1-2 atlama komşu eklenir (HippoRAG 2).
         """
+        scope = tuple(categories) if categories else tuple(DEFAULT_RECALL_CATEGORIES)
+        if include_episodic and EPISODIC not in scope:
+            scope = scope + (EPISODIC,)
+
+        results: List[Tuple[CognitiveMemoryNode, float]] = []
         if _np is not None:
             try:
-                return self._hybrid_recall_indexed(query, top_k, min_threshold)
+                results = self._hybrid_recall_indexed(query, top_k, min_threshold, scope)
             except Exception as exc:
                 # İndeks kurulamazsa geri çağırma tamamen kaybolmasın; ama artık
                 # sessiz değil: kullanıcı yavaşlığın nedenini görebilmeli.
@@ -979,7 +1243,51 @@ class CognitiveMemorySystem:
                 self._record_error(
                     "hybrid_recall", "İndeksli geri çağırma düştü, skaler yola geçildi", exc
                 )
-        return self._hybrid_recall_scalar(query, top_k, min_threshold)
+                results = self._hybrid_recall_scalar(query, top_k, min_threshold, scope)
+        else:
+            results = self._hybrid_recall_scalar(query, top_k, min_threshold, scope)
+
+        if expand_graph and results:
+            results = self._expand_with_ppr(results, top_k, scope)
+        return results
+
+    def _expand_with_ppr(
+        self,
+        seeds: List[Tuple["CognitiveMemoryNode", float]],
+        top_k: int,
+        scope: Tuple[str, ...],
+    ) -> List[Tuple["CognitiveMemoryNode", float]]:
+        """
+        İlk sonuçları tohum alıp graf komşularını ekler (HippoRAG 2 deseni).
+
+        Kod zaten vardı (`graph_store._personalized_pagerank`) ama okuma yoluna
+        bağlı değildi. Komşular listenin SONUNA eklenir ve skorları tohumun
+        skorunun altında kalacak biçimde ölçeklenir: sıralamanın ilk k'sı
+        (8/10 Hit@1 veren kısım) korunur, genişletme yalnızca kuyruğu doldurur.
+        """
+        try:
+            store = self.graph_store()
+            if store is None:
+                return seeds
+            seed_scores = {node.id: score for node, score in seeds[:3]}
+            if not seed_scores:
+                return seeds
+            ranked = store._personalized_pagerank(seed_scores, hops=2)
+        except Exception as exc:
+            self._record_error("_expand_with_ppr", "PPR genişletmesi başarısız", exc)
+            return seeds
+
+        have = {node.id for node, _ in seeds}
+        floor = min(score for _, score in seeds) if seeds else 0.0
+        extras: List[Tuple["CognitiveMemoryNode", float]] = []
+        for node_id, weight in sorted(ranked.items(), key=lambda kv: -kv[1]):
+            if node_id in have or len(seeds) + len(extras) >= top_k:
+                break
+            node = self.get_node(node_id)
+            if node is None or node.category not in scope or node.archived:
+                continue
+            extras.append((node, min(floor, float(weight)) * 0.99))
+        return seeds + extras
 
     # -- geri çağırma: bellek içi indeks ---------------------------------
 
@@ -1046,7 +1354,12 @@ class CognitiveMemorySystem:
     def _build_recall_index(self, engine, active_model: str, signature: tuple) -> _RecallIndex:
         idx = _RecallIndex(signature, active_model)
         with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(f"SELECT {_RECALL_COLUMNS} FROM cognitive_nodes").fetchall()
+            # Arşivlenmiş düğümler indekse girmez: ölçülü unutma silme değil,
+            # geri çağırma kapsamından çıkarmadır (rate-distortion, §4.4 adım 5).
+            rows = conn.execute(
+                f"SELECT {_RECALL_COLUMNS} FROM cognitive_nodes "
+                "WHERE COALESCE(archived, 0) = 0"
+            ).fetchall()
 
         backfill: List[tuple] = []
         postings: Dict[str, List[tuple]] = {}
@@ -1118,7 +1431,8 @@ class CognitiveMemorySystem:
         return idx
 
     def _hybrid_recall_indexed(
-        self, query: str, top_k: int, min_threshold: float
+        self, query: str, top_k: int, min_threshold: float,
+        scope: Optional[Tuple[str, ...]] = None,
     ) -> List[Tuple[CognitiveMemoryNode, float]]:
         idx = self._get_recall_index()
         if idx.size == 0:
@@ -1168,6 +1482,14 @@ class CognitiveMemorySystem:
         if suppress.any():
             final = _np.where(suppress, final * (vec_sim / 0.35), final)
 
+        # Faz 11.10: kapsam süzgeci. Kapsam dışı katmanlar skorlanır ama
+        # sıralamaya girmez; böylece iki geri çağırma yolu aynı sayıyı üretir.
+        if scope:
+            allowed = _np.asarray(
+                [cat in scope for cat in idx.categories], dtype=bool
+            )
+            final = _np.where(allowed, final, -1.0)
+
         keep = _np.flatnonzero(final >= min_threshold)
         if keep.size == 0:
             return []
@@ -1179,7 +1501,8 @@ class CognitiveMemorySystem:
     # -- geri çağırma: eski satır satır tarama (numpy yoksa) ---------------
 
     def _hybrid_recall_scalar(
-        self, query: str, top_k: int, min_threshold: float
+        self, query: str, top_k: int, min_threshold: float,
+        scope: Optional[Tuple[str, ...]] = None,
     ) -> List[Tuple[CognitiveMemoryNode, float]]:
         now = time.time()
         engine = LocalEmbeddingEngine.get_instance()
@@ -1190,12 +1513,19 @@ class CognitiveMemorySystem:
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model FROM cognitive_nodes")
+            cursor.execute(
+                "SELECT id, category, content, importance, created_at, last_accessed,"
+                " access_count, metadata_json, embedding_json, embedding_model"
+                " FROM cognitive_nodes WHERE COALESCE(archived, 0) = 0"
+            )
             rows = cursor.fetchall()
 
         nodes_to_update = []
 
         for row in rows:
+            # Faz 11.10 kapsam suzgeci: indeksli yolla ayni sonuc kumesi.
+            if scope and row[1] not in scope:
+                continue
             embedding = json.loads(row[8]) if (len(row) > 8 and row[8]) else None
             row_model = row[9] if len(row) > 9 else None
             node = CognitiveMemoryNode(
@@ -1271,10 +1601,14 @@ class CognitiveMemorySystem:
         category: str,
         content: str,
         importance: float = 0.5,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        provenance: str = "",
     ) -> Tuple[CognitiveMemoryNode, bool]:
-        """Convenience alias for record_memory."""
-        return self.record_memory(category, content, importance, metadata)
+        """
+        Yedi uretim cagri noktasinin kullandigi ad. `record_memory` ile ayni
+        kapidan gecer; ayri bir yazma yolu DEGILDIR.
+        """
+        return self.record_memory(category, content, importance, metadata, provenance)
 
     def recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Convenience alias returning list of dicts for hybrid_recall."""
@@ -1341,7 +1675,11 @@ class CognitiveMemorySystem:
                 category="semantic",
                 content=summary,
                 importance=0.6,
-                metadata={"source": "dream_consolidation", "items_clustered": len(rows), "date": date_str}
+                metadata={"source": "dream_consolidation", "items_clustered": len(rows), "date": date_str},
+                # Konsolidasyon düğümünün kaynağı YAPISAL alanda durur; gövdeye
+                # gömülü kalırsa kapı onu kaynaksız sayıp reddeder ve "duyum"
+                # kesin olguya dönüşür (Manufactured Confidence, arXiv:2606.29279).
+                provenance=f"dream_consolidation:{date_str}:{len(rows)} epizodik düğüm",
             )
             synthesized_rules.append(summary)
 
@@ -1464,6 +1802,7 @@ class CognitiveMemorySystem:
             content=f"Konsolide öğrenimler ({time.strftime('%Y-%m-%d')}):\n{text[:1600]}",
             importance=0.8,
             metadata={"source": "dream_consolidation_agy", "date": time.strftime('%Y-%m-%d')},
+            provenance=f"dream_consolidation_agy:{time.strftime('%Y-%m-%d')}",
         )
         return node
 
@@ -1484,7 +1823,10 @@ class CognitiveMemorySystem:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, category, content, importance, created_at, last_accessed, access_count FROM cognitive_nodes WHERE category = 'episodic' AND last_accessed <= ? AND importance < 0.35",
+                "SELECT id, category, content, importance, created_at, last_accessed, access_count"
+                " FROM cognitive_nodes WHERE category = 'episodic'"
+                " AND COALESCE(is_identity, 0) = 0"
+                " AND last_accessed <= ? AND importance < 0.35",
                 (dormant_cutoff,)
             )
             rows = cursor.fetchall()

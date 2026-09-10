@@ -101,7 +101,10 @@ def test_migration_is_lossless_and_reversible(tmp_path):
     assert types[mem._generate_node_id("semantic", "Finansal analiz bilanço gerektirir")] == "fact"
     assert types[mem._generate_node_id("procedural", "Önce araştırma raporu okunur")] == "procedure"
     # bilinmeyen kategori fact'e düşer ama özgün kategori saklanır
-    arch = store.get_node(mem._generate_node_id("architecture", "Bellek katmanı SQLite üzerinde çalışır"))
+    # Faz 11.1: "architecture" kanonik bir kategori değil; yazma anında
+    # `semantic`e eşlenir (düğüm kimliği de ona göre kurulur), ham değer
+    # metadata'da izlenebilir kalır.
+    arch = store.get_node(mem._generate_node_id("semantic", "Bellek katmanı SQLite üzerinde çalışır"))
     assert arch.type == "fact" and arch.metadata["legacy_category"] == "architecture"
     # wikilink -> entity düğümü + kenar
     assert store.get_node("entity-canivopets") is not None

@@ -55,8 +55,13 @@ def test_five_production_writes_leave_zero_drift(memory):
     assert _drift(memory.db_path) == 0
 
 
-def test_reconcile_closes_drift_and_is_idempotent(memory):
+def test_reconcile_closes_drift_and_is_idempotent(memory, monkeypatch):
     """Sapma senaryosu: eski yol gibi doğrudan cognitive_nodes'a yazılan satırlar."""
+    # Faz 11.2: bu test SAPMAYI ölçer, yeniliği değil. 22 satır yalnızca sonda
+    # farklı ("... eski kayit 7") olduğu için yazma kapısı bir kısmını kopya
+    # sayıp NOOP'a düşürüyordu (ölçüm: 22 yerine 14 satır). Kapı burada
+    # bilerek kapatılır; kapının kendi davranışı test_phase11_memory_gate'te.
+    monkeypatch.setenv("ENTROPY_MEMORY_GATE", "0")
     memory._graph_sync_enabled = False  # eski (bozuk) yazma yolunu taklit et
     for i in range(22):
         memory.record_memory("query", f"Graf disinda kalmis eski kayit {i}")

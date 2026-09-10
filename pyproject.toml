@@ -17,6 +17,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "numpy>=1.26.0",   # agent_desk/analysis/* modüllerinde koşulsuz içe aktarılıyor
     "pypdf>=4.0.0",    # skills/pdf_engine.py'de koşulsuz içe aktarılıyor
+    "qtawesome>=1.3.0",  # ui/design/icons.py — emoji yerine Codicons (MIT)
 ]
 
 [project.optional-dependencies]

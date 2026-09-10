@@ -1,57 +1,88 @@
-"""Dark Cybernetic theme and design tokens for Entropy AI."""
+"""Geriye uyumlu köprü — gerçek kaynak `entropy.ui.design.tokens`.
 
+Faz 11-E adım 1: tasarım sistemi `entropy/ui/design/` altına taşındı.
+Bu dosya artık **kendi paletini tanımlamaz**; `CYBER_THEME` ve `READING_TOKENS`
+aynı anahtarlarla ama yeni belirteç değerleriyle burada türetilir.
+
+Neden köprü: denetimde 223 yerel `setStyleSheet` ve bu iki sözlüğe yapılan
+onlarca içe aktarma ölçüldü (`src/entropy/ui/**`, `src/entropy/desk/**`).
+Anahtar adlarını korumak, o çağrı yerlerinin bu adımda hiç değişmeden yeni
+renkleri almasını sağlar. Anahtar kümesi teste bağlıdır
+(`tests/ui/test_design_system.py::test_legacy_alias_keys_stable`).
+
+Denetimin D-01 bulgusu ("iki çelişen palet aynı dosyada") böylece kapanır:
+`CYBER_THEME["accent_cyan"]` ile `READING_TOKENS["accent"]` artık aynı renktir.
+
+Yeni kod bu dosyayı kullanmaz:
+
+    from entropy.ui.design import TOKENS, apply_design_system, icon
+"""
+
+from entropy.ui.design.tokens import TOKENS
+
+_C = TOKENS["color"]
+_T = TOKENS["type"]
+_F = TOKENS["font"]
+_R = TOKENS["radius"]
+
+# ---------------------------------------------------------------------------
+# Takma ad 1: CYBER_THEME (eski anahtarlar korunur, değerler yeni belirteçten)
+#
+# `accent_amber` → warn, `accent_emerald` → ok, `accent_purple` → accent:
+# mor tamamen kaldırıldı (dört farklı mor vardı, hiçbiri anlam taşımıyordu),
+# tek vurgu kuralı gereği vurgu rolüne düşürüldü.
+# ---------------------------------------------------------------------------
 CYBER_THEME = {
-    "bg_root": "#080B10",
-    "bg_surface": "#0E1420",
-    "bg_card": "#141C2C",
-    "bg_terminal": "#05070A",
-    "border": "#1F2B42",
-    "border_focus": "#00F0FF",
-    "accent_cyan": "#00F0FF",
-    "accent_amber": "#FFB300",
-    "accent_purple": "#9D00FF",
-    "accent_emerald": "#00FF9D",
-    "text_primary": "#F0F6FC",
-    "text_secondary": "#8B949E",
-    "text_muted": "#484F58",
+    "bg_root": _C["bg"],
+    "bg_surface": _C["surface"],
+    "bg_card": _C["surface.raised"],
+    "bg_terminal": _C["terminal"],
+    "border": _C["line"],
+    "border_focus": _C["accent"],
+    "accent_cyan": _C["accent"],
+    "accent_amber": _C["warn"],
+    "accent_purple": _C["accent"],
+    "accent_emerald": _C["ok"],
+    "text_primary": _C["text"],
+    "text_secondary": _C["text.muted"],
+    "text_muted": _C["text.muted"],
 }
 
 # ---------------------------------------------------------------------------
-# Okuma yüzeyi tasarım belirteçleri (sohbet balonları + rapor okuyucu ortak)
+# Takma ad 2: READING_TOKENS (okuma yüzeyi: sohbet balonu + rapor okuyucu)
 #
-# Neden ayrı bir sözlük: sohbet, Zen paneli, rapor okuyucu ve bağımsız rapor
-# penceresi aynı görünüme sahip olmalı. Renk/aralık değerleri kod içine
-# serpiştirilince tablolar ve kod blokları tam siyah dolgularla ayrışıyordu.
-# Yüzeyler artık arka planla uyumlu, birbirinden yalnızca bir kademe farklı.
+# Eskiden CYBER_THEME'den bir tık farklı gri/vurgu kullanıyordu; bu fark
+# kullanıcı tarafından "bulanık, kirli" olarak algılanan geçişin nedeniydi.
+# Artık aynı belirteçlerden türer.
 # ---------------------------------------------------------------------------
 READING_TOKENS = {
     # Yüzeyler: kök → kart → yükseltilmiş. Hiçbiri saf siyah değil.
-    "surface_base": "#0F1622",
-    "surface_raised": "#151E2C",
-    "surface_soft": "#1A2434",
-    # Ayırıcı çizgiler: dolgu yerine ince çizgi kullanılır.
-    "divider": "#22314A",
-    "divider_soft": "#1A2436",
+    "surface_base": _C["bg"],
+    "surface_raised": _C["surface"],
+    "surface_soft": _C["surface.raised"],
+    # Ayırıcı çizgiler
+    "divider": _C["line.strong"],
+    "divider_soft": _C["line"],
     # Yazı
-    "text": "#E8EFF7",
-    "text_body": "#C7D3E1",
-    "text_dim": "#93A3B8",
-    # Vurgular
-    "accent": "#38D9FF",
-    "accent_soft": "#0F2A38",
-    "accent_alt": "#3DE8A8",
-    "accent_warn": "#FFC24D",
-    # Tipografi
-    "font_body": "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif",
-    "font_mono": "'Cascadia Mono', 'Consolas', 'Courier New', monospace",
-    "font_size_body": "14px",
-    "font_size_small": "12px",
-    "font_size_mono": "13px",
+    "text": _C["text"],
+    "text_body": _C["text"],
+    "text_dim": _C["text.muted"],
+    # Vurgular (tek vurgu + iki durum)
+    "accent": _C["accent"],
+    "accent_soft": _C["accent.soft"],
+    "accent_alt": _C["ok"],
+    "accent_warn": _C["warn"],
+    # Tipografi (CSS dizeleri — Qt zengin metin motoru için)
+    "font_body": _F["sans"],
+    "font_mono": _F["mono"],
+    "font_size_body": f"{_T['body']['size']}px",
+    "font_size_small": f"{_T['label']['size']}px",
+    "font_size_mono": f"{_T['mono']['size']}px",
     "line_height": "1.55",
     # Aralıklar
-    "radius": "8px",
-    "radius_small": "5px",
-    "block_margin": "14px",
+    "radius": f"{_R['md']}px",
+    "radius_small": f"{_R['sm']}px",
+    "block_margin": f"{TOKENS['space']['4']}px",
 }
 
 
@@ -99,95 +130,118 @@ def reading_css() -> str:
     td {{ color: {t['text_body']}; }}
     """
 
+
+# ---------------------------------------------------------------------------
+# STYLESHEET — pencere düzeyinde uygulanan eski stil sayfası.
+#
+# Bilinçli olarak `design.qss.build_qss()` DEĞİL: build_qss denetim boyutlarını
+# (min/max-height 28 px) dayatır ve bu adımda dokunmadığımız 223 yerel stille
+# çakışabilir. Burada eski kural yapısı korunur, yalnızca değerler belirteçten
+# gelir. Tam sisteme geçiş `apply_design_system(app)` ile adım 2+ işidir.
+# ---------------------------------------------------------------------------
 STYLESHEET = f"""
 QWidget {{
-    background-color: {CYBER_THEME['bg_root']};
-    color: {CYBER_THEME['text_primary']};
-    font-family: 'Segoe UI', 'Consolas', sans-serif;
-    font-size: 13px;
+    background-color: {_C['bg']};
+    color: {_C['text']};
+    font-family: {_F['sans']};
+    font-size: {_T['body']['size']}px;
 }}
 
 QFrame#cardFrame {{
-    background-color: {CYBER_THEME['bg_surface']};
-    border: 1px solid {CYBER_THEME['border']};
-    border-radius: 8px;
+    background-color: {_C['surface']};
+    border: 1px solid {_C['line']};
+    border-radius: {_R['md']}px;
 }}
 
 QLabel {{
     background-color: transparent;
-    color: {CYBER_THEME['text_primary']};
+    color: {_C['text']};
 }}
 
 QPushButton {{
-    background-color: {CYBER_THEME['bg_card']};
-    color: {CYBER_THEME['accent_cyan']};
-    border: 1px solid {CYBER_THEME['border']};
-    border-radius: 6px;
+    background-color: {_C['surface.raised']};
+    color: {_C['text']};
+    border: 1px solid {_C['line.strong']};
+    border-radius: {_R['sm']}px;
     padding: 6px 14px;
-    font-weight: 600;
 }}
 
 QPushButton:hover {{
-    border-color: {CYBER_THEME['accent_cyan']};
-    background-color: #1A263C;
+    border-color: {_C['accent']};
+    background-color: {_C['surface.raised']};
+}}
+
+QPushButton:pressed {{
+    background-color: {_C['surface.raised']};
+    padding-top: 7px;
+}}
+
+QPushButton:focus {{
+    border-color: {_C['accent']};
+    outline: {TOKENS['control']['focus_ring']}px solid {_C['accent']};
+}}
+
+QPushButton:disabled {{
+    color: {_C['text.muted']};
+    border-color: {_C['line']};
 }}
 
 QLineEdit, QTextEdit {{
-    background-color: {CYBER_THEME['bg_terminal']};
-    color: {CYBER_THEME['text_primary']};
-    border: 1px solid {CYBER_THEME['border']};
-    border-radius: 6px;
+    background-color: {_C['terminal']};
+    color: {_C['text']};
+    border: 1px solid {_C['line.strong']};
+    border-radius: {_R['sm']}px;
     padding: 8px;
-    font-family: 'Consolas', monospace;
 }}
 
 QLineEdit:focus, QTextEdit:focus {{
-    border-color: {CYBER_THEME['accent_cyan']};
+    border-color: {_C['accent']};
+    outline: {TOKENS['control']['focus_ring']}px solid {_C['accent']};
 }}
 
 QComboBox {{
-    background-color: #05070A;
-    color: #00F0FF;
-    border: 1px solid #1F2B42;
-    border-radius: 4px;
+    background-color: {_C['bg']};
+    color: {_C['text']};
+    border: 1px solid {_C['line.strong']};
+    border-radius: {_R['sm']}px;
     padding: 4px 8px;
-    font-family: 'Consolas', monospace;
-    font-size: 11px;
-    font-weight: bold;
+    font-size: {_T['label']['size']}px;
 }}
 
 QComboBox:hover, QComboBox:focus {{
-    border-color: #00F0FF;
+    border-color: {_C['accent']};
 }}
 
 QComboBox QAbstractItemView {{
-    background-color: #0E1420;
-    color: #F0F6FC;
-    border: 1px solid #1F2B42;
-    selection-background-color: #1A263C;
-    selection-color: #00F0FF;
+    background-color: {_C['surface']};
+    color: {_C['text']};
+    border: 1px solid {_C['line.strong']};
+    selection-background-color: {_C['surface.raised']};
+    selection-color: {_C['text']};
 }}
 
 QTabWidget::pane {{
-    border: 1px solid #1F2B42;
-    background: #0E1420;
-    border-radius: 6px;
+    border: 1px solid {_C['line']};
+    background: {_C['surface']};
+    border-radius: {_R['sm']}px;
 }}
 
 QTabBar::tab {{
-    background: #080B10;
-    color: #8B949E;
-    border: 1px solid #1F2B42;
+    background: transparent;
+    color: {_C['text.muted']};
+    border: none;
+    border-bottom: 2px solid transparent;
     padding: 6px 12px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    font-weight: bold;
-    font-size: 11px;
+    font-size: {_T['body']['size']}px;
 }}
 
 QTabBar::tab:selected {{
-    background: #0E1420;
-    color: #00F0FF;
-    border-bottom-color: #0E1420;
+    background: {_C['surface']};
+    color: {_C['text']};
+    border-bottom-color: {_C['accent']};
+}}
+
+QSplitter::handle {{
+    background-color: {_C['line.strong']};
 }}
 """

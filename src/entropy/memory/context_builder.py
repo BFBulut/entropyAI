@@ -63,6 +63,12 @@ BUDGET_AGENT_MEMORY = 300
 # değil. Yalnızca meta["office"] doluysa ödenir.
 BUDGET_OFFICE_MEMORY = 300
 
+# CRAG esigi (Faz 11.10). Kor testte (denetim Ek A) isabetli sorgularin top-1
+# hibrit skoru 0,478-0,585 araligindaydi; tek kacirmanin top-1 skoru 0,398'di.
+# 0,45 bu iki kumeyi ayiriyor. Altinda kalan sorgu icin baglam kurucusu
+# "beyinde yok" sinyali verir.
+CRAG_MIN_SCORE = 0.45
+
 
 @dataclass
 class ContextSection:
@@ -81,6 +87,16 @@ class ContextSection:
 class AssembledContext:
     sections: List[ContextSection] = field(default_factory=list)
     budget: int = DEFAULT_TOKEN_BUDGET
+    # Faz 11.10 (CRAG kapisi): geri cagirmanin en iyi hibrit skoru. 0.0 =
+    # beyinde hic karsilik yok. Cagiran (arastirma akisi, arayuz) bu sayiya
+    # bakarak "beyinde yok, disariya cikmali" karari verir; onceden sistem
+    # zayif sonuclari da guvenle sunuyordu.
+    brain_confidence: float = 0.0
+
+    @property
+    def brain_has_answer(self) -> bool:
+        """Beyinde ise yarar bir karsilik var mi (CRAG esigi)."""
+        return self.brain_confidence >= CRAG_MIN_SCORE
 
     @property
     def tokens(self) -> int:
@@ -93,6 +109,8 @@ class AssembledContext:
         return {
             "total_tokens": self.tokens,
             "budget": self.budget,
+            "brain_confidence": round(self.brain_confidence, 4),
+            "brain_has_answer": self.brain_has_answer,
             "sections": [{"kind": s.kind, "title": s.title, "tokens": s.tokens} for s in self.sections],
         }
 
@@ -385,10 +403,17 @@ class CognitiveContextBuilder:
 
     def _recall_section(self, query: str, skill_name: Optional[str], budget: int) -> Optional[ContextSection]:
         try:
+            # Faz 11.10: varsayılan kapsam L2+L3 (çalışma belleği ve epizodik
+            # kayıtlar dışarıda) + graf komşularıyla PPR genişletmesi.
+            hits = self.memory.hybrid_recall(query, top_k=12, expand_graph=True)
+        except TypeError:
+            # Eski imzalı bir bellek nesnesi (test sahtesi) geçilmiş olabilir.
             hits = self.memory.hybrid_recall(query, top_k=12)
         except Exception as e:
             logger.warning("Hafıza geri çağırma başarısız: %s", e)
+            self._last_recall_best = 0.0
             return None
+        self._last_recall_best = max((score for _, score in hits), default=0.0)
         if not hits:
             return None
 
@@ -862,6 +887,8 @@ class CognitiveContextBuilder:
         """
         ctx = AssembledContext(budget=token_budget)
         remaining = token_budget
+        # CRAG kapisi icin geri cagirmanin en iyi skoru; _recall_section doldurur.
+        self._last_recall_best = 0.0
         agent = (meta or {}).get("agent")
         office = (meta or {}).get("office")
 
@@ -913,4 +940,5 @@ class CognitiveContextBuilder:
                 ctx.sections.append(section)
                 remaining -= section.tokens
 
+        ctx.brain_confidence = float(getattr(self, "_last_recall_best", 0.0))
         return ctx
