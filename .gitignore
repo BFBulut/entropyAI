@@ -22,3 +22,47 @@ build_check/
 *.db
 *.db-wal
 *.db-shm
+
+# --- Faz 11-A depo temizligi (2026-09-10) ---
+# Uretilmis ikili cikti (PyInstaller); spec ile yeniden uretilir.
+dist*/
+build*/
+
+# Denetim/olcum gunlukleri ve gecici scratch ciktilari.
+scratch/_*.log
+scratch/_*.js
+scratch/_*.html
+# scratch/ bir olcum tezgahidir: ekran goruntuleri, fikstur ciktilari, gecici
+# betikler. Halihazirda IZLENEN 55 dosya etkilenmez (gitignore izlenen dosyayi
+# kapsamaz); yalnizca yeni uretilen cikti git'e sizmaz.
+scratch/
+
+# Entropy'nin derledigi ajan tanimlari APP_ROOT'a da yaziliyor (compile.py).
+# Izlenen .agents/agents/distiller etkilenmez: gitignore izlenen dosyayi kapsamaz.
+.agents/
+
+# Ajan kosumlarinin depo kokune dusurdugu artiklar.
+/module_task_*.py
+/schema_task_*.py
+/test_task_*.py
+/test_t_exec_*.py
+/test_bridge_background_task_*/
+/test_project_directory_binding*/
+/test_thread_off*/
+/test_office_*/
+/financial-auditor/
+
+# Kullanici cikti klasoru (depo disina tasindi).
+/google_flow_files/
+
+# Ucuncu taraf kopya (THIRD_PARTY.md'de belgeli, depo disina tasindi).
+scratch/pixel-agents-main/
+
+# Entropy'nin kendi kadrosu (kasadan derlenir). Depo etkin proje kökü
+# secilirse buraya yeniden dusebilir; kullanicinin gelistirme alt ajanlariyla
+# karismasin diye ada gore yok sayilir.
+.claude/agents/analist.md
+.claude/agents/arastirmaci.md
+.claude/agents/degerlendirici.md
+.claude/agents/orkestrator.md
+.claude/agents/yazar.md

@@ -47,45 +47,73 @@ Entropy AI is an autonomous, desktop-native Agentic Operating System designed sp
 
 ## 3. Directory Map
 
+> Faz 11-A'da gerçekle eşitlendi (2026-09-10). Ayrıntılı ve **yaşayan** mimari:
+> `docs/ARCHITECTURE.md`; güncel durum: `docs/STATE.md`; kararlar: `docs/adr/`.
+> Bu haritada olmayan bir klasör görürsen ya harita ya kod yanlıştır — ikisinden
+> birini aynı commit'te düzelt.
+
 ```text
-c:/EntropiAI/
-├── GEMINI.md                           # Root system context, invariants & directory map
-├── AGENTS.md                           # Agent registry and interaction protocol
-├── Agents/
-│   └── EntropyAI/
-│       └── persona.md                  # Autonomous agent identity, boundaries & behavioral specs
+C:/EntropiAI/
+├── GEMINI.md                           # Kök sistem bağlamı, değişmezler ve dizin haritası
+├── AGENTS.md                           # Bu depoda ajanlar nasıl tanımlanır (kadro listesi DEĞİL)
+├── THIRD_PARTY.md                      # Üçüncü taraf varlık ve lisans bildirimleri
+├── EntropyAI.spec                      # PyInstaller (hiddenimports bir dizgi listesidir!)
+├── EntropyAI_OneFile.spec
+├── run_entropy.py                      # Giriş noktası -> entropy.main:main
+├── launch.bat · entropy.ico · entropy.png · pyproject.toml
+├── .claude/agents/                     # YALNIZCA kullanıcının 6 geliştirme alt ajanı
+├── .agents/agents/distiller/           # agy biçiminde damıtıcı ajan (izlenen tek tanım)
 ├── docs/
-│   ├── PHASED_ROADMAP.md               # Phased implementation and research documentation
-│   └── specifications/
-│       ├── SYSTEM_ARCHITECTURE.md      # High-level architecture and IPC specification
-│       ├── UI_SPECIFICATION.md         # Zen, Floating, Chat modes and widget designs
-│       ├── MEMORY_RAG_SPECIFICATION.md # Supabase pgvector + Mem0 + Obsidian GraphRAG specs
-│       ├── AGY_CLI_INTEGRATION.md      # Antigravity CLI process wrapper & streaming specs
-│       └── TASK_SCHEDULER_SPECIFICATION.md # Background cron scheduler specs
+│   ├── ARCHITECTURE.md                 # Yaşayan mimari (paketler, veri kökleri, sözleşmeler)
+│   ├── STATE.md                        # Güncel durum — alt ajanların çalışma belleği
+│   ├── ROADMAP.md                      # Faz durumları (eski PHASED_ROADMAP.md)
+│   ├── adr/                            # ADR-0001… geri alınamaz kararlar
+│   ├── reports/                        # Faz raporları (tarih önekli)
+│   ├── specifications/                 # Eski spec'ler (ARCHITECTURE.md'ye damıtılıyor)
+│   └── _archive/{customer,prototype}/  # Müşteri çıktıları ve silinen prototipin notları
 ├── src/
 │   └── entropy/
-│       ├── __init__.py
-│       ├── main.py                     # Application entry point & Windows startup initializer
-│       ├── core/                       # Core configuration, event bus, and state management
-│       ├── ui/                         # PySide6 GUI implementations
-│       │   ├── modes/                  # ZenModeWindow, FloatingModeWidget, ChatModeWindow
-│       │   ├── widgets/                # CoreVisualizerWidget, TerminalWidget, ReportsReader, MemoryGraph
-│       │   └── themes/                 # High-contrast cybernetic/dark aesthetic design tokens
-│       ├── memory/                     # Hybrid memory system
-│       │   ├── obsidian/               # Vault Operator & Markdown parser
-│       │   ├── supabase/               # Mem0 bilişsel katmanlar (bugün SQLite üzerinde; pgvector bağlanmadı)
-│       │   └── rag/                    # Project codebase indexing & vector search
-│       ├── agent_desk/                 # Çok ofisli otonom ajan platformu (ayrı uygulama: run_agent_desk.py)
-│       │   ├── core/                   # Harness, görev yürütücü, ofis orkestratörü, worktree yöneticisi
-│       │   ├── ui/                     # AgentDeskWindow, piksel ofis tuvali, kanban, terminal ızgarası
-│       │   ├── analysis/               # Nicel finans modelleri (numpy gerektirir)
-│       │   ├── memory/                 # Bölümlenmiş ajan belleği & bellek grafiği köprüsü
-│       │   └── research/               # Otonom ofis araştırmacısı
-│       ├── skills/                     # SKILL.md keşfi, içe aktarma ve yürütme motoru
-│       ├── tools/                      # Self-tooling & Pydantic AI dynamic tool synthesis
-│       ├── mcp/                        # MCP hub & 'agy mcp' process manager
-│       ├── scheduler/                  # Cron-like background task runner
-│       └── platform/                   # Windows startup hooks & clipboard image handler
+│       ├── __init__.py · main.py       # Uygulama girişi ve açılış kablolaması
+│       ├── core/                       # config, event_bus, claude_bridge, agy_bridge, provider,
+│       │                               # paths, identity, slash_commands, task_ledger, kilitler
+│       ├── agents/                     # registry, compile, tasks, harness, mailbox, worktrees,
+│       │                               # pr_flow, templates, watchers, desk_registry (Desk defteri)
+│       ├── memory/                     # bilişsel bellek, graf, wiki, playbook, context_builder,
+│       │   ├── obsidian/               # kasa yöneticisi
+│       │   ├── supabase/               # 12 katmanlı bilişsel bellek (bugün yerel SQLite)
+│       │   └── rag/                    # proje kodu indeksleme
+│       ├── desk/                       # Agent Desk penceresi ve panelleri
+│       │   ├── engine/                 # piksel sahne motoru
+│       │   ├── assets/                 # piksel varlıklar (CC0 — bkz. THIRD_PARTY.md)
+│       │   └── templates/              # ekip şablonları
+│       ├── ui/
+│       │   ├── modes/                  # zen_mode, chat_mode, floating_mode
+│       │   ├── widgets/                # 29 widget (graf, rapor merkezi, komut paleti, terminal…)
+│       │   └── themes/                 # bugün iki yarım sistem; Faz 11-E'de tek belirteç seti
+│       ├── skills/                     # SKILL.md keşfi (manager.py) + tembel yüklenen motorlar
+│       ├── tools/                      # synthesizer.py (dinamik araç sentezi) — tek ürün modülü
+│       ├── mcp/                        # MCP hub ve süreç yöneticisi
+│       ├── scheduler/                  # cron benzeri arka plan görev koşucusu
+│       └── platform/                   # Windows açılış kancaları, pano görsel işleyici
 ├── skills/                             # Kurulu yetenek paketleri (her biri SKILL.md içerir)
-└── tests/                              # Automated pytest suites (unit, mock-CLI, UI headless)
+├── scripts/                            # Geliştirici betikleri (perf_bench, routing_eval, graph_metrics…)
+├── scratch/                            # Ölçüm çıktıları ve ekran görüntüleri (git'te dar kapsamlı)
+└── tests/
+    ├── conftest.py                     # kasa + ~/.entropy yalıtımı
+    ├── contracts/                      # kalıcı ürün sözleşmeleri (eski test_phase*)
+    ├── ui/ · desk/ · skills/           # konu bazlı gruplar
+    └── (kök)                           # modül testleri ve nicel finans defterleri
 ```
+
+**Haritada bilerek OLMAYANLAR** (eski haritada vardı, gerçekte yok):
+
+- `Agents/` klasörü ve `persona.md` dosyaları — gerçek kadro kasadadır
+  (`<kasa>/Entropy/Agents/<ad>/AGENT.md`, `entropy.agents.registry`).
+- `src/entropy/agent_desk/` ve `run_agent_desk.py` — Desk ayrı bir uygulama olarak
+  başlatılmıyor; kodu `src/entropy/desk/` altında ve Entropy'nin içine gömülü.
+- `docs/PHASED_ROADMAP.md` — `docs/ROADMAP.md` oldu.
+- `src/entropy/tools/autonomous_agent_architecture*` — 60 dosyalık üretilmiş prototip,
+  Faz 11-A'da 32 testiyle birlikte silindi.
+- `dist/`, `build/`, `dist_check/`, `build_check/`, kök `EntropyAI.exe` — üretilmiş çıktı;
+  `.gitignore`'da ve depoda tutulmaz, `pyinstaller EntropyAI.spec` ile yeniden üretilir.
+- `CLAUDE.md` — **bilerek yok**; gerekçe `docs/adr/ADR-0002-claude-saf-kip.md`.

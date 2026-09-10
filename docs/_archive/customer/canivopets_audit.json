@@ -1,0 +1,347 @@
+{
+  "metadata": {
+    "mode": "offline",
+    "engine": "MediaAgencySoldier",
+    "version": "1.0.0"
+  },
+  "analysis": {
+    "brand_info": {
+      "brand_name": "Canivo Pets",
+      "domain": "canivopets.com",
+      "company_title": "TRADE BASYIGIT DANISMANLIK IÇ VE DIS TICARET LIMITED SIRKETI"
+    },
+    "contact_and_location": {
+      "city": "Edremit",
+      "country": "TR",
+      "address": "Yolören Mah. Yolören 66 Sk. No:3/A Edremit-Balıkesir, Edremit, TR",
+      "phones": [
+        "+905407206262"
+      ],
+      "emails": [
+        "info@canivopets.com"
+      ],
+      "social_media": {
+        "youtube": "https://www.youtube.com/@CanivoPets",
+        "facebook": "https://www.facebook.com/profile.php?id=61581502411962",
+        "instagram": "https://www.instagram.com/canivopets?utm_source=ig_web_button_share_sheet&igsh=ZDNlZDc0MzIxNw==",
+        "twitter": "https://getfirefox.com/"
+      }
+    },
+    "product_catalog": {
+      "count": 12,
+      "products": [
+        {
+          "name": "Canivo Hunter Köpek Maması 15 kg",
+          "price": 2499.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": true,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Kuzulu Performans Maması 15 KG",
+          "price": 2499.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Joint Plus Eklem Destekleyici Köpek Maması 15 kg",
+          "price": 2499.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "CANIVO Yavru Köpek Maması 15 KG",
+          "price": 2199.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Rottweiler Köpek Maması 15 kg",
+          "price": 1999.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Flex Eklem ve Kalça Destekleyici",
+          "price": 1499.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Anti Parvo Bağışıklık Sistemi Destekleyici",
+          "price": 1299.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Kuzulu Yetişkin Köpek Konservesi  400 gr 12 Adet",
+          "price": 849.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Kuzulu Yavru Köpek Konservesi 400 gr 12 Adet",
+          "price": 849.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Biftekli Yetişkin Köpek Konservesi  400 gr 36 Adet",
+          "price": 1899.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Biftekli Yetişkin Köpek Konservesi  400 gr 24 Adet",
+          "price": 1399.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        },
+        {
+          "name": "Canivo Biftekli Yetişkin Köpek Konservesi  400 gr 12 Adet",
+          "price": 849.0,
+          "currency": "₺",
+          "category": null,
+          "is_hero": false,
+          "confidence": 0.92
+        }
+      ],
+      "currencies": [
+        "₺"
+      ],
+      "min_price": 849.0,
+      "max_price": 2499.0,
+      "average_price": 1694.83
+    },
+    "competitors": {
+      "comparison_present": true,
+      "detected_competitors": [
+        "Pro Plan",
+        "Royal Canin",
+        "Reflex",
+        "Enjoy",
+        "BonaCibo",
+        "Pawpaw"
+      ],
+      "market_positioning": "Orta Segment / Rekabetçi",
+      "industry": "Evcil Hayvan & Pet Food"
+    },
+    "seo_audit": {
+      "title": "Canivo Pets | Sağlıklı & Ekonomik Kuzu Etli Köpek Mamaları",
+      "title_length": 58,
+      "title_status": "optimal",
+      "meta_description": "Canivo Pets ile dostunuz için en doğru beslenme! Yüksek proteinli, kuzu etli ve pirinçli köpek mamaları, üreticiden tüketiciye uygun fiyatlarla. Sağlıklı tüyler ve güçlü bağışıklık için hemen keşfedin.",
+      "meta_description_length": 201,
+      "meta_description_status": "too_long",
+      "h1_status": "missing",
+      "h1_count": 0,
+      "h1_elements": [],
+      "canonical_status": "present",
+      "canonical": "https://canivopets.com/",
+      "open_graph": {
+        "status": "complete",
+        "tags": {
+          "og:site_name": "Canivo Pets | Sağlıklı &amp; Ekonomik Kuzu Etli Köpek Mamaları",
+          "og:type": "website",
+          "og:url": "https://canivopets.com"
+        }
+      },
+      "schema_json_ld": {
+        "has_organization_schema": true,
+        "has_product_schema": false
+      },
+      "search_intents": [
+        "Transactional",
+        "Commercial"
+      ],
+      "issues": []
+    },
+    "performance_vitals": {
+      "images": {
+        "total": 23,
+        "modern_format_ratio": 0.0,
+        "modern_format_count": 0,
+        "lazy_load_count": 0,
+        "risk_level": "High"
+      },
+      "scripts": {
+        "blocking_render": 9,
+        "risk_level": "High"
+      },
+      "compression": {
+        "minified_assets_detected": true
+      },
+      "overall_performance_risk": "High"
+    },
+    "cro_and_ux": {
+      "cta_buttons": {
+        "count": 11,
+        "status": "strong",
+        "items": [
+          "Sepete Ekle",
+          "Köpek Mamaları",
+          "Köpek Mamaları",
+          "Canivo Flex Eklem ve Kalça Destekleyici",
+          "Canivo Flex Eklem ve Kalça Destekleyici",
+          "Alman Çoban",
+          "Kangal",
+          "Köpek Mamaları",
+          "Kedi Mamaları",
+          " İade Taleplerim",
+          " Kampanyalar"
+        ]
+      },
+      "trust_badges": {
+        "has_ssl_badge": false,
+        "has_guarantee": true,
+        "detected": [
+          "14 Gün Koşulsuz Para İade Garantisi"
+        ]
+      },
+      "form_friction": {
+        "input_field_count": 17,
+        "friction_level": "High"
+      }
+    }
+  },
+  "campaigns": {
+    "bogo": {
+      "name": "Canivo Pets İkili Fırsat - Hediye Ürün Avantajı",
+      "mechanic": "X alana Y bedava",
+      "primary_product": "Canivo Hunter Köpek Maması 15 kg",
+      "free_product": "Canivo Kuzulu Performans Maması 15 KG",
+      "margin_impact": "Düşük maliyetli tamamlayıcı ürün liste fiyatıyla sübvanse edilerek brüt marj korunur.",
+      "slogan": "Canivo Hunter Köpek Maması 15 kg Alana Canivo Kuzulu Performans Maması 15 KG Bedava Hediye!"
+    },
+    "cross_discount": {
+      "name": "Canivo Pets Çapraz Sepet Genişletme Paketi",
+      "mechanic": "X alana Y %10 indirimli",
+      "discount_percent": 10,
+      "primary_product": "Canivo Hunter Köpek Maması 15 kg",
+      "discounted_product": "Canivo Kuzulu Performans Maması 15 KG",
+      "promotional_angle": "Sepet derinliğini ve ortalama sipariş tutarını artırma.",
+      "bundled_savings": "Birlikte alımda sepette %10 tasarruf avantajı."
+    },
+    "cart_threshold": {
+      "name": "Canivo Pets Ücretsiz Kargo & Sepet Teşvik Kampanyası",
+      "mechanic": "2288.02 ₺ üzeri alışverişlerde kargo bedava ve hediye",
+      "threshold_amount": 2288.02,
+      "currency": "₺",
+      "slogan": "2288 ₺ ve Üzeri Alışverişlerde Kargo Bedava!",
+      "estimated_aov_lift": "%25 AOV Sepet Artışı Öngörüsü"
+    },
+    "vip_subscription": {
+      "name": "Canivo Pets VIP Sadakat Kulübü",
+      "mechanic": "VIP üyelere sabit indirim ve öncelikli kargo",
+      "discount_percent": 15,
+      "slogan": "Ayrıcalıklı Alışverişin Adresi"
+    }
+  },
+  "ad_plans": {
+    "google_search_ads": {
+      "ad_type": "Responsive Search Ads (RSA)",
+      "headlines": [
+        "Canivo Pets Resmi Sitesi",
+        "Yeni Sezon Canivo Pets",
+        "Canivo Hunter Köpe Fırsatı",
+        "Aynı Gün Hızlı Kargo",
+        "Orijinal Ürün Garantisi",
+        "Sepette Anında İndirim"
+      ],
+      "descriptions": [
+        "Canivo Pets koleksiyonunu keşfedin. Kalite ve konfor burada.",
+        "Güvenli ödeme ve 14 gün koşulsuz iade avantajıyla hemen sipariş verin.",
+        "Kaçırılmayacak Canivo Pets fırsatları stoklarla sınırlıdır. Hemen alın."
+      ],
+      "negative_keywords": [
+        "ücretsiz",
+        "bedava",
+        "crack",
+        "torrent",
+        "ikinci el",
+        "sahibinden",
+        "iş ilanları",
+        "kariyer",
+        "staj",
+        "şikayet",
+        "ekşi",
+        "hile",
+        "sahte",
+        "çakma"
+      ]
+    },
+    "meta_ads": {
+      "hook": "Hala sıradan ürünlerle vakit mi kaybediyorsunuz? Canivo Pets ile tanışma zamanı geldi!",
+      "carousel_cards": [
+        {
+          "card_number": 1,
+          "headline": "Canivo Pets Amiral Ürün",
+          "caption": "En çok satan favori model.",
+          "cta": "Hemen İncele"
+        },
+        {
+          "card_number": 2,
+          "headline": "Tamamlayıcı Avantaj",
+          "caption": "Birlikte alımda sepette ek indirim.",
+          "cta": "Sepete Ekle"
+        },
+        {
+          "card_number": 3,
+          "headline": "Hediye & Hızlı Kargo",
+          "caption": "Eşik üzeri siparişlerde kargo hediye.",
+          "cta": "Fırsatı Yakala"
+        }
+      ],
+      "ugc_scenario": {
+        "hook_0_3s": "İçerik üreticisi kutuyu heyecanla kameraya gösterir: 'Bunu internette görüp duruyordum!'",
+        "problem_3_8s": "Eski kalitesiz alternatiflerin yarattığı hayal kırıklığı vurgulanır.",
+        "solution_8_15s": "Kutu açılır ve Canivo Pets kalitesi, dokusu yakın çekimle net şekilde gösterilir.",
+        "demo_15_25s": "Ürünün günlük hayatta rahat ve şık kullanımı canlı olarak sergilenir.",
+        "cta_25_30s": "Aşağıdaki bağlantıya tıklayın ve Canivo Pets özel hediyenizi kaçırmayın!"
+      }
+    },
+    "tiktok_reels_ads": {
+      "hook": "POV: 2026'da hala eski yöntemleri kullanıyorsundur...",
+      "trend_concept": "Hızlı tempolu viral ses ve eğlenceli split-screen tepki formatı",
+      "script_breakdown": [
+        {
+          "timing": "0-3 sn",
+          "visual": "Parmak şıklatma ve şaşkın yüz ifadesi",
+          "audio": "Trend drop beat"
+        },
+        {
+          "timing": "3-8 sn",
+          "visual": "Ürünün merkezde estetik dönüşü",
+          "audio": "Bunu mutlaka denemelisiniz"
+        },
+        {
+          "timing": "8-15 sn",
+          "visual": "Sonuç ve gülümseme",
+          "audio": "Link profilde, acele edin!"
+        }
+      ],
+      "cta": "Hemen bio'daki linke tıkla ve avantajlı paketini al!"
+    }
+  }
+}

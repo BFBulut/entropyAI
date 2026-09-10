@@ -311,15 +311,22 @@ def _rules_lines(spec: AgentSpec) -> List[str]:
 
 def compile_roots(project_dir: Optional[Path | str] = None) -> List[Path]:
     """
-    Derlemenin yazılacağı kökler: uygulama kökü + istenen proje kökü + etkin proje.
+    Derlemenin yazılacağı kökler: istenen proje kökü + etkin proje + nötr çalışma dizini.
 
-    Aynı yol iki kez dönmez; proje kökü uygulama kökünün kendisiyse tek yazım olur.
-    Paketlenmiş sürümde APP_ROOT .exe'nin klasörü (ör. `dist/EntropyAI`) olduğu
-    için yalnızca ona yazmak, ajanların gerçekte çalışılan proje kökünde
-    "bulunamadı" olmasına yol açıyordu; bu yüzden `default_project_path` de
-    `project_dir` verilse bile listeye eklenir (erken çıkış yok).
+    Aynı yol iki kez dönmez.
+
+    **APP_ROOT neden listede değil (Faz 11-A):** kaynaktan koşarken APP_ROOT
+    deponun kendisidir; oraya yazmak Entropy'nin kendi kadrosunu (`analist`,
+    `arastirmaci`, `degerlendirici`, `orkestrator`, `yazar`) deponun
+    `.claude/agents/` ve `.agents/agents/` klasörlerine düşürüyordu. Sonuç:
+    kullanıcının kendi CLI oturumunda Entropy'nin iç ajanları alt ajan olarak
+    görünüyor, üretilmiş dosyalar sürüm denetimine sızıyordu. Paketlenmiş
+    sürümde ise APP_ROOT .exe klasörüdür ve oraya yazmanın hiçbir faydası yok
+    (ajanlar gerçek proje kökünden ve nötr çalışma dizininden keşfediliyor).
+    `default_project_path`, `project_dir` verilse bile listeye eklenir
+    (erken çıkış yok).
     """
-    from entropy.core.config import APP_ROOT, config
+    from entropy.core.config import config
 
     roots: List[Path] = []
 
@@ -333,7 +340,6 @@ def compile_roots(project_dir: Optional[Path | str] = None) -> List[Path]:
         if p not in roots and p.is_dir():
             roots.append(p)
 
-    _add(APP_ROOT)
     _add(project_dir)
     _add(getattr(config, "default_project_path", None))
     # Claude saf kipte NÖTR çalışma dizininde koşuyor (bkz. run_cwd); agy ise

@@ -1,0 +1,1150 @@
+{
+  "brand_name": "Canivo Pets",
+  "domain": "canivopets.com",
+  "target_url": "https://canivopets.com",
+  "audit_categories": [
+    {
+      "category": "Marka Kimliği & Yasal Bilgiler",
+      "status": "İncelendi",
+      "priority": "Yüksek",
+      "score": 100,
+      "details": "Marka: Canivo Pets, Domain: canivopets.com"
+    },
+    {
+      "category": "MarTech & Takip Kodları (GA4 / CAPI)",
+      "status": "Eksik Kodlar Var",
+      "priority": "Kritik (P0)",
+      "score": 0.0,
+      "details": "Tespit edilen: 0/6 etiket"
+    },
+    {
+      "category": "Güvenlik, CSP & Consent Mode v2",
+      "status": "Consent Mode Eksik",
+      "priority": "Kritik (P0)",
+      "score": 10.0,
+      "details": "CSP: Yok, Consent v2: Eksik"
+    },
+    {
+      "category": "Schema.org & Yapılandırılmış Veri",
+      "status": "Eksik Alanlar",
+      "priority": "Yüksek",
+      "score": 0.0,
+      "details": "Şemalar: Bulunamadı"
+    },
+    {
+      "category": "Core Web Vitals DOM Teşhisi",
+      "status": "Risk: Needs Improvement",
+      "priority": "Yüksek",
+      "score": 75.0,
+      "details": "LCP: Needs Improvement, CLS: Good, INP: Good"
+    },
+    {
+      "category": "İndekslenebilirlik & Sosyal Grafikler",
+      "status": "İndekslenebilir",
+      "priority": "Yüksek",
+      "score": 90.0,
+      "details": "Canonical: Valid Self-Referencing, OG Görsel: Yok"
+    },
+    {
+      "category": "E-Ticaret CRO & Mobil Sürtünme",
+      "status": "SEVERE_FRICTION",
+      "priority": "Yüksek",
+      "score": 45.0,
+      "details": "Sticky CTA: Yok, Express: Yok"
+    },
+    {
+      "category": "SERP Fırsatları (Snippet & PAA)",
+      "status": "Snippet: LOW",
+      "priority": "Orta",
+      "score": 0.0,
+      "details": "PAA Soru Sayısı: 0, Merchant: NOT_ELIGIBLE"
+    },
+    {
+      "category": "Birim Ekonomisi & Breakeven ROAS",
+      "status": "Hesaplandı",
+      "priority": "Kritik",
+      "score": 100,
+      "details": "Breakeven ROAS: 1.82x, Hedef ROAS: 2.5x"
+    },
+    {
+      "category": "LTV:CAC & CAC Geri Ödeme (Payback)",
+      "status": "UNDERINVESTING",
+      "priority": "Kritik",
+      "score": 60,
+      "details": "LTV: ₺4986.67, LTV:CAC: 16.76x, Payback: 2.4 ay"
+    },
+    {
+      "category": "Katkı Marjı Kademeleri (CM1-CM3)",
+      "status": "Pozitif",
+      "priority": "Kritik",
+      "score": 95,
+      "details": "CM1: %55.0, CM2: %46.0, CM3: %21.0"
+    },
+    {
+      "category": "POAS Net Kârlılık & MER Ölçümü",
+      "status": "Kârlı",
+      "priority": "Kritik",
+      "score": 95,
+      "details": "POAS: 3.12x, MER: 2.64x (Çift Sayım: 1.74x)"
+    }
+  ],
+  "recommended_funnel": {
+    "tofu": "Eğitici video kancaları, TikTok Spark Ads, Google Demand Gen & Meta Reels (%55 Bütçe)",
+    "mofu": "Kullanıcı yorumları, Carousel ve Google Search ticari arama (%25 Bütçe)",
+    "bofu": "Meta ASC, DPA dinamik sepet tamamlama & Google PMax (%15 Bütçe)",
+    "retention": "Klaviyo e-posta/SMS hoş geldin, terk edilen sepet ve VIP akışları (%5 Bütçe)"
+  },
+  "unit_economics": {
+    "assumed_gross_margin_pct": 55.0,
+    "breakeven_roas": 1.82,
+    "breakeven_roas_pct": 182.0,
+    "target_roas": 2.5,
+    "target_roas_pct": 250.0,
+    "max_allowable_cpa": 200.0,
+    "currency": "₺",
+    "funnel_budget_allocations": {
+      "balanced": {
+        "strategy": "balanced",
+        "total_budget": 100000.0,
+        "currency": "₺",
+        "tiers": [
+          {
+            "stage": "TOFU",
+            "name": "Top of Funnel (Soğuk Kitle / Keşif)",
+            "allocation_pct": 55.0,
+            "amount": 55000.0,
+            "focus_objective": "Sürekli yeni müşteri akışı ve piksel öğrenim tabanı",
+            "recommended_channels": [
+              "Meta Reels/UGC",
+              "TikTok Ads",
+              "Google Search Non-Brand"
+            ]
+          },
+          {
+            "stage": "MOFU",
+            "name": "Middle of Funnel (Ilık Kitle / İnceleme)",
+            "allocation_pct": 25.0,
+            "amount": 25000.0,
+            "focus_objective": "Açılış sayfası eğitimi, kullanıcı yorumları ve incelemeler",
+            "recommended_channels": [
+              "Meta Carousel",
+              "Google Search (Kategori/Niyet)"
+            ]
+          },
+          {
+            "stage": "BOFU",
+            "name": "Bottom of Funnel (Sıcak Kitle / Dönüşüm)",
+            "allocation_pct": 15.0,
+            "amount": 15000.0,
+            "focus_objective": "Sepet terk geri kazanımı ve doğrudan satın alma teklifi",
+            "recommended_channels": [
+              "Meta Dynamic Ads (Catalog DPA)",
+              "Google RSA & Shopping"
+            ]
+          },
+          {
+            "stage": "RETENTION",
+            "name": "Sadakat & LTV (Mevcut Müşteri)",
+            "allocation_pct": 5.0,
+            "amount": 5000.0,
+            "focus_objective": "Tekrar satın alma döngüsü ve AOV artırıcı paketler",
+            "recommended_channels": [
+              "E-posta / SMS",
+              "Meta LTV Audiences"
+            ]
+          }
+        ]
+      },
+      "scale": {
+        "strategy": "scale",
+        "total_budget": 100000.0,
+        "currency": "₺",
+        "tiers": [
+          {
+            "stage": "TOFU",
+            "name": "Top of Funnel (Soğuk Kitle / Keşif)",
+            "allocation_pct": 70.0,
+            "amount": 70000.0,
+            "focus_objective": "Geniş kitle edinimi, video kancaları, pazar payı kazanımı",
+            "recommended_channels": [
+              "Meta Reels/Video",
+              "TikTok Ads",
+              "Google Demand Gen"
+            ]
+          },
+          {
+            "stage": "MOFU",
+            "name": "Middle of Funnel (Ilık Kitle / İnceleme)",
+            "allocation_pct": 15.0,
+            "amount": 15000.0,
+            "focus_objective": "Etkileşim, sosyal kanıt, karşılaştırma ve inceleme trafiği",
+            "recommended_channels": [
+              "Meta Carousel",
+              "Google Arama (Ticari Niyet)",
+              "YouTube"
+            ]
+          },
+          {
+            "stage": "BOFU",
+            "name": "Bottom of Funnel (Sıcak Kitle / Dönüşüm)",
+            "allocation_pct": 10.0,
+            "amount": 10000.0,
+            "focus_objective": "Dinamik yeniden pazarlama (DPA), terk edilen sepet kazanımı",
+            "recommended_channels": [
+              "Meta Dynamic Ads (DPA)",
+              "Google RSA (Marka + İşlemsel)",
+              "Google PMax"
+            ]
+          },
+          {
+            "stage": "RETENTION",
+            "name": "Sadakat & LTV (Mevcut Müşteri)",
+            "allocation_pct": 5.0,
+            "amount": 5000.0,
+            "focus_objective": "Çapraz satış, ikinci sipariş teşviki, VIP teklifler",
+            "recommended_channels": [
+              "E-posta Otomasyonu",
+              "SMS",
+              "Meta Custom Audience (Mevcut Müşteri)"
+            ]
+          }
+        ]
+      }
+    },
+    "promotional_simulations": {
+      "bogo_simulation": {
+        "promotion_type": "BOGO",
+        "headline": "1 Alana 1 Hediye (Hero: 500.00, Hediye: 200.00)",
+        "normal_revenue": 700.0,
+        "promotional_revenue": 500.0,
+        "total_cogs": 225.0,
+        "additional_expenses": 35.0,
+        "net_gross_profit": 240.0,
+        "net_gross_margin_pct": 48.0,
+        "effective_discount_pct": 28.57,
+        "margin_protected": false,
+        "verdict": "DİKKAT: Brüt marj %35-%50 bandında; yalnızca yüksek hacimli kitle edinimi için sınırlı süreyle uygulanabilir."
+      },
+      "bundle_simulation": {
+        "promotion_type": "CROSS_DISCOUNT",
+        "headline": "Çapraz Satış Paketi (%10 İndirimli Tamamlayıcı Ürün)",
+        "normal_revenue": 700.0,
+        "promotional_revenue": 680.0,
+        "total_cogs": 245.0,
+        "additional_expenses": 0.0,
+        "net_gross_profit": 435.0,
+        "net_gross_margin_pct": 63.97,
+        "effective_discount_pct": 2.86,
+        "margin_protected": true,
+        "verdict": "Sepet genişletici bundle (%10 indirim). Net Marj: %64.0. Başarılı çapraz satış yapısı."
+      },
+      "cart_thresholds": {
+        "current_aov": 500.0,
+        "currency": "₺",
+        "tier_1_free_shipping": {
+          "multiplier": 1.25,
+          "threshold_amount": 620.0,
+          "rationale": "Sepeti ₺620 üzerine çıkararak kargo maliyetini sübvanse eden psikolojik eşik."
+        },
+        "tier_2_tiered_gift": {
+          "multiplier": 1.5,
+          "threshold_amount": 750.0,
+          "rationale": "Sepeti ₺750 üzerine çıkararak yüksek marjlı AOV basamağı oluşturan hediye eşiği."
+        }
+      }
+    }
+  },
+  "advanced_economics": {
+    "ltv_payback": {
+      "aov": 850.0,
+      "purchase_frequency_annual": 3.2,
+      "gross_margin_pct": 55.0,
+      "annual_churn_rate_pct": 30.0,
+      "cac": 297.5,
+      "ltv": 4986.67,
+      "ltv_to_cac_ratio": 16.76,
+      "payback_period_months": 2.39,
+      "health_status": "UNDERINVESTING",
+      "strategic_recommendation": "DÜŞÜK YATIRIM: LTV:CAC > 5.0. Büyüme fırsatı kaçırılıyor; daha agresif pazar payı kazanımı için CAC toleransı ve reklam bütçesi yükseltilmeli."
+    },
+    "contribution_margins": {
+      "revenue": 850.0,
+      "cogs": 382.5,
+      "logistics_and_shipping": 55.0,
+      "payment_gateway_fee": 21.25,
+      "ad_spend": 212.5,
+      "cm1_gross_profit": 467.5,
+      "cm1_pct": 55.0,
+      "cm2_operational_profit": 391.25,
+      "cm2_pct": 46.03,
+      "cm3_contribution_profit": 178.75,
+      "cm3_pct": 21.03,
+      "is_unit_profitable": true,
+      "verdict": "SAĞLIKLI: Pazarlama sonrası birim kârlılık yüksek (%21.0). Kampanya ölçeklenebilir."
+    },
+    "ncac_analysis": {
+      "total_ad_spend": 100000.0,
+      "total_orders": 336,
+      "new_customers": 280,
+      "returning_customers": 56,
+      "blended_cac": 297.62,
+      "ncac": 357.14,
+      "new_customer_order_ratio_pct": 83.33,
+      "organic_cannibalization_risk": false,
+      "channel_efficiency_rating": "DENGELİ EDİNİM: Yeni müşteri maliyeti kabul edilebilir oranda; edinim motoru yeni kitleye ulaşıyor."
+    },
+    "testing_budget_322": {
+      "cpm": 45.0,
+      "expected_ctr_pct": 1.8,
+      "expected_cvr_pct": 2.5,
+      "target_conversions_per_variant": 30,
+      "variant_count": 7,
+      "required_clicks_per_variant": 1200,
+      "required_impressions_per_variant": 66666,
+      "spend_per_variant": 2999.97,
+      "total_testing_budget_needed": 20999.79,
+      "testing_duration_days": 7,
+      "recommended_daily_budget": 2999.97,
+      "testing_protocol_notes": "3:2:2 Test Protokolü: 7 varyantın her biri için 30 dönüşüm (~1200 tıklama, ~66666 gösterim) hedeflenir. 7 günde tamamlamak için günlük ₺2999.97 test hücresi tahsis edilmelidir."
+    },
+    "discount_breakeven": {
+      "gross_margin_pct": 55.0,
+      "discount_pct": 15.0,
+      "current_orders": 336,
+      "current_aov": 850.0,
+      "discounted_aov": 722.5,
+      "required_volume_increase_pct": 37.5,
+      "break_even_order_count": 462,
+      "original_gross_profit": 157080.0,
+      "discounted_gross_profit_at_breakeven": 157080.0,
+      "margin_preserved": true,
+      "verdict": "DİKKAT: Brüt kârı korumak için sipariş hacmi +%37.5 (462 sipariş) artmalıdır. Talep esnekliği (price elasticity) yüksek değilse kâr erimesi yaşanabilir."
+    },
+    "poas_net_profit": {
+      "gross_revenue": 285600.0,
+      "ad_spend": 35000.0,
+      "cogs": 128520.0,
+      "logistics_and_shipping": 18480.0,
+      "packaging_and_handling": 0.0,
+      "payment_gateway_rate_pct": 2.8,
+      "payment_gateway_fee": 7996.8,
+      "return_refund_rate_pct": 7.5,
+      "refund_amount": 21420.0,
+      "net_revenue": 264180.0,
+      "net_gross_profit": 135660.0,
+      "net_operational_profit": 109183.2,
+      "net_profit_after_ads": 74183.2,
+      "poas": 3.12,
+      "blended_roas": 8.16,
+      "net_margin_pct": 25.97,
+      "is_profitable": true,
+      "currency": "₺",
+      "verdict": "MÜKEMMEL POAS (3.12x): Reklam harcaması tüm iade, komisyon ve lojistik maliyetlerini karşılayıp güçlü net nakit akışı (%26.0) üretiyor."
+    },
+    "mer_attribution": {
+      "total_net_revenue": 264180.0,
+      "total_ad_spend": 100000.0,
+      "blended_mer": 2.64,
+      "channel_reported_revenues": {
+        "Meta ASC": 220000.00000000003,
+        "Google PMax": 180000.0,
+        "TikTok Spark": 60000.0
+      },
+      "sum_reported_revenue": 460000.0,
+      "attribution_overlap_factor": 1.74,
+      "overreporting_pct": 74.1,
+      "efficiency_tier": "MONITOR_CLOSELY",
+      "strategic_directive": "DİKKAT MER: Başa başa yakın seviye. Kreatif yorgunluğu ve kanal yamyamlığı denetlenmeli; bütçe artışı durdurulmalı."
+    },
+    "budget_pacing": {
+      "monthly_budget": 100000.0,
+      "days_elapsed": 12,
+      "days_in_month": 30,
+      "current_spend": 41000.0,
+      "expected_spend_to_date": 40000.0,
+      "actual_daily_burn": 3416.67,
+      "target_daily_budget": 3333.33,
+      "projected_end_of_month_spend": 102500.06,
+      "pacing_ratio": 1.025,
+      "pacing_status": "ON_TRACK",
+      "recommended_adjusted_daily_budget": 3277.78,
+      "currency": "₺",
+      "actionable_recommendation": "TAM HEDEFTE: Harcama hızı ideal koridorda (%102.5). Ay sonu tahmini: ₺102500.06."
+    },
+    "ab_test_significance": {
+      "visitors_control": 5000,
+      "conversions_control": 120,
+      "cvr_control_pct": 2.4,
+      "visitors_variant": 5000,
+      "conversions_variant": 165,
+      "cvr_variant_pct": 3.3,
+      "relative_lift_pct": 37.5,
+      "z_score": 2.7044,
+      "p_value": 0.0068,
+      "confidence_level_pct": 95.0,
+      "is_statistically_significant": true,
+      "winner": "VARIANT",
+      "verdict": "KAZANAN VARYANT: Test %95 güvenle istatistiki olarak anlamlıdır (Z=2.70, p=0.0068). Varyant dönüşümde +%37.5 artış sağladı; kalıcı olarak yayına alınmalıdır."
+    }
+  },
+  "technical_seo_deep_audit": {
+    "schema_org": {
+      "has_json_ld": false,
+      "schema_types_detected": [],
+      "detected_schemas_detail": [],
+      "valid_product_schema": false,
+      "missing_product_fields": [],
+      "valid_organization_schema": false,
+      "has_breadcrumbs": false,
+      "has_faq_page": false,
+      "schema_health_score": 0,
+      "rich_results_eligibility": [],
+      "recommendations": [
+        "Ürün sayfalarında Product JSON-LD şeması tanımlanmalı (Fiyat, Stok, SKU, Görsel).",
+        "Organization / LocalBusiness şeması eklenerek kurumsal itibar ve Google Harita eşleşmesi güçlendirilmeli.",
+        "BreadcrumbList şeması eklenerek SERP tıklama oranı (CTR) artırılmalı."
+      ]
+    },
+    "core_web_vitals": {
+      "cwv_score": 75,
+      "lcp_risk": "Needs Improvement",
+      "inp_risk": "Good",
+      "cls_risk": "Good",
+      "render_blocking_scripts_count": 0,
+      "render_blocking_stylesheets_count": 0,
+      "missing_lazy_load_count": 0,
+      "missing_dimensions_img_count": 0,
+      "missing_font_swap_count": 0,
+      "viewport_tag_found": false,
+      "estimated_dom_depth": 8,
+      "diagnostic_checklist": [
+        "KRİTİK: Mobil Viewport meta etiketi eksik! Mobil ekranlarda bozulma yaşanır."
+      ]
+    },
+    "indexability": {
+      "indexability_score": 90,
+      "is_indexable": true,
+      "meta_robots": null,
+      "noindex_detected": false,
+      "nofollow_detected": false,
+      "canonical_url": "https://canivopets.com",
+      "canonical_status": "Valid Self-Referencing",
+      "has_og_title": false,
+      "has_og_image": false,
+      "has_og_description": false,
+      "has_twitter_card": false,
+      "hreflang_languages": [],
+      "sitemap_link_detected": false,
+      "warnings": [
+        "og:image etiketi eksik; sosyal medya paylaşımlarında ve WhatsApp önizlemelerinde görsel çıkmaz."
+      ]
+    },
+    "semantic_clusters": {
+      "total_words": 13,
+      "text_to_html_ratio_pct": 34.78,
+      "dominant_topics": [
+        {
+          "term": "canivo",
+          "count": 2
+        },
+        {
+          "term": "pets",
+          "count": 2
+        },
+        {
+          "term": "resmi",
+          "count": 1
+        },
+        {
+          "term": "web",
+          "count": 1
+        },
+        {
+          "term": "sitesi",
+          "count": 1
+        }
+      ],
+      "top_ngrams": {
+        "unigrams": [
+          "canivo",
+          "pets",
+          "resmi",
+          "web",
+          "sitesi"
+        ],
+        "bigrams": [
+          "canivo pets",
+          "pets resmi",
+          "resmi web",
+          "web sitesi",
+          "sitesi canivo"
+        ]
+      },
+      "keyword_stuffing_detected": false,
+      "keyword_dilution_detected": true,
+      "recommended_pillar_concept": "Kapsamlı Canivo Rehberi ve Satın Alma Standartları (Pillar Content)",
+      "proposed_cluster_articles": [
+        "Canivo Seçerken Dikkat Edilmesi Gereken 7 Kritik Unsur",
+        "En İyi Canivo Modelleri ve Kullanıcı Deneyimi İncelemesi",
+        "Canivo Bakımı, Ömrünü Uzatma ve Doğru Kullanım İpuçları"
+      ]
+    },
+    "security_and_privacy": {
+      "security_score": 10,
+      "has_csp": false,
+      "csp_details": "CSP (Content-Security-Policy) eksik; üçüncü taraf script enjeksiyonuna açık.",
+      "has_hsts": false,
+      "has_x_frame_options": false,
+      "has_referrer_policy": false,
+      "consent_mode_v2_detected": false,
+      "consent_mode_details": "Google Consent Mode v2 eksik! Avrupa ve küresel gizlilik yasaları gereği reklam dönüşüm modellemesi kaybı riski.",
+      "cookie_banner_detected": false,
+      "kvkk_gdpr_detected": false,
+      "security_warnings": [
+        "Güvenlik: Content-Security-Policy (CSP) başlığı tanımlanmamış.",
+        "SSL/TLS: HSTS başlığı eksik; HTTPS zorunlu kılınmalı (max-age=31536000).",
+        "Clickjacking: X-Frame-Options başlığı eksik (DENY veya SAMEORIGIN önerilir).",
+        "MarTech Uyarısı: Google Consent Mode v2 kurulu değil (P0 - Veri kaybı riski).",
+        "Hukuk/KVKK: Çerez onay banner'ı tespit edilemedi (Yasal idari para cezası riski).",
+        "Hukuk: KVKK Aydınlatma Metni veya Gizlilik Politikası bağlantısı footer'da bulunamadı."
+      ]
+    },
+    "ecommerce_cro": {
+      "cro_score": 45,
+      "friction_tier": "SEVERE_FRICTION",
+      "sticky_cta_detected": false,
+      "express_checkout_detected": false,
+      "express_methods": [],
+      "guest_checkout_accessible": false,
+      "checkout_form_input_count": 0,
+      "trust_badges_detected": [],
+      "friction_flags": [
+        "Mobil Yapışkan CTA (Sticky Add-to-Cart) eksik.",
+        "1-Tıkla Hızlı Ödeme (Express Checkout) altyapısı bulunamadı.",
+        "Sosyal kanıt ve güven rozetleri (İade/SSL/Kargo garantisi) yetersiz."
+      ],
+      "actionable_recommendations": [
+        "Kullanıcı sayfayı kaydırdığında ekranın altına sabitlenen 'Sepete Ekle' barı eklenmeli (CVR +%18).",
+        "Masterpass veya Apple/Google Pay entegrasyonuyla ödeme sürtünmesi düşürülmeli.",
+        "Sepet ve ödeme butonunun hemen altına güven rozetleri (14 Gün İade, 3D Secure, SSL) yerleştirilmeli."
+      ]
+    },
+    "serp_features": {
+      "featured_snippet_readiness": "LOW",
+      "featured_snippet_candidates": [],
+      "paa_question_count": 0,
+      "paa_questions_detected": [],
+      "rich_merchant_readiness": "NOT_ELIGIBLE",
+      "sitelinks_searchbox_eligible": false,
+      "serp_opportunity_score": 0,
+      "optimization_roadmap": [
+        "Sayfa sonuna 'Sıkça Sorulan Sorular' akordeonu ve FAQPage şeması eklenerek PAA görünürlüğü hedeflenmeli.",
+        "40-55 kelimelik net tanım paragrafları veya adımlı `<ol>` listeleri eklenerek Sıfırıncı Sıra (Featured Snippet) hedeflenmeli.",
+        "Ürün detay sayfalarına Product ve AggregateOffer JSON-LD şemaları eklenmelidir."
+      ]
+    }
+  },
+  "campaign_architecture": {
+    "relational_campaigns": {
+      "bogo": {
+        "name": "Canivo Pets İkili Fırsat - Hediye Ürün Avantajı",
+        "mechanic": "X alana Y bedava",
+        "primary_product": "Amiral Ürün",
+        "free_product": "Tamamlayıcı Ürün",
+        "margin_impact": "Düşük maliyetli tamamlayıcı ürün liste fiyatıyla sübvanse edilerek brüt marj korunur.",
+        "slogan": "Amiral Ürün Alana Tamamlayıcı Ürün Bedava Hediye!"
+      },
+      "cross_discount": {
+        "name": "Canivo Pets Çapraz Sepet Genişletme Paketi",
+        "mechanic": "X alana Y %10 indirimli",
+        "discount_percent": 10,
+        "primary_product": "Amiral Ürün",
+        "discounted_product": "Tamamlayıcı Ürün",
+        "promotional_angle": "Sepet derinliğini ve ortalama sipariş tutarını artırma.",
+        "bundled_savings": "Birlikte alımda sepette %10 tasarruf avantajı."
+      },
+      "cart_threshold": {
+        "name": "Canivo Pets Ücretsiz Kargo & Sepet Teşvik Kampanyası",
+        "mechanic": "675.0 ₺ üzeri alışverişlerde kargo bedava ve hediye",
+        "threshold_amount": 675.0,
+        "currency": "₺",
+        "slogan": "675 ₺ ve Üzeri Alışverişlerde Kargo Bedava!",
+        "estimated_aov_lift": "%25 AOV Sepet Artışı Öngörüsü"
+      },
+      "vip_subscription": {
+        "name": "Canivo Pets VIP Sadakat Kulübü",
+        "mechanic": "VIP üyelere sabit indirim ve öncelikli kargo",
+        "discount_percent": 15,
+        "slogan": "Ayrıcalıklı Alışverişin Adresi"
+      }
+    },
+    "multichannel_ad_plans": {
+      "google_search_ads": {
+        "ad_type": "Responsive Search Ads (RSA)",
+        "headlines": [
+          "Canivo Pets Resmi Sitesi",
+          "Yeni Sezon Canivo Pets",
+          "Özel Ürün Fırsatı",
+          "Aynı Gün Hızlı Kargo",
+          "Orijinal Ürün Garantisi",
+          "Sepette Anında İndirim"
+        ],
+        "descriptions": [
+          "Canivo Pets koleksiyonunu keşfedin. Kalite ve konfor burada.",
+          "Güvenli ödeme ve 14 gün koşulsuz iade avantajıyla hemen sipariş verin.",
+          "Kaçırılmayacak Canivo Pets fırsatları stoklarla sınırlıdır. Hemen alın."
+        ],
+        "negative_keywords": [
+          "ücretsiz",
+          "bedava",
+          "crack",
+          "torrent",
+          "ikinci el",
+          "sahibinden",
+          "iş ilanları",
+          "kariyer",
+          "staj",
+          "şikayet",
+          "ekşi",
+          "hile",
+          "sahte",
+          "çakma"
+        ]
+      },
+      "meta_ads": {
+        "hook": "Hala sıradan ürünlerle vakit mi kaybediyorsunuz? Canivo Pets ile tanışma zamanı geldi!",
+        "carousel_cards": [
+          {
+            "card_number": 1,
+            "headline": "Canivo Pets Amiral Ürün",
+            "caption": "En çok satan favori model.",
+            "cta": "Hemen İncele"
+          },
+          {
+            "card_number": 2,
+            "headline": "Tamamlayıcı Avantaj",
+            "caption": "Birlikte alımda sepette ek indirim.",
+            "cta": "Sepete Ekle"
+          },
+          {
+            "card_number": 3,
+            "headline": "Hediye & Hızlı Kargo",
+            "caption": "Eşik üzeri siparişlerde kargo hediye.",
+            "cta": "Fırsatı Yakala"
+          }
+        ],
+        "ugc_scenario": {
+          "hook_0_3s": "İçerik üreticisi kutuyu heyecanla kameraya gösterir: 'Bunu internette görüp duruyordum!'",
+          "problem_3_8s": "Eski kalitesiz alternatiflerin yarattığı hayal kırıklığı vurgulanır.",
+          "solution_8_15s": "Kutu açılır ve Canivo Pets kalitesi, dokusu yakın çekimle net şekilde gösterilir.",
+          "demo_15_25s": "Ürünün günlük hayatta rahat ve şık kullanımı canlı olarak sergilenir.",
+          "cta_25_30s": "Aşağıdaki bağlantıya tıklayın ve Canivo Pets özel hediyenizi kaçırmayın!"
+        }
+      },
+      "tiktok_reels_ads": {
+        "hook": "POV: 2026'da hala eski yöntemleri kullanıyorsundur...",
+        "trend_concept": "Hızlı tempolu viral ses ve eğlenceli split-screen tepki formatı",
+        "script_breakdown": [
+          {
+            "timing": "0-3 sn",
+            "visual": "Parmak şıklatma ve şaşkın yüz ifadesi",
+            "audio": "Trend drop beat"
+          },
+          {
+            "timing": "3-8 sn",
+            "visual": "Ürünün merkezde estetik dönüşü",
+            "audio": "Bunu mutlaka denemelisiniz"
+          },
+          {
+            "timing": "8-15 sn",
+            "visual": "Sonuç ve gülümseme",
+            "audio": "Link profilde, acele edin!"
+          }
+        ],
+        "cta": "Hemen bio'daki linke tıkla ve avantajlı paketini al!"
+      }
+    },
+    "meta_asc_blueprint": {
+      "campaign_name": "[ASC] - Canivo Pets - Satış & Yeni Müşteri Büyümesi",
+      "campaign_objective": "OUTCOME_SALES",
+      "budget_optimization": "Advantage Campaign Budget (CBO)",
+      "allocated_monthly_budget": 55000.00000000001,
+      "existing_customer_budget_cap_pct": 5.0,
+      "attribution_setting": "7-day click or 1-day view",
+      "creative_mix": [
+        {
+          "format": "DPA / Dynamic Product Ads",
+          "share_pct": 25.0,
+          "role": "Dinamik katalog sepet tamamlama ve kişiselleştirilmiş ürün gösterimi."
+        },
+        {
+          "format": "Statik Değer & Sosyal Kanıt",
+          "share_pct": 25.0,
+          "role": "Yıldızlı müşteri yorumları, basın kupürleri ve %100 memnuniyet güvencesi."
+        },
+        {
+          "format": "Kurucu / Uzman Anlatımı",
+          "share_pct": 20.0,
+          "role": "Marka hikayesi, üretim kalitesi ve neden daha iyi olduğunun açıklaması."
+        },
+        {
+          "format": "UGC Kutu Açılımı / Demo",
+          "share_pct": 30.0,
+          "role": "Kullanıcı deneyimi, problem-çözüm videosu ve doğrudan teklif."
+        }
+      ],
+      "suggested_ad_angles": [
+        {
+          "angle": "Problem-Çözüm",
+          "hook": "Sıradan ürünlerden bıktınız mı? Canivo Pets ile tanışın."
+        },
+        {
+          "angle": "Sosyal Kanıt & İnceleme",
+          "hook": "Binlerce mutlu müşterinin tercihi Koleksiyon neden bu kadar popüler?"
+        },
+        {
+          "angle": "Kıtlık / Özel Teklif",
+          "hook": "Sınırlı stok! İlk siparişinize özel sepette anında indirim fırsatını kaçırmayın."
+        }
+      ],
+      "scaling_rules": "48 saatte bir en fazla %20 bütçe artışı."
+    },
+    "google_pmax_blueprint": {
+      "campaign_name": "[PMAX] - Canivo Pets - Tüm Kanallar Performans",
+      "target_roas_pct": 260.0,
+      "allocated_monthly_budget": 30000.0,
+      "asset_group_name": "Canivo Pets - Çok Satanlar & Hero SKU",
+      "final_url": "https://canivopets.com",
+      "short_headlines": [
+        "Canivo Pets Resmi Sitesi",
+        "Premium Ürünler Modelleri",
+        "Güvenli ve Hızlı Teslimat",
+        "En Çok Satan Koleksiyon",
+        "Aynı Gün Kargo Fırsatı",
+        "14 Gün Kolay İade",
+        "Orijinal Ürün Garantisi",
+        "Sezon İndirimleri Başladı",
+        "Sepette Ek İndirim",
+        "Hemen Sipariş Verin"
+      ],
+      "long_headlines": [
+        "Canivo Pets Resmi Web Sitesinde Yüzlerce Ürün ve Özel Fırsatlar",
+        "Premium Ürünler ile Kaliteyi Deneyimleyin: Ücretsiz Kargo Avantajıyla Hemen Alın",
+        "Türkiye'nin Güvenilir Markası Canivo Pets: %100 Müşteri Memnuniyeti",
+        "En Yeni Sezon Koleksiyonu ve Kampanyalı Fiyatlarla Güvenli Alışveriş",
+        "Sepet Eşiklerine Özel Hediye ve İndirim Fırsatlarıyla Şimdi Keşfedin"
+      ],
+      "descriptions": [
+        "Canivo Pets kalitesiyle tanışın. Yüksek müşteri memnuniyeti ve güvenli ödeme.",
+        "Premium Ürünler ve tüm koleksiyon resmi web sitemizde. Hızlı kargo ile kapınızda.",
+        "Güvenli alışveriş, taksit imkanları ve kolay iade garantisiyle hemen sipariş verin.",
+        "Özel kampanyalar, sepet indirimleri ve hediye fırsatlarını kaçırmayın."
+      ],
+      "search_themes": [
+        "Canivo Pets online satış",
+        "en iyi premium ürünler",
+        "premium ürünler fiyatları",
+        "Canivo Pets indirim kampanyası",
+        "güvenilir online alışveriş"
+      ],
+      "audience_signals": {
+        "first_party": [
+          "Son 180 Gün Alıcıları (Customer Match)",
+          "GA4 Tüm Ziyaretçiler"
+        ],
+        "custom_intent": [
+          "Canivo Pets",
+          "satın al premium ürünler",
+          "en iyi markalar"
+        ],
+        "in_market": [
+          "Alışveriş / Giyim / Aksesuar / E-Ticaret"
+        ]
+      },
+      "brand_exclusion_applied": true
+    },
+    "google_demand_gen_blueprint": {
+      "campaign_name": "Canivo Pets - Google Demand Gen (Shorts & Discover)",
+      "monthly_budget": 15000.0,
+      "target_channels": [
+        "YouTube Shorts",
+        "YouTube In-Stream",
+        "Google Discover",
+        "Gmail"
+      ],
+      "short_headlines": [
+        "Canivo Pets Yeni Sezon",
+        "Koleksiyon Keşfet",
+        "Canivo Pets Özel Fırsatlar",
+        "Hızlı ve Ücretsiz Kargo",
+        "Hemen Sipariş Ver"
+      ],
+      "long_headlines": [
+        "Canivo Pets ile tarzınızı ve konforunuzu en üst seviyeye taşıyın.",
+        "Özel tasarım Koleksiyon ve çok daha fazlası avantajlı fiyatlarla.",
+        "İlk siparişinize özel indirim ve ayrıcalıklı müşteri deneyimi."
+      ],
+      "descriptions": [
+        "Trend modeller, yüksek kalite standartları ve güvenli ödeme Canivo Pets'de.",
+        "Hemen sepetinizi oluşturun, aynı gün kargo avantajını kaçırmayın.",
+        "Müşteri memnuniyeti garantisi ve 14 gün ücretsiz iade imkanıyla alışverişe başlayın."
+      ],
+      "video_assets": [
+        {
+          "aspect_ratio": "9:16 (Shorts / Reels)",
+          "duration": "15-30s",
+          "role": "Dikey mobil keşif ve ilk 3 saniye kanca odaklı video"
+        },
+        {
+          "aspect_ratio": "16:9 (Landscape)",
+          "duration": "30-60s",
+          "role": "YouTube ana sayfa ve in-stream marka hikayesi videosu"
+        },
+        {
+          "aspect_ratio": "1:1 (Square)",
+          "duration": "15s",
+          "role": "Discover akışı ürün odaklı video"
+        }
+      ],
+      "image_assets": [
+        {
+          "format": "1.91:1 Landscape",
+          "role": "Google Discover ve Gmail tanıtım bannerı"
+        },
+        {
+          "format": "1:1 Square",
+          "role": "Ürün vitrin karesi"
+        },
+        {
+          "format": "4:5 Portrait",
+          "role": "Mobil tam ekran görseli"
+        }
+      ],
+      "lookalike_segments": [
+        {
+          "tier": "Narrow (%1-%2)",
+          "seed": "First-Party 180 Günlük Alıcılar",
+          "objective": "En yüksek dönüşüm verimliliği"
+        },
+        {
+          "tier": "Balanced (%2-%5)",
+          "seed": "Sepete Ekleyenler ve Yüksek Oturum Süresi",
+          "objective": "Dengeli ölçekleme"
+        },
+        {
+          "tier": "Broad (%5-%10)",
+          "seed": "Pazar İçi (In-Market) Alışverişçiler",
+          "objective": "Maksimum erişim ve pazar payı"
+        }
+      ],
+      "call_to_action": "Şimdi İncele",
+      "bidding_strategy": "Maximize Conversions (Target CPA)"
+    },
+    "creative_hook_swap_package": {
+      "campaign_name": "Canivo Pets - Hook Swap Kreatif Yenileme Paketi",
+      "winning_creative_id": "Kazanan UGC Video",
+      "winning_body_core_concept": "Canivo Pets ürünümüz Değer Önerisi ve Çözüm Gösterimi",
+      "fatigue_indicators_triggered": [
+        "Sıklık (Frequency) 7 günlük dönemde > 3.2 seviyesinde.",
+        "Tıklama Oranı (CTR) son 3 günde %25'ten fazla düşüş gösterdi.",
+        "Thumbstop Rate (İlk 3 saniye izleme oranı) %25'in altına indi."
+      ],
+      "hook_variants": [
+        {
+          "angle": "Merak & Kalıp Kırıcı (Curiosity / Pattern Interrupt)",
+          "hook_title": "Kimsenin Bahsetmediği Basit Sır",
+          "headline_text": "Bunu kimse bilmenizi istemiyor ama... 🤫",
+          "visual_action": "Kameraya gizemli yaklaşma, ani ses kısılması ve ekran zoom-in efekti.",
+          "voiceover_script": "Eğer siz de aylardır ürünümüz arayışındaysanız, bilmeniz gereken tek bir gerçek var."
+        },
+        {
+          "angle": "Negatif Uyarı (Negative / Warning)",
+          "hook_title": "Bunu Yapmayı Hemen Bırakın",
+          "headline_text": "2026'da hala eski yöntemleri kullanıyorsanız durun! 🛑",
+          "visual_action": "Eski kalitesiz yöntemin kırmızı çarpı ile durdurulması.",
+          "voiceover_script": "Paranızı ve zamanınızı çöpe atmayı bırakın. Bu hatayı neredeyse herkes yapıyor."
+        },
+        {
+          "angle": "Kronik Acı / Problem (Pain-Point Question)",
+          "hook_title": "Siz de Bu Sorundan Bıktınız mı?",
+          "headline_text": "Her gün bu sorunla uğraşmaktan yorulmadınız mı?",
+          "visual_action": "Kullanıcının yaşadığı sıkıntılı anın gerçekçi ve filtresiz canlandırılması.",
+          "voiceover_script": "Sürekli aynı hüsranı yaşamaktan yorulduysanız, Canivo Pets ile tanışma vaktiniz geldi."
+        },
+        {
+          "angle": "Müşteri İtirafı (Social Proof / Customer Confession)",
+          "hook_title": "Başta İnanmamıştım Ama...",
+          "headline_text": "3. günde şok oldum! Neden herkesin bunu konuştuğunu anladım 😱",
+          "visual_action": "Doğal selfie açısıyla kutu açılımı ve hayran kalma reaksiyonu.",
+          "voiceover_script": "Sosyal medyada sürekli görüyordum, abartıldığını sanmıştım. Denedikten sonra tüm fikrim değişti."
+        },
+        {
+          "angle": "Dönüşüm / Öncesi-Sonrası (Transformation)",
+          "hook_title": "Eski Durum vs Yeni Durum",
+          "headline_text": "Aralarındaki farka inanamayacaksınız! ✨",
+          "visual_action": "Bölünmüş ekran (Split-screen) ile anlık dramatik sonuç kıyaslaması.",
+          "voiceover_script": "Sadece 1 haftalık kullanımdan sonra ortaya çıkan farka siz de şaşıracaksınız."
+        }
+      ],
+      "recommended_test_duration_days": 5,
+      "actionable_testing_protocol": "Hook-Swap Test Protokolü: Kazanan videonun gövdesi (Problem, Çözüm, Demo, CTA) birebir korunarak bu 5 kanca ayrı test setlerinde 5 gün boyunca eşit bütçeyle yarıştırılır. En yüksek Thumbstop ve en düşük CPA getiren 2 varyant ana ölçekleme kampanyasına taşınır."
+    },
+    "agency_onboarding_sla": {
+      "brand_name": "Canivo Pets",
+      "target_launch_date": "Lansman: Onboarding Sonrası 8. Gün",
+      "milestones": [
+        {
+          "day_range": "1 - 3. Gün",
+          "phase_name": "Varlık Erişimi ve Yetkilendirme",
+          "sla_gate": "Erişim Kapısı",
+          "deliverables": [
+            "Meta Business Manager ortaklık bağlantısı (Pixel, Katalog, Sayfa, Reklam Hesabı).",
+            "Google Ads MCC bağlantısı, GA4 ve Search Console yönetici yetkileri.",
+            "E-ticaret altyapısı salt okunur veri erişimi ve Klaviyo CRM API anahtarları."
+          ],
+          "status": "TAMAMLANDI"
+        },
+        {
+          "day_range": "4 - 7. Gün",
+          "phase_name": "Adli Altyapı ve MarTech Denetimi",
+          "sla_gate": "Veri Güvenliği Kapısı (Data Gate)",
+          "deliverables": [
+            "GTM Server-side (sGTM) ve GA4 e-ticaret purchase veri katmanı doğrulaması.",
+            "Meta Conversions API (CAPI) sunucu tekilleştirmesi (event_id) testi (EMQ >= 8.0).",
+            "COGS, kargo, ambalaj ve POS maliyetleriyle Breakeven ROAS ve Target ROAS sözleşmesi."
+          ],
+          "status": "TAMAMLANDI"
+        },
+        {
+          "day_range": "8 - 14. Gün",
+          "phase_name": "Kreatif Üretimi, 3:2:2 Test ve Lansman",
+          "sla_gate": "Teknik Trafik Kapısı (CRO Gate)",
+          "deliverables": [
+            "3:2:2 Dynamic Creative test paketlerinin hazırlanması ve yayına alınması.",
+            "BOGO veya sepet teşvik basamaklarının (kargo/hediye eşikleri) siteye tanımlanması.",
+            "PMax varlık grupları, negatif anahtar kelime kalkanı ve Klaviyo terk edilmiş sepet akışları."
+          ],
+          "status": "BEKLEMEDE"
+        },
+        {
+          "day_range": "15 - 30. Gün",
+          "phase_name": "Haftalık Büyüme Sprintleri ve Ölçekleme",
+          "sla_gate": "Ölçekleme Kapısı (Scaling Gate)",
+          "deliverables": [
+            "Pazartesi-Cuma haftalık sprint ritmi: Bütçe pacing kontrolü ve yorgun kreatif rotasyonu.",
+            "Kazanan kancaların Post ID ile Meta ASC ve PMax ana kampanyalarına aktarılması.",
+            "Looker Studio gerçek zamanlı ciro, MER ve POAS panosunun teslimi."
+          ],
+          "status": "BEKLEMEDE"
+        }
+      ],
+      "fail_closed_rules": [
+        "Veri Güvenliği Kuralı: GA4 ve Meta CAPI tekilleştirmesi doğrulanmadan hiçbir reklam yayına alınamaz.",
+        "Kârlılık Kuralı: Breakeven ROAS ve CM3 hesaplanmadan bütçe girilemez.",
+        "CRO Kuralı: Mobil LCP > 3.5s veya ödeme adımı bozuk olan sayfalara doğrudan ücretli trafik yönlendirilemez.",
+        "Bütçe Artış Kuralı: Dikey ölçeklemede bütçe 48 saatte bir en fazla %20 artırılır."
+      ]
+    },
+    "retention_flows": [
+      {
+        "flow_name": "Hoş Geldin Serisi (Welcome Nurture)",
+        "trigger_event": "Bülten / Pop-up Aboneliği",
+        "steps": [
+          {
+            "delay": "Anında",
+            "channel": "Email",
+            "subject": "Aramıza Hoş Geldiniz! İlk siparişinize özel %10 indirim kodunuz burada.",
+            "action": "%10 Hoş geldin kuponu"
+          },
+          {
+            "delay": "24 Saat",
+            "channel": "Email",
+            "subject": "Canivo Pets Neden Farklı? Kurucumuzdan özel bir mesaj.",
+            "action": "Marka hikayesi ve değerler"
+          },
+          {
+            "delay": "48 Saat",
+            "channel": "Email",
+            "subject": "Müşterilerimiz en çok neyi seviyor? Çok satanları keşfedin.",
+            "action": "Sosyal kanıt ve 5 yıldızlı yorumlar"
+          },
+          {
+            "delay": "72 Saat",
+            "channel": "SMS",
+            "subject": "Canivo Pets: Hoş geldin indirim kodunuz bu gece sona eriyor! [Link]",
+            "action": "Aciliyet ve sepet tamamlama"
+          }
+        ],
+        "projected_revenue_contribution_pct": 12.0
+      },
+      {
+        "flow_name": "Terk Edilen Sepet / Ödeme (Cart & Checkout Abandonment)",
+        "trigger_event": "Sepete Ekleme veya Ödeme Başlatıp Ayrılma",
+        "steps": [
+          {
+            "delay": "1 Saat",
+            "channel": "Email",
+            "subject": "Sepetinizdeki ürünler sizi bekliyor!",
+            "action": "Sepet linki hatırlatma"
+          },
+          {
+            "delay": "12 Saat",
+            "channel": "SMS",
+            "subject": "Canivo Pets: Sepetinizdeki ürünler tükenmek üzere. Ücretsiz kargo ile tamamlayın: [Link]",
+            "action": "Kargo bedava teşviki"
+          },
+          {
+            "delay": "24 Saat",
+            "channel": "Email",
+            "subject": "Hala karar veremediniz mi? İşte bu ürünü alanların yorumları.",
+            "action": "Sosyal kanıt ve SSS"
+          },
+          {
+            "delay": "48 Saat",
+            "channel": "Email",
+            "subject": "Sepetiniz için son şans: %5 sürpriz indirim eklendi!",
+            "action": "Marj korumalı indirim"
+          }
+        ],
+        "projected_revenue_contribution_pct": 18.0
+      },
+      {
+        "flow_name": "Satın Alma Sonrası VIP Sadakat (Post-Purchase Cross-Sell)",
+        "trigger_event": "Başarılı Sipariş Tamamlama",
+        "steps": [
+          {
+            "delay": "Anında",
+            "channel": "Email",
+            "subject": "Siparişiniz Alındı! Hazırlık aşamalarını buradan izleyebilirsiniz.",
+            "action": "Kargo takibi ve teşekkür"
+          },
+          {
+            "delay": "7 Gün",
+            "channel": "Email",
+            "subject": "Ürününüzü en iyi şekilde kullanma rehberi.",
+            "action": "Eğitim ve bakım ipuçları"
+          },
+          {
+            "delay": "14 Gün",
+            "channel": "Email",
+            "subject": "Deneyiminizi paylaşın, bir sonraki siparişinizde 100 TL puan kazanın!",
+            "action": "Fotoğraflı yorum toplama"
+          },
+          {
+            "delay": "21 Gün",
+            "channel": "Email",
+            "subject": "Aldığınız ürünü mükemmel tamamlayan özel parçalar.",
+            "action": "Kişiselleştirilmiş çapraz satış"
+          }
+        ],
+        "projected_revenue_contribution_pct": 10.0
+      },
+      {
+        "flow_name": "60 Gün Geri Kazanım (Win-Back & Reactivation)",
+        "trigger_event": "Son Siparişten 60 Gün Geçmesi",
+        "steps": [
+          {
+            "delay": "60 Gün",
+            "channel": "Email",
+            "subject": "Sizi Özledik! Canivo Pets'de yeni neler var?",
+            "action": "Yeni sezon tanıtımı"
+          },
+          {
+            "delay": "67 Gün",
+            "channel": "SMS",
+            "subject": "Canivo Pets: Size özel tanımlanan 150 TL hediye kuponunu kullanın: [Link]",
+            "action": "VIP geri kazanım kuponu"
+          }
+        ],
+        "projected_revenue_contribution_pct": 6.0
+      }
+    ],
+    "media_flight_plan": {
+      "monthly_budget": 100000.0,
+      "total_90_day_budget": 300000.0,
+      "phase_1_days_1_30": {
+        "name": "1-30 Gün: Altyapı, MarTech Sinyalleri ve Piksel Eğitimi",
+        "monthly_budget": 100000.0,
+        "budget_allocation": {
+          "Meta TOFU (Reels/Video)": 50000.0,
+          "Meta BOFU (DPA/Sepet)": 15000.0,
+          "Google Search (Marka + Temel)": 25000.0,
+          "Test Sandbox (3:2:2)": 10000.0
+        },
+        "strategic_milestones": [
+          "GTM Server-side ve Meta CAPI tekilleştirmesinin (event_id) doğrulanması.",
+          "Mobil sticky CTA ve tek adımda ödeme entegrasyonuyla CRO sürtünmesinin düşürülmesi.",
+          "Piksel tabanında ilk 500+ Purchase olayının tamamlanması.",
+          "Klaviyo Hoş Geldin ve Terk Edilen Sepet akışlarının canlıya alınması."
+        ],
+        "target_blended_roas": 2.0
+      },
+      "phase_2_days_31_60": {
+        "name": "31-60 Gün: Katalizör Lansmanı, Teklif & Kreatif Test Ölçeklemesi",
+        "monthly_budget": 100000.0,
+        "budget_allocation": {
+          "Meta Advantage+ Shopping (ASC)": 55000.0,
+          "Google PMax": 25000.0,
+          "TikTok Spark Ads": 10000.0,
+          "Retention (Email/SMS VIP)": 10000.0
+        },
+        "strategic_milestones": [
+          "Kazanan 3:2:2 kreatiflerin Meta ASC kampanyasına taşınması.",
+          "BOGO ve %10-%15 bundle sepet teşviklerinin devreye alınması.",
+          "AOV artırıcı ücretsiz kargo ve hediye eşiklerinin lansmanı.",
+          "TikTok Spark Ads ile içerik üretici işbirliklerinin başlatılması."
+        ],
+        "target_blended_roas": 2.8
+      },
+      "phase_3_days_61_90": {
+        "name": "61-90 Gün: Agresif Dikey/Yatay Ölçekleme ve LTV Hasadı",
+        "monthly_budget": 100000.0,
+        "budget_allocation": {
+          "Meta ASC (Ölçekleme)": 50000.0,
+          "Google PMax + RSA": 30000.0,
+          "TikTok & Çok Kanallı Remarketing": 10000.0,
+          "Retention & Sadakat (Klaviyo/VIP)": 10000.0
+        },
+        "strategic_milestones": [
+          "Haftalık bütçe pacing ile kazanan setlerde 48 saatte bir %15-20 dikey bütçe artışı.",
+          "Klaviyo retention cirosunun toplam şirket cirosunun %25'ine ulaştırılması.",
+          "First-party customer match listeleri ile lookalike ve pmax kitle sinyallerinin zenginleştirilmesi.",
+          "POAS ve MER optimizasyonuyla şirketin net katkı marjının (CM3) maksimize edilmesi."
+        ],
+        "target_blended_roas": 3.4
+      },
+      "kpi_milestones": {
+        "day_30_target": "500 Sipariş, 2.0x MER, %8.0 CAPI EMQ",
+        "day_60_target": "1400 Sipariş, 2.8x MER, +%20 AOV Artışı",
+        "day_90_target": "2800 Sipariş, 3.4x MER, LTV:CAC >= 3.5x"
+      }
+    }
+  },
+  "agency_tool_stack": [
+    {
+      "name": "Screaming Frog SEO Spider",
+      "primary_role": "Derin Teknik Web Taraması (URL Düzeyi)",
+      "use_case": "404/301 yönlendirme zincirleri, mükerrer canonical, robots.txt ve hreflang denetimi."
+    },
+    {
+      "name": "Ahrefs Site Audit & Explorer",
+      "primary_role": "Backlink, DR ve Keyword Gap Analizi",
+      "use_case": "Rakip pazar payı, arama hacmi trendleri ve kayıp backlink tespiti."
+    },
+    {
+      "name": "Google Search Console (GSC)",
+      "primary_role": "Arama Motoru Gerçeklik ve Dizin Kapsamı",
+      "use_case": "Tıklama, ortalama konum, tarama bütçesi ve dizinleme (index) doğrulama."
+    },
+    {
+      "name": "Meta Ad Library & Ads Transparency",
+      "primary_role": "Rakip Reklam Kreatif İstihbaratı",
+      "use_case": "Rakiplerin en uzun süredir yayında olan kazanan kreatifleri ve kancaları."
+    },
+    {
+      "name": "Semrush Competitive Intelligence",
+      "primary_role": "Ücretli Reklam ve SERP Karşılaştırması",
+      "use_case": "Rakip Google Ads bütçeleri, reklam kopyaları ve anahtar kelime zorluğu."
+    }
+  ]
+}

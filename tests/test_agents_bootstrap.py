@@ -6,6 +6,11 @@ ve `.claude/agents/` altında hiçbir derleme görünmüyordu. Kök neden derlem
 yalnızca `APP_ROOT`'a (paketlenmiş sürümde `dist/EntropyAI`) yazması ve hatanın
 sessizce yutulmasıydı. Bu testler yalıtılmış tmp kasa + tmp proje kökü ile
 main.py'nin çağırdığı ta kendisi olan fonksiyonu koşturur.
+
+Faz 11-A: `APP_ROOT` derleme köklerinden ÇIKARILDI. Kaynaktan koşarken APP_ROOT
+deponun kendisi olduğu için Entropy'nin kendi kadrosu deponun `.claude/agents/`
+klasörüne düşüyor ve kullanıcının geliştirme alt ajanlarıyla karışıyordu.
+Kökler artık: proje kökü + ayarlardaki etkin proje + nötr Claude çalışma dizini.
 """
 
 from __future__ import annotations
@@ -46,7 +51,7 @@ def _claude(root: Path, name: str) -> Path:
     return root / ".claude" / "agents" / f"{name}.md"
 
 
-def test_bootstrap_seeds_and_compiles_to_both_roots(isolated):
+def test_bootstrap_seeds_and_compiles_to_project_roots(isolated):
     app_root, project, vault = isolated
 
     result = bootstrap_agents(project_dir=project, vault_path=vault)
@@ -58,17 +63,19 @@ def test_bootstrap_seeds_and_compiles_to_both_roots(isolated):
     for name in result.created:
         # Kasadaki kaynak
         assert (vault / "Entropy" / "Agents" / name / "AGENT.md").is_file()
-        # Her iki kök, her iki sağlayıcı biçimi
-        for root in (app_root, project):
-            assert _agy(root, name).is_file(), f"{name} agy biçimi {root} altında yok"
-            assert _claude(root, name).is_file(), f"{name} claude biçimi {root} altında yok"
+        # Proje kökü, her iki sağlayıcı biçimi
+        assert _agy(project, name).is_file(), f"{name} agy biçimi {project} altında yok"
+        assert _claude(project, name).is_file(), f"{name} claude biçimi {project} altında yok"
+        # APP_ROOT (kaynaktan koşarken deponun kendisi) ARTIK yazılmaz.
+        assert not _agy(app_root, name).exists(), f"{name} APP_ROOT'a sızdı"
+        assert not _claude(app_root, name).exists(), f"{name} APP_ROOT'a sızdı"
 
-    text = _agy(app_root, result.created[0]).read_text(encoding="utf-8")
+    text = _agy(project, result.created[0]).read_text(encoding="utf-8")
     assert text.startswith("---") and "subagent: true" in text.lower()
 
 
 def test_bootstrap_without_project_dir_still_writes(isolated):
-    """project_dir None ise bile APP_ROOT ve ayarlardaki etkin proje yazılmalı."""
+    """project_dir None ise bile ayarlardaki etkin proje yazılmalı (APP_ROOT hariç)."""
     app_root, project, vault = isolated
 
     result = bootstrap_agents(project_dir=None, vault_path=vault)
@@ -79,10 +86,10 @@ def test_bootstrap_without_project_dir_still_writes(isolated):
     from entropy.core.config import claude_workspace_path
 
     assert set(result.roots) == {
-        app_root.resolve(), project.resolve(), claude_workspace_path().resolve(),
+        project.resolve(), claude_workspace_path().resolve(),
     }
+    assert app_root.resolve() not in result.roots
     for name in result.compiled:
-        assert _agy(app_root, name).is_file()
         assert _agy(project, name).is_file()
 
 
@@ -92,7 +99,9 @@ def test_bootstrap_with_invalid_project_dir_falls_back(isolated):
     result = bootstrap_agents(project_dir=app_root / "yok" / "boyle" / "dizin", vault_path=vault)
 
     assert result.ok, result.error
-    assert app_root.resolve() in result.roots
+    # Geçersiz proje kökü sessizce atlanır; etkin proje kökü yine de yazılır.
+    assert app_root.resolve() not in result.roots
+    assert project.resolve() in result.roots
     assert result.compiled
 
 

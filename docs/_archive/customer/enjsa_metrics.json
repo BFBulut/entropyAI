@@ -1,0 +1,71 @@
+{
+  "company": "Enerjisa Enerji A.Ş.",
+  "ticker": "IS:ENJSA",
+  "analysis_date": "2026-09-03",
+  "market_data": {
+    "stock_price_try": 113.2,
+    "market_cap_try_b": 133.7,
+    "shares_outstanding_m": 1181.0,
+    "range_52w": "64.7 - 127.9 TRY",
+    "pct_of_52w_high": 88.5,
+    "dividend_yield_pct": 4.49,
+    "dividend_streak_years": 9
+  },
+  "profitability": {
+    "revenue_ltm_try_b": 236.4,
+    "operating_income_ebit_try_b": 38.28,
+    "ebitda_try_b": 44.11,
+    "net_income_ltm_try_b": 6.39,
+    "gross_margin_pct": 27.35,
+    "operating_margin_pct": 16.19,
+    "ebitda_margin_pct": 18.66,
+    "net_margin_pct": 2.71,
+    "q2_26_net_income_growth_yoy_pct": 223.3
+  },
+  "guidance_fy26": {
+    "operational_earnings_try_b": "80 - 85",
+    "underlying_net_income_try_b": "13 - 15"
+  },
+  "cash_flow_quality": {
+    "cfo_try_b": 43.94,
+    "capex_try_b": 34.61,
+    "fcf_try_b": 9.32,
+    "cfo_to_ebitda_conversion_pct": 99.59,
+    "fcf_yield_pct": 6.97,
+    "sloan_accrual_ratio": -0.1456,
+    "sloan_verdict": "Yüksek Kâr Kalitesi (Nakit akışı muhasebe kârından belirgin yüksek)"
+  },
+  "balance_sheet_and_solvency": {
+    "current_ratio": 0.858,
+    "net_working_capital_try_b": -14.21,
+    "total_debt_try_b": 94.03,
+    "total_equity_try_b": 108.96,
+    "debt_to_equity_pct": 86.3,
+    "debt_to_assets_pct": 33.94,
+    "book_value_per_share_try": 92.26,
+    "liquidity_assessment": "Kısa vadeli yükümlülükler dönen varlıkları aşıyor (Negatif Çalışma Sermayesi), ancak kamu hizmeti şebeke nakit akışları ve E.ON/Sabancı ortaklığı refinansmanı güvence altına alıyor."
+  },
+  "forensic_scores": {
+    "altman_z_score": 2.269,
+    "altman_zone": "Grey Zone (Finansal Baskı / Güvenli Arası - Utility Standardı)",
+    "components": {
+      "x1_liquidity": -0.051,
+      "x2_retained_profit": 0.389,
+      "x3_operating_margin": 0.138,
+      "x4_market_leverage": 0.795,
+      "x5_asset_turnover": 0.853
+    }
+  },
+  "valuation_multiples": {
+    "pe_ltm": 20.91,
+    "pe_forward_fy26_consensus": 11.0,
+    "pe_forward_fy26_guidance_mid": 9.55,
+    "pe_forward_fy27": 8.46,
+    "pb_ratio": 1.23,
+    "ev_ebitda_ltm": 5.16,
+    "analyst_avg_target_try": 137.34,
+    "analyst_high_target_try": 169.3,
+    "upside_avg_pct": 21.33,
+    "upside_high_pct": 49.56
+  }
+}
