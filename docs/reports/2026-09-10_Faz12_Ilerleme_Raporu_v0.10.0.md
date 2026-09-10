@@ -15,6 +15,7 @@ Plan: `2026-09-10_Faz12_Plan_ve_Yol_Haritasi.md` (Faz 11 sonrası aynı dört ar
 - **Kota nedeniyle koşulmayan canlı adımlar:** 4. kartta oturum devri + `handoff.md`, `/distill wiki compile financial-auditor --turns 25` (K6 bu yüzden %29'da sabit), `/memory merge` gerçek turu (kuyrukta 2 aday), `/skill synth` tek turlu zenginleştirme + `/skill approve`. Bunlar senin kota kararınla bir sonraki oturumda koşulabilir (tahmini 60–70k token).
 
 ## Kalanlar
+- Görevler panosundaki kart detayı Entropy kartının kontrol noktasını hâlâ eski kökten okuyor (`task_board_widget.py:110`; kartın `checkpoint` alanındaki mutlak yol kullanılmalı) ve Entropy kontrol noktası için iki yazıcı var (hafıza `write_checkpoint(office="entropy")` ve `board_tool_exec.write_entropy_checkpoint`, aynı biçim) — tek yazıcıya indirilmeli. Kasadaki hayalet `Desk/Offices/entropy` klasörü `Entropy/_archive/2026-09-10/desk-entropy-ghost` altına taşındı.
 - Ofis (Desk) kartlarında araç bloğu sızıntısı sürüyor (harness `summary`den ayrıştırıyor) — Desk'e dönüşte.
 - `--autocompact`/`--fork-session` bağlanmadı (sürüm bağımlı).
 - Faz 13: `memory → brain` paket taşıması (ön koşullar 12-E ile yaklaştı), Desk'e dönüş (Faz 10 kalanları, ofis kartı temizliği).
