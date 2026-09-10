@@ -317,3 +317,89 @@ def test_context_builder_reports_brain_confidence(tmp_path):
     ctx2 = builder2.build("hakkında hiçbir şey bilmediğim bir konu xyzzy", token_budget=1200)
     assert ctx2.brain_confidence < CRAG_MIN_SCORE
     assert ctx2.brain_has_answer is False
+
+
+# --------------------------------------------------------------------------
+# Faz 11 kapanışı — kapı iki kez koşmaz, içerik güncelleme bayrağı
+# --------------------------------------------------------------------------
+
+def test_record_memory_with_precomputed_decision_skips_the_gate(mem, monkeypatch):
+    """Karar önceden alındıysa kapı ikinci kez KOŞMAZ (tek gömme)."""
+    content = (
+        "Güçlendirme boru hattı raporu: kapının kararı çağıran tarafta alındı, "
+        "yazma yolu aynı adayı ikinci kez değerlendirmemeli."
+    )
+    gate = MemoryGate(mem, strict=False)
+    decision = gate.admit("semantic", content, provenance="docs/reports/x.md")
+    assert decision.action == ACTION_ADD
+
+    calls = {"admit": 0, "embed": 0}
+    real_admit = mem.gate.admit
+    monkeypatch.setattr(
+        type(mem.gate), "admit",
+        lambda self, *a, **k: (calls.__setitem__("admit", calls["admit"] + 1),
+                               real_admit(*a, **k))[1],
+    )
+    from entropy.memory.supabase.cognitive_memory import LocalEmbeddingEngine
+
+    engine = LocalEmbeddingEngine.get_instance()
+    real_embed = engine.embed_text_status
+    monkeypatch.setattr(
+        type(engine), "embed_text_status",
+        lambda self, text: (calls.__setitem__("embed", calls["embed"] + 1),
+                            real_embed(text))[1],
+    )
+
+    node, novel = mem.record_memory(
+        "semantic", content, provenance="docs/reports/x.md", decision=decision
+    )
+    assert novel is True
+    assert calls["admit"] == 0, "kapı ikinci kez koşmamalı"
+    assert calls["embed"] == 0, "gömme yeniden hesaplanmamalı (karardan gelir)"
+    assert mem.get_node(node.id) is not None
+
+
+def test_store_decision_writes_without_reevaluating(mem):
+    content = (
+        "store_decision sözleşmesi: karar nesnesi doğrudan yazılır, kategori ve "
+        "kaynak karardan okunur, kapı tekrar çağrılmaz."
+    )
+    decision = MemoryGate(mem, strict=False).admit(
+        "semantic", content, provenance="docs/reports/y.md"
+    )
+    before = dict(mem.gate.counters)
+    node, novel = mem.store_decision(decision)
+    assert novel is True
+    assert mem.gate.counters == before, "sayaçlar ikinci kez artmamalı"
+    assert node.provenance == "docs/reports/y.md"
+
+
+def test_save_node_updates_content_only_with_flag(mem):
+    node, _ = mem.record_memory(
+        "semantic",
+        "İlk gövde: bu düğümün içeriği birleştirme turunda değişecek, kimliği değil.",
+        provenance="docs/reports/z.md",
+    )
+    node_id = node.id
+
+    # bayraksız: içerik sütunu DEĞİŞMEZ (11-D'de bulunan hata)
+    stale = mem.get_node(node_id)
+    stale.content = "Bayraksız yazım içeriği değiştirmemeli."
+    mem._save_node(stale)
+    assert mem.get_node(node_id).content.startswith("İlk gövde")
+
+    # bayraklı: içerik değişir, gömme 'pending' işaretlenir
+    merged = mem.get_node(node_id)
+    merged.content = "Birleşik gövde: iki düğümün bilgisi tek metinde toplandı."
+    merged.embedding = []
+    mem._save_node(merged, allow_content_update=True)
+    fresh = mem.get_node(node_id)
+    assert fresh.content.startswith("Birleşik gövde")
+    assert fresh.id == node_id, "kimlik korunmalı (kenarlar kopmasın)"
+    import sqlite3 as _sq
+
+    with _sq.connect(mem.db_path) as conn:
+        status = conn.execute(
+            "SELECT embedding_status FROM cognitive_nodes WHERE id = ?", (node_id,)
+        ).fetchone()[0]
+    assert status == "pending", "içerik değişince gömme bayatlar"

@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from entropy.memory.gate import LEGACY_PROVENANCE
+
 logger = logging.getLogger(__name__)
 
 # Kopya birleştirme eşiği (konsolidasyon). Yazma kapısının NOOP eşiğiyle aynı
@@ -255,6 +257,11 @@ def forget_stale(memory: Any,
 
     Kimlik/kural düğümleri (`is_identity=1`) muaftır; kullanıcı onaylı kural
     kullanılmadı diye unutulamaz.
+
+    Faz 11 kapanışı: `legacy:pre-v2` etiketli düğümler (v2 öncesinden gelen,
+    kaynağı hiçbir zaman kaydedilmemiş düğümler) önem eşiğinden bağımsız
+    adaydır — hiç geri çağrılmamış ve yeterince eskiyse arşivlenir. Kaynağı
+    doğrulanamayan bilgi, kullanılmıyorsa hafızada tutulmaz.
     """
     cutoff = time.time() - min_age_days * 86400.0
     try:
@@ -263,10 +270,10 @@ def forget_stale(memory: Any,
                 "UPDATE cognitive_nodes SET archived = 1"
                 " WHERE COALESCE(archived, 0) = 0"
                 " AND COALESCE(is_identity, 0) = 0"
-                " AND importance < ?"
+                " AND (importance < ? OR COALESCE(provenance, '') = ?)"
                 " AND COALESCE(access_count, 0) <= ?"
                 " AND COALESCE(last_accessed, created_at) <= ?",
-                (float(max_importance), int(max_access), cutoff),
+                (float(max_importance), LEGACY_PROVENANCE, int(max_access), cutoff),
             )
             conn.commit()
             count = int(cur.rowcount or 0)

@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from entropy.memory.categories import CANONICAL_CATEGORIES  # noqa: E402
+from entropy.memory.gate import LEGACY_PROVENANCE  # noqa: E402
 from entropy.memory.supabase.cognitive_memory import (  # noqa: E402
     CognitiveMemorySystem,
     default_cognitive_db_path,
@@ -204,11 +205,31 @@ def fixture_leak(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def unsourced_l2(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    hits = [
-        r["id"] for r in rows
-        if (r.get("category") == L2_CATEGORY) and not r.get("_has_provenance")
-    ]
-    return {"count": len(hits), "sample_ids": hits[:5]}
+    """
+    K12 = kaynaksız L2 sayısı.
+
+    Faz 11 kapanışı: `legacy:pre-v2` etiketli düğümler (v2 öncesinden gelen,
+    kaynağı hiçbir zaman kaydedilmemiş düğümler) K12'ye SAYILMAZ — uydurma
+    kaynak yazmak yerine dürüstçe etiketlendiler. Gizlenmesinler diye ayrı
+    sayaçta raporlanırlar: `legacy_untagged`. K12 böylece yalnızca "yeni yazma
+    yolundan kaynaksız geçmiş L2 düğümü" ölçer; hedef hâlâ 0.
+    """
+    hits: List[str] = []
+    legacy: List[str] = []
+    for r in rows:
+        if r.get("category") != L2_CATEGORY:
+            continue
+        prov = (r.get("provenance") or "").strip()
+        if prov == LEGACY_PROVENANCE:
+            legacy.append(r["id"])
+        elif not r.get("_has_provenance"):
+            hits.append(r["id"])
+    return {
+        "count": len(hits),
+        "sample_ids": hits[:5],
+        "legacy_untagged": len(legacy),
+        "legacy_sample_ids": legacy[:5],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -350,7 +371,8 @@ def main() -> int:
     print(f"K10 fikstür : {report['K10_fixture_leak']['count']}")
     if "K11_gate_latency" in report:
         print(f"K11 kapı    : medyan {report['K11_gate_latency']['median_ms']} ms")
-    print(f"K12 kaynaksız L2: {report['K12_unsourced_l2']['count']}")
+    print(f"K12 kaynaksız L2: {report['K12_unsourced_l2']['count']}"
+          f"  (eski etiketli: {report['K12_unsourced_l2'].get('legacy_untagged', 0)})")
     print(f"Karar       : {report['verdict']}")
     return 0
 

@@ -345,24 +345,17 @@ def _update_content(memory: Any, node_id: str, content: str) -> bool:
     content = (content or "").strip()
     if not content:
         return False
-    # Doğrudan SQL: `_save_node`ın ON CONFLICT dalı içerik sütununu
-    # güncellemez (ölçüldü — düğüm kimliği içerikten türediği için oraya
-    # "içerik değişmez" varsayımı gömülü). Burada içerik kasten değişiyor;
-    # kimlik korunur ki düğüme bağlı kenarlar ve sayaçlar kopmasın.
-    import sqlite3
-
+    # Faz 11 kapanışı: doğrudan SQL yerine yazma yolunun kendisi kullanılır.
+    # `_save_node(..., allow_content_update=True)` içerik sütununu günceller,
+    # gömmeyi 'pending' işaretler ve graf kopyasını da senkronlar — doğrudan
+    # SQL bunu yapmıyordu, graf tarafında eski metin kalıyordu.
     try:
-        if memory.get_node(node_id) is None:
+        node = memory.get_node(node_id)
+        if node is None:
             return False
-        with sqlite3.connect(memory.db_path) as conn:
-            conn.execute(
-                "UPDATE cognitive_nodes SET content = ?, embedding_json = NULL,"
-                " embedding_status = 'pending' WHERE id = ?",
-                (content[:4000], node_id),
-            )
-            conn.commit()
-        # Gömme bayatladı: `reembed_stale` (rüya döngüsü adım 1) tazeler.
-        memory._invalidate_recall_index()
+        node.content = content[:4000]
+        node.embedding = []
+        memory._save_node(node, allow_content_update=True)
         return True
     except Exception as exc:  # pragma: no cover - savunma
         logger.warning("Birleşik içerik yazılamadı (%s): %s", node_id, exc)

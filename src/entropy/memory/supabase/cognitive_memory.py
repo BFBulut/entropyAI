@@ -793,7 +793,23 @@ class CognitiveMemorySystem:
         h = hashlib.sha256(f"{category}:{content.strip().lower()}".encode("utf-8")).hexdigest()[:16]
         return f"{category}-{h}"
 
-    def _save_node(self, node: CognitiveMemoryNode, embedding_status: str = ""):
+    def _save_node(
+        self,
+        node: CognitiveMemoryNode,
+        embedding_status: str = "",
+        allow_content_update: bool = False,
+    ):
+        """
+        Diske giden TEK yol.
+
+        `allow_content_update` (Faz 11-D bulgusu): düğüm kimliği içerikten
+        türediği için `ON CONFLICT` dalı normalde `content` sütununa DOKUNMAZ —
+        aynı kimlikle farklı içerik gelmesi beklenmez, gelirse sessizce yutulur.
+        Ama gri bant birleştirme ve rüya döngüsü içeriği KASTEN değiştirir
+        (kimlik korunur ki kenarlar ve sayaçlar kopmasın). O yollar bayrağı
+        açar; içerik değişince gömme bayatlar, bu yüzden satır
+        `embedding_status='pending'` işaretlenir ve `reembed_stale` tazeler.
+        """
         # Kategori disiplini son savunma hattı: `_save_node` diske giden TEK
         # yoldur (record_memory, ego tohumu, konsolidasyon hepsi buradan geçer).
         # Serbest metin kategori burada kanonik dörtlüye indirgenir; kimlik
@@ -803,7 +819,12 @@ class CognitiveMemorySystem:
         if resolution.is_identity:
             node.is_identity = 1
         engine = LocalEmbeddingEngine.get_instance()
-        if node.embedding is None or len(node.embedding) == 0:
+        if allow_content_update and (node.embedding is None or len(node.embedding) == 0):
+            # İçerik kasten değişti: eski vektör geçersiz. Yeniden gömme BURADA
+            # yapılmaz (toplu turun işi); satır 'pending' kalır.
+            node.embedding = []
+            embedding_status = "fallback"
+        elif node.embedding is None or len(node.embedding) == 0:
             node.embedding, status = engine.embed_text_status(node.content)
             embedding_status = embedding_status or status
         active_model = engine.model_name or "hash-fallback"
@@ -813,13 +834,15 @@ class CognitiveMemorySystem:
             active_model = "hash-fallback"
         status_col = "pending" if embedding_status == "fallback" else "ok"
 
+        # Çakışma dalında içerik yalnızca bayrak açıkken güncellenir.
+        content_clause = "content = excluded.content,\n                    " if allow_content_update else ""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO cognitive_nodes (id, category, content, importance, created_at, last_accessed, access_count, metadata_json, embedding_json, embedding_model, embedding_status, provenance, confidence, valid_from, valid_to, archived, novelty, is_identity)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    importance = excluded.importance,
+                    {content_clause}importance = excluded.importance,
                     last_accessed = excluded.last_accessed,
                     access_count = cognitive_nodes.access_count + 1,
                     metadata_json = excluded.metadata_json,
@@ -1011,6 +1034,7 @@ class CognitiveMemorySystem:
         importance: float = 0.5,
         metadata: Optional[Dict[str, Any]] = None,
         provenance: str = "",
+        decision: Optional[Any] = None,
     ) -> Tuple[CognitiveMemoryNode, bool]:
         """
         Yazma yolunun TEK giriş noktası (Faz 11.2).
@@ -1020,6 +1044,12 @@ class CognitiveMemorySystem:
           2. `MemoryGate.admit()` — kategori, fikstür, kaynak, yoğunluk, üç bant.
              `ENTROPY_MEMORY_GATE=0` ile atlanır (geri alma bayrağı).
 
+        `decision` (Faz 11 kapanışı): çağıran kapıyı ZATEN koşturduysa
+        (`MemoryGate.admit` ile karar alıp sonra buraya geldiyse) kararı
+        buraya verir; kapı ikinci kez koşmaz ve gömme yeniden hesaplanmaz.
+        Ölçüldü: karar verilmeyen yolda aynı metin iki kez gömülüyordu
+        (`admit` içinde `_nearest`, sonra tekrar `admit`).
+
         Döner: `(node, is_novel)`. RED kararında düğüm yazılmaz ve `node` kapının
         ürettiği geçici (kalıcı olmayan) düğümdür — çağıranların hepsi dönüşü
         yalnızca günlük/`bus` için kullanıyor, bu yüzden imza değişmiyor.
@@ -1028,11 +1058,12 @@ class CognitiveMemorySystem:
         existing = self.get_node(node_id)
         now = time.time()
 
-        if existing is None and gate_enabled():
-            decision = self.gate.admit(
-                category, content, importance=importance,
-                metadata=metadata, provenance=provenance,
-            )
+        if existing is None and (gate_enabled() or decision is not None):
+            if decision is None:
+                decision = self.gate.admit(
+                    category, content, importance=importance,
+                    metadata=metadata, provenance=provenance,
+                )
             self.last_gate_decision = decision
             if decision.action == GATE_REJECT:
                 self._record_error("memory_gate", f"Yazma reddedildi: {decision.reason}")
@@ -1124,6 +1155,27 @@ class CognitiveMemorySystem:
         )
         self._save_node(new_node, embedding_status=embed_status)
         return new_node, True
+
+    def store_decision(
+        self,
+        decision: Any,
+        importance: Optional[float] = None,
+    ) -> Tuple[CognitiveMemoryNode, bool]:
+        """
+        Önceden alınmış bir `GateDecision`ı yazar. Kapı ikinci kez KOŞMAZ.
+
+        `MemoryGate.admit()` ile kararı kendisi alan çağrı noktaları (ör.
+        güçlendirme boru hattının rapor kabulü) bunu kullanır; aksi hâlde aynı
+        aday iki kez gömülür.
+        """
+        return self.record_memory(
+            decision.category,
+            decision.content,
+            importance=decision.importance if importance is None else importance,
+            metadata=dict(getattr(decision, "metadata", None) or {}),
+            provenance=getattr(decision, "provenance", "") or "",
+            decision=decision,
+        )
 
     # -- yazma kapısı (Faz 11.2) ------------------------------------------
 

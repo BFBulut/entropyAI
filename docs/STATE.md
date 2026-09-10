@@ -250,6 +250,33 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   (düğüm yazılır **ve** kuyruğa girer). `record_memory` / `store_node` bu tek
   kapıdan geçer (yedi üretim çağrı noktası değişmedi; `store_node` artık
   `provenance=` de alır).
+- **Kapı iki kez koşmaz (Faz 11 kapanışı):** kararı çağıran ZATEN aldıysa
+  (`MemoryGate.admit(...) -> GateDecision`) yazma yoluna kararı verir:
+  `record_memory(..., decision=<GateDecision>)` ya da kısa yolu
+  `CognitiveMemorySystem.store_decision(decision, importance=None)`.
+  Karar verildiğinde `admit` bir daha çağrılmaz, gömme yeniden hesaplanmaz
+  (vektör karardan gelir) ve kapı sayaçları ikinci kez artmaz.
+  **agy'nin bağlayacağı yer:** `agents/amplification.admit_report` şu an önce
+  `MemoryGate.admit` ile karar veriyor, sonra `record_memory` ile aynı adayı
+  kapıdan bir kez daha geçiriyor (aynı metin iki kez gömülüyor); ikinci çağrı
+  `memory.store_decision(decision)` ile değiştirilmelidir.
+- **Eski kaynaksız L2 etiketi (Faz 11 kapanışı):** v2 öncesinden gelen,
+  kaynağı hiç kaydedilmemiş `semantic` düğümler için uydurma kaynak YAZILMAZ:
+  `gate.LEGACY_PROVENANCE = "legacy:pre-v2"`, `confidence = 0.40`
+  (`gate.LEGACY_CONFIDENCE`), `valid_from = created_at`. Etiketi
+  `scripts/memory_migrate_v2.py --tag-legacy` koyar (varsayılan kuru koşum,
+  `--apply` önce yedek alır, idempotent). `derive_provenance` bu dizeyi GÜÇLÜ
+  kaynak saymaz — yeni yazımlar onunla L2 zorunluluğunu atlayamaz.
+  `brain_metrics` K12 tanımı: etiketli düğümler "kaynaksız L2" sayılmaz, ayrı
+  sayaçta raporlanır (`K12_unsourced_l2.legacy_untagged`). `dream.forget_stale`
+  bu düğümleri önem eşiğinden bağımsız aday sayar: hiç geri çağrılmamış ve
+  30 günden eskiyse arşivlenir.
+- **İçerik güncelleme bayrağı (Faz 11-D hatası):** `_save_node`ın `ON CONFLICT`
+  dalı `content` sütununa dokunmaz (düğüm kimliği içerikten türer). İçeriği
+  kasten değiştiren yollar (gri bant birleştirme, rüya döngüsü) artık doğrudan
+  SQL yerine `_save_node(node, allow_content_update=True)` çağırır: içerik
+  güncellenir, kimlik korunur, satır `embedding_status='pending'` işaretlenir
+  (`reembed_stale` tazeler) ve graf kopyası da senkronlanır.
 - **Gri bant kuyruğu:** `<db klasörü>/memory/gray_queue.jsonl`, satır başına
   `{ts, status, node_id, category, content, similarity, nearest_id,
   nearest_content, provenance, reason}`; `MemoryGate.pending_gray()` okur.

@@ -75,6 +75,15 @@ ACTION_REJECT = "reject"
 
 GRAY_QUEUE_FILENAME = "gray_queue.jsonl"
 
+# Faz 11 kapanışı (K12): v2 öncesinden gelen, kaynağı hiçbir zaman kaydedilmemiş
+# L2 düğümleri. Uydurma kaynak yazmak yerine dürüst etiket: "bu düğümün kaynağı
+# bilinmiyor, eski şemadan geldi". Kapının kaynak zorunluluğu bu etiketi GÜÇLÜ
+# kaynak saymaz (yeni yazımlar hâlâ gerçek kaynak ister); ölçüm paketi ise bu
+# düğümleri ayrı sayar ve rüya döngüsünün `forget_stale` adayı olarak bırakır.
+LEGACY_PROVENANCE = "legacy:pre-v2"
+# Etiketli düğümün güveni: kaynağı doğrulanamıyor, ama içerik hâlâ okunabilir.
+LEGACY_CONFIDENCE = 0.40
+
 # Üretim hafızasına asla girmemesi gereken kalıplar. Hepsi denetimde gerçek
 # düğümlerden çıkarıldı (en büyük küme 322 üyeli tek bir ofis fikstürüydü).
 _FIXTURE_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
@@ -124,7 +133,9 @@ def derive_provenance(metadata: Optional[Dict[str, Any]], explicit: str = "") ->
     # önceki çıktısı geçerli kaynak değildir" kuralının denetimi araştırma turu
     # kapısına aittir (11.6), yazma kapısına değil.
     if explicit and explicit.strip():
-        return explicit.strip(), True
+        # Tek istisna: eski düğüm etiketi kaynak yerine geçmez. Yeni yazımlar
+        # bu dizeyi vererek L2 kaynak zorunluluğunu atlayamasın (Faz 11 kapanışı).
+        return explicit.strip(), explicit.strip() != LEGACY_PROVENANCE
     meta = metadata or {}
     for key in _STRONG_PROVENANCE_KEYS:
         value = meta.get(key)

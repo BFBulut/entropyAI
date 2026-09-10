@@ -160,3 +160,111 @@ def test_backup_is_written_next_to_profile(migrate, dirty_db, monkeypatch, tmp_p
     assert dest.exists()
     assert dest.parent == tmp_path / ".entropy" / "backups"
     assert dest.name.startswith("cognitive_memory.pre-v2.")
+
+
+# --------------------------------------------------------------------------
+# Faz 11 kapanışı — `--tag-legacy`: v2 öncesi kaynaksız L2 düğümleri
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def legacy_db(tmp_path):
+    """Kaynaksız L2 + kaynaklı L2 + kimlik düğümü olan v2 şemalı veritabanı."""
+    import os
+    import time
+
+    previous = os.environ.get("ENTROPY_MEMORY_GATE")
+    os.environ["ENTROPY_MEMORY_GATE"] = "0"
+    try:
+        db = tmp_path / "legacy.db"
+        mem = CognitiveMemorySystem(db_path=db)
+        old = time.time() - 400 * 86400.0
+        for i in range(3):
+            mem.record_memory(
+                "semantic",
+                f"Kaynagi hic kaydedilmemis eski bilgi {i}: bu metin v2 oncesinden geliyor.",
+            )
+        mem.record_memory(
+            "semantic",
+            "Kaynagi olan bilgi: rapor gövdesinden derlendi ve dosya yolu var.",
+            metadata={"path": "docs/reports/x.md"},
+        )
+        with sqlite3.connect(db) as conn:
+            # Kapı kapalıyken record_memory provenance yazmaz (v1 davranışı);
+            # kaynaklı düğümü elle işaretle, kalan üçü kaynaksız kalsın.
+            conn.execute(
+                "UPDATE cognitive_nodes SET created_at = ?, valid_from = ?",
+                (old, time.time()),
+            )
+            conn.execute(
+                "UPDATE cognitive_nodes SET provenance = 'path=docs/reports/x.md'"
+                " WHERE content LIKE 'Kaynagi olan bilgi%'"
+            )
+            conn.commit()
+        return db
+    finally:
+        if previous is None:
+            os.environ.pop("ENTROPY_MEMORY_GATE", None)
+        else:
+            os.environ["ENTROPY_MEMORY_GATE"] = previous
+
+
+def test_tag_legacy_dry_run_writes_nothing(migrate, legacy_db):
+    before = sqlite3.connect(legacy_db).execute(
+        "SELECT COUNT(*) FROM cognitive_nodes WHERE TRIM(COALESCE(provenance,'')) = ''"
+    ).fetchone()[0]
+    report = migrate.plan_legacy_tagging(legacy_db)
+    assert report["candidates"] == before == 3
+    assert report["already_tagged"] == 0
+    after = sqlite3.connect(legacy_db).execute(
+        "SELECT COUNT(*) FROM cognitive_nodes WHERE TRIM(COALESCE(provenance,'')) = ''"
+    ).fetchone()[0]
+    assert after == before, "kuru koşum veritabanına dokunmamalı"
+
+
+def test_tag_legacy_apply_is_idempotent_and_sets_fields(migrate, legacy_db):
+    from entropy.memory.gate import LEGACY_CONFIDENCE, LEGACY_PROVENANCE
+
+    tagged = migrate.apply_legacy_tagging(legacy_db)
+    assert tagged == 3
+    with sqlite3.connect(legacy_db) as conn:
+        rows = conn.execute(
+            "SELECT provenance, confidence, valid_from, created_at FROM cognitive_nodes"
+            " WHERE provenance = ?", (LEGACY_PROVENANCE,)
+        ).fetchall()
+    assert len(rows) == 3
+    for prov, conf, valid_from, created_at in rows:
+        assert prov == LEGACY_PROVENANCE
+        assert abs(conf - LEGACY_CONFIDENCE) < 1e-9
+        # valid_from eski created_at olmalı (göç anı değil)
+        assert abs(valid_from - created_at) < 1e-6
+
+    # ikinci koşum: etiketlenecek düğüm kalmaz
+    assert migrate.apply_legacy_tagging(legacy_db) == 0
+    report = migrate.plan_legacy_tagging(legacy_db)
+    assert report["candidates"] == 0
+    assert report["already_tagged"] == 3
+
+
+def test_legacy_label_is_not_strong_provenance():
+    """Etiket kaynak yerine geçmez: yeni L2 yazımı bununla kapıyı geçemez."""
+    from entropy.memory.gate import LEGACY_PROVENANCE, derive_provenance
+
+    prov, strong = derive_provenance({}, LEGACY_PROVENANCE)
+    assert prov == LEGACY_PROVENANCE
+    assert strong is False
+
+
+def test_brain_metrics_k12_excludes_legacy_tagged(migrate, legacy_db):
+    """K12 legacy etiketlileri saymaz; ayrı sayaçta görünür."""
+    import importlib.util
+
+    migrate.apply_legacy_tagging(legacy_db)
+    path = Path(__file__).resolve().parents[1] / "scripts" / "brain_metrics.py"
+    spec = importlib.util.spec_from_file_location("brain_metrics_legacy", path)
+    bm = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = bm
+    spec.loader.exec_module(bm)
+    rows = bm.read_rows(legacy_db)
+    report = bm.unsourced_l2(rows)
+    assert report["count"] == 0, "etiketli düğümler kaynaksız L2 sayılmamalı"
+    assert report["legacy_untagged"] == 3

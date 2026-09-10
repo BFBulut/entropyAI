@@ -52,6 +52,8 @@ except Exception:  # pragma: no cover - numpy pyproject'te sert bağımlılık
 
 from entropy.memory.categories import normalize_category  # noqa: E402
 from entropy.memory.gate import (  # noqa: E402
+    LEGACY_CONFIDENCE,
+    LEGACY_PROVENANCE,
     MIN_CONTENT_CHARS,
     derive_provenance,
     fixture_match,
@@ -284,6 +286,75 @@ def write_target(plan: MigrationPlan, target: Path) -> Dict[str, Any]:
     return {"written": len(plan.kept), "graph": graph_stats}
 
 
+# --------------------------------------------------------------------------
+# --tag-legacy: v2 öncesi kaynaksız L2 düğümlerini etiketle (Faz 11 kapanışı)
+# --------------------------------------------------------------------------
+
+LEGACY_TAG_SQL_WHERE = (
+    " WHERE COALESCE(category, '') = 'semantic'"
+    "   AND COALESCE(is_identity, 0) = 0"
+    "   AND TRIM(COALESCE(provenance, '')) = ''"
+)
+
+
+def plan_legacy_tagging(source: Path) -> Dict[str, Any]:
+    """
+    Kaynaksız L2 düğümlerini sayar. **Hiçbir şey yazmaz.**
+
+    Karar: uydurma kaynak yazılmaz. Bu düğümlere `provenance='legacy:pre-v2'`
+    konur, `confidence` 0,40'a düşürülür, `valid_from` eski `created_at` olur.
+    Böylece K12 "kaynaksız L2" sayımı temizlenir ama bilgi kaybolmaz: etiketli
+    düğümler ayrı sayılır ve rüya döngüsünün `forget_stale` adayı olur (hiç
+    geri çağrılmamışsa arşivlenir).
+
+    İdempotent: ikinci koşumda etiketlenecek düğüm kalmaz (`candidates` = 0).
+    """
+    with sqlite3.connect(f"file:{Path(source).as_posix()}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(cognitive_nodes)")}
+        if "provenance" not in cols:
+            return {"schema": "v1", "candidates": 0, "already_tagged": 0,
+                    "note": "provenance sütunu yok; önce şema göçü gerekir"}
+        total = conn.execute("SELECT COUNT(*) FROM cognitive_nodes").fetchone()[0]
+        semantic = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes WHERE COALESCE(category,'')='semantic'"
+        ).fetchone()[0]
+        candidates = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes" + LEGACY_TAG_SQL_WHERE
+        ).fetchone()[0]
+        already = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes WHERE COALESCE(provenance,'') = ?",
+            (LEGACY_PROVENANCE,),
+        ).fetchone()[0]
+        never_recalled = conn.execute(
+            "SELECT COUNT(*) FROM cognitive_nodes" + LEGACY_TAG_SQL_WHERE
+            + " AND COALESCE(access_count, 0) <= 1"
+        ).fetchone()[0]
+    return {
+        "schema": "v2",
+        "nodes": total,
+        "semantic": semantic,
+        "candidates": candidates,
+        "already_tagged": already,
+        "never_recalled": never_recalled,
+    }
+
+
+def apply_legacy_tagging(target: Path) -> int:
+    """Etiketi yazar; etkilenen satır sayısını döndürür. İdempotent."""
+    with sqlite3.connect(target) as conn:
+        cur = conn.execute(
+            "UPDATE cognitive_nodes SET provenance = ?, confidence = ?,"
+            # valid_from eski `created_at` olur: düğüm göç anında değil,
+            # gerçekten yazıldığı anda geçerli olmuştu (çift zamanlı graf).
+            " valid_from = created_at"
+            + LEGACY_TAG_SQL_WHERE,
+            (LEGACY_PROVENANCE, LEGACY_CONFIDENCE),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
 def backup(source: Path) -> Path:
     stamp = time.strftime("%Y%m%d%H%M%S")
     folder = Path.home() / ".entropy" / "backups"
@@ -300,12 +371,41 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="gerçekten yaz (varsayılan kuru koşum)")
     ap.add_argument("--merge-threshold", type=float, default=MERGE_THRESHOLD)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--tag-legacy", action="store_true",
+        help="v2 öncesi kaynaksız L2 düğümlerini 'legacy:pre-v2' etiketler (göç yapmaz)",
+    )
     args = ap.parse_args()
 
     source = Path(args.source)
     if not source.exists():
         print(f"Kaynak veritabanı yok: {source}")
         return 2
+
+    if args.tag_legacy:
+        report = plan_legacy_tagging(source)
+        report["source"] = str(source)
+        report["mode"] = "apply" if args.apply else "dry-run"
+        if args.apply:
+            report["backup"] = str(backup(source))
+            report["tagged"] = apply_legacy_tagging(source)
+            report["after"] = plan_legacy_tagging(source)
+        else:
+            report["note"] = "kuru koşum: hiçbir dosya değiştirilmedi"
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
+        print(f"Kaynak         : {report['source']}  ({report.get('nodes', 0)} düğüm)")
+        print(f"Kip            : {report['mode']}")
+        print(f"L2 (semantic)  : {report.get('semantic', 0)}")
+        print(f"Etiketlenecek  : {report.get('candidates', 0)}"
+              f"  (hiç geri çağrılmamış: {report.get('never_recalled', 0)})")
+        print(f"Zaten etiketli : {report.get('already_tagged', 0)}")
+        if args.apply:
+            print(f"Etiketlendi    : {report.get('tagged', 0)}  · yedek: {report['backup']}")
+        else:
+            print("Not            : kuru koşum, hiçbir dosya değiştirilmedi")
+        return 0
 
     working_copy = _copy_to_temp(source)
     plan = plan_migration(working_copy, merge_threshold=args.merge_threshold)
