@@ -51,7 +51,10 @@ __all__ = [
     "BOARD_CLAIMS_SUBDIR",
     "BOARD_AGENTS_SUBDIR",
     "BOARD_PROJECTION_SUBPATH",
+    "BOARD_CHECKPOINTS_SUBDIR",
     "board_root",
+    "board_checkpoints_dir",
+    "board_checkpoint_path",
     "board_events_path",
     "board_events_archive_dir",
     "board_taskboard_path",
@@ -99,6 +102,7 @@ BOARD_EVENTS_ARCHIVE_SUBDIR = "Entropy/Board/events"
 BOARD_CLAIMS_SUBDIR = "Entropy/Board/claims"
 BOARD_AGENTS_SUBDIR = "Entropy/Board/agents"
 BOARD_PROJECTION_SUBPATH = "Entropy/Board/projection.json"
+BOARD_CHECKPOINTS_SUBDIR = "Entropy/Board/checkpoints"
 
 # Eski kökler. Sıra önemlidir: geçiş bunları bu sırayla tüketir.
 LEGACY_DESK_ROOT_SUBDIRS = ("Entropy/Desk",)
@@ -178,6 +182,27 @@ def agent_session_path(agent: str, vault_path: Optional[Path | str] = None) -> P
     safe = "".join(ch if (ch.isalnum() or ch in "-_") else "-"
                    for ch in str(agent or "").strip()) or "agent"
     return board_agents_dir(vault_path) / safe / "session.json"
+
+
+def board_checkpoints_dir(vault_path: Optional[Path | str] = None) -> Path:
+    """
+    `<kasa>/Entropy/Board/checkpoints/` — ENTROPY kartlarının kontrol noktaları.
+
+    Ayrı kök kuralı: Entropy'nin kendi kartı Desk'in kökü (`Desk/Offices/...`)
+    altına hiçbir dosya yazamaz. `memory.checkpoints` ofis kavramıyla çalışıyor
+    ve ofis adı boş olduğunda "entropy" adında SAHTE bir ofis çalışma alanı
+    açıyordu (`Desk/Offices/entropy/workspace/checkpoints/…`); iki kadronun
+    verisi orada karışıyordu. Entropy kartları bu köke yazar.
+    """
+    return vault_root(vault_path) / BOARD_CHECKPOINTS_SUBDIR
+
+
+def board_checkpoint_path(card_id: str,
+                          vault_path: Optional[Path | str] = None) -> Path:
+    """`<kasa>/Entropy/Board/checkpoints/<kart>.md`."""
+    safe = "".join(ch if (ch.isalnum() or ch in "-_.") else "-"
+                   for ch in str(card_id or "").strip()) or "kart"
+    return board_checkpoints_dir(vault_path) / f"{safe}.md"
 
 
 def board_projection_path(vault_path: Optional[Path | str] = None) -> Path:

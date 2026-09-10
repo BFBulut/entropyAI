@@ -6,6 +6,8 @@ kaldığı yerden devam ederken sohbet geçmişi değil bu özet okunur: geçmi�
 pahalıdır (her turda yeniden gönderilir) hem de çökmede kaybolur.
 
 Dosya:  <kasa>/Desk/Offices/<ofis>/workspace/checkpoints/<kart-id>.md
+        `office="entropy"` için <kasa>/Entropy/Board/checkpoints/<kart-id>.md
+        (Entropy bir ofis değildir: Desk kökü altına yazılmaz)
 
 Blok sözleşmesi (alt ajan çıktısında, harness ayrıştırır):
 
@@ -33,6 +35,8 @@ from typing import Dict, List, Optional
 
 __all__ = [
     "CHECKPOINT_BLOCK_TAG",
+    "ENTROPY_CHECKPOINTS_SUBDIR",
+    "ENTROPY_OFFICE",
     "PROOF_BLOCK_TAG",
     "RESUME_MAX_CHARS",
     "checkpoints_dir",
@@ -98,7 +102,28 @@ def _safe(name: str) -> str:
     return cleaned or "office"
 
 
+#: Entropy'nin kendi kartları ofis değildir: Desk kökü altına yazılmaz.
+ENTROPY_OFFICE = "entropy"
+ENTROPY_CHECKPOINTS_SUBDIR = "Entropy/Board/checkpoints"
+
+
+def _is_entropy_office(office: str) -> bool:
+    return (office or "").strip().lower() == ENTROPY_OFFICE
+
+
 def checkpoints_dir(office: str, vault_path: Optional[Path] = None) -> Path:
+    """
+    Kontrol noktası klasörü.
+
+    `office="entropy"` Entropy'nin kendi kart panosudur; Desk'in ofis köküne
+    (`Desk/Offices/entropy/...`) sahte bir ofis açmamak için kasada
+    `Entropy/Board/checkpoints` altına yazılır.
+    """
+    if _is_entropy_office(office):
+        from entropy.core.paths import vault_root
+
+        return vault_root(vault_path) / ENTROPY_CHECKPOINTS_SUBDIR
+
     from entropy.memory.office_workspace import workspace_dir
 
     return workspace_dir(office, vault_path) / "checkpoints"

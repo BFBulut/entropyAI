@@ -43,19 +43,71 @@ logger = logging.getLogger(__name__)
 # "yazılanın ≥ %70'i yeni olsun"du; kilit onun tersi yönden okunuşudur.
 MIN_NOVELTY_RATIO = 0.30
 
+# Kartın niteliği: `TaskCard.kind` alanının sözleşmesi (Faz 12 kapanışı).
+# Dört değer var çünkü beyin kısayolu YALNIZCA `research` kartında uygulanır;
+# diğer üçünde beyin paketi yalnızca isteme girer (kısayol yok).
+CARD_KINDS = ("research", "write", "code", "ops")
+#: `kind` hiçbir sezgiye takılmazsa yazılan değer. `write` seçilmesi bilinçli:
+#: kısayol açmaz (yanlış pozitif riski yok) ama beyin paketini isteme sokar.
+DEFAULT_KIND = "write"
+
 # Kartın araştırma niteliği: açık `kind` alanı.
 RESEARCH_KINDS = ("research", "arastirma", "araştırma", "arastırma", "survey")
 
-# Başlık/hedef sezgisi — `kind` yazılmamış kartlar için. Yalnızca ARAŞTIRMA
-# fiilleri; "kodu incele" gibi geliştirme kartlarını yakalamamak için "incele"
-# tek başına yeterli sayılmaz (aşağıdaki `_WRITE_HINTS` onu geri çeker).
+# Başlık/hedef sezgisi — `kind` yazılmamış kartlar için. ARAŞTIRMA fiilleri
+# ÖNCE bakılır: "X'i araştır ve raporu yaz" bir araştırma kartıdır. Eski sıra
+# tersti ve `_WRITE_HINTS` ("yaz ") araştırma kartlarını geri çekiyordu; canlı
+# ölçümde dört kartta `brain_lookup` yanıt bulmuşken CLI yine de koştu.
 _RESEARCH_HINTS = (
     "araştır", "arastir", "araştırma", "arastirma", "research",
     "kaynak topla", "literatür", "literatur", "son gelişme", "son gelismeler",
     "web taraması", "web taramasi", "survey", "investigate", "piyasa analizi",
+    "incele ve raporla", "karşılaştır", "karsilastir",
 )
-_WRITE_HINTS = ("kodla", "uygula", "yaz ", "düzelt", "duzelt", "refactor",
-                "test ekle", "implement", "fix ")
+# KOD fiilleri: kartı kesinlikle CLI'ya götürür (kısayol yok).
+_CODE_HINTS = ("kodla", "uygula", "düzelt", "duzelt", "refactor", "test ekle",
+               "implement", "fix ", "hata ayıkla", "hata ayikla", "yama",
+               "modül yaz", "modul yaz", "fonksiyon", "sınıf ekle", "sinif ekle")
+# OPS fiilleri: kurulum/dağıtım/izleme.
+_OPS_HINTS = ("kur ", "kurulum", "dağıt", "dagit", "deploy", "build", "derle",
+              "yayınla", "yayinla", "izle", "yedek", "geri yükle", "geri yukle",
+              "sürüm çıkar", "surum cikar")
+# YAZI fiilleri: metin üretimi (rapor, özet, çeviri, damıtma).
+_WRITE_HINTS = ("yaz ", "yaz.", "yazı", "yazi", "özetle", "ozetle", "özet",
+                "ozet", "rapor", "taslak", "çevir", "cevir", "damıt", "damit",
+                "metin", "makale", "içerik", "icerik", "belge")
+
+
+def infer_kind(title: str = "", goal: str = "") -> str:
+    """
+    Başlık + hedeften kart niteliğini sezer (`research|write|code|ops`).
+
+    Sıra sabittir ve anlamlıdır: research → code → ops → write. "Araştır ve
+    raporu yaz" araştırmadır; "panoyu kodla, dispatcher yaz" koddur. Hiçbiri
+    tutmazsa `DEFAULT_KIND` döner — sezgi ASLA boş bırakmaz, çünkü boş `kind`
+    her okuyucuda yeniden sezgiye düşüyordu.
+    """
+    text = f" {title or ''} {goal or ''} ".lower()
+    if not text.strip():
+        return DEFAULT_KIND
+    if any(h in text for h in _RESEARCH_HINTS):
+        return "research"
+    if any(h in text for h in _CODE_HINTS):
+        return "code"
+    if any(h in text for h in _OPS_HINTS):
+        return "ops"
+    if any(h in text for h in _WRITE_HINTS):
+        return "write"
+    return DEFAULT_KIND
+
+
+def card_kind(card: Any) -> str:
+    """Kartın niteliği: açık `kind` alanı, yoksa sezgi. Boş DÖNMEZ."""
+    kind = str(getattr(card, "kind", "") or "").strip().lower()
+    if kind:
+        return "research" if kind in RESEARCH_KINDS else kind
+    return infer_kind(getattr(card, "title", "") or "",
+                      getattr(card, "goal", "") or "")
 
 # Kaynak işareti: URL ya da dosya yolu. Rapor metninde bunlardan biri yoksa
 # "kaynak" iddiası doğrulanamaz.
@@ -70,19 +122,11 @@ def is_research_card(card: Any) -> bool:
     """
     Kart araştırma niteliğinde mi?
 
-    Sıra: (1) açık `kind` alanı, (2) başlık + hedef sezgisi. Sezgi bilinçli
-    olarak DAR: yanlış pozitif, bir geliştirme kartını beyin cevabıyla
-    kapatmak demekti.
+    Sıra: (1) açık `kind` alanı, (2) başlık + hedef sezgisi (`infer_kind`).
+    Açık alan sezgiyi EZER: `kind="build"` yazılmış bir kart başlığında
+    "araştır" geçse de araştırma sayılmaz.
     """
-    kind = str(getattr(card, "kind", "") or "").strip().lower()
-    if kind:
-        return kind in RESEARCH_KINDS
-    text = f"{getattr(card, 'title', '') or ''} {getattr(card, 'goal', '') or ''}".lower()
-    if not text.strip():
-        return False
-    if any(h in text for h in _WRITE_HINTS):
-        return False
-    return any(h in text for h in _RESEARCH_HINTS)
+    return card_kind(card) == "research"
 
 
 def has_sources(text: str) -> bool:
@@ -103,6 +147,26 @@ class BrainAnswer:
     confidence: float = 0.0
     text: str = ""
     sources: List[str] = field(default_factory=list)
+
+    def prompt_section(self) -> str:
+        """
+        İsteme giren `[BEYİN]` bölümü — kısayolun uygulanmadığı kartlar için.
+
+        `research` DIŞINDAKİ kartlarda (write/code/ops) beyin cevabı kartı
+        kapatmaz ama CLI turunu KISALTIR: ajan aynı bilgiyi yeniden aramak
+        yerine hazır paketle başlar. Boş yanıtta boş dize döner (istem
+        kirlenmesin).
+        """
+        body = (self.text or "").strip()
+        if not body:
+            return ""
+        head = (f"[BEYİN]\nHafızandan bu görev için hazır bulunan bilgi "
+                f"(güven {self.confidence:.2f}). Doğrula ve KULLAN; aynı şeyi "
+                f"baştan araştırma:")
+        tail = ""
+        if self.sources:
+            tail = "\nKaynaklar: " + ", ".join(str(s) for s in self.sources[:10])
+        return f"{head}\n\n{body}{tail}"
 
     def note(self) -> str:
         """Kart özetine yazılacak insan okur metin."""
@@ -459,7 +523,8 @@ def _notify(card: Any, outcome: LockOutcome) -> None:
 
 
 __all__ = [
-    "MIN_NOVELTY_RATIO", "RESEARCH_KINDS", "BrainAnswer", "NoveltyReport",
+    "MIN_NOVELTY_RATIO", "RESEARCH_KINDS", "CARD_KINDS", "DEFAULT_KIND",
+    "infer_kind", "card_kind", "BrainAnswer", "NoveltyReport",
     "LockOutcome", "is_research_card", "has_sources", "brain_lookup",
     "split_claims", "admit_report", "topic_tokens", "same_topic",
     "stop_scheduled_research", "apply_report_lock",

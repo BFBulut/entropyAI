@@ -205,24 +205,84 @@ def recurring_signals(
 # ---------------------------------------------------------------------------
 
 
-def _sections_from_playbook(procedure: str) -> Dict[str, str]:
+#: Playbook başlıklarını şema bölümlerine eşleyen anahtar sözcükler. Damıtılmış
+#: playbook başlıkları serbest yazılır; eşleme bu yüzden anahtar sözcükle yapılır.
+_SECTION_TERMS: Dict[str, tuple] = {
+    "Ne zaman kullanılır": ("ne zaman", "kullanım", "kullanim", "when", "kapsam"),
+    "Girdiler": ("girdi", "input", "ön koşul", "on kosul", "gereken", "veri kaynağı",
+                 "veri kaynagi", "hazırlık", "hazirlik"),
+    "Çıktılar": ("çıktı", "cikti", "output", "rapor biçim", "rapor bicim", "sonuç biçim",
+                 "sonuc bicim", "teslim"),
+    "Adımlar": ("adım", "adim", "step", "workflow", "prosedür", "prosedur", "yordam"),
+    "Sonlandırma ölçütü": ("ölçüt", "olcut", "criteria", "kriter", "eşik", "esik",
+                           "karar", "doğrulama", "dogrulama"),
+    "Ortam varsayımları": ("ortam", "environment", "araç", "arac", "kurulum", "varsayım",
+                           "varsayim"),
+}
+
+#: Doldurulmamış bölüm işareti — doğrulayıcı bu ibareyi eksik sayar.
+PLACEHOLDER_MARK = "doldurulacak"
+
+
+def _placeholder(label: str) -> str:
+    return f"- ({label} doldurulacak: kaynak bulunamadı)"
+
+
+def _sections_from_playbook(procedure: str) -> Dict[str, Any]:
     """Playbook bölümlerini şema bölümlerine kabaca eşler (LLM'siz)."""
+    pairs: List[tuple] = []
     try:
         from entropy.memory.wiki import split_playbook_sections
 
-        chunks = [text for _title, text in split_playbook_sections(procedure or "")]
+        pairs = list(split_playbook_sections(procedure or ""))
     except Exception:  # pragma: no cover
-        chunks = [c for c in (procedure or "").split("\n\n") if c.strip()]
+        pairs = []
+    if not pairs:
+        pairs = [("", c) for c in (procedure or "").split("\n\n") if c.strip()]
+    chunks = [text for _title, text in pairs]
     steps: List[str] = []
     for chunk in chunks:
         for line in chunk.splitlines():
             stripped = line.strip()
             if re.match(r"^([-*+]|\d+[.)])\s+", stripped):
                 steps.append(re.sub(r"^([-*+]|\d+[.)])\s+", "", stripped))
+
+    # Başlık eşlemesi: her şema bölümüne ilk eşleşen playbook bölümünün gövdesi.
+    mapped: Dict[str, str] = {}
+    for section, terms in _SECTION_TERMS.items():
+        for title, body in pairs:
+            low = (title or "").strip().lower()
+            if not low or not body.strip():
+                continue
+            if any(t in low for t in terms) and section not in mapped:
+                mapped[section] = f"{body.strip()}\n\n> Kaynak: playbook bölümü “{title.strip()}”."
     return {
         "steps": "\n".join(f"{i}. {s}" for i, s in enumerate(steps[:12], 1)),
         "first": (chunks[0].strip() if chunks else ""),
+        "mapped": mapped,
     }
+
+
+def _wiki_concept_titles(skill: str, vault_path: Optional[Path]) -> List[str]:
+    """Yeteneğin wiki kavram sayfası adları (kaynağı olan girdi listesi)."""
+    try:
+        from entropy.memory.wiki import concepts_dir
+
+        folder = concepts_dir(skill, vault_path)
+        if not folder.is_dir():
+            return []
+        return [p.stem for p in sorted(folder.glob("*.md"))][:MAX_PROVENANCE_ITEMS]
+    except Exception:  # pragma: no cover
+        return []
+
+
+def _report_titles(store: Any, skill: str) -> List[str]:
+    """Kaynak rapor başlıkları (yeteneğin ürettiği çıktının kanıtı)."""
+    try:
+        reports = list(store.source_reports(skill))
+    except Exception:  # pragma: no cover
+        return []
+    return [p.stem for p in reports[:MAX_PROVENANCE_ITEMS]]
 
 
 def _provenance_lines(skill: str, store: Any, vault_path: Optional[Path]) -> List[str]:
@@ -280,30 +340,106 @@ def render_skill_md(
     return "\n".join(body).rstrip() + "\n"
 
 
-def _skeleton_sections(skill: str, playbook: Any, report_count: int) -> Dict[str, str]:
-    parts = _sections_from_playbook(getattr(playbook, "procedure", "") or "")
+def _skeleton_sections(
+    skill: str,
+    playbook: Any,
+    report_count: int,
+    *,
+    store: Any = None,
+    vault_path: Optional[Path] = None,
+) -> Dict[str, str]:
+    """
+    Kotasız iskelet: zorunlu bölümler **gerçek içerikle** doldurulur.
+
+    Kaynak sırası: playbook bölümü → wiki kavramları → rapor başlıkları. Hiçbiri
+    yoksa bölüm yer tutucu kalır ve doğrulayıcı adayı `draft` bırakır — uydurma
+    içerik yazmaktansa eksik bırakmak yeğdir.
+    """
+    procedure = getattr(playbook, "procedure", "") or ""
+    parts = _sections_from_playbook(procedure)
+    mapped: Dict[str, str] = parts.get("mapped") or {}
     summary = (parts["first"].splitlines() or [""])[0].strip("#- ").strip()
-    steps = parts["steps"] or "1. (adım yok: playbook boş)"
-    return {
+    steps = mapped.get("Adımlar") or parts["steps"]
+    concepts = _wiki_concept_titles(skill, vault_path) if vault_path is not None or store else []
+    reports = _report_titles(store, skill) if store is not None else []
+
+    out: Dict[str, str] = {
         "summary": summary or f"{skill} yordamının paketlenmiş hâli",
-        "Ne zaman kullanılır": (
+    }
+
+    # Ne zaman kullanılır: playbook bölümü varsa o, yoksa rapor birikimi gerçeği.
+    if mapped.get("Ne zaman kullanılır"):
+        out["Ne zaman kullanılır"] = mapped["Ne zaman kullanılır"]
+    elif report_count:
+        out["Ne zaman kullanılır"] = (
             f"- {skill} konusunda tekrarlayan bir iş geldiğinde "
             f"({report_count} rapor bu konuda birikti).\n"
-            f"- Tek seferlik araştırmalarda kullanma; yordam tekrar ediyorsa kullan."
-        ),
-        "Ortam varsayımları": (
-            "- Python 3.13, çevrimdışı çalışabilir.\n"
-            "- Girdi dosyaları yerel diskte okunabilir.\n"
-            "- Ağ erişimi gerekiyorsa adımda açıkça belirtilir."
-        ),
-        "Girdiler": "- (girdi tanımı doldurulacak)",
-        "Çıktılar": "- (çıktı tanımı doldurulacak)",
-        "Adımlar": steps,
-        "Sonlandırma ölçütü": (
+            "- Tek seferlik araştırmalarda kullanma; yordam tekrar ediyorsa kullan."
+        )
+    elif procedure.strip():
+        out["Ne zaman kullanılır"] = (
+            f"- {skill} yordamı gerektiren işlerde.\n"
+            "- Yordam tekrar etmiyorsa kullanma."
+        )
+    else:
+        out["Ne zaman kullanılır"] = _placeholder("kullanım koşulu")
+
+    out["Ortam varsayımları"] = mapped.get("Ortam varsayımları") or (
+        "- Python 3.13, çevrimdışı çalışabilir.\n"
+        "- Girdi dosyaları yerel diskte okunabilir.\n"
+        "- Ağ erişimi gerekiyorsa adımda açıkça belirtilir."
+    )
+
+    # Girdiler: playbook bölümü → wiki kavramları.
+    if mapped.get("Girdiler"):
+        out["Girdiler"] = mapped["Girdiler"]
+    elif concepts:
+        out["Girdiler"] = "\n".join(
+            [f"- {c} (wiki kavramı)" for c in concepts]
+            + ["", "> Kaynak: yetenek wiki'sinin kavram sayfaları."]
+        )
+    elif procedure.strip():
+        first = [
+            re.sub(r"^([-*+]|\d+[.)])\s+", "", l.strip())
+            for l in procedure.splitlines()
+            if re.match(r"^\s*([-*+]|\d+[.)])\s+\S", l)
+        ][:3]
+        out["Girdiler"] = (
+            "\n".join(f"- {l}" for l in first) + "\n\n> Kaynak: playbook yordamının ilk adımları."
+            if first else _placeholder("girdi tanımı")
+        )
+    else:
+        out["Girdiler"] = _placeholder("girdi tanımı")
+
+    # Çıktılar: playbook bölümü → kaynak rapor başlıkları.
+    if mapped.get("Çıktılar"):
+        out["Çıktılar"] = mapped["Çıktılar"]
+    elif reports:
+        out["Çıktılar"] = "\n".join(
+            ["- Bu yordamın ürettiği rapor türü; örnekler:"]
+            + [f"  - `{r}`" for r in reports[:5]]
+            + ["", "> Kaynak: yeteneğin kaynak raporlarının başlıkları."]
+        )
+    else:
+        out["Çıktılar"] = _placeholder("çıktı tanımı")
+
+    out["Adımlar"] = steps or _placeholder("adım listesi")
+
+    if mapped.get("Sonlandırma ölçütü"):
+        # Ölçüt ölçülebilir olmalı: playbook ölçütünün altına paketin kendi
+        # yeşil-test koşulu eklenir.
+        out["Sonlandırma ölçütü"] = (
+            mapped["Sonlandırma ölçütü"]
+            + f"\n\n- `tests/test_{slugify(skill)}.py` yeşil."
+        )
+    elif procedure.strip():
+        out["Sonlandırma ölçütü"] = (
             f"- `tests/test_{slugify(skill)}.py` yeşil.\n"
             "- Çıktı dosyası üretildi ve boş değil."
-        ),
-    }
+        )
+    else:
+        out["Sonlandırma ölçütü"] = _placeholder("sonlandırma ölçütü")
+    return out
 
 
 def _script_skeleton(name: str, skill: str) -> str:
@@ -443,7 +579,9 @@ def synthesize_skill(
     except Exception:  # pragma: no cover
         report_count = 0
     provenance = _provenance_lines(skill, store, vault_path)
-    sections = _skeleton_sections(skill, playbook, report_count)
+    sections = _skeleton_sections(
+        skill, playbook, report_count, store=store, vault_path=vault_path
+    )
 
     turns = 0
     reason = "kotasız iskelet (playbook bölümlerinden)"
@@ -689,7 +827,7 @@ def reject_skill(name: str, reason: str = "", vault_path: Optional[Path] = None)
 
 
 __all__ = [
-    "CANDIDATES_SUBDIR", "MIN_RECURRENCE", "PROMOTED_SUBDIR", "REQUIRED_SECTIONS",
+    "CANDIDATES_SUBDIR", "MIN_RECURRENCE", "PLACEHOLDER_MARK", "PROMOTED_SUBDIR", "REQUIRED_SECTIONS",
     "SCHEMA_VERSION", "STATUS_APPROVED", "STATUS_DRAFT", "STATUS_REJECTED",
     "STATUS_VALIDATED", "build_synthesis_prompt", "candidate_dir",
     "candidate_state_path", "candidates_root", "leak_findings", "list_candidates",

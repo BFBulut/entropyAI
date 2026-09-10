@@ -1250,9 +1250,14 @@ class TaskBoard:
         agent_spec=None,
         project_path: Optional[str] = None,
         lead_sections: Optional[List[str]] = None,
+        brain_section: str = "",
     ) -> str:
         """
         Ajanın gövdesi + görev sözleşmesi + kabul ölçütleri.
+
+        `brain_section` (Faz 12 kapanışı): beyinden gelen hazır bilgi paketi
+        (`[BEYİN]`). Görev sözleşmesinin HEMEN ARDINDAN girer — ajan ne
+        yapacağını okuduktan sonra "bunu zaten biliyorsun" bilgisini görmeli.
 
         `lead_sections` istemin EN BAŞINA girer (doğuş talimatı, kaldığın yer,
         koşan karta yorum). Sıra bilinçli: ajan doğar doğmaz önce panoyu ve
@@ -1281,6 +1286,8 @@ class TaskBoard:
             # bir alt kart tek başına ofisin bütçesini bitiriyordu.
             f"{COST_DISCIPLINE}"
         )
+        if (brain_section or "").strip():
+            parts.append(brain_section.strip())
         # Faz 10-A: kontrol noktası / kanıt / kural adayı disiplini. Kanıt
         # metni kartın yazma niyetine göre değişir: salt araştırma kartında
         # "test koştur" demek ajanı olmayan bir testi uydurmaya itiyordu.
@@ -1382,7 +1389,8 @@ class TaskBoard:
         # "beyinden yanıtlandı" özetiyle `review`e düşer. Kilit, kotayı
         # harcamadan kapanan tek yoldur; hata durumunda (hafıza katmanı yok,
         # sorgu patladı) sessizce normal koşuya devam eder.
-        brain = self._brain_shortcut(card, provider=provider)
+        brain_answer = self._brain_consult(card)
+        brain = self._brain_shortcut(card, provider=provider, answer=brain_answer)
         if brain is not None:
             return brain
 
@@ -1401,8 +1409,19 @@ class TaskBoard:
         # ajanınkini ezer; ikisi de boşsa köprü oturum eforunda kalır.
         run_effort = resolve_card_effort(card, agent_spec=agent_spec)
 
+        # Faz 12 kapanışı: kısayol uygulanmadıysa (write/code/ops kartı ya da
+        # eşiğin altında güven) beyin cevabı ÇÖPE ATILMAZ; isteme `[BEYİN]`
+        # bölümü olarak girer. Amaç kotayı kısaltmak: ajan hafızada zaten olan
+        # bilgiyi CLI turunda yeniden aramaz.
+        brain_section = ""
+        if brain_answer is not None:
+            try:
+                brain_section = brain_answer.prompt_section()
+            except Exception:
+                brain_section = ""
         prompt = self.build_prompt(card, agent_spec=agent_spec, project_path=project_path,
-                                   lead_sections=lead_sections)
+                                   lead_sections=lead_sections,
+                                   brain_section=brain_section)
         needs_write = card_needs_write(card, agent_spec=agent_spec)
         # Faz 12-B: OTURUM BÜTÇESİ. Eşik aşıldıysa oturum burada döner ve devir
         # sayfası isteme eklenir; `agent_session_kwargs` aşağıda taze bir
@@ -1532,13 +1551,13 @@ class TaskBoard:
             return None
         return task_id
 
-    def _brain_shortcut(self, card: TaskCard, provider: str = "") -> Optional[str]:
+    def _brain_consult(self, card: TaskCard):
         """
-        Araştırma kartı beyinden yanıtlanabiliyorsa kartı kapatır (Faz 11.6-a).
+        Karta karşılık beyne bir kez sorar; `BrainAnswer` ya da None döner.
 
-        Dönüş: kart kapatıldıysa sahte görev kimliği (`brain-<id>`) — çağıranlar
-        (dispatcher, harness) bunu "kart işlendi" olarak okur ve ikinci bir tur
-        açmaz; aksi hâlde None ve normal koşu devam eder.
+        Sorgu her nitelikteki Entropy kartı için yapılır (yalnızca araştırma
+        için değil): `research` kartında sonuç KISAYOL olur, diğerlerinde
+        istemin `[BEYİN]` bölümü olur. Tek çağrı, iki kullanım.
 
         Ofis kartları KAPSAM DIŞI: Desk'in kendi zinciri ara çıktılara bağlı ve
         Entropy'nin beyni Desk'e sızmamalı (tek yönlü bilgi kuralı).
@@ -1555,15 +1574,46 @@ class TaskBoard:
         try:
             from entropy.agents import amplification
 
-            if not amplification.is_research_card(card):
-                return None
-            answer = amplification.brain_lookup(
+            return amplification.brain_lookup(
                 f"{card.title or ''}\n{card.goal or ''}".strip()
             )
         except Exception:
-            logging.getLogger(__name__).debug("Beyin kısayolu denenemedi", exc_info=True)
+            logging.getLogger(__name__).debug("Beyne sorulamadı", exc_info=True)
+            return None
+
+    def _brain_shortcut(self, card: TaskCard, provider: str = "",
+                        answer=None) -> Optional[str]:
+        """
+        Araştırma kartı beyinden yanıtlanabiliyorsa kartı kapatır (Faz 11.6-a).
+
+        Üç koşul BİRLİKTE aranır (Faz 12 kapanışı): kart `kind="research"`,
+        beyinde yanıt var (`brain_has_answer`) ve güven
+        `config.brain_confidence_threshold` eşiğinin ÜSTÜNDE. Eşik denetimi
+        eskiden yoktu: `has_answer` True ama güven 0.05 olan bir yanıtla da
+        kart kapanabiliyordu. `write`/`code`/`ops` kartlarında kısayol YOKTUR.
+
+        Dönüş: kart kapatıldıysa sahte görev kimliği (`brain-<id>`) — çağıranlar
+        (dispatcher, harness) bunu "kart işlendi" olarak okur ve ikinci bir tur
+        açmaz; aksi hâlde None ve normal koşu devam eder.
+        """
+        if card.office or answer is None:
+            return None
+        try:
+            from entropy.agents import amplification
+
+            if not amplification.is_research_card(card):
+                return None
+        except Exception:
             return None
         if not answer.has_answer or not (answer.text or "").strip():
+            return None
+        try:
+            from entropy.core.config import config as _config
+
+            threshold = float(getattr(_config, "brain_confidence_threshold", 0.40))
+        except Exception:
+            threshold = 0.40
+        if float(getattr(answer, "confidence", 0.0) or 0.0) < threshold:
             return None
         moved = self._advance_to_running(card, provider=provider or card.provider)
         if moved is None:

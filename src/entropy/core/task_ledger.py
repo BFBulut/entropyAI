@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+#: Sohbet turu satırlarının adı (defterde göreve benzemesin diye açık).
+CHAT_TURN_NAME = "Sohbet turu"
+
+
 class TaskStatus(str, Enum):
     """Finite state machine statuses for autonomous tasks."""
     PENDING = "PENDING"
@@ -212,6 +216,69 @@ class TaskLedger:
                          now, now, now, summary, tok_in, tok_out, tok_total)
                     )
                 conn.commit()
+
+    def record_chat_turn(
+        self,
+        usage: Optional[Dict[str, int]] = None,
+        provider: str = "",
+        model: str = "",
+        task_id: str = "",
+    ) -> Optional[str]:
+        """
+        Bir SOHBET turunun token maliyetini deftere yazar (Faz 12 kapanışı).
+
+        Neden: defter yalnızca arka plan GÖREVLERİNİ tutuyordu; kullanıcının
+        sohbet turları hiçbir yerde birikmiyordu. Tavan aşımının nedeni tam
+        buydu — ölçülemeyen tüketim. Satırın kimliği `chat-<zaman>` ve durumu
+        doğrudan SUCCESS: sohbet turu bittiğinde ölçülür, "süren" hâli yoktur.
+
+        Sıfır tokenli tur YAZILMAZ (defteri boş satırla şişirmez); dönüş
+        yazılan satırın kimliği ya da None.
+        """
+        u = usage or {}
+        tok_in = int(u.get("input_tokens") or 0)
+        tok_out = int(u.get("output_tokens") or 0)
+        tok_total = int(u.get("total_tokens") or 0) or (tok_in + tok_out)
+        if tok_total <= 0:
+            return None
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        row_id = task_id or f"chat-{now_dt.strftime('%Y%m%d-%H%M%S-%f')}"
+        now = now_dt.isoformat()
+        with self._lock:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO tasks (
+                        task_id, task_name, project_path, status,
+                        created_at, started_at, completed_at, error, result_summary,
+                        input_tokens, output_tokens, total_tokens, provider, model
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        input_tokens = excluded.input_tokens,
+                        output_tokens = excluded.output_tokens,
+                        total_tokens = excluded.total_tokens
+                    """,
+                    (row_id, CHAT_TURN_NAME, "", TaskStatus.SUCCESS.value,
+                     now, now, now, CHAT_TURN_NAME,
+                     tok_in, tok_out, tok_total, provider or "", model or "")
+                )
+                conn.commit()
+        return row_id
+
+    def chat_token_totals(self, since_iso: Optional[str] = None) -> Dict[str, int]:
+        """Yalnızca sohbet turlarının toplamı (`chat-` ön ekli satırlar)."""
+        with self._lock:
+            with self._get_connection() as conn:
+                sql = ("SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), "
+                       "COALESCE(SUM(total_tokens),0), COUNT(*) FROM tasks "
+                       "WHERE task_id LIKE 'chat-%'")
+                if since_iso:
+                    row = conn.execute(sql + " AND completed_at >= ?", (since_iso,)).fetchone()
+                else:
+                    row = conn.execute(sql).fetchone()
+        return {"input_tokens": row[0], "output_tokens": row[1],
+                "total_tokens": row[2], "turns": row[3]}
 
     def token_totals(self, since_iso: Optional[str] = None) -> Dict[str, int]:
         """Kayıtlı arka plan görevlerinin toplam token maliyeti (opsiyonel tarih filtresiyle)."""

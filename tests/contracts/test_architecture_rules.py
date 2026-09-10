@@ -276,3 +276,42 @@ def test_entropy_agents_are_not_bound_to_any_desk_office(tmp_path):
     reg.seed_defaults() if hasattr(reg, "seed_defaults") else None
     written = [a.name for a in reg.list() if (getattr(a, "office", "") or "").strip()]
     assert written == [], f"kasadaki Entropy ajaninda office alani: {written}"
+
+
+# ----------------------------- 5. ayri kok: Entropy karti Desk'e yazmaz
+
+def test_entropy_card_writes_nothing_under_the_desk_root(tmp_path):
+    """
+    Kural (f): Entropy'nin KENDI karti `Desk/` kokunun altina hicbir dosya
+    yazmaz.
+
+    Olculen ihlal (Faz 12 kapanisi): `board_checkpoint` araci Entropy kartinda
+    da ofis yazicisini `office="entropy"` ile cagiriyor ve kontrol noktasi
+    `Desk/Offices/entropy/workspace/checkpoints/<kart>.md` altina dusuyordu.
+    Iki kadronun verisi ayni kokte karisiyordu.
+    """
+    from entropy.agents import board_tool_exec, board_tools
+    from entropy.agents.tasks import TaskBoard, TaskCard
+    from entropy.core.paths import board_checkpoints_dir, desk_root
+
+    board = TaskBoard(vault_path=tmp_path)
+    card = board.create(TaskCard(id="ent-1", title="Entropy karti",
+                                 agent="arastirmaci", status="running"))
+
+    res = board_tool_exec.execute(
+        [board_tools.ToolCall(name="board_checkpoint",
+                              args={"task_id": card.id, "done": "modul 1",
+                                    "next": "modul 2", "files": ["a.py"],
+                                    "tests": "pytest -q"})],
+        board=board, card=card, actor="arastirmaci", vault_path=tmp_path,
+    )
+    assert res[0]["ok"], res
+    written = Path(res[0]["path"])
+    assert written.is_file()
+    assert written.parent == board_checkpoints_dir(tmp_path)
+
+    root = desk_root(tmp_path)
+    stray = [str(p) for p in root.rglob("*") if p.is_file()] if root.exists() else []
+    assert stray == [], f"Entropy karti Desk kokune yazdi: {stray}"
+    # Sahte "entropy" ofisi hic olusmamali.
+    assert not (root / "Offices" / "entropy").exists()

@@ -2263,6 +2263,19 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                 "total_tokens": cum_total,
                             }
                             config.last_cumulative_usage = dict(self.last_cumulative_usage)
+                            # Faz 12 kapanışı: SOHBET turunun maliyeti deftere
+                            # yazılır (görevler zaten yazılıyordu). Kaydedilen
+                            # değer TURUN farkıdır, oturumun kümülatifi değil.
+                            try:
+                                task_ledger.record_chat_turn(
+                                    {"input_tokens": turn_input,
+                                     "output_tokens": turn_output,
+                                     "total_tokens": turn_total},
+                                    provider="agy",
+                                    model=getattr(self, "model", "") or "",
+                                )
+                            except Exception:
+                                pass
                             config.save_settings()
                             self.session_turn_count += 1
                             bus.token_usage_updated.emit(turn_total)

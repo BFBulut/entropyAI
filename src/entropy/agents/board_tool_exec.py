@@ -111,9 +111,15 @@ def _run_checkpoint(board, card, args: Dict[str, Any], actor: str,
     """
     Kontrol noktasını diske yazar ve kartın `checkpoint` alanını doldurur.
 
-    Disk yazımı `memory.checkpoints.write_checkpoint`ın işidir ve o modül
-    hafıza katmanına aittir: içe aktarma KORUMALI, modül yoksa kart alanı yine
-    de dolar (ajan katmanı hafıza katmanına sert bağımlı olamaz).
+    İki ayrı kök (Faz 12 kapanışı): OFİS kartı `memory.checkpoints`in ofis
+    çalışma alanına yazar; ENTROPY kartı (`office` boş) `Entropy/Board/
+    checkpoints/<kart>.md`e yazar. Eskiden Entropy kartı da ofis yazıcısına
+    `office="entropy"` ile gidiyor ve dosya `Desk/Offices/entropy/workspace/`
+    altına düşüyordu — ayrı kök kuralının ihlali (Entropy verisi Desk kökünde).
+
+    Ofis kolunda disk yazımı `memory.checkpoints.write_checkpoint`ın işidir ve
+    o modül hafıza katmanına aittir: içe aktarma KORUMALI, modül yoksa kart
+    alanı yine de dolar (ajan katmanı hafıza katmanına sert bağımlı olamaz).
     """
     if card is None:
         return _err("board_checkpoint", "kart yok")
@@ -126,20 +132,33 @@ def _run_checkpoint(board, card, args: Dict[str, Any], actor: str,
         return _err("board_checkpoint", "boş kontrol noktası: en az `done` yaz")
 
     path = ""
+    office = (card.office or "").strip()
     try:
-        from entropy.memory.checkpoints import write_checkpoint  # type: ignore
+        if office:
+            from entropy.memory.checkpoints import write_checkpoint  # type: ignore
 
-        written = write_checkpoint(
-            card.office or "entropy",
-            card.id,
-            summary=summary,
-            done=done,
-            next_steps=next_steps,
-            files_touched=files,
-            tests=tests,
-            author=actor or card.agent or "",
-            vault_path=vault_path,
-        )
+            written = write_checkpoint(
+                office,
+                card.id,
+                summary=summary,
+                done=done,
+                next_steps=next_steps,
+                files_touched=files,
+                tests=tests,
+                author=actor or card.agent or "",
+                vault_path=vault_path,
+            )
+        else:
+            written = write_entropy_checkpoint(
+                card.id,
+                summary=summary,
+                done=done,
+                next_steps=next_steps,
+                files_touched=files,
+                tests=tests,
+                author=actor or card.agent or "",
+                vault_path=vault_path,
+            )
         path = str(written)
     except Exception:
         logger.debug("Kontrol noktası diske yazılamadı", exc_info=True)
@@ -154,6 +173,54 @@ def _run_checkpoint(board, card, args: Dict[str, Any], actor: str,
     _emit_checkpoint(card, path)
     return _ok("board_checkpoint", card_id=card.id, path=path,
                checkpoint=line, card=updated)
+
+
+def write_entropy_checkpoint(
+    card_id: str,
+    *,
+    summary: str = "",
+    done: str = "",
+    next_steps: str = "",
+    files_touched=None,
+    tests: str = "",
+    author: str = "",
+    vault_path=None,
+):
+    """
+    Entropy kartının kontrol noktasını `Entropy/Board/checkpoints/<kart>.md`e
+    yazar (üzerine yazar: son durum tek kayıttır).
+
+    Neden `memory.checkpoints` DEĞİL: o modülün yol şeması ofis çalışma alanına
+    çıpalı (`Desk/Offices/<ofis>/workspace/checkpoints`) ve ofis adı boş
+    olduğunda Entropy verisini Desk kökünün altına düşürüyor. Biçim ofis
+    kontrol noktasıyla AYNI tutulur (aynı başlıklar), böylece devir sayfası ve
+    okuyucular tek şemayla çalışır.
+    """
+    from datetime import datetime
+    from pathlib import Path
+
+    from entropy.core.paths import board_checkpoint_path
+
+    path: Path = board_checkpoint_path(card_id, vault_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    files = [str(f).strip() for f in (files_touched or []) if str(f).strip()]
+    now = datetime.now().isoformat(timespec="seconds")
+    lines = [
+        f"# Kontrol noktası: {card_id}",
+        "",
+        f"- Kart: {card_id}",
+        f"- Yazan: {author or '-'}",
+        f"- Güncelleme: {now}",
+        "",
+        "## Özet", "", (summary or done or "-").strip(),
+        "", "## Yapılan", "", (done or "-").strip(),
+        "", "## Sonraki adımlar", "", (next_steps or "-").strip(),
+        "", "## Dokunulan dosyalar", "",
+    ]
+    lines += [f"- {f}" for f in files] or ["- (yok)"]
+    lines += ["", "## Testler", "", (tests or "-").strip(), ""]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
 
 
 def _emit_checkpoint(card, path: str) -> None:
@@ -275,4 +342,4 @@ def _update_card(board, card, **fields):
 
 
 __all__ = ["execute", "ToolResult", "ACTOR_AGENT", "ACTOR_ENTROPY",
-           "ASK_NOTE_PREFIX", "ASK_REVIEW_TEXT"]
+           "ASK_NOTE_PREFIX", "ASK_REVIEW_TEXT", "write_entropy_checkpoint"]

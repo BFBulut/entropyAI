@@ -1310,6 +1310,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             }
             self.last_total_cost_usd = cost
         config.last_cumulative_usage = dict(self.last_cumulative_usage)
+        # Faz 12 kapanışı: SOHBET turu da deftere yazılır. Defter yalnızca arka
+        # plan görevlerini tutarken sohbet tüketimi hiçbir yerde birikmiyordu ve
+        # tavan aşımının nedeni ölçülemiyordu.
+        try:
+            task_ledger.record_chat_turn(usage, provider="claude",
+                                         model=getattr(self, "model", "") or "")
+        except Exception:
+            pass
         try:
             config.save_settings()
         except Exception:

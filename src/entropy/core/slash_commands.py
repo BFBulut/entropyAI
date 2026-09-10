@@ -593,6 +593,8 @@ def _handle_task(args: str) -> str:
         return (f"<b>📋 Görev</b><br/>'{_html_escape(agent_name)}' adında ajan yok.<br/>"
                 f"Mevcut: {_html_escape(known)}")
 
+    from entropy.agents import amplification as _amplification
+
     card = TaskCard(
         id=new_task_id(title),
         title=title,
@@ -602,6 +604,9 @@ def _handle_task(args: str) -> str:
         model=spec.model,
         skill=(spec.skills or [""])[0],
         goal=goal or title,
+        # `kind` sezgisi burada da uygulanır (Faz 12 kapanışı): `/task` ile
+        # açılan kart `kind`siz kalınca beyin kısayolu hiç tetiklenmiyordu.
+        kind=_amplification.infer_kind(title, goal or title),
     )
     try:
         card = board.create(card)

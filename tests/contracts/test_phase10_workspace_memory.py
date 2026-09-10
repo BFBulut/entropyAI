@@ -185,6 +185,22 @@ def test_checkpoint_overwrite_keeps_history(vault):
     assert any("birinci tur" in h for h in data["history"])
 
 
+def test_entropy_office_checkpoints_live_outside_desk_root(vault):
+    """Entropy'nin kendi kartları Desk kökünde sahte bir ofis açmaz."""
+    from entropy.core.paths import desk_root
+
+    path = checkpoints.write_checkpoint(
+        "entropy", "kart-e1", summary="entropy kartı", author="a", vault_path=vault
+    )
+    rel = path.relative_to(vault).as_posix()
+    assert rel.startswith("Entropy/Board/checkpoints/"), rel
+    assert not (desk_root(vault) / "Offices" / "entropy").exists()
+
+    data = checkpoints.read_checkpoint("entropy", "kart-e1", vault)
+    assert data and data["summary"] == "entropy kartı"
+    assert checkpoints.resume_section("entropy", "kart-e1", vault).startswith("[KALDIĞIN YER]")
+
+
 def test_resume_section_budget_and_absence(vault):
     assert checkpoints.resume_section(OFFICE, "yok-boyle-kart", vault) == ""
     checkpoints.write_checkpoint(

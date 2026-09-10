@@ -60,6 +60,7 @@ def create_card_from_args(
     Dönüş `(kart, not)`. Kart `None` ise not RET NEDENİDİR; kart doluysa not
     bilgilendirmedir (boş olabilir).
     """
+    from entropy.agents import amplification
     from entropy.agents.tasks import TaskBoard, TaskCard, new_task_id
 
     title = str(args.get("title") or "").strip()
@@ -76,6 +77,13 @@ def create_card_from_args(
     agent = str(args.get("agent") or "").strip()
     priority = str(args.get("priority") or "").strip().upper()
     effort = str(args.get("effort") or "").strip().lower()
+    # `kind` ZORUNLU alandır (Faz 12 kapanışı) ama kart REDDEDİLMEZ: JSON'da
+    # yoksa başlık/hedef sezgisiyle doldurulur ve karta YAZILIR. Boş bırakıldığı
+    # sürece her okuyucu sezgiyi baştan çalıştırıyordu ve beyin kısayolu
+    # ("research" kartında CLI'yı hiç açma) fiilen hiç tetiklenmiyordu.
+    kind = str(args.get("kind") or "").strip().lower()
+    if kind not in amplification.CARD_KINDS:
+        kind = amplification.infer_kind(title, goal)
 
     note = ""
     spec = None
@@ -104,6 +112,7 @@ def create_card_from_args(
         input_paths=inputs,
         priority=priority,
         effort=effort,
+        kind=kind,
         notes=note,
     )
     if spec is not None:

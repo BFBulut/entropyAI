@@ -710,3 +710,41 @@ def test_bridge_background_task_unexpected_exception_ledger_status(tmp_path, mon
     # Lock must be fully released
     assert project_lock_manager.is_write_locked(tmp_path) is False
 
+
+
+# =====================================================================
+# Faz 12 kapanışı — sohbet turu defterde ölçülür
+# =====================================================================
+
+def test_chat_turn_usage_is_recorded_and_separable(tmp_path):
+    """
+    Sohbet turu tüketimi deftere yazılır; görev maliyetinden AYRI okunabilir.
+
+    Tavan aşımının nedeni ölçülemeyen sohbet tüketimiydi: defter yalnızca arka
+    plan görevlerini tutuyordu.
+    """
+    ledger = TaskLedger(db_path=tmp_path / "chat.db")
+
+    ledger.record_task_start("task-1", "Görev", str(tmp_path))
+    ledger.record_task_success("task-1", "bitti",
+                               usage={"input_tokens": 100, "output_tokens": 50,
+                                      "total_tokens": 150})
+
+    row_id = ledger.record_chat_turn(
+        {"input_tokens": 8000, "output_tokens": 400, "total_tokens": 8400},
+        provider="agy", model="gemini-3.8-flash-low")
+    assert row_id and row_id.startswith("chat-")
+
+    rec = ledger.get_task(row_id)
+    assert rec["status"] == TaskStatus.SUCCESS.value
+    assert rec["provider"] == "agy"
+    assert rec["model"] == "gemini-3.8-flash-low"
+    assert rec["total_tokens"] == 8400
+
+    # Sıfır tokenli tur defteri şişirmez.
+    assert ledger.record_chat_turn({"total_tokens": 0}, provider="claude") is None
+
+    chat = ledger.chat_token_totals()
+    assert chat["turns"] == 1 and chat["total_tokens"] == 8400
+    # Genel toplam ikisini de kapsar (görev 150 + sohbet 8400).
+    assert ledger.token_totals()["total_tokens"] == 8550

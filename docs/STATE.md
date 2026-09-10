@@ -97,6 +97,26 @@ yeni CrashDump **yok** (en yenisi 2026-09-08).
 **Marka:** iki ad da (ürün + üretici) `git grep -ril` ile **0 dosya**.
 Mimari kural testleri (`tests/contracts/test_architecture_rules.py`) yeşil.
 
+### Kota notu — tavan aşımının nedeni: ölçülemeyen sohbet tüketimi
+
+`tasks_ledger.db` bugüne kadar **yalnızca arka plan GÖREVLERİNİ** tutuyordu
+(`record_task_start` / `record_task_success`). Kullanıcının sohbet turları
+(`_execute_prompt_worker` / `_apply_chat_usage`) yalnızca oturum içi sayaçlara
+ve rozete yazılıyordu; uygulama kapanınca o tüketim kayboluyordu. Sonuç:
+`token_totals()` "harcanan" diye gösterilen sayı gerçek tüketimin ALT sınırıydı
+ve tavan (`agy` günlük kotası) defter temiz görünürken aşılıyordu.
+
+Kapanış düzeltmesi: `TaskLedger.record_chat_turn(usage, provider, model)` —
+her sohbet turu `task_id="chat-<zaman>"`, `status=SUCCESS`, `provider`
+(`agy|claude`) ve `model` ile deftere yazılır; kaydedilen değer TURUN farkıdır
+(agy'de kümülatif `usage` alanından çıkarılan delta), oturumun kümülatifi
+değil. Sıfır tokenli tur yazılmaz. Ayrıştırma için `chat_token_totals()`
+eklendi (`task_id LIKE 'chat-%'`), böylece "görev maliyeti" ile "sohbet
+maliyeti" tek defterde ama ayrı okunabilir.
+Yerler: `src/entropy/core/task_ledger.py` (`record_chat_turn`,
+`chat_token_totals`), `src/entropy/core/claude_bridge.py` (`_apply_chat_usage`),
+`src/entropy/core/agy_bridge.py` (`_execute_prompt_worker` tur muhasebesi).
+
 ### Gerçek ekran (LG ULTRAGEAR, dpr 2,0 = %200; 1920×1080, avail 1920×1032)
 
 Betikler: `scratch/ui/phase12/live_shots.py`, `live_shots2.py`, `live_shots3.py`;

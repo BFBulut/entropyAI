@@ -10,6 +10,7 @@ kasa `tmp_path` altında.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -430,3 +431,142 @@ def test_long_memory_commands_do_not_block_the_caller(monkeypatch):
 def test_memory_stop_reports_when_nothing_runs():
     sc.reset_memory_jobs()
     assert "Koşan hafıza turu yok" in sc._handle_memory("stop", None)
+
+
+# --------------------------------------------------------------------------
+# 7. Faz 12 kapanışı — `kind` sözleşmesi ve beyin kısayolu
+# --------------------------------------------------------------------------
+
+
+def test_board_create_always_fills_kind(board, tmp_path):
+    """`kind` JSON'da yoksa sezgiyle doldurulur ve KARTA yazılır."""
+    from entropy.agents import amplification
+
+    # (a) açık `kind`
+    created, _ = board_autonomy.create_card_from_args(
+        {"title": "A", "goal": "x", "kind": "research"}, board=board)
+    assert created.kind == "research"
+    assert board.get(created.id).kind == "research"
+
+    # (b) sezgi: "araştır ve raporu yaz" → research (eski sezgi bunu REDDEDİYORDU)
+    created, _ = board_autonomy.create_card_from_args(
+        {"title": "Vektör veritabanlarını araştır",
+         "goal": "son gelişmeleri özetle ve raporu yaz"}, board=board)
+    assert created.kind == "research", "yazma fiili araştırma kartını geri çekti"
+
+    # (c) sezgi: kod kartı
+    created, _ = board_autonomy.create_card_from_args(
+        {"title": "Panoyu kodla", "goal": "dispatcher yaz"}, board=board)
+    assert created.kind == "code"
+
+    # (d) geçersiz `kind` sezgiye düşer, boş KALMAZ
+    created, _ = board_autonomy.create_card_from_args(
+        {"title": "Belirsiz iş", "goal": "bir şey", "kind": "zırva"}, board=board)
+    assert created.kind in amplification.CARD_KINDS
+
+
+def test_kind_contract_is_in_the_entropy_tool_text():
+    text = board_tools.tools_section(for_entropy=True)
+    assert '"kind"' in text
+    for kind in ("research", "write", "code", "ops"):
+        assert kind in text
+
+
+class _FakeBridge:
+    """Çağrıldığında istemi kaydeden sahte köprü."""
+
+    def __init__(self):
+        self.calls = []
+
+    def send_background_task_async(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def _brain(monkeypatch, confidence: float, text: str = "Beyindeki yanıt."):
+    from entropy.agents import amplification
+
+    monkeypatch.setattr(
+        amplification, "brain_lookup",
+        lambda q, builder=None: amplification.BrainAnswer(
+            has_answer=True, confidence=confidence, text=text))
+
+
+def _registry_with(tmp_path, name="arastirmaci"):
+    """GERÇEK ajan defteri: `resolve_model` AgentSpec sözleşmesine bağlı."""
+    from entropy.agents.registry import AgentRegistry, AgentSpec
+
+    reg = AgentRegistry(vault_path=tmp_path)
+    if reg.get(name) is None:
+        reg.create(AgentSpec(name=name, role="Araştırmacı", provider="claude",
+                             tools_policy="read-only", prompt="Araştır."))
+    return reg
+
+
+def test_research_card_with_brain_answer_never_calls_cli(board, tmp_path, monkeypatch):
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "brain_confidence_threshold", 0.40, raising=False)
+    _brain(monkeypatch, 0.88)
+    card = _card(board, id="kind-r", title="Vektör veritabanlarını araştır",
+                 goal="son gelişmeler", kind="research", provider="claude")
+    board.apply_event(card.id, "task.assigned", payload={"agent": "arastirmaci"})
+
+    bridge = _FakeBridge()
+    task_id = board.run(card.id, bridge_factory=lambda p: bridge,
+                        agent_registry=_registry_with(tmp_path))
+    assert bridge.calls == [], "araştırma kartı için CLI çağrıldı (kısayol çalışmadı)"
+    assert task_id and task_id.startswith("brain-")
+
+
+def test_research_card_below_threshold_still_runs(board, tmp_path, monkeypatch):
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "brain_confidence_threshold", 0.40, raising=False)
+    _brain(monkeypatch, 0.12)
+    card = _card(board, id="kind-r2", title="Hibrit aramayı araştır",
+                 goal="son gelişmeler", kind="research", provider="claude")
+    board.apply_event(card.id, "task.assigned", payload={"agent": "arastirmaci"})
+
+    bridge = _FakeBridge()
+    board.run(card.id, bridge_factory=lambda p: bridge,
+              agent_registry=_registry_with(tmp_path))
+    assert bridge.calls, "eşiğin altındaki güvenle kart kapandı (yanlış kısayol)"
+
+
+def test_write_card_runs_cli_with_brain_section(board, tmp_path, monkeypatch):
+    from entropy.core.config import config
+
+    monkeypatch.setattr(config, "brain_confidence_threshold", 0.40, raising=False)
+    _brain(monkeypatch, 0.95, "Damıtma için hazır bilgi.")
+    card = _card(board, id="kind-w", title="Notları özetle",
+                 goal="kısa rapor yaz", kind="write", provider="claude")
+    board.apply_event(card.id, "task.assigned", payload={"agent": "arastirmaci"})
+
+    bridge = _FakeBridge()
+    board.run(card.id, bridge_factory=lambda p: bridge,
+              agent_registry=_registry_with(tmp_path))
+    assert bridge.calls, "write kartı için CLI çağrılmadı (kısayol uygulanmamalıydı)"
+    prompt = str(bridge.calls[0].get("prompt") or "")
+    assert "[BEYİN]" in prompt, "beyin paketi isteme girmedi"
+    assert "Damıtma için hazır bilgi." in prompt
+
+
+def test_entropy_checkpoint_is_written_under_board_root(board, tmp_path):
+    """Entropy kartı Desk kökü altına DEĞİL `Entropy/Board/checkpoints`e yazar."""
+    from entropy.core.paths import board_checkpoints_dir, desk_root
+
+    card = _card(board, id="cp-entropy")
+    res = board_tool_exec.execute(
+        [_call("board_checkpoint", task_id=card.id, done="modül 1",
+               next="modül 2", files=["a.py"], tests="pytest -q → 3 passed")],
+        board=board, card=card, actor="arastirmaci", vault_path=tmp_path,
+    )
+    assert res[0]["ok"], res
+    path = Path(res[0]["path"])
+    assert path.is_file()
+    assert path.parent == board_checkpoints_dir(tmp_path)
+    text = path.read_text(encoding="utf-8")
+    assert "modül 1" in text and "modül 2" in text
+    root = desk_root(tmp_path)
+    assert not root.exists() or not list(root.rglob("*.md")), \
+        "Entropy kartı Desk kökü altına dosya yazdı"

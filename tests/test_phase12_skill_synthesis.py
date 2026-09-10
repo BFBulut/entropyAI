@@ -312,10 +312,29 @@ def test_synthesize_without_bridge_writes_candidate_skeleton(tmp_path):
         assert f"## {title}" in text, f"şema bölümü eksik: {title}"
     assert "- Playbook:" in text, "kaynak (provenance) yazılmadı"
 
-    # İskelette girdi/çıktı doldurulmamış: aday henüz taslak.
-    assert out["status"] == ss.STATUS_DRAFT
-    assert out["checks"]["has_provenance"] is True
+    # Kotasız kol da doğrulanabilir olmalı: zorunlu bölümler playbook/wiki/rapor
+    # kaynağından gerçek içerikle dolar, yer tutucu kalmaz.
+    assert ss.PLACEHOLDER_MARK not in text, "yer tutucu kaldı: bölüm doldurulmadı"
+    assert out["status"] == ss.STATUS_VALIDATED, out["findings"]
+    assert all(out["checks"].values()), out["checks"]
+    assert "Rapor_0" in text, "çıktı bölümü rapor başlıklarından türemedi"
+
+
+def test_synthesize_without_playbook_stays_draft(tmp_path):
+    """Kaynak yoksa uydurma yok: bölümler yer tutucu kalır, aday taslaktır."""
+    store = PlaybookStore(vault_path=tmp_path)
+    rdir = store.reports_dir("kaynaksiz-yetenek")
+    rdir.mkdir(parents=True, exist_ok=True)
+
+    out = ss.synthesize_skill("kaynaksiz-yetenek", vault_path=tmp_path, store=store)
+
+    assert out["turns"] == 0
+    assert out["status"] == ss.STATUS_DRAFT, out["checks"]
     assert out["checks"]["schema_complete"] is False
+    text = (ss.candidate_dir("kaynaksiz-yetenek", tmp_path) / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert ss.PLACEHOLDER_MARK in text
 
 
 def test_single_turn_enrichment_validates_and_promotes(tmp_path):
@@ -356,11 +375,13 @@ def test_promoted_skill_is_discovered_by_skill_manager(tmp_path):
 
 
 def test_draft_candidate_cannot_be_promoted(tmp_path):
-    store = _vault_with_skill(tmp_path)
-    ss.synthesize_skill(SKILL, vault_path=tmp_path, store=store)  # iskelet = taslak
-    out = ss.promote_skill(SKILL, vault_path=tmp_path)
+    """Kaynaksız yetenek taslakta kalır ve yükseltilemez."""
+    store = PlaybookStore(vault_path=tmp_path)
+    store.reports_dir("kaynaksiz-yetenek").mkdir(parents=True, exist_ok=True)
+    ss.synthesize_skill("kaynaksiz-yetenek", vault_path=tmp_path, store=store)
+    out = ss.promote_skill("kaynaksiz-yetenek", vault_path=tmp_path)
     assert out["ok"] is False and out["reason"] == "doğrulamadan geçmedi"
-    assert not (ss.promoted_root(tmp_path) / ss.slugify(SKILL)).exists()
+    assert not (ss.promoted_root(tmp_path) / "kaynaksiz-yetenek").exists()
 
 
 def test_reject_keeps_files_and_blocks_promotion(tmp_path):

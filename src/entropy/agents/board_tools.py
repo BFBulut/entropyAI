@@ -205,12 +205,14 @@ gövdesi tek bir JSON nesnesidir ve `[/PANO]` ile kapanır.
   Bilgi eksikse TAHMİN ÜRETME; soruyu buradan sor, çalışmaya devam et."""
 
 _ENTROPY_TOOL_TEXT = """[PANO board_create]
-{"title": "<başlık>", "goal": "<hedef>", "criteria": ["<ölçüt>"],
- "agent": "<ajan>", "priority": "P1", "effort": "<low|medium|high>",
- "input_paths": ["<girdi>"]}
+{"title": "<başlık>", "goal": "<hedef>", "kind": "<research|write|code|ops>",
+ "criteria": ["<ölçüt>"], "agent": "<ajan>", "priority": "P1",
+ "effort": "<low|medium|high>", "input_paths": ["<girdi>"]}
 [/PANO]
   Bir işi devretmeye karar verdiğinde kart doğurur. Kartı SEN koşturmazsın:
-  pano sıradaki turda ajanı uyandırır."""
+  pano sıradaki turda ajanı uyandırır.
+  `kind` ZORUNLU: `research` kartı hafızada yanıt varsa CLI'ya HİÇ gitmez;
+  `write`/`code`/`ops` her zaman koşar. Yazmazsan başlıktan sezilir."""
 
 
 def tools_section(for_entropy: bool = False) -> str:
