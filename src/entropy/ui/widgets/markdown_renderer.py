@@ -13,7 +13,55 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 from entropy.core.config import config
+from entropy.ui.design.embedded import palette as _embedded_palette
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, reading_css
+
+# --------------------------------------------------------------------------- #
+# Gomulu belge tema koprusu (Faz 12-D.2, denetim D12-04 / D12-09)
+#
+# Bu dosya eskiden kendi "neon" paletini tasiyordu (saf tayf kroma 255 renkler). SVG cizicileri artik renklerini TOKENS / TOKENS["viz"] uzerinden
+# `entropy.ui.design.embedded.palette()` ile alir. Qt zengin metin motoru CSS
+# degiskeni tanimadigi icin degerler burada duz onaltiliga acilir.
+# --------------------------------------------------------------------------- #
+
+#: Okuma yuzeyinin o anki kullanilabilir genisligi (px). SVG'ler bu degere gore
+#: olceklenir: `viewBox` mantiksal koordinati korur, `width/height` yalnizca
+#: sunum olcusudur -> yatay kaydirma cikmaz (denetim D12-09).
+_READER_WIDTH = [860]
+
+#: SVG cevresindeki okuma dolgusu (reading_css body padding + kenarlik).
+READER_GUTTER = 56
+
+
+def set_reader_width(width: int) -> int:
+    """Okuma yuzeyi genisligini bildirir (okuyucunun resizeEvent'i cagirir)."""
+    try:
+        value = int(width)
+    except (TypeError, ValueError):
+        return _READER_WIDTH[0]
+    _READER_WIDTH[0] = max(280, min(2400, value))
+    return _READER_WIDTH[0]
+
+
+def reader_width() -> int:
+    return _READER_WIDTH[0]
+
+
+def _pal():
+    """Gomulu govdelerin renk tablosu (tema degisince kendiliginden doner)."""
+    return _embedded_palette()
+
+
+def _svg_open(total_w: int, total_h: int) -> str:
+    """Akiskan <svg> acilisi: mantiksal viewBox + kutuya sigan sunum olcusu."""
+    avail = max(240, reader_width() - READER_GUTTER)
+    scale = min(1.0, avail / float(total_w or 1))
+    render_w = int(round(total_w * scale))
+    render_h = int(round(total_h * scale))
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{render_w}" height="{render_h}" '
+        f'viewBox="0 0 {total_w} {total_h}" preserveAspectRatio="xMidYMid meet">'
+    )
 
 
 def _escape(text: str) -> str:
@@ -27,6 +75,7 @@ class MermaidSvgGenerator:
     @classmethod
     def render_to_svg(cls, mermaid_code: str) -> str:
         """Parse mermaid diagram syntax and return a complete SVG string."""
+        P = _pal()
         lines = [line.strip() for line in mermaid_code.strip().splitlines() if line.strip()]
         if not lines:
             return ""
@@ -47,6 +96,7 @@ class MermaidSvgGenerator:
     @classmethod
     def _render_flowchart(cls, lines: List[str], is_horizontal: bool = False) -> str:
         """Render node-edge flowchart to SVG."""
+        P = _pal()
         nodes: Dict[str, str] = {}
         edges: List[Tuple[str, str, str]] = []
 
@@ -119,21 +169,21 @@ class MermaidSvgGenerator:
                 pos[k] = (x, y)
 
         svg_parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">',
+            _svg_open(total_w, total_h),
             '<defs>',
             '  <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">',
-            '    <stop offset="0%" stop-color="#141C2C"/>',
-            '    <stop offset="100%" stop-color="#0E1420"/>',
+            f'    <stop offset="0%" stop-color="{P["raised"]}"/>',
+            f'    <stop offset="100%" stop-color="{P["surface"]}"/>',
             '  </linearGradient>',
             '  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">',
             '    <feGaussianBlur stdDeviation="3" result="blur" />',
             '    <feComposite in="SourceGraphic" in2="blur" operator="over" />',
             '  </filter>',
             '  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">',
-            '    <path d="M 0 1 L 10 5 L 0 9 z" fill="#00F0FF" />',
+            f'    <path d="M 0 1 L 10 5 L 0 9 z" fill="{P["accent"]}" />',
             '  </marker>',
             '</defs>',
-            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>'
+            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="{P["surface"]}" stroke="{P["line_strong"]}" stroke-width="1"/>'
         ]
 
         # Draw edges
@@ -154,14 +204,14 @@ class MermaidSvgGenerator:
 
                 svg_parts.append(
                     f'<line x1="{start_x}" y1="{start_y}" x2="{end_x}" y2="{end_y}" '
-                    f'stroke="#00F0FF" stroke-width="2" marker-end="url(#arrow)" opacity="0.85"/>'
+                    f'stroke="{P["accent"]}" stroke-width="2" marker-end="url(#arrow)" opacity="0.85"/>'
                 )
                 if label:
                     mid_x = (start_x + end_x) // 2
                     mid_y = (start_y + end_y) // 2 - 6
                     svg_parts.append(
-                        f'<rect x="{mid_x - 30}" y="{mid_y - 10}" width="60" height="18" rx="3" fill="#080B10" stroke="#1F2B42" stroke-width="1"/>'
-                        f'<text x="{mid_x}" y="{mid_y + 3}" fill="#00FF9D" font-family="Segoe UI, sans-serif" font-size="10" text-anchor="middle">{_escape(label[:12])}</text>'
+                        f'<rect x="{mid_x - 30}" y="{mid_y - 10}" width="60" height="18" rx="3" fill="{P["bg"]}" stroke="{P["line_strong"]}" stroke-width="1"/>'
+                        f'<text x="{mid_x}" y="{mid_y + 3}" fill="{P["ok"]}" font-family="Segoe UI, sans-serif" font-size="10" text-anchor="middle">{_escape(label[:12])}</text>'
                     )
 
         # Draw nodes
@@ -170,8 +220,8 @@ class MermaidSvgGenerator:
             short_lbl = label[:24] + ("..." if len(label) > 24 else "")
             svg_parts.append(
                 f'<g transform="translate({x}, {y})">'
-                f'  <rect width="{node_width}" height="{node_height}" rx="6" fill="url(#nodeGrad)" stroke="#00F0FF" stroke-width="1.5" filter="url(#glow)"/>'
-                f'  <text x="{node_width // 2}" y="{node_height // 2 + 5}" fill="#F0F6FC" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="middle">{_escape(short_lbl)}</text>'
+                f'  <rect width="{node_width}" height="{node_height}" rx="6" fill="url(#nodeGrad)" stroke="{P["accent"]}" stroke-width="1.5" filter="url(#glow)"/>'
+                f'  <text x="{node_width // 2}" y="{node_height // 2 + 5}" fill="{P["text"]}" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="middle">{_escape(short_lbl)}</text>'
                 f'</g>'
             )
 
@@ -181,6 +231,7 @@ class MermaidSvgGenerator:
     @classmethod
     def _render_pie_chart(cls, lines: List[str]) -> str:
         """Render Mermaid pie chart cleanly to cybernetic SVG."""
+        P = _pal()
         title = "Pasta Grafiği (Pie Distribution)"
         data: List[Tuple[str, float]] = []
 
@@ -219,17 +270,18 @@ class MermaidSvgGenerator:
         if total <= 0:
             return cls._render_generic_card(title, lines)
 
-        # High-contrast Cyberpunk Palette
-        palette = ["#00F0FF", "#00FF9D", "#FF007F", "#FFB300", "#7928CA", "#3B82F6", "#F59E0B", "#10B981"]
+        # Kategorik seri paleti artik `TOKENS["viz"].kind*` ailesinden gelir
+        # (saf tayf renk yok, hepsinin kontrasti olculu).
+        palette = P["series"]
 
         w = 640
         h = max(280, len(data) * 28 + 80)
         cx, cy, r = 160, h // 2, min(90, (h - 60) // 2)
 
         svg = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">',
-            f'<rect width="{w}" height="{h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="13" font-weight="bold">{_escape(title)}</text>'
+            _svg_open(w, h),
+            f'<rect width="{w}" height="{h}" rx="8" fill="{P["surface"]}" stroke="{P["line_strong"]}" stroke-width="1"/>',
+            f'<text x="20" y="28" fill="{P["accent"]}" font-family="Segoe UI, sans-serif" font-size="13" font-weight="bold">{_escape(title)}</text>'
         ]
 
         # Draw wedges
@@ -240,7 +292,7 @@ class MermaidSvgGenerator:
             color = palette[idx % len(palette)]
 
             if len(data) == 1 or abs(slice_angle - 2 * math.pi) < 1e-4:
-                svg.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" fill-opacity="0.85" stroke="#070A0F" stroke-width="2"/>')
+                svg.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}" fill-opacity="0.85" stroke="{P["surface"]}" stroke-width="2"/>')
             else:
                 x1 = cx + r * math.cos(start_angle)
                 y1 = cy + r * math.sin(start_angle)
@@ -249,7 +301,7 @@ class MermaidSvgGenerator:
                 large_arc = 1 if slice_angle > math.pi else 0
 
                 path_d = f"M {cx} {cy} L {x1:.2f} {y1:.2f} A {r} {r} 0 {large_arc} 1 {x2:.2f} {y2:.2f} Z"
-                svg.append(f'<path d="{path_d}" fill="{color}" fill-opacity="0.85" stroke="#070A0F" stroke-width="1.5"/>')
+                svg.append(f'<path d="{path_d}" fill="{color}" fill-opacity="0.85" stroke="{P["surface"]}" stroke-width="1.5"/>')
 
             # Legend item on right side
             leg_y = 65 + idx * 26
@@ -258,8 +310,8 @@ class MermaidSvgGenerator:
             svg.append(
                 f'<g transform="translate(300, {leg_y})">'
                 f'  <rect x="0" y="0" width="14" height="14" rx="3" fill="{color}"/>'
-                f'  <text x="22" y="11" fill="#F0F6FC" font-family="Segoe UI" font-size="11">{_escape(lbl[:25])}</text>'
-                f'  <text x="240" y="11" fill="#8B949E" font-family="Consolas" font-size="11" text-anchor="end">{val_display} ({pct:.1f}%)</text>'
+                f'  <text x="22" y="11" fill="{P["text"]}" font-family="Segoe UI" font-size="11">{_escape(lbl[:25])}</text>'
+                f'  <text x="240" y="11" fill="{P["text_muted"]}" font-family="Consolas" font-size="11" text-anchor="end">{val_display} ({pct:.1f}%)</text>'
                 f'</g>'
             )
 
@@ -267,8 +319,8 @@ class MermaidSvgGenerator:
 
         # Inner donut cutout
         inner_r = r // 2
-        svg.append(f'<circle cx="{cx}" cy="{cy}" r="{inner_r}" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>')
-        svg.append(f'<text x="{cx}" y="{cy + 4}" fill="#00F0FF" font-family="Segoe UI" font-size="10" font-weight="bold" text-anchor="middle">TOPLAM</text>')
+        svg.append(f'<circle cx="{cx}" cy="{cy}" r="{inner_r}" fill="{P["surface"]}" stroke="{P["line_strong"]}" stroke-width="1"/>')
+        svg.append(f'<text x="{cx}" y="{cy + 4}" fill="{P["accent"]}" font-family="Segoe UI" font-size="10" font-weight="bold" text-anchor="middle">TOPLAM</text>')
 
         svg.append('</svg>')
         return "".join(svg)
@@ -276,6 +328,7 @@ class MermaidSvgGenerator:
     @classmethod
     def _render_state_diagram(cls, lines: List[str]) -> str:
         """Render state diagrams cleanly to SVG."""
+        P = _pal()
         transitions: List[Tuple[str, str, str]] = []
         states = set()
 
@@ -304,26 +357,26 @@ class MermaidSvgGenerator:
         total_h = max(240, len(transitions) * 50 + 70)
 
         svg = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">',
+            _svg_open(total_w, total_h),
             '<defs>',
             '  <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">',
-            '    <path d="M 0 1 L 10 5 L 0 9 z" fill="#00FF9D" />',
+            f'    <path d="M 0 1 L 10 5 L 0 9 z" fill="{P["ok"]}" />',
             '  </marker>',
             '</defs>',
-            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Durum Makinesi (State Transition Flow)</text>'
+            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="{P["surface"]}" stroke="{P["line_strong"]}" stroke-width="1"/>',
+            f'<text x="20" y="26" fill="{P["accent"]}" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Durum Makinesi (State Transition Flow)</text>'
         ]
 
         y = 55
         for src, dst, lbl in transitions:
             svg.append(
                 f'<g transform="translate(20, {y})">'
-                f'  <rect x="0" y="0" width="130" height="30" rx="4" fill="#141C2C" stroke="#00F0FF" stroke-width="1"/>'
-                f'  <text x="65" y="19" fill="#00F0FF" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(src[:16])}</text>'
-                f'  <line x1="135" y1="15" x2="275" y2="15" stroke="#00FF9D" stroke-width="2" marker-end="url(#arrow-green)"/>'
-                f'  <text x="205" y="10" fill="#8B949E" font-family="Segoe UI" font-size="9" text-anchor="middle">{_escape(lbl[:22])}</text>'
-                f'  <rect x="280" y="0" width="130" height="30" rx="4" fill="#141C2C" stroke="#00FF9D" stroke-width="1"/>'
-                f'  <text x="345" y="19" fill="#00FF9D" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(dst[:16])}</text>'
+                f'  <rect x="0" y="0" width="130" height="30" rx="4" fill="{P["raised"]}" stroke="{P["accent"]}" stroke-width="1"/>'
+                f'  <text x="65" y="19" fill="{P["accent"]}" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(src[:16])}</text>'
+                f'  <line x1="135" y1="15" x2="275" y2="15" stroke="{P["ok"]}" stroke-width="2" marker-end="url(#arrow-green)"/>'
+                f'  <text x="205" y="10" fill="{P["text_muted"]}" font-family="Segoe UI" font-size="9" text-anchor="middle">{_escape(lbl[:22])}</text>'
+                f'  <rect x="280" y="0" width="130" height="30" rx="4" fill="{P["raised"]}" stroke="{P["ok"]}" stroke-width="1"/>'
+                f'  <text x="345" y="19" fill="{P["ok"]}" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(dst[:16])}</text>'
                 f'</g>'
             )
             y += 45
@@ -334,6 +387,7 @@ class MermaidSvgGenerator:
     @classmethod
     def _render_sequence_diagram(cls, lines: List[str]) -> str:
         """Render sequence diagram cleanly to SVG."""
+        P = _pal()
         messages: List[Tuple[str, str, str]] = []
         participants = set()
 
@@ -351,9 +405,9 @@ class MermaidSvgGenerator:
         total_h = max(240, len(messages) * 44 + 90)
 
         svg = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">',
-            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="#070A0F" stroke="#1F2B42" stroke-width="1"/>',
-            '<text x="20" y="26" fill="#00F0FF" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Sıralı İletişim (Sequence Flow)</text>'
+            _svg_open(total_w, total_h),
+            f'<rect width="{total_w}" height="{total_h}" rx="8" fill="{P["surface"]}" stroke="{P["line_strong"]}" stroke-width="1"/>',
+            f'<text x="20" y="26" fill="{P["accent"]}" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">Sıralı İletişim (Sequence Flow)</text>'
         ]
 
         part_x = {}
@@ -361,9 +415,9 @@ class MermaidSvgGenerator:
             x = 50 + idx * 160
             part_x[p] = x
             svg.append(
-                f'<rect x="{x - 50}" y="45" width="100" height="26" rx="4" fill="#141C2C" stroke="#00F0FF" stroke-width="1"/>'
-                f'<text x="{x}" y="62" fill="#00F0FF" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(p)}</text>'
-                f'<line x1="{x}" y1="71" x2="{x}" y2="{total_h - 15}" stroke="#1F2B42" stroke-dasharray="4" stroke-width="1"/>'
+                f'<rect x="{x - 50}" y="45" width="100" height="26" rx="4" fill="{P["raised"]}" stroke="{P["accent"]}" stroke-width="1"/>'
+                f'<text x="{x}" y="62" fill="{P["accent"]}" font-family="Segoe UI" font-size="11" font-weight="bold" text-anchor="middle">{_escape(p)}</text>'
+                f'<line x1="{x}" y1="71" x2="{x}" y2="{total_h - 15}" stroke="{P["line_strong"]}" stroke-dasharray="4" stroke-width="1"/>'
             )
 
         cur_y = 95
@@ -371,10 +425,10 @@ class MermaidSvgGenerator:
             if src in part_x and dst in part_x:
                 x1 = part_x[src]
                 x2 = part_x[dst]
-                color = "#00FF9D" if x1 < x2 else "#FFB300"
+                color = P["ok"] if x1 < x2 else P["warn"]
                 svg.append(
                     f'<line x1="{x1}" y1="{cur_y}" x2="{x2}" y2="{cur_y}" stroke="{color}" stroke-width="2"/>'
-                    f'<text x="{(x1 + x2) // 2}" y="{cur_y - 5}" fill="#F0F6FC" font-family="Segoe UI" font-size="10" text-anchor="middle">{_escape(msg[:35])}</text>'
+                    f'<text x="{(x1 + x2) // 2}" y="{cur_y - 5}" fill="{P["text"]}" font-family="Segoe UI" font-size="10" text-anchor="middle">{_escape(msg[:35])}</text>'
                 )
                 cur_y += 38
 
@@ -384,17 +438,18 @@ class MermaidSvgGenerator:
     @classmethod
     def _render_generic_card(cls, title: str, lines: List[str]) -> str:
         """Render a clean cybernetic info card when complex graph syntax is present."""
+        P = _pal()
         w = 600
         h = max(160, len(lines) * 22 + 60)
         svg = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">',
-            f'<rect width="{w}" height="{h}" rx="8" fill="#070A0F" stroke="#00F0FF" stroke-width="1.2"/>',
-            f'<text x="20" y="28" fill="#00F0FF" font-family="Segoe UI" font-size="13" font-weight="bold">{title}</text>'
+            _svg_open(w, h),
+            f'<rect width="{w}" height="{h}" rx="8" fill="{P["surface"]}" stroke="{P["accent"]}" stroke-width="1.2"/>',
+            f'<text x="20" y="28" fill="{P["accent"]}" font-family="Segoe UI" font-size="13" font-weight="bold">{title}</text>'
         ]
         y = 55
         for l in lines[:10]:
             clean_l = _escape(l.strip())
-            svg.append(f'<text x="25" y="{y}" fill="#CBD5E1" font-family="Consolas" font-size="11">{clean_l[:75]}</text>')
+            svg.append(f'<text x="25" y="{y}" fill="{P["text"]}" font-family="Consolas" font-size="11">{clean_l[:75]}</text>')
             y += 20
         svg.append('</svg>')
         return "".join(svg)
@@ -419,6 +474,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
     Hem sohbet balonları (parça) hem de rapor okuyucu (tam belge) bunu kullanır;
     böylece üç yüzeyde de tek tasarım sistemi geçerlidir.
     """
+    P = _pal()
     if not markdown_text:
         return ""
 
@@ -492,7 +548,14 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
                 )
         except Exception:
             pass
-        return f'<pre style="background:{RT["surface_raised"]}; color:{RT["accent"]}; padding:12px 16px; border-radius:{RT["radius"]}; font-family:{RT["font_mono"]};"><code>{_escape(code)}</code></pre>'
+        # Denetim D12-09: bu yedek blokta `white-space` yoktu ve okuma yüzeyinde
+        # yatay kaydırma üretiyordu; artık sarıyor.
+        return (
+            f'<pre style="background:{RT["surface_raised"]}; color:{RT["accent"]};'
+            f' padding:12px 16px; border-radius:{RT["radius"]}; font-family:{RT["font_mono"]};'
+            f' white-space:pre-wrap; word-wrap:break-word;">'
+            f'<code>{_escape(code)}</code></pre>'
+        )
 
     text = re.sub(r'```mermaid\s*\n(.*?)```', replace_mermaid, text, flags=re.DOTALL | re.IGNORECASE)
 
@@ -531,7 +594,12 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
     text = re.sub(r'\$\$(.*?)\$\$', replace_math_block, text, flags=re.DOTALL)
 
     # 5. Inline Math $...$
-    text = re.sub(r'(?<!\$)\$(?!\$)(.*?)\$', r'<i style="color:#00FF9D; font-family:Cambria Math, serif;">\1</i>', text)
+    # Satır içi matematik: renk belirteçten gelir (ham hex yok).
+    text = re.sub(
+        r'(?<!\$)\$(?!\$)(.*?)\$',
+        '<i style="color:%s; font-family:Cambria Math, serif;">\\1</i>' % _pal()["ok"],
+        text,
+    )
 
     # 6. Parse Markdown Tables
     lines = text.split('\n')
@@ -584,7 +652,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
         alt = match.group(1)
         src = match.group(2).strip()
         if src.startswith(("http://", "https://", "data:")):
-            return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #22314A; border-radius:8px;" /></div>'
+            return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid {_pal()["line"]}; border-radius:8px;" /></div>'
         try:
             img_path = Path(src)
             if not img_path.is_absolute() and base_dir:
@@ -595,7 +663,7 @@ def _render_markdown_body(markdown_text: str, base_dir: Optional[Path] = None) -
                 src = img_path.as_uri()
         except Exception:
             pass
-        return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid #22314A; border-radius:8px;" /></div>'
+        return f'<div style="text-align:center; margin:12px 0;"><img src="{src}" alt="{alt}" style="max-width:95%; border:1px solid {_pal()["line"]}; border-radius:8px;" /></div>'
 
     text = re.sub(r'!\[(.*?)\]\((.*?)\)', resolve_image, text)
 
@@ -649,8 +717,18 @@ def render_markdown_fragment(markdown_text: str, base_dir: Optional[Path] = None
     return _render_markdown_body(markdown_text, base_dir=base_dir)
 
 
-def render_markdown_to_html(markdown_text: str, base_dir: Optional[Path] = None) -> str:
-    """Markdown'ı, ortak okuma CSS'i gömülü eksiksiz bir HTML belgesine dönüştürür."""
+def render_markdown_to_html(
+    markdown_text: str,
+    base_dir: Optional[Path] = None,
+    reader_width: Optional[int] = None,
+) -> str:
+    """Markdown'ı, ortak okuma CSS'i gömülü eksiksiz bir HTML belgesine dönüştürür.
+
+    `reader_width` verilirse gömülü SVG'ler o genişliğe göre ölçeklenir
+    (denetim D12-09: sabit genişlikli diyagramlar yatay kaydırma üretiyordu).
+    """
+    if reader_width:
+        set_reader_width(reader_width)
     if not markdown_text:
         return (
             f"<html><body style='background-color:{RT['surface_base']};"

@@ -266,10 +266,10 @@ def test_graph_legend_has_new_groups():
         # girdisinin varligi LEGEND_DEFS satirindan dogrulanir.
         assert f"['{group}', " in src, f"{group} LEGEND_DEFS'te yok"
         assert f"'{group}': true" in src, f"{group} kategori varsayılanı yok"
-    # Renkler: kavram açık yeşil, varlık açık mavi.
-    assert "'concept': '#9BE9A8'" in src
-    assert "'entity': '#8CC8FF'" in src
-    assert "'hub-offices': '#FFC94D'" in src
+    # Faz 12-D.2: renkler `TOKENS["viz"]` serisinden gelir (düz hex yok).
+    assert "'concept': VIZ.series[1]" in src
+    assert "'entity': VIZ.series[4]" in src
+    assert "'hub-offices': VIZ.series[6]" in src
     # İkonlar
     assert "'concept': '📗'" in src
     assert "'entity': '🏷'" in src

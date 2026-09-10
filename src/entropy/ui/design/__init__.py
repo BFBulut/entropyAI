@@ -24,6 +24,22 @@ from entropy.ui.design.tokens import (
 )
 from entropy.ui.design.qss import apply_design_system, build_qss
 from entropy.ui.design.icons import EMOJI_ICON_MAP, icon, icon_for_emoji, qtawesome_available
+from entropy.ui.design.prefs import (
+    install_splitter_persistence,
+    reset_layout,
+    restore_splitter,
+    save_splitter,
+    set_ui_density,
+    set_ui_theme,
+    ui_density,
+    ui_theme,
+)
+from entropy.ui.design.embedded import (
+    css_variables,
+    js_palette_json,
+    palette,
+    series_colors,
+)
 
 __all__ = [
     "TOKENS",
@@ -39,4 +55,16 @@ __all__ = [
     "icon_for_emoji",
     "EMOJI_ICON_MAP",
     "qtawesome_available",
+    "palette",
+    "series_colors",
+    "css_variables",
+    "js_palette_json",
+    "ui_theme",
+    "ui_density",
+    "set_ui_theme",
+    "set_ui_density",
+    "save_splitter",
+    "restore_splitter",
+    "install_splitter_persistence",
+    "reset_layout",
 ]

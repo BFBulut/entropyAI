@@ -27,14 +27,19 @@ from PySide6.QtWidgets import (
 
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 # Palette bölümleri ve rozetleri: kullanıcı sonucun nereden geldiğini görsün.
 KIND_BADGES = {
-    "command": ("⌘", "Komut", "#00F0FF"),
-    "skill": ("", "Yetenek", "#00FF9D"),
-    "agent": ("", "Ajan", "#2DD4BF"),
-    "office": ("", "Ofis", "#FFB000"),
-    "report": ("", "Rapor", "#C792EA"),
+    "command": ("⌘", "Komut", f"{_P["accent"]}"),
+    "skill": ("", "Yetenek", f"{_P["ok"]}"),
+    "agent": ("", "Ajan", f"{_P["accent"]}"),
+    "office": ("", "Ofis", f"{_P["warn"]}"),
+    "report": ("", "Rapor", f"{_P["neutral"]}"),
 }
 
 MAX_RESULTS = 40
@@ -247,7 +252,7 @@ class CommandPalette(QDialog):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(
-            "Komut, yetenek, ajan, ofis ya da rapor ara…  (↑↓ gez · Enter aç · Esc kapat)"
+            "Komut, yetenek, ajan, ofis ya da rapor ara. Yukarı/aşağı gez, Enter aç, Esc kapat."
         )
         self.search_input.textChanged.connect(self.apply_filter)
         root.addWidget(self.search_input)
@@ -291,7 +296,7 @@ class CommandPalette(QDialog):
         self._visible = filter_items(self._items, query)
         self.list_widget.clear()
         for item in self._visible:
-            icon, badge, color = KIND_BADGES.get(str(item.get("kind")), ("•", "", "#8B949E"))
+            icon, badge, color = KIND_BADGES.get(str(item.get("kind")), ("•", "", f"{_P["text_muted"]}"))
             subtitle = str(item.get("subtitle") or "")
             text = f"{icon}  {item.get('label', '')}"
             if subtitle:

@@ -8,6 +8,11 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.slash_commands import SlashCommand
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 #: Coklu secim isaretleri. Emoji/dingbat KULLANILMAZ (11-E tasarim kapisi:
 #: `scripts/ui_audit.py:EMOJI_RE` U+2600-U+27BF araligini da sayar, "V"
@@ -35,7 +40,7 @@ class SlashCommandItemWidget(QWidget):
 
         # Badge Pill
         badge_lbl = QLabel(command.badge)
-        badge_color = command.color or "#00F0FF"
+        badge_color = command.color or f"{_P["accent"]}"
         badge_lbl.setProperty("role", "badge")
         layout.addWidget(badge_lbl)
 
@@ -133,7 +138,7 @@ class SlashCommandPopupWidget(QFrame):
         title_lbl.setProperty("role", "label")
         header.addWidget(title_lbl)
         header.addStretch()
-        hints_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>[Tıkla]: Ekle/Kaldır &nbsp; [Tab/Enter]: Tamamla &nbsp; [Esc]: Kapat</span>")
+        hints_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>[Tıkla]: Ekle/Kaldır &nbsp; [Tab/Enter]: Tamamla &nbsp; [Esc]: Kapat</span>")
         header.addWidget(hints_lbl)
         layout.addLayout(header)
 
@@ -154,7 +159,7 @@ class SlashCommandPopupWidget(QFrame):
         # Bottom Multi-Select Actions Bar
         bottom_bar = QHBoxLayout()
         bottom_bar.setContentsMargins(4, 3, 4, 2)
-        self.chips_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
+        self.chips_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
         bottom_bar.addWidget(self.chips_lbl)
         bottom_bar.addStretch()
 
@@ -211,9 +216,9 @@ class SlashCommandPopupWidget(QFrame):
     def _update_footer(self):
         if self.selected_commands:
             chips = " ".join(self.selected_commands)
-            self.chips_lbl.setText(f"<b style='color:#00FF9D; font-size:11px;'>Seçilenler:</b> <span style='color:#F0F6FC; font-family:Consolas; font-size:11px;'>{chips}</span>")
+            self.chips_lbl.setText(f"<b style='color:{_P["ok"]}; font-size:11px;'>Seçilenler:</b> <span style='color:{_P["text"]}; font-family:Consolas; font-size:11px;'>{chips}</span>")
         else:
-            self.chips_lbl.setText("<span style='color:#8B949E; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
+            self.chips_lbl.setText(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Çoklu seçim: Komutlara tıklayarak birden fazlasını ekleyin</span>")
 
     def select_next(self):
         """Move selection to next item."""

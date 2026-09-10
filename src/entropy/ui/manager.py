@@ -9,6 +9,7 @@ from entropy.core.event_bus import bus
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.core.provider import create_bridge, switch_provider
 from entropy.ui.design import apply_design_system
+from entropy.ui.design.prefs import ui_density, ui_theme
 from entropy.ui.modes.chat_mode import CHAT_MIN_SIZE, CHAT_SCREEN_RATIO, ChatModeWindow
 from entropy.ui.modes.floating_mode import FloatingModeWidget
 from entropy.ui.modes.zen_mode import ZEN_MIN_SIZE, ZEN_SCREEN_RATIO, ZenModeWindow
@@ -37,9 +38,16 @@ class EntropyUIManager(QObject):
         # burada kuruluyor; stil pencerelerden ÖNCE uygulanmalı ki hiçbir
         # pencere kendi stil sayfasını yazmak zorunda kalmasın (eski
         # `setStyleSheet(STYLESHEET)` çağrıları kaldırıldı).
+        # Faz 12-D.2 (denetim D12-08): tema ve yoğunluk artık ölü özellik
+        # değil — kullanıcının `QSettings`'teki seçimi açılışta uygulanır.
+        # Ayarlar diyaloğu aynı işlevi çalışma anında yeniden çağırır.
         app = QApplication.instance()
         if app is not None:
-            self.design_qss = apply_design_system(app)
+            self.ui_theme = ui_theme()
+            self.ui_density = ui_density()
+            self.design_qss = apply_design_system(
+                app, theme=self.ui_theme, density=self.ui_density
+            )
 
         # Initialize windows
         self.floating_widget = FloatingModeWidget()

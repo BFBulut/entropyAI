@@ -18,6 +18,7 @@ Yeni kod bu dosyayı kullanmaz:
     from entropy.ui.design import TOKENS, apply_design_system, icon
 """
 
+from entropy.ui.design.embedded import READER_LAYOUT_CSS as _READER_LAYOUT_CSS
 from entropy.ui.design.tokens import TOKENS
 
 _C = TOKENS["color"]
@@ -128,6 +129,7 @@ def reading_css() -> str:
         font-weight: 600;
     }}
     td {{ color: {t['text_body']}; }}
+    {_READER_LAYOUT_CSS()}
     """
 
 

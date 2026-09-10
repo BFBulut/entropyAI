@@ -13,6 +13,11 @@ Bu biçimlendirici iki kalemi her zaman ayrı ve adıyla gösterir:
 from __future__ import annotations
 
 from typing import Any, Tuple
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 
 def _k(n: int) -> str:
@@ -84,8 +89,8 @@ def format_token_badge(bridge: Any) -> Tuple[str, str]:
 # Bağlam doluluğu bu oranı aşınca rozet turuncuya döner ve /handoff önerilir.
 CONTEXT_WARN_RATIO = 0.60
 
-CONTEXT_OK_COLOR = "#3DE8A8"
-CONTEXT_WARN_COLOR = "#FFC24D"
+CONTEXT_OK_COLOR = f"{_P["ok"]}"
+CONTEXT_WARN_COLOR = f"{_P["warn"]}"
 
 
 def usage_breakdown_text(bridge: Any) -> str:

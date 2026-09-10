@@ -138,12 +138,13 @@ def test_u5_hover_dim_hittest_and_breadcrumb():
 def test_u6_hulls_and_cvd_safe_palettes():
     assert "function convexHull" in TPL and "function drawHulls" in TPL
     assert "function drawHullLabels" in TPL
-    assert "const OKABE_ITO = [" in TPL
-    assert TPL.count("const TOL_12 = [") == 1
-    tol = TPL.split("const TOL_12 = [", 1)[1].split("];", 1)[0]
-    assert len(re.findall(r"#[0-9A-F]{6}", tol)) == 12
-    okabe = TPL.split("const OKABE_ITO = [", 1)[1].split("];", 1)[0]
-    assert len(re.findall(r"#[0-9A-F]{6}", okabe)) == 8
+    # Faz 12-D.2: iki yedek palet de `TOKENS["viz"]` serisinden türetilir
+    # (denetim D12-05). Ton sayısı sözleşmesi korunur: 8 kategori, 12 topluluk.
+    assert "const OKABE_ITO = VIZ.series.slice();" in TPL
+    assert TPL.count("const TOL_12 = ") == 1
+    assert "VIZ.series.concat(VIZ.series.slice(0, 4))" in TPL
+    from entropy.ui.design.embedded import series_colors
+    assert len(series_colors()) == 8
     # Hale artık altın açı HSL değil, ayrık 12 tondan gelir.
     assert "137.508" not in TPL
 

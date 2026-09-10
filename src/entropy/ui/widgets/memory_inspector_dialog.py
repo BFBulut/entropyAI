@@ -13,6 +13,11 @@ from entropy.core.config import config
 from entropy.core.event_bus import bus
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem, CognitiveMemoryNode
 from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 
 def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
@@ -90,7 +95,7 @@ class MemoryErrorsSection(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(4)
-        self.title_label = QLabel(f"<b style='color:#FF9F4D;'>{self.TITLE}</b>")
+        self.title_label = QLabel(f"<b style='color:{_P["warn"]};'>{self.TITLE}</b>")
         layout.addWidget(self.title_label)
         self.body = QTextBrowser()
         self.body.setMaximumHeight(120)
@@ -237,12 +242,12 @@ class MemoryInspectorDialog(QDialog):
     def _render_cognitive_node(self, node: CognitiveMemoryNode):
         # Header
         hdr = QHBoxLayout()
-        title_lbl = QLabel(f"<b style='color:#00F0FF; font-size:14px;'>{node.id}</b>")
+        title_lbl = QLabel(f"<b style='color:{_P["accent"]}; font-size:14px;'>{node.id}</b>")
         hdr.addWidget(title_lbl)
         hdr.addStretch()
 
-        cat_color = "#00FF9D" if node.category == "semantic" else "#FFB300" if node.category == "episodic" else "#00F0FF"
-        badge = QLabel(f"<span style='background:#141C2C; color:{cat_color}; border:1px solid {cat_color}; padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;'>KATMAN: {node.category.upper()}</span>")
+        cat_color = f"{_P["ok"]}" if node.category == "semantic" else f"{_P["warn"]}" if node.category == "episodic" else f"{_P["accent"]}"
+        badge = QLabel(f"<span style='background:{_P["surface"]}; color:{cat_color}; border:1px solid {cat_color}; padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;'>KATMAN: {node.category.upper()}</span>")
         hdr.addWidget(badge)
         self.layout.addLayout(hdr)
 
@@ -257,9 +262,9 @@ class MemoryInspectorDialog(QDialog):
         # Cognitive Metrics
         ebbinghaus = node.calculate_ebbinghaus_strength()
         metrics_layout = QHBoxLayout()
-        imp_lbl = QLabel(f"Önem Skoru: <b style='color:#00FF9D;'>{node.importance:.2f}</b>")
-        ret_lbl = QLabel(f"Hatırlama Gücü (Ebbinghaus): <b style='color:#00F0FF;'>%{int(ebbinghaus * 100)}</b>")
-        acc_lbl = QLabel(f"Erişim Sayısı: <b style='color:#E6EDF3;'>{node.access_count}</b>")
+        imp_lbl = QLabel(f"Önem Skoru: <b style='color:{_P["ok"]};'>{node.importance:.2f}</b>")
+        ret_lbl = QLabel(f"Hatırlama Gücü (Ebbinghaus): <b style='color:{_P["accent"]};'>%{int(ebbinghaus * 100)}</b>")
+        acc_lbl = QLabel(f"Erişim Sayısı: <b style='color:{_P["text"]};'>{node.access_count}</b>")
         metrics_layout.addWidget(imp_lbl)
         metrics_layout.addWidget(ret_lbl)
         metrics_layout.addWidget(acc_lbl)
@@ -290,9 +295,9 @@ class MemoryInspectorDialog(QDialog):
                     btn.clicked.connect(lambda _, rid=rel.id: self._switch_to_node(rid))
                     related_layout.addWidget(btn)
             else:
-                related_layout.addWidget(QLabel("<span style='color:#8B949E; font-size:11px;'>Bu düğümle doğrudan eşleşen başka semantik anı bulunamadı.</span>"))
+                related_layout.addWidget(QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Bu düğümle doğrudan eşleşen başka semantik anı bulunamadı.</span>"))
         except Exception:
-            related_layout.addWidget(QLabel("<span style='color:#8B949E; font-size:11px;'>İlişkili düğümler sorgulanırken bir sorun oluştu.</span>"))
+            related_layout.addWidget(QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>İlişkili düğümler sorgulanırken bir sorun oluştu.</span>"))
 
         related_layout.addStretch()
         related_scroll.setWidget(related_widget)
@@ -469,8 +474,8 @@ class MemoryInspectorDialog(QDialog):
                 self.btn_max.setText("Küçült")
 
     def _render_generic_node(self):
-        self.layout.addWidget(QLabel(f"<b style='color:#00F0FF; font-size:14px;'>Düğüm: {self.node_id}</b>"))
-        self.layout.addWidget(QLabel("<span style='color:#8B949E;'>Bu düğüm için kayıtlı ek metin detayı bulunmuyor.</span>"))
+        self.layout.addWidget(QLabel(f"<b style='color:{_P["accent"]}; font-size:14px;'>Düğüm: {self.node_id}</b>"))
+        self.layout.addWidget(QLabel(f"<span style='color:{_P["text_muted"]};'>Bu düğüm için kayıtlı ek metin detayı bulunmuyor.</span>"))
         self.layout.addStretch()
         close_btn = QPushButton("Kapat")
         close_btn.clicked.connect(self.accept)

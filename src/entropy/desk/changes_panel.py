@@ -31,6 +31,7 @@ from entropy.core.event_bus import bus
 from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import spec_field
+from entropy.ui.design.prefs import install_splitter_persistence
 
 # Tek dosyalık diff için üst sınır (bayt). Üstü kesilir: 12 MB'lik bir üretim
 # dosyası farkı QPlainTextEdit'i dakikalarca meşgul ediyordu.
@@ -222,6 +223,10 @@ class ChangesPanel(QFrame):
         layout.addWidget(self.status_label)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+
+        install_splitter_persistence("desk.changes", splitter)
         self.file_list = QListWidget()
         self.file_list.setMinimumWidth(160)
         # Qt varsayılanı beyaz zemindir; okuma temasında liste diff görünümüyle

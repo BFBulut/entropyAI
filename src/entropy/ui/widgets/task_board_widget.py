@@ -26,6 +26,12 @@ from PySide6.QtWidgets import (
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.prefs import install_splitter_persistence
+
+_P = _embedded_palette()
 
 # Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
 # Faz 11-C: yedi sütun olunca 190 px pano genişliğini 1.400 px'e zorluyordu.
@@ -223,7 +229,7 @@ class TaskCardWidget(QFrame):
         header = title_text
         if self.status == "failed":
             header = (
-                f"<span style='background:#4A1A1F; color:#FF6B6B; font-size:11px; "
+                f"<span style='background:{_P["raised"]}; color:{_P["danger"]}; font-size:11px; "
                 f"padding:1px 5px; border-radius:3px;'>BAŞARISIZ</span> {title_text}"
             )
         self.title_label = QLabel(
@@ -267,7 +273,7 @@ class TaskCardWidget(QFrame):
         self.proof_missing = proof_is_missing(card)
         if self.proof_missing:
             proof_label = QLabel(
-                f"<span style='background:#4A3A12; color:#FFC24D; "
+                f"<span style='background:{_P["raised"]}; color:{_P["warn"]}; "
                 f"font-size:{LABEL_PX}px; padding:1px 5px; border-radius:3px;'>"
                 f"kanıt eksik</span>"
             )
@@ -560,7 +566,7 @@ class TaskDetailPanel(QFrame):
             missing = proof_is_missing(card)
             self.proof_label.setText(
                 f"<b style='color:{RT['text']};'>Kanıt</b> "
-                f"<span style='background:#4A3A12; color:#FFC24D; padding:1px 5px;"
+                f"<span style='background:{_P["raised"]}; color:{_P["warn"]}; padding:1px 5px;"
                 f" border-radius:3px;'>kanıt yok</span>"
                 + ("<br><span style='color:" + RT["text_dim"] + ";'>"
                    "İşçi testsiz 'bitti' diyemez.</span>" if missing else "")
@@ -569,9 +575,9 @@ class TaskDetailPanel(QFrame):
             return
         result = str(proof.get("result") or "unknown").lower()
         badge = {
-            "green": ("#12331F", "#3DE8A8", "yeşil"),
-            "red": ("#4A1A1F", "#FF6B6B", "kırmızı"),
-        }.get(result, ("#33302A", "#FFC24D", "belirsiz"))
+            "green": (f"{_P["raised"]}", f"{_P["ok"]}", "yeşil"),
+            "red": (f"{_P["raised"]}", f"{_P["danger"]}", "kırmızı"),
+        }.get(result, (f"{_P["raised"]}", f"{_P["warn"]}", "belirsiz"))
         command = str(proof.get("command") or "")
         summary = str(proof.get("summary") or "")
         html_parts = [
@@ -741,6 +747,10 @@ class TaskBoardWidget(QFrame):
         root.addLayout(header)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+
+        install_splitter_persistence("board.detail", splitter)
 
         columns_host = QWidget()
         columns_layout = QHBoxLayout(columns_host)

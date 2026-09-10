@@ -22,6 +22,14 @@ from entropy.skills.manager import SkillManager
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 
+# Gomulu tuvalin renk kaynagi (Faz 12-D.2, denetim D12-05): duz onaltilik
+# renk yerine `TOKENS` / `TOKENS["viz"]` koprusu.
+from entropy.ui.design.embedded import css_variables as _css_variables
+from entropy.ui.design.embedded import js_palette_json as _js_palette_json
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
+
 # Rapor kümesi açma/kapama düğümleri kaldırıldı (2026-09-08): "87 rapor" halkası
 # tıklandığında görünüm baştan kuruluyor, kullanıcı yerini kaybediyordu. Artık
 # bütün yapraklar her zaman küçük noktalar olarak görünür; kalabalık, kümeleme
@@ -449,18 +457,23 @@ def compute_radial_fan_leaf_pos(
     return leaf_x, leaf_y
 
 
-GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
+#: Ham şablon — `__VIZ_CSS__` / `__VIZ_JSON__` yer tutucularıyla.
+#: Kullanıma hazır hâli aşağıdaki `GRAPH_HTML_TEMPLATE`'tir (o anki temanın
+#: paleti enjekte edilmiş). Tema değişince `graph_html_template()` yeniden
+#: üretir; JS mantığı hiç değişmez.
+GRAPH_TEMPLATE_SOURCE = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <style>
+__VIZ_CSS__
         * { box-sizing: border-box; }
         body {
             margin: 0;
             padding: 0;
-            background: #080B10;
+            background: var(--viz-bg);
             overflow: hidden;
-            color: #F0F6FC;
+            color: var(--viz-text);
             font-family: 'Segoe UI', Consolas, sans-serif;
             user-select: none;
             width: 100vw;
@@ -483,7 +496,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             left: 8px;
             font-size:11px;
             background: rgba(14, 20, 32, 0.92);
-            border: 1px solid #1F2B42;
+            border: 1px solid var(--viz-line-strong);
             border-radius: 6px;
             padding: 3px 8px;
             display: flex;
@@ -498,7 +511,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         #legendToggle {
             cursor: pointer;
-            color: #00F0FF;
+            color: var(--viz-accent);
             font-weight: 700;
             padding: 0 3px;
         }
@@ -513,7 +526,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .legend-item:hover { background: rgba(0, 240, 255, 0.12); }
         .legend-item.dimmed { opacity: 0.30; text-decoration: line-through; }
-        .legend-count { color: #8B949E; font-size:11px; }
+        .legend-count { color: var(--viz-text-muted); font-size:11px; }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         /* Katlanan panel: tam kategori listesi + topluluk paleti + kontroller. */
         #legendPanel {
@@ -523,12 +536,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             display: none;
             font-size:11px;
             background: rgba(14, 20, 32, 0.96);
-            border: 1px solid #1F2B42;
+            border: 1px solid var(--viz-line-strong);
             border-radius: 6px;
             padding: 8px 10px;
             z-index: 11;
             max-width: 460px;
-            color: #C9D1D9;
+            color: var(--viz-text);
             backdrop-filter: blur(6px);
         }
         #legendPanel.open { display: block; }
@@ -538,16 +551,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             flex-wrap: wrap;
             align-items: center;
             gap: 10px;
-            border-top: 1px solid #1F2B42;
+            border-top: 1px solid var(--viz-line-strong);
             padding-top: 6px;
         }
         #graphControls.empty { display: none; }
         .ctrl-group { display: flex; align-items: center; gap: 5px; }
         .ctrl-group.disabled { display: none; }
         #graphControls select, #graphControls input[type=range] {
-            background: #0E1420;
-            color: #00F0FF;
-            border: 1px solid #1F2B42;
+            background: var(--viz-surface);
+            color: var(--viz-accent);
+            border: 1px solid var(--viz-line-strong);
             border-radius: 4px;
             font-size:11px;
             padding: 1px 4px;
@@ -563,9 +576,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .ctrl-btn {
             background: rgba(14, 20, 32, 0.92);
-            border: 1px solid #1F2B42;
+            border: 1px solid var(--viz-line-strong);
             border-radius: 4px;
-            color: #00F0FF;
+            color: var(--viz-accent);
             font-weight: bold;
             font-size:13px;
             width: 28px;
@@ -578,9 +591,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             backdrop-filter: blur(4px);
         }
         .ctrl-btn:hover {
-            background: #00F0FF;
-            color: #080B10;
-            border-color: #00F0FF;
+            background: var(--viz-accent);
+            color: var(--viz-bg);
+            border-color: var(--viz-accent);
         }
         /* U7: arama kutusu (Ctrl+F) */
         #searchBox {
@@ -590,7 +603,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             z-index: 12;
             display: none;
             background: rgba(14, 20, 32, 0.96);
-            border: 1px solid #00F0FF;
+            border: 1px solid var(--viz-accent);
             border-radius: 6px;
             padding: 4px 6px;
             width: 260px;
@@ -598,9 +611,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         #searchBox.open { display: block; }
         #searchInput {
             width: 100%;
-            background: #0E1420;
-            color: #F0F6FC;
-            border: 1px solid #1F2B42;
+            background: var(--viz-surface);
+            color: var(--viz-text);
+            border: 1px solid var(--viz-line-strong);
             border-radius: 4px;
             font-size:11px;
             padding: 3px 6px;
@@ -612,12 +625,12 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             font-size:11px;
             border-radius: 4px;
             cursor: pointer;
-            color: #C9D1D9;
+            color: var(--viz-text);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .search-hit:hover { background: rgba(0, 240, 255, 0.14); color: #00F0FF; }
+        .search-hit:hover { background: rgba(0, 240, 255, 0.14); color: var(--viz-accent); }
         /* U5: breadcrumb — hiyerarşideki konum, gezinti geçmişi değil. */
         #breadcrumb {
             position: absolute;
@@ -626,9 +639,9 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             transform: translateX(-50%);
             z-index: 9;
             font-size:11px;
-            color: #8B949E;
+            color: var(--viz-text-muted);
             background: rgba(14, 20, 32, 0.82);
-            border: 1px solid #1F2B42;
+            border: 1px solid var(--viz-line-strong);
             border-radius: 6px;
             padding: 3px 10px;
             display: none;
@@ -637,19 +650,19 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             white-space: nowrap;
             text-overflow: ellipsis;
         }
-        #breadcrumb .crumb { cursor: pointer; color: #79C0FF; }
-        #breadcrumb .crumb:hover { color: #00F0FF; text-decoration: underline; }
+        #breadcrumb .crumb { cursor: pointer; color: var(--viz-accent); }
+        #breadcrumb .crumb:hover { color: var(--viz-accent); text-decoration: underline; }
         #infoBox {
             position: absolute;
             bottom: 12px;
             left: 12px;
             right: 300px;
             background: rgba(14, 20, 32, 0.95);
-            border: 1px solid #00F0FF;
+            border: 1px solid var(--viz-accent);
             border-radius: 6px;
             padding: 8px 12px;
             font-size:13px;
-            color: #F0F6FC;
+            color: var(--viz-text);
             display: none;
             z-index: 10;
             backdrop-filter: blur(6px);
@@ -708,12 +721,16 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
     <canvas id="canvas"></canvas>
 
     <script>
+        // Faz 12-D.2: tuvalin tum renkleri `TOKENS`/`TOKENS["viz"]` ailesinden
+        // enjekte edilir (denetim D12-05). Kanvas 2D baglami CSS degiskeni
+        // okuyamadigi icin ayni palet burada JSON olarak da gelir.
+        const VIZ = __VIZ_JSON__;
         window.onerror = function(msg, url, line) {
             console.error("Canvas Graph Error: " + msg + " line " + line);
             const box = document.getElementById('infoBox');
             if (box) {
                 box.style.display = 'block';
-                box.style.borderColor = '#FF4D4D';
+                box.style.borderColor = VIZ.danger;
                 box.innerHTML = "Hafıza Haritası Hatası: " + msg;
             }
         };
@@ -1371,22 +1388,24 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
         updateDimensions();
 
         const colors = {
-            'ego': '#00F0FF', 'hub': '#79C0FF', 'project': '#388BFD', 'skill': '#00FF9D',
-            'subbranch': '#FF79C6', 'mcp': '#F778BA', 'mcp-tool': '#D2A8FF',
-            'cognitive': '#7EE787', 'semantic': '#7EE787', 'episodic': '#FFB300',
-            'procedural': '#58A6FF', 'Reports': '#FF0055', 'DailyNotes': '#E3B341',
-            'obsidian': '#BC8CFF', 'office': '#FFB000', 'agent': '#2DD4BF',
-            'query': '#C792EA', 'hub-offices': '#FFC94D', 'concept': '#9BE9A8',
-            'entity': '#8CC8FF', 'community': '#FFD166'
+            // Dugum turu -> `viz.kind*` serisi (mor/neon aile kaldirildi).
+            'ego': VIZ.accent, 'hub': VIZ.series[0], 'project': VIZ.series[4], 'skill': VIZ.ok,
+            'subbranch': VIZ.series[5], 'mcp': VIZ.series[5], 'mcp-tool': VIZ.series[3],
+            'cognitive': VIZ.add, 'semantic': VIZ.add, 'episodic': VIZ.warn,
+            'procedural': VIZ.series[4], 'Reports': VIZ.danger, 'DailyNotes': VIZ.series[6],
+            'obsidian': VIZ.series[3], 'office': VIZ.series[2], 'agent': VIZ.series[0],
+            'query': VIZ.series[5], 'hub-offices': VIZ.series[6], 'concept': VIZ.series[1],
+            'entity': VIZ.series[4], 'community': VIZ.series[2]
         };
 
         // U6: renk körlüğüne güvenli paletler. OKABE_ITO kategori yedeği
         // (tabloda olmayan grup), TOL_12 ise topluluk tonlarıdır: 88 topluluğu
         // altın açıyla 88 tona dağıtmak yerine 12 ayrık ton döngüsü kullanılır.
-        const OKABE_ITO = ['#E69F00', '#56B4E9', '#009E73', '#F0E442',
-                           '#0072B2', '#D55E00', '#CC79A7', '#999999'];
-        const TOL_12 = ['#332288', '#88CCEE', '#44AA99', '#117733', '#999933', '#DDCC77',
-                        '#CC6677', '#882255', '#AA4499', '#6699CC', '#DDAA33', '#BB5566'];
+        // U6: renk korlugune guvenli yedek paletler. Faz 12-D.2'de ikisi de
+        // `viz.*` serisinden turetilir: 8 ton kategori yedegi, 12'lik topluluk
+        // donusu ise ayni serinin acik/koyu varyantlariyla uzatilir.
+        const OKABE_ITO = VIZ.series.slice();
+        const TOL_12 = VIZ.series.concat(VIZ.series.slice(0, 4));
 
         const groupIcons = {
             'office': '🏢', 'agent': '🤖', 'query': '🔎', 'hub-offices': '🏢',
@@ -2115,7 +2134,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 // Yakın bantta tam ad, uzakta kısa etiket.
                 const text = (isHovered || zoom >= LOD_BRANCH) ? n._full : n._short;
                 if (!text) continue;
-                const color = isHovered ? getNodeColor(n.group) : '#E6EDF3';
+                const color = isHovered ? getNodeColor(n.group) : VIZ.text;
                 const sp = labelSprite(text, st.size, st.weight, color);
                 // Dört aday konum: sağ, sol, üst, alt.
                 const cands = [
@@ -2287,7 +2306,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 const c2 = cv.getContext('2d');
                 c2.fillStyle = 'rgba(8, 11, 16, 0.86)';
                 c2.fillRect(0, 0, MINIMAP_W, MINIMAP_H);
-                c2.strokeStyle = '#1F2B42';
+                c2.strokeStyle = VIZ.line_strong;
                 c2.strokeRect(0.5, 0.5, MINIMAP_W - 1, MINIMAP_H - 1);
                 const sc = Math.min(MINIMAP_W / (x1 - x0), MINIMAP_H / (y1 - y0));
                 for (let i = 0; i < pts.length; i++) {
@@ -2321,7 +2340,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             ctx.beginPath();
             ctx.rect(R.x, R.y, R.w, R.h);
             ctx.clip();
-            ctx.strokeStyle = '#00F0FF';
+            ctx.strokeStyle = VIZ.accent;
             ctx.lineWidth = 1;
             ctx.strokeRect(R.x + vx0, R.y + vy0, vw, vh);
             ctx.restore();
@@ -2596,11 +2615,11 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (n.group === 'community') {
                     const count = communityMembers.get(String(n.id)) || n.member_count || 0;
                     const open = expandedCommunities.has(String(n.id));
-                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid #FFD166; border-radius:4px; color:#FFD166; font-size:11px; font-weight:600;">🔮 ' + count + ' üye — tıkla: ' + (open ? 'kapat' : 'aç') + '</span>';
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 209, 102, 0.15); border:1px solid ' + VIZ.warn + '; border-radius:4px; color:' + VIZ.warn + '; font-size:11px; font-weight:600;">🔮 ' + count + ' üye — tıkla: ' + (open ? 'kapat' : 'aç') + '</span>';
                 } else if (n.id.includes('MEMORY') || n.id.includes('BELLEK_HARITASI')) {
-                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid #FFAA00; border-radius:4px; color:#FFAA00; font-size:11px; font-weight:600;">📑 İndeks Kataloğu</span>';
+                    extraBadge = '<br/><span style="display:inline-block; margin-top:4px; padding:2px 8px; background:rgba(255, 170, 0, 0.15); border:1px solid ' + VIZ.warn + '; border-radius:4px; color:' + VIZ.warn + '; font-size:11px; font-weight:600;">📑 İndeks Kataloğu</span>';
                 }
-                infoBox.innerHTML = '<b style="color:' + col + '; font-size:13px;">' + n._full + '</b> <span style="color:#8B949E; font-size:11px;">[' + n.group + ']</span> <span style="color:#00FF9D; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>' + extraBadge + '<br/><span style="color:#C9D1D9; font-size:11px; line-height:1.4;">' + (n.info || '') + '</span>';
+                infoBox.innerHTML = '<b style="color:' + col + '; font-size:13px;">' + n._full + '</b> <span style="color:' + VIZ.text_muted + '; font-size:11px;">[' + n.group + ']</span> <span style="color:' + VIZ.ok + '; font-size:11px; margin-left:8px;">(Detayları Açmak İçin Tıkla)</span>' + extraBadge + '<br/><span style="color:' + VIZ.text + '; font-size:11px; line-height:1.4;">' + (n.info || '') + '</span>';
             } else {
                 canvas.style.cursor = isPanning ? 'grabbing' : 'default';
                 infoBox.style.display = 'none';
@@ -2754,7 +2773,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             const tDraw = performance.now();
             ctx.save();
             if (typeof ctx.clearRect === 'function') ctx.clearRect(0, 0, width, height);
-            ctx.fillStyle = '#080B10';
+            ctx.fillStyle = VIZ.bg;
             ctx.fillRect(0, 0, width, height);
             ctx.translate(panX, panY);
             ctx.scale(zoom, zoom);
@@ -2884,7 +2903,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
             // Yol vurgusu (U7)
             if (pathHighlight) {
                 ctx.lineWidth = 2.6 / zoom;
-                ctx.strokeStyle = '#00FF9D';
+                ctx.strokeStyle = VIZ.ok;
                 ctx.beginPath();
                 for (let i = 0; i < simLinks.length; i++) {
                     const l = simLinks[i];
@@ -2934,7 +2953,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                 if (isHovered || n._level <= 1 || n.id === searchHighlight) {
                     try {
                         const glow = ctx.createRadialGradient(n.x, n.y, r * 0.2, n.x, n.y, r * 2.2);
-                        glow.addColorStop(0, (n.id === searchHighlight ? '#00FF9D' : color) + 'aa');
+                        glow.addColorStop(0, (n.id === searchHighlight ? VIZ.ok : color) + 'aa');
                         glow.addColorStop(1, color + '00');
                         ctx.fillStyle = glow;
                     } catch (e) { ctx.fillStyle = color; }
@@ -2965,7 +2984,7 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
                     ctx.fillText(icon, n.x, n.y);
                     ctx.restore();
                 } else if (n._level <= 3) {
-                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillStyle = VIZ.text;
                     ctx.beginPath();
                     ctx.arc(n.x, n.y, r * 0.35, 0, Math.PI * 2);
                     ctx.fill();
@@ -3025,6 +3044,26 @@ GRAPH_HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def graph_html_template(theme: str | None = None) -> str:
+    """Paleti enjekte edilmiş, kullanıma hazır tuval şablonu (Faz 12-D.2).
+
+    `GRAPH_TEMPLATE_SOURCE` yalnızca yer tutucuları taşır; renkler burada
+    `TOKENS` / `TOKENS["viz"]` ailesinden gelir. Tema değişince bu işlev
+    yeniden çağrılır — JS mantığına (fizik, yerleşim, etiket çakışması)
+    dokunulmaz.
+    """
+    return (
+        GRAPH_TEMPLATE_SOURCE
+        .replace("__VIZ_CSS__", _css_variables(theme))
+        .replace("__VIZ_JSON__", _js_palette_json(theme))
+    )
+
+
+#: Geriye dönük ad: içe aktaran testler ve çağrı yerleri bunu kullanır.
+GRAPH_HTML_TEMPLATE = graph_html_template()
+
 
 
 class GraphWebEnginePage(QWebEnginePage):
@@ -3094,7 +3133,7 @@ class KnowledgeGraphWidget(QFrame):
         header.addStretch()
 
         # Scope Selector Dropdown
-        self.scope_label = QLabel("<span style='color:#8B949E; font-size:11px;'>Odak:</span>")
+        self.scope_label = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Odak:</span>")
         header.addWidget(self.scope_label)
 
         self.scope_combo = QComboBox()
@@ -3114,8 +3153,8 @@ class KnowledgeGraphWidget(QFrame):
         self.isolate_btn.toggled.connect(self._on_isolate_toggled)
         header.addWidget(self.isolate_btn)
 
-        self.refresh_btn = QPushButton("↻")
-        self.refresh_btn.setAccessibleName("↻")
+        self.refresh_btn = QPushButton("Yenile")
+        self.refresh_btn.setAccessibleName("Haritayı yenile")
         self.refresh_btn.setToolTip("Grafiği yenile")
         self.refresh_btn.setProperty("role", "icon")
         self.refresh_btn.setProperty("variant", "primary")
@@ -4078,8 +4117,10 @@ class KnowledgeGraphWidget(QFrame):
         nodes_json = json.dumps(graph_data["nodes"], ensure_ascii=False).replace("</", "<\\/")
         links_json = json.dumps(graph_data["links"], ensure_ascii=False).replace("</", "<\\/")
 
+        # Faz 12-D.2: tuval paleti `TOKENS`/`TOKENS["viz"]` ailesinden enjekte
+        # edilir; JS mantigina (fizik, yerlesim, etiket cakismasi) dokunulmaz.
         html_content = (
-            GRAPH_HTML_TEMPLATE
+            graph_html_template()
             .replace("__NODES__", nodes_json)
             .replace("__LINKS__", links_json)
             .replace("__INITIAL_SCOPE__", self.current_scope)

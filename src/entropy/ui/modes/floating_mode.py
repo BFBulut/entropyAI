@@ -68,20 +68,11 @@ class FloatingModeWidget(QWidget):
 
     def contextMenuEvent(self, event: QContextMenuEvent):
         """Right-click context menu (Pin, Switch to Zen, Open Chat, Exit)."""
+        # Faz 12-D.2: yerel stil sayfası kaldırıldı (son kalan `setStyleSheet`).
+        # `QMenu` kuralları uygulama düzeyindeki tek QSS girişinde
+        # (`design/qss.py`) zaten tanımlı; burada yinelenmesi paleti ikiye
+        # bölüyor ve tema değişiminde menüyü koyu bırakıyordu.
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #0E1420;
-                color: #F0F6FC;
-                border: 1px solid #1F2B42;
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #1A263C;
-                color: #00F0FF;
-            }
-        """)
 
         # 1. Pin / Always on top toggle
         pin_text = "Sabitlemeyi Kaldır" if self.is_pinned_on_top else "Ekrana Sabitle (Always On Top)"

@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import pytest
+from entropy.ui.design.embedded import css_variables, js_palette_json
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 GRAPH_PY = SRC_ROOT / "entropy" / "ui" / "widgets" / "knowledge_graph.py"
@@ -713,7 +714,8 @@ def test_graph_control_strip_strings_present():
     # Topluluk düğümü efsanede ve renk/ikon tablolarında.
     # Faz 8: efsane LEGEND_DEFS + buildLegend ile JS'ten kuruluyor.
     assert "['community', " in src
-    assert "'community': '#FFD166'" in src
+    # Faz 12-D.2: tuval renkleri `TOKENS["viz"]` serisinden gelir (D12-05).
+    assert "'community': VIZ.series[2]" in src
 
 
 def test_graph_script_still_valid_javascript():
@@ -867,7 +869,7 @@ def _graph_js_with_fixture() -> str:
         {"source": "fact-new", "target": "com-1", "type": "member_of"},
     ]
     js = (
-        block.replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
+        block.replace("__VIZ_JSON__", js_palette_json()).replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
         .replace("__LINKS__", json.dumps(links, ensure_ascii=False))
         .replace("__INITIAL_SCOPE__", "all")
         .replace("__ACTIVE_PROJECT_SLUG__", "test")
@@ -903,7 +905,7 @@ def test_graph_controls_disabled_without_memory_fields(tmp_path):
         {"id": "r1", "name": "Rapor", "group": "Reports", "val": 10, "x": 40, "y": 20},
     ]
     js = (
-        block.replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
+        block.replace("__VIZ_JSON__", js_palette_json()).replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
         .replace("__LINKS__", json.dumps([{"source": "ego-entropy-core", "target": "r1", "is_tree_link": True}]))
         .replace("__INITIAL_SCOPE__", "all")
         .replace("__ACTIVE_PROJECT_SLUG__", "test")
@@ -951,7 +953,7 @@ def test_graph_frame_budget_with_1000_nodes(tmp_path):
         })
         links.append({"source": "ego-entropy-core", "target": f"n{i}", "is_tree_link": True})
     js = (
-        block.replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
+        block.replace("__VIZ_JSON__", js_palette_json()).replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
         .replace("__LINKS__", json.dumps(links))
         .replace("__INITIAL_SCOPE__", "all")
         .replace("__ACTIVE_PROJECT_SLUG__", "test")

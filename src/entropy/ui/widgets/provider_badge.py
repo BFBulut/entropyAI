@@ -26,14 +26,19 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import LABEL_PX
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 # Rozette gösterilecek sağlayıcılar ve kısa adları.
 PROVIDERS = (("agy", "AGY"), ("claude", "Claude"))
 
-COLOR_OK = "#00FF9D"
-COLOR_WARN = "#E3B341"
-COLOR_BAD = "#FF4D4D"
-COLOR_UNKNOWN = "#8B949E"
+COLOR_OK = f"{_P["ok"]}"
+COLOR_WARN = f"{_P["warn"]}"
+COLOR_BAD = f"{_P["danger"]}"
+COLOR_UNKNOWN = f"{_P["text_muted"]}"
 
 
 def status_color(status: Optional[Dict[str, Any]]) -> str:
@@ -121,6 +126,11 @@ class ProviderStatusBadge(QFrame):
         self.setObjectName("providerBadge")
         self.setProperty("role", "panel")
         self.statuses: Dict[str, Dict[str, Any]] = {}
+        #: Faz 12-D.2 (denetim D12-06): üst çubukta AYNI ANDA tek sağlayıcı
+        #: etiketi görünür. İkinci sağlayıcının durumu kaybolmaz — birincinin
+        #: ipucunda ve komut paletinde durur. Boşsa (eski davranış) ikisi de
+        #: gösterilir; testler bu yolu kullanmayı sürdürebilir.
+        self.primary: str = ""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -155,14 +165,30 @@ class ProviderStatusBadge(QFrame):
             widget = self.labels[provider]
             # Bos metin geride yalnizca renkli bir cerceve birakiyordu ("bos
             # kirmizi kare" ikincil adayi); metin yoksa etiket gizlenir.
-            widget.setVisible(bool(text.strip()))
+            hidden_by_primary = bool(self.primary) and provider != self.primary
+            widget.setVisible(bool(text.strip()) and not hidden_by_primary)
             widget.setMaximumWidth(MAX_BADGE_WIDTH)
             widget.setText(
                 f"<span style='color:{color}; border:1px solid {color};"
                 f" border-radius:8px; padding:2px 8px; font-size:{LABEL_PX}px;"
                 f" font-weight:600;'>{text}</span>"
             )
-            widget.setToolTip(status_tooltip(provider, status))
+            widget.setToolTip(self._tooltip_for(provider))
+
+    def set_primary(self, provider: str) -> None:
+        """Üst çubukta gösterilecek sağlayıcıyı seçer (diğeri ipucuna iner)."""
+        self.primary = str(provider or "")
+        self.refresh()
+
+    def _tooltip_for(self, provider: str) -> str:
+        """Birincil rozetin ipucu ikinci sağlayıcının durumunu da taşır."""
+        parts = [status_tooltip(provider, self.statuses.get(provider))]
+        if self.primary and provider == self.primary:
+            for other, label in PROVIDERS:
+                if other == provider:
+                    continue
+                parts.append(status_tooltip(other, self.statuses.get(other)))
+        return "\n".join(p for p in parts if p)
 
     def mousePressEvent(self, event):  # noqa: N802
         # Rozete tıklamak, giriş yapılmamış ilk sağlayıcı için /login önerir.

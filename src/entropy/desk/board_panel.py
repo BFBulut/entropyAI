@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QFrame, QSplitter, QTabWidget, QVBoxLayout
 from entropy.desk.changes_panel import ChangesPanel
 from entropy.desk.receipt_panel import ReceiptPanel
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
+from entropy.ui.design.prefs import install_splitter_persistence
 
 TAB_CHANGES = 0
 TAB_RECEIPT = 1
@@ -39,6 +40,10 @@ class BoardPanel(QFrame):
         layout.setSpacing(0)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+
+        install_splitter_persistence("desk.board", splitter)
         self.board_widget = TaskBoardWidget(parent=self, board=board, office=office, bridge=bridge)
         self.board_widget.card_selected.connect(self.card_selected)
         self.board_widget.card_selected.connect(self._on_card_selected)

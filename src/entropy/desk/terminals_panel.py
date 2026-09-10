@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from entropy.core.event_bus import bus
 from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.design.prefs import install_splitter_persistence
 
 # Bölmede tutulan en fazla olay: uzun koşu belleği şişirmesin.
 MAX_EVENTS = 400
@@ -46,7 +47,7 @@ KIND_STYLE: Dict[str, tuple] = {
     "thinking": (RT["text_dim"], True, "…"),
     "text": (RT["text_body"], False, ""),
     "tool_call": (TOKENS["color"]["warn"], False, ""),
-    "tool_result": (RT["text_dim"], False, "↩"),
+    "tool_result": (RT["text_dim"], False, "sonuç"),
     "status": (RT["text_dim"], False, "•"),
     "result": (TOKENS["color"]["ok"], False, ""),
     "error": (TOKENS["color"]["danger"], False, ""),
@@ -466,6 +467,8 @@ class TerminalsPanel(QFrame):
 
         self.stack = QStackedWidget()
         self.split = QSplitter(Qt.Orientation.Horizontal)
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+        install_splitter_persistence("desk.terminal", self.split)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.stack.addWidget(self.split)   # 0: bölünmüş görünüm

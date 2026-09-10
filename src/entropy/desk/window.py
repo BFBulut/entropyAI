@@ -41,6 +41,7 @@ from entropy.desk.projects_panel import ProjectsPanel
 from entropy.desk.stream_panel import StreamPanel
 from entropy.desk.terminals_panel import TerminalsPanel
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.design.prefs import install_splitter_persistence
 
 WINDOW_TITLE = "Entropy Agent Desk"
 DEFAULT_SIZE = (1400, 880)
@@ -368,6 +369,7 @@ class AgentDeskWindow(QMainWindow):
         terminals_split.addWidget(self.stream_panel)
         terminals_split.addWidget(self.terminals_panel)
         terminals_split.setSizes([180, 420])
+        install_splitter_persistence("desk.terminals", terminals_split)
         terminals_layout.addWidget(terminals_split)
         self.terminals_tab = terminals_tab
 
@@ -378,6 +380,9 @@ class AgentDeskWindow(QMainWindow):
         self.tabs.addTab(scroll_host(self.memory_panel), "Bellek")
         center_splitter.addWidget(self.tabs)
         center_splitter.setSizes([420, 380])
+        # Faz 12-D.2 (denetim D12-07): bölücü konumları QSettings'e yazılır.
+        install_splitter_persistence("desk.center", center_splitter)
+        self.center_splitter = center_splitter
         center_layout.addWidget(center_splitter)
         self.splitter.addWidget(center)
 
@@ -421,6 +426,7 @@ class AgentDeskWindow(QMainWindow):
         self.tabs.setMinimumWidth(200)
         self.tabs.setMinimumHeight(120)
         self.splitter.setSizes([250, 770, ROSTER_MIN_WIDTH])
+        install_splitter_persistence("desk.main", self.splitter)
         root.addWidget(self.splitter, 1)
 
         signal = getattr(bus, "offices_updated", None)

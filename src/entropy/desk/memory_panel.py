@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
 from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.design.prefs import install_splitter_persistence
 
 # Düğüm türü -> renk. Faz 11-E adım 6: `viz.*` belirteç ailesi; bilinmeyen
 # tür nötr. Renk yalnızca türü kodlar, vurgu görevi görmez.
@@ -249,7 +250,15 @@ class OfficeMemoryPanel(QFrame):
 
         self.split = QSplitter(Qt.Orientation.Vertical)
 
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+
+        install_splitter_persistence("desk.memory", self.split)
+
         top = QSplitter(Qt.Orientation.Horizontal)
+
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+
+        install_splitter_persistence("desk.memory.top", top)
         graph_box = QWidget()
         graph_layout = QVBoxLayout(graph_box)
         graph_layout.setContentsMargins(0, 0, 0, 0)

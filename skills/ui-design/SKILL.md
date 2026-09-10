@@ -6,7 +6,7 @@ description: >-
   mevcut bir ekranı sadeleştirirken veya "arayüz modern görünmüyor" türü bir istek
   geldiğinde kullanılır.
 tags: ui, design, pyside6, accessibility, tokens
-version: 1.0.0
+version: 1.1.0
 ---
 
 # ui-design — Entropy arayüz tasarımı
@@ -28,6 +28,18 @@ Belirteçler: `src/entropy/ui/design/tokens.py` · QSS: `design/qss.py` · ikon:
    üzerinden gelir; her ikon düğmesinde `setAccessibleName()` bulunur.
 6. **Odak görünür.** Odaklanabilir her denetimde 2 px `accent` halka vardır.
 7. **Hedef boyutu.** Tıklanabilir hiçbir şey 24×24 px'in altında değildir (WCAG 2.5.8).
+8. **Gömülü belge kuralı.** QTextBrowser/QWebEngine'e gönderilen HTML, CSS, SVG ve JS
+   gövdelerinde düz onaltılık renk, emoji veya sabit piksel genişlik yazmak **yasaktır**.
+   Renk `entropy.ui.design.embedded.palette()` / `css_variables()` / `js_palette_json()`
+   üzerinden `TOKENS` ve `TOKENS["viz"]`'den gelir; genişlik `viewBox` + ölçek ya da
+   `%` ile akışkan olur (`markdown_renderer.set_reader_width`).
+9. **Durum kalıcılığı.** Kullanıcının elle ayarladığı her yerleşim değeri (bölücü konumu,
+   panel açık/kapalı, tema, yoğunluk) `entropy.ui.design.prefs` (`QSettings`) üzerinden
+   kalıcıdır. Yeni bir `QSplitter` eklersen aynı satırda
+   `install_splitter_persistence("<ad>", splitter)` çağırırsın.
+10. **Kapı beyana dayanamaz.** Bir kapı, kodun kendi beyan ettiği listeyi (ör.
+   `header_items`) değil **canlı widget ağacını** ölçer; "aynı anda görünen" =
+   `isVisible()` **ve** `visibleRegion()` boş değil.
 
 ## 1. Süreç (her arayüz işi bu sırayla)
 
@@ -38,7 +50,8 @@ yapılabilir kılıyor? Hangi öğe **kaldırılıyor**? (Eklemeden önce bir ş
 **c. Brief'e karşı gözden geçir.** Planın herhangi bir parçası "her uygulamada olur"
 tipindeyse (§5) o parçayı değiştir ve neyi neden değiştirdiğini yaz.
 **d. Uygula.** Yalnızca belirteç ve bileşen sınıfı kullanarak.
-**e. Kanıtla.** Ölçüm betiğini yeniden çalıştır + offscreen ekran görüntüsü al
+**e. Kanıtla.** Kapılar yeşil ama kullanıcı görevindeki tıklama sayısı ya da
+`interactive_count_zen_1366` düşmediyse iş **bitmemiştir**. Ölçüm betiğini yeniden çalıştır + offscreen ekran görüntüsü al
 (1366×768 ve 1920×1080). Rapora önce/sonra sayı tablosu ve iki görüntü ekle.
 Yeşil ölçüm olmadan iş "bitti" sayılmaz.
 
@@ -107,6 +120,40 @@ Nihai kapı değerleri (`--final`, Faz 11-E adım 2–6 sonunda **yeşil**):
 | `small_targets` | 0 | **0** |
 | `desk_hex` | 0 | **0** |
 | `desk_stylesheets` | ≤ 10 | **0** |
+
+Faz 12-D.2'de eklenen kapılar (`FINAL_GATES_12D2` + `FINAL_MIN_GATES`;
+canlı olanlar `--live` ya da `--final` ile offscreen Qt kolunda ölçülür):
+
+| Alan | Eşik | Ölçüm (2026-09-10, 12-D.2 sonrası) |
+|---|---:|---:|
+| `embedded_hex` | 0 | **0** (önce ≥ 67) |
+| `embedded_contrast_failures` | 0 | **0** (önce ≥ 2) |
+| `pure_spectrum_colors` | 0 | **0** (önce 3) |
+| `arrow_glyphs` | ≤ 5 | **4** (önce 21) |
+| `splitters_unpersisted` | 0 | **0** (12/12 kalıcı; önce 0/12) |
+| `themes_reachable` | ≥ 4 | **4** (önce 1) |
+| `interactive_count_zen_1366` | ≤ 90 | **50** |
+| `header_leaf_widgets` | ≤ 6 | **6** (önce 8) |
+| `embedded_h_overflow` | 0 | **0** |
+
+Bilgi (kapı değil): `midpoint_separators` (bugün 72), `emoji_raw`,
+`splitters_total`.
+
+## 7. Gerçek ekran kontrol listesi (offscreen'in kapatamadığı boşluk)
+
+Offscreen sürücü 800×800 sanal ekran kullanır ve gerçek yazı tipini yüklemez;
+aşağıdakiler **gerçek pencerede, gerçek ekranda** doğrulanır (QA):
+
+- [ ] 1366×768 ve 1920×1080 tam ekran görüntüsü; Türkçe karakterler doğru (`ğ ş ı İ ö ü ç`)
+- [ ] Yazı tipi gerçekten `Segoe UI Variable Text`/`Segoe UI`; mono yalnızca terminal/kod/model kimliği
+- [ ] %100 ve %200 DPI yan yana; denetim yükseklikleri orantılı, kırpma yok
+- [ ] Tab ile 10 durak: her durakta odak halkası fotoğraflanır
+- [ ] Ekran okuyucu bir tur: ikon düğmelerinin adı okunuyor
+- [ ] Rapor okuyucusunda bir SVG diyagram + bir kod bloğu: yatay kaydırma yok, renkler belirteçten
+- [ ] Bilişsel hafıza grafiği: tuval renkleri `viz.*` ailesiyle aynı; **açık temada da okunur**
+- [ ] Ayarlar diyaloğunda tema/yoğunluk değiştirilir: pencere yeniden başlatılmadan döner
+- [ ] Bölücüler oynatılır, uygulama kapatılıp açılır: konumlar korunur
+- [ ] Paketlenmiş `dist/EntropyAI/EntropyAI.exe` ile aynı tur (QtAwesome font riski)
 
 Emoji sayımından muaf dosyalar (`EMOJI_EXEMPT`): `design/icons.py` (emoji → ikon
 eşlemesi), `design/tokens.py` (belge dizesi), `widgets/ui_polish.py` (emoji yazı

@@ -7,6 +7,11 @@ from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QHBoxLayout, QL
 
 from entropy.core.config import config
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 _ACTIVE_STANDALONE_REPORT_WINDOW: Optional["StandaloneReportWindow"] = None
 
@@ -70,7 +75,7 @@ class StandaloneReportWindow(QMainWindow):
         # Slim top bar with pin and close buttons
         header = QHBoxLayout()
         header.setContentsMargins(4, 2, 4, 2)
-        hdr_lbl = QLabel("<span style='color:#00F0FF; font-weight:bold; font-size:13px;'>Bağımsız Rapor ve Bellek Görüntüleyici</span>")
+        hdr_lbl = QLabel(f"<span style='color:{_P["accent"]}; font-weight:bold; font-size:13px;'>Bağımsız Rapor ve Bellek Görüntüleyici</span>")
         header.addWidget(hdr_lbl)
         header.addStretch()
 

@@ -377,9 +377,15 @@ def test_unified_graph_places_office_nodes_under_offices_hub(qapp, tmp_path, mon
 def test_graph_template_has_office_colors_icons_legend_and_scope():
     from entropy.ui.widgets.knowledge_graph import GRAPH_HTML_TEMPLATE as T
 
-    assert "'office': '#FFB000'" in T
-    assert "'agent': '#2DD4BF'" in T
-    assert "'query': '#C792EA'" in T
+    # Faz 12-D.2: tuval renkleri belirteç serisinden (mor/neon aile kalktı).
+    from entropy.ui.design.embedded import palette
+
+    series = palette()["series"]
+    assert "'office': VIZ.series[2]" in T
+    assert "'agent': VIZ.series[0]" in T
+    assert "'query': VIZ.series[5]" in T
+    # Enjekte edilmiş şablonda değerler de bulunur (tek kaynak doğrulaması).
+    assert series[2] in T and series[0] in T and series[5] in T
     assert "🏢" in T and "🤖" in T and "🔎" in T
     assert "['office', " in T  # Faz 8: efsane LEGEND_DEFS + buildLegend ile kuruluyor
     assert "['agent', " in T  # Faz 8: efsane LEGEND_DEFS + buildLegend ile kuruluyor

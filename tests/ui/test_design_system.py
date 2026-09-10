@@ -243,8 +243,12 @@ def test_ui_audit_script_runs_and_records_baseline(tmp_path):
     # Taban ölçüm kaydı — düşürme adım 2-6'da yapılır.
     assert data["contrast_failures"] == []
     assert data["focusless_selectors"] == []
-    assert data["distinct_hex"] > 0
-    assert data["local_stylesheets"] > 0
+    # Faz 12-D.2: `src/entropy/ui` altında belirteç dosyaları dışında düz
+    # onaltılık renk KALMADI (gömülü HTML/SVG/JS köprüsü tamamlandı) ve son
+    # yerel stil sayfası da uygulama QSS'ine devredildi.
+    assert data["distinct_hex"] == 0
+    assert data["local_stylesheets"] == 0
+    assert data["embedded_hex"] == []
     assert data["baseline"]["local_stylesheets"] == 222
     assert data["baseline"]["distinct_hex"] == 91
 

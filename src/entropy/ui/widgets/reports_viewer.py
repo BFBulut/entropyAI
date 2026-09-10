@@ -24,6 +24,13 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT
 from entropy.ui.widgets.report_center import ReportCenterWidget
 from entropy.ui.widgets.report_inbox import ReportInboxStrip
 from entropy.ui.widgets.ui_polish import apply_list_polish
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design import icon as design_icon
+from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.prefs import install_splitter_persistence
+
+_P = _embedded_palette()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -206,6 +213,8 @@ class ReportsViewerWidget(QFrame):
 
         # Splitter between Report List and Report Content
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Faz 12-D.2: bölücü konumu QSettings'e yazılır (denetim D12-07).
+        install_splitter_persistence("reports.viewer", self.splitter)
 
         # Left Container: Search + Report List
         left_container = QWidget()
@@ -263,8 +272,8 @@ class ReportsViewerWidget(QFrame):
         self.btn_read_report.clicked.connect(self._read_selected_report)
         list_action_bar.addWidget(self.btn_read_report)
 
-        self.btn_open_standalone = QPushButton("Ayrı Aç ↗")
-        self.btn_open_standalone.setAccessibleName("Ayrı Aç ↗")
+        self.btn_open_standalone = QPushButton("Ayrı pencerede aç")
+        self.btn_open_standalone.setAccessibleName("Ayrı pencerede aç")
         self.btn_open_standalone.setToolTip("Raporu tam ekran ayrı pencerede aç")
         self.btn_open_standalone.clicked.connect(self._open_current_standalone)
         list_action_bar.addWidget(self.btn_open_standalone)
@@ -291,7 +300,7 @@ class ReportsViewerWidget(QFrame):
         bar_layout.setContentsMargins(6, 2, 6, 2)
         bar_layout.setSpacing(6)
 
-        self.reader_status_lbl = QLabel("<span style='color:#00F0FF; font-weight:bold; font-size:11px;'>Bilişsel Okuyucu</span>")
+        self.reader_status_lbl = QLabel(f"<span style='color:{_P["accent"]}; font-weight:bold; font-size:11px;'>Bilişsel Okuyucu</span>")
         bar_layout.addWidget(self.reader_status_lbl)
         bar_layout.addStretch()
 
@@ -334,8 +343,9 @@ class ReportsViewerWidget(QFrame):
         copy_btn.clicked.connect(self._copy_content)
         bar_layout.addWidget(copy_btn)
 
-        expand_btn = QPushButton("↗")
-        expand_btn.setAccessibleName("↗")
+        expand_btn = QPushButton()
+        expand_btn.setIcon(design_icon("link-external"))
+        expand_btn.setAccessibleName("Raporu ayrı pencerede aç")
         expand_btn.setProperty("role", "icon")
         expand_btn.setToolTip("Tam ekran — raporu ayrı pencerede açar")
         expand_btn.setProperty("variant", "primary")
@@ -458,6 +468,17 @@ class ReportsViewerWidget(QFrame):
         """Arama kutusu değişince listeyi yeniden kurar (başlık + etiket + yetenek araması)."""
         self._rebuild_list()
 
+    def total_report_count(self) -> int:
+        """Rapor sayacının tek kaynağı — Rapor Merkezi ile aynı sayıyı verir."""
+        center = getattr(self, "report_center", None)
+        getter = getattr(center, "total_count", None)
+        if callable(getter):
+            try:
+                return int(getter())
+            except Exception:
+                pass
+        return len(self._entries)
+
     def _add_group_header(self, text: str):
         """Seçilemeyen bir grup başlığı satırı ekler."""
         header = QListWidgetItem(text)
@@ -465,7 +486,7 @@ class ReportsViewerWidget(QFrame):
         header.setData(Qt.ItemDataRole.UserRole, None)
         header.setData(Qt.ItemDataRole.UserRole + 1, "header")
         from PySide6.QtGui import QColor, QFont
-        header.setForeground(QColor("#00F0FF"))
+        header.setForeground(QColor(f"{_P["accent"]}"))
         # Faz 12-D.1: boş `QFont()` uygulama fontunu değil Qt varsayılanını
         # taşır; QSS piksel boyutlu font uyguladığında nokta/piksel karışımı
         # `setPointSize(-1)` uyarısını doğuruyordu. Font listeden türetilir.
@@ -539,7 +560,9 @@ class ReportsViewerWidget(QFrame):
                     add_entry(entry)
 
         self.list_widget.blockSignals(False)
-        self.list_count_lbl.setText(f"{len(visible)} / {len(self._entries)} kayıt")
+        # Tek sayaç kaynağı (denetim D12-03): payda Rapor Merkezi'nin
+        # `total_count()`'undan gelir; merkez yoksa yerel künye sayısı.
+        self.list_count_lbl.setText(f"{len(visible)} / {self.total_report_count()} kayıt")
 
         # Önceki seçim hâlâ listedeyse korunur, değilse ilk rapor seçilir.
         restored = False
@@ -961,23 +984,23 @@ class ReportsViewerWidget(QFrame):
         chips = []
         if meta.get("skill"):
             chips.append(
-                f"<span style='color:#00FF9D;'>{meta['skill']}</span>"
+                f"<span style='color:{_P["ok"]};'>{meta['skill']}</span>"
             )
         if meta.get("project"):
-            chips.append(f"<span style='color:#58A6FF;'>{meta['project']}</span>")
+            chips.append(f"<span style='color:{_P["accent"]};'>{meta['project']}</span>")
         if meta.get("date"):
-            chips.append(f"<span style='color:#E3B341;'>{meta['date']}</span>")
+            chips.append(f"<span style='color:{_P["warn"]};'>{meta['date']}</span>")
         if meta.get("modified"):
-            chips.append(f"<span style='color:#8B949E;'>{meta['modified']}</span>")
+            chips.append(f"<span style='color:{_P["text_muted"]};'>{meta['modified']}</span>")
         tags = [t for t in (meta.get("tags") or []) if not t.lower().startswith(("skill:", "project:"))]
         tag_html = ""
         if tags:
             tag_html = "<br/>" + " ".join(
-                f"<span style='background:#141C2C; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; color:#BC8CFF;'>#{t}</span>"
+                f"<span style='background:{_P["surface"]}; border:1px solid {_P["line_strong"]}; border-radius:3px; padding:1px 5px; color:{_P["neutral"]};'>#{t}</span>"
                 for t in tags[:10]
             )
         self.meta_panel.setText(
-            f"<b style='color:#F0F6FC; font-size:13px;'>{meta.get('title', path.stem)}</b><br/>"
+            f"<b style='color:{_P["text"]}; font-size:13px;'>{meta.get('title', path.stem)}</b><br/>"
             + " &nbsp;·&nbsp; ".join(chips)
             + tag_html
         )

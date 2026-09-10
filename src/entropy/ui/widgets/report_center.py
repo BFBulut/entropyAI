@@ -43,6 +43,11 @@ from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.report_inbox import ReportInboxStore, get_shared_store
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 # --------------------------------------------------------------------- ayar
 
@@ -690,14 +695,14 @@ def _badge(text: str, fg: str, bg: str) -> str:
 
 
 IMPORTANCE_COLORS = {
-    "yüksek": ("#FF9F45", "rgba(255,159,69,0.16)"),
-    "orta": ("#79C0FF", "rgba(121,192,255,0.14)"),
-    "düşük": ("#8B949E", "rgba(139,148,158,0.12)"),
+    "yüksek": (f"{_P["warn"]}", "rgba(255,159,69,0.16)"),
+    "orta": (f"{_P["accent"]}", "rgba(121,192,255,0.14)"),
+    "düşük": (f"{_P["text_muted"]}", "rgba(139,148,158,0.12)"),
 }
 URGENCY_COLORS = {
-    "acil": ("#FF4D4D", "rgba(255,77,77,0.16)"),
-    "yakın": ("#E3B341", "rgba(227,179,65,0.14)"),
-    "sakin": ("#7EE787", "rgba(126,231,135,0.12)"),
+    "acil": (f"{_P["danger"]}", "rgba(255,77,77,0.16)"),
+    "yakın": (f"{_P["warn"]}", "rgba(227,179,65,0.14)"),
+    "sakin": (f"{_P["ok"]}", "rgba(126,231,135,0.12)"),
 }
 
 
@@ -994,6 +999,16 @@ class ReportCenterWidget(QFrame):
     def set_entries(self, entries: Sequence[Dict[str, Any]]) -> None:
         self._entries = list(entries or [])
         self.refresh()
+
+    def total_count(self) -> int:
+        """Ekrandaki **tek** rapor sayacı (Faz 12-D.2, denetim D12-03).
+
+        Rapor Merkezi ile okuyucu listesi eskiden iki bağımsız sayı yazıyordu
+        (`662 rapor` ve `658 / 658 kayıt`): merkez posta kutusu iletilerini
+        ekliyor ve arşivlenmişleri düşüyordu, liste ham künyeleri sayıyordu.
+        Artık ikisi de bu sayıyı okur.
+        """
+        return int(self._result.get("total", 0))
 
     def all_entries(self) -> List[Dict[str, Any]]:
         """Kasa künyeleri + posta kutusu `report` mesajları, okundu durumu ekli."""

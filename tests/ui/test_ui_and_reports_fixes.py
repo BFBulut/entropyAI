@@ -14,6 +14,7 @@ from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 from entropy.ui.modes.zen_mode import ZenModeWindow
 from entropy.ui.modes.chat_mode import ChatModeWindow
+from entropy.ui.design.embedded import css_variables, js_palette_json
 
 def test_report_sanitization_on_save(tmp_path):
     """Verify that save_research_report strips BOM, ANSI escapes, carriage returns, and control chars."""
@@ -76,7 +77,8 @@ def test_reports_viewer_flexible_resizing_and_buttons(qapp):
     assert hasattr(viewer, "btn_open_standalone")
     # Faz 11-E adim 3: dugme metninden emoji kaldirildi (ikon design.icon()).
     assert viewer.btn_read_report.text() == "Raporu Oku"
-    assert viewer.btn_open_standalone.text() == "Ayrı Aç ↗"
+    # Faz 12-D.2: yasaklı desen "↗" düğme metninden kaldırıldı (D12-11).
+    assert viewer.btn_open_standalone.text() == "Ayrı pencerede aç"
     
     # Splitter is non-collapsible for both sides
     assert viewer.splitter.isCollapsible(0) is False
@@ -145,14 +147,16 @@ def test_knowledge_graph_html_generation_and_escaping(qapp, tmp_path):
     
     nodes_json = json.dumps(graph_data["nodes"], ensure_ascii=False).replace("</", "<\\/")
     links_json = json.dumps(graph_data["links"], ensure_ascii=False).replace("</", "<\\/")
-    html_content = GRAPH_HTML_TEMPLATE.replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
+    html_content = GRAPH_HTML_TEMPLATE.replace("__VIZ_JSON__", js_palette_json()).replace("__VIZ_CSS__", css_variables()).replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
     
     # No unescaped closing script inside node payload
     assert "</script><script>" not in html_content
     # Legend contains research reports category.
     # Faz 8: efsane LEGEND_DEFS'ten kuruluyor, etiket "Raporlar" olarak kisaldi.
     assert "['Reports', 'Raporlar', ['Reports']]" in html_content
-    assert "#FF0055" in html_content
+    # Faz 12-D.2: rapor düğümü rengi `TOKENS["viz"].del` (danger) belirtecinden.
+    from entropy.ui.design.embedded import palette as _pal
+    assert _pal()["danger"] in html_content
     widget.close()
 
 def test_knowledge_graph_js_runtime_execution(qapp, tmp_path):
@@ -174,7 +178,7 @@ def test_knowledge_graph_js_runtime_execution(qapp, tmp_path):
     
     nodes_json = json.dumps(graph_data["nodes"], ensure_ascii=False).replace("</", "<\\/")
     links_json = json.dumps(graph_data["links"], ensure_ascii=False).replace("</", "<\\/")
-    html = GRAPH_HTML_TEMPLATE.replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
+    html = GRAPH_HTML_TEMPLATE.replace("__VIZ_JSON__", js_palette_json()).replace("__VIZ_CSS__", css_variables()).replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
     
     start = html.find("<script>") + len("<script>")
     end = html.find("</script>")
@@ -297,7 +301,7 @@ def test_knowledge_graph_fit_to_view_and_physics_clamping(qapp, tmp_path):
     graph_data = widget.build_unified_graph()
     nodes_json = json.dumps(graph_data["nodes"], ensure_ascii=False).replace("</", "<\\/")
     links_json = json.dumps(graph_data["links"], ensure_ascii=False).replace("</", "<\\/")
-    html = GRAPH_HTML_TEMPLATE.replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
+    html = GRAPH_HTML_TEMPLATE.replace("__VIZ_JSON__", js_palette_json()).replace("__VIZ_CSS__", css_variables()).replace("__NODES__", nodes_json).replace("__LINKS__", links_json)
 
     start = html.find("<script>") + len("<script>")
     end = html.find("</script>")

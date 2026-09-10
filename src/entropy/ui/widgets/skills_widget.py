@@ -16,6 +16,11 @@ from entropy.core.event_bus import bus
 from entropy.ui.widgets.header_bar import repolish
 from entropy.skills.manager import SkillManager, SkillDefinition
 from entropy.ui.themes.cyber_theme import CYBER_THEME
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 class AddSkillDialog(QDialog):
     """Dialog to manually register or synthesize a new skill."""
@@ -98,7 +103,7 @@ class DownloadSkillDialog(QDialog):
 
         layout.addLayout(form)
 
-        info_lbl = QLabel("<span style='color:#8B949E; font-size:11px;'>Not: Doğrudan GitHub depo adresi (https://github.com/...), raw SKILL.md veya .zip arşivi bağlantısı girebilirsiniz. Otomatik olarak taranıp sisteme yüklenecektir.</span>")
+        info_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Not: Doğrudan GitHub depo adresi (https://github.com/...), raw SKILL.md veya .zip arşivi bağlantısı girebilirsiniz. Otomatik olarak taranıp sisteme yüklenecektir.</span>")
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)
 
@@ -335,14 +340,14 @@ class SkillsWidget(QFrame):
             info_layout.setContentsMargins(0, 0, 0, 0)
             info_layout.setSpacing(3)
 
-            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s.enabled else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
-            script_badge = f"<span style='background:#05070A; color:#00F0FF; border:1px solid #1F2B42; border-radius:3px; padding:1px 5px; font-size:11px;'>{len(s.scripts)} Araç</span>" if s.scripts else ""
+            status_badge = f"<span style='color:{_P["ok"]}; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s.enabled else f"<span style='color:{_P["text_muted"]}; font-size:11px;'>○ PASİF</span>"
+            script_badge = f"<span style='background:{_P["bg"]}; color:{_P["accent"]}; border:1px solid {_P["line_strong"]}; border-radius:3px; padding:1px 5px; font-size:11px;'>{len(s.scripts)} Araç</span>" if s.scripts else ""
             
-            title_text = f"<b style='color:#F0F6FC; font-size:13px;'>{s.name}</b> &nbsp; {status_badge} &nbsp; {script_badge}"
+            title_text = f"<b style='color:{_P["text"]}; font-size:13px;'>{s.name}</b> &nbsp; {status_badge} &nbsp; {script_badge}"
             name_lbl = QLabel(title_text)
             name_lbl.setProperty("role", "label")
 
-            desc_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{s.description[:85]}</span>")
+            desc_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>{s.description[:85]}</span>")
             desc_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)

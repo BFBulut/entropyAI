@@ -18,6 +18,11 @@ from entropy.core.task_ledger import task_ledger
 from entropy.scheduler.cron_engine import TaskScheduler, ScheduledTask
 from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 class TasksWidget(QFrame):
     """Visual Task Scheduler displaying cron jobs, intervals, and manual triggers."""
@@ -132,16 +137,16 @@ class TasksWidget(QFrame):
             info_layout.setSpacing(2)
 
             is_running = t_id in running_ids
-            title_color = "#00F0FF" if task.enabled else "#8B949E"
-            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if task.enabled else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
+            title_color = f"{_P["accent"]}" if task.enabled else f"{_P["text_muted"]}"
+            status_badge = f"<span style='color:{_P["ok"]}; font-size:11px; font-weight:bold;'>● AKTİF</span>" if task.enabled else f"<span style='color:{_P["text_muted"]}; font-size:11px;'>○ PASİF</span>"
             if is_running:
-                status_badge += " <span style='color:#FFB300; font-size:11px; font-weight:bold;'>▶ ÇALIŞIYOR</span>"
+                status_badge += f" <span style='color:{_P["warn"]}; font-size:11px; font-weight:bold;'>▶ ÇALIŞIYOR</span>"
             name_lbl = QLabel(f"<b style='color:{title_color}; font-size:13px;'>{task.name}</b> &nbsp; {status_badge}")
             name_lbl.setProperty("role", "label")
 
             interval_str = f"Periyot: {task.interval_type} ({task.interval_value})"
             next_str = datetime.datetime.fromtimestamp(task.next_run).strftime("%H:%M:%S") if task.next_run else "Planlanmadı"
-            status_lbl = QLabel(f"<span style='color:#8B949E; font-size:11px;'>{interval_str} | Sonraki: <span style='color:#00FF9D;'>{next_str}</span></span>")
+            status_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>{interval_str} | Sonraki: <span style='color:{_P["ok"]};'>{next_str}</span></span>")
             status_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)

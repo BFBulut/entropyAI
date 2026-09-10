@@ -12,6 +12,11 @@ from PySide6.QtWidgets import (
 from entropy.core.event_bus import bus
 from entropy.mcp.manager import MCPManager
 from entropy.ui.themes.cyber_theme import CYBER_THEME
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 
 
@@ -87,7 +92,7 @@ class MCPServerDialog(QDialog):
         layout.addLayout(form)
 
         hint = QLabel(
-            "<span style='color:#8B949E; font-size:11px;'>Kayıt agy'nin "
+            f"<span style='color:{_P["text_muted"]}; font-size:11px;'>Kayıt agy'nin "
             "<code>~/.gemini/config/mcp_config.json</code> dosyasına yazılır; "
             "bir sonraki ajan turunda etkin olur.</span>"
         )
@@ -222,12 +227,12 @@ class MCPDrawerWidget(QFrame):
             info_layout.setContentsMargins(0, 0, 0, 0)
             info_layout.setSpacing(3)
 
-            status_badge = "<span style='color:#00FF9D; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s["status"].lower() == "enabled" else "<span style='color:#8B949E; font-size:11px;'>○ PASİF</span>"
-            name_lbl = QLabel(f"<b style='color:#F0F6FC; font-size:13px;'>{s['name']}</b> &nbsp; <span style='color:#8B949E; font-size:11px;'>({s['type']})</span> &nbsp; {status_badge}")
+            status_badge = f"<span style='color:{_P["ok"]}; font-size:11px; font-weight:bold;'>● AKTİF</span>" if s["status"].lower() == "enabled" else f"<span style='color:{_P["text_muted"]}; font-size:11px;'>○ PASİF</span>"
+            name_lbl = QLabel(f"<b style='color:{_P["text"]}; font-size:13px;'>{s['name']}</b> &nbsp; <span style='color:{_P["text_muted"]}; font-size:11px;'>({s['type']})</span> &nbsp; {status_badge}")
             name_lbl.setProperty("role", "label")
 
             target_val = s.get('target', '')
-            target_lbl = QLabel(f"<code style='background:#05070A; color:#8B949E; border:1px solid #1F2B42; border-radius:3px; padding:2px 6px; font-family:Consolas; font-size:11px;'>{target_val[:80]}</code>")
+            target_lbl = QLabel(f"<code style='background:{_P["bg"]}; color:{_P["text_muted"]}; border:1px solid {_P["line_strong"]}; border-radius:3px; padding:2px 6px; font-family:Consolas; font-size:11px;'>{target_val[:80]}</code>")
             target_lbl.setProperty("role", "label")
 
             info_layout.addWidget(name_lbl)
@@ -242,12 +247,12 @@ class MCPDrawerWidget(QFrame):
             card_layout.addWidget(cb)
 
             # Edit server button
-            edit_btn = self._small_button("Düzenle", "#00F0FF", "#141C2C")
+            edit_btn = self._small_button("Düzenle", f"{_P["accent"]}", f"{_P["surface"]}")
             edit_btn.clicked.connect(lambda _, s_name=s["name"]: self._open_edit_dialog(s_name))
             card_layout.addWidget(edit_btn)
 
             # Remove server button
-            del_btn = self._small_button("Kaldır", "#FF4D4D", "#261418")
+            del_btn = self._small_button("Kaldır", f"{_P["danger"]}", f"{_P["raised"]}")
             del_btn.clicked.connect(lambda _, s_name=s["name"]: self._on_remove_server(s_name))
             card_layout.addWidget(del_btn)
 

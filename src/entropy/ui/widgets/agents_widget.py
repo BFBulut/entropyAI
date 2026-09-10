@@ -25,6 +25,11 @@ from PySide6.QtGui import QColor, QPalette
 from entropy.core.event_bus import bus
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, BODY_STRONG_PX, LABEL_PX
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 
 
 def _paint_dark(widget) -> None:
@@ -198,9 +203,9 @@ ROLE_LABELS = {
     "worker": "üye",
 }
 ROLE_COLORS = {
-    "orchestrator": "#C084FC",
-    "evaluator": "#3DE8A8",
-    "worker": "#93A3B8",
+    "orchestrator": f"{_P["neutral"]}",
+    "evaluator": f"{_P["ok"]}",
+    "worker": f"{_P["text_muted"]}",
 }
 TOOLS_POLICIES = ["inherit", "read-only", "full", "none"]
 
@@ -928,7 +933,7 @@ STATUS_COLORS = {
     "running": RT["accent"],
     "review": RT["accent_warn"],
     "done": RT["accent_alt"],
-    "failed": "#FF6B6B",
+    "failed": f"{_P["danger"]}",
     "canceled": RT["text_dim"],
 }
 

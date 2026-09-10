@@ -15,6 +15,11 @@ from PySide6.QtWidgets import (
 
 import sys as _sys
 import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 # entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
 # gecmisi yardimcilari icin gercek modul gerekiyor.
 config_module = _sys.modules["entropy.core.config"]
@@ -28,6 +33,7 @@ from entropy.mcp.manager import default_mcp_manager
 from entropy.ui.modes.chat_mode import ChatInputField
 from entropy.ui.themes.cyber_theme import CYBER_THEME, READING_TOKENS as RT, reading_css
 from entropy.ui.design import TOKENS, icon as design_icon
+from entropy.ui.design.prefs import install_splitter_persistence
 from entropy.ui.widgets.header_bar import (
     BrandCluster, ModelCapsule, PaletteButton, StatusCluster, WindowControls,
     context_badge_tone, repolish as _repolish,
@@ -59,6 +65,8 @@ from entropy.ui.widgets.standalone_report_window import StandaloneReportWindow
 from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
 from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
+from entropy.ui.widgets.skill_candidates_panel import SkillCandidatesPanel
+from entropy.ui.widgets.office_cards_panel import OfficeCardsPanel
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
 from entropy.ui.widgets.frameless import FramelessWindowHelper
 from entropy.ui.window_sizing import (
@@ -194,19 +202,25 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self._sync_model_capsule()
         h_layout.addWidget(self.model_capsule)
 
-        # (3) Durum rozetleri: kimlik + token + bağlam + gelen kutusu
+        # (3) Durum rozetleri: gelen kutusu + sağlayıcı.
+        # Faz 12-D.2 (denetim D12-06): token ve bağlam rozetleri üst çubuktan
+        # **model kapsülünün içine** taşındı. Kapı artık beyan edilen
+        # `header_items` yerine canlı yaprak widget sayısını ölçüyor; çubuktaki
+        # yaprak sayısı 8 → 6. Bilgi kaybolmuyor: kapsül açılınca iki satır
+        # olarak görünür, ayrıca kapsül ipucunda ve komut paletinde durur.
         self.status_cluster = StatusCluster()
         self.tokens_badge = QLabel("Tokens: 0")
         self.tokens_badge.setProperty("role", "badge")
         self.tokens_badge.setProperty("tone", "ok")
         self.tokens_badge.setAccessibleName("Token kullanımı")
-        self.status_cluster.add(self.tokens_badge, secondary=True)
 
         # Bağlam doluluk rozeti: %60 üstünde uyarı tonu + /handoff ipucu.
         self.context_badge = QLabel("Bağlam: %0")
         self.context_badge.setProperty("role", "badge")
         self.context_badge.setAccessibleName("Bağlam doluluğu")
-        self.status_cluster.add(self.context_badge, secondary=True)
+        self.model_capsule.add_row("Token", self.tokens_badge)
+        self.model_capsule.add_row("Bağlam", self.context_badge)
+        self.model_capsule.popup.adjustSize()
         self._apply_context_badge()
 
         # Rapor Merkezi rozeti (Faz 4): son 24 saatte okunmamış rapor sayısı.
@@ -217,6 +231,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
 
         # Faz 5.4/5.5: iki sağlayıcı için giriş/kota/oturum penceresi rozeti.
         self.provider_badge = ProviderStatusBadge()
+        # Üst çubukta yalnızca aktif sağlayıcının rozeti (D12-06); diğeri ipuçunda.
+        self.provider_badge.set_primary(str(getattr(self.bridge, "provider_name", "") or ""))
         self.provider_badge.login_requested.connect(self._on_provider_login_requested)
         self.status_cluster.add(self.provider_badge)
         h_layout.addWidget(self.status_cluster)
@@ -289,6 +305,11 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         tasks_tab_layout.setSpacing(TOKENS["space"]["2"])
         tasks_tab_layout.addWidget(self.task_board_widget, 3)
         tasks_tab_layout.addWidget(self.tasks_widget, 2)
+        # Faz 12-D.2: birleşik pano görünümü. Desk ofis kartları SALT OKUNUR
+        # ayrı bir bölmede görünür; Entropy'nin panosuna karışmaz (tek yön
+        # kuralı korunur).
+        self.office_cards_panel = OfficeCardsPanel(parent=self)
+        tasks_tab_layout.addWidget(self.office_cards_panel, 1)
         self.tasks_tab = tasks_tab
 
         # Rapor Merkezi kartlarindaki "Orkestratore sor" yaniti sohbete duser;
@@ -316,6 +337,11 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         agents_tab_layout.setSpacing(TOKENS["space"]["2"])
         agents_tab_layout.addWidget(self.agents_widget, 3)
         agents_tab_layout.addWidget(self.entropy_rules_panel, 1)
+        # Faz 12-D.2: beceri adayları da aynı onay yüzeyinde. Hafıza bir
+        # örüntüyü yeteneğe dönüştürmek isterse kullanıcı onaylamadan
+        # etkinleşmez (12-C `memory.skill_synthesis` sözleşmesi, guard'lı).
+        self.skill_candidates_panel = SkillCandidatesPanel(parent=self)
+        agents_tab_layout.addWidget(self.skill_candidates_panel, 1)
         self.agents_tab = agents_tab
         self.left_tabs.addTab(agents_tab, "Ajanlar", "robot")
 
@@ -378,6 +404,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             _panel.setMinimumWidth(_min_w)
 
         top_h_splitter.setSizes([880, 400])
+        # Faz 12-D.2 (denetim D12-07): bölücü konumu QSettings'e yazılır.
+        # İlk açılışta kayıt yoksa yukarıdaki varsayılan korunur.
+        install_splitter_persistence("zen.top", top_h_splitter)
+        self.top_h_splitter = top_h_splitter
         main_v_splitter.addWidget(top_h_splitter)
 
         # Alt bölge: sohbet (terminal artık onun içinde katlanır çekmece).
@@ -493,6 +523,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         main_v_splitter.addWidget(chat_card)
         chat_card.setMinimumWidth(260)
         main_v_splitter.setSizes([520, 340])
+        install_splitter_persistence("zen.main", main_v_splitter)
+        self.main_v_splitter = main_v_splitter
         root_layout.addWidget(main_v_splitter)
 
         # Odak modu (Ctrl+Shift+F): tek panel. Sohbet kalir, yan paneller
@@ -556,17 +588,29 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         strip.setProperty("role", "panel")
         row = strip.flow()
 
+        # Faz 12-D.2 (denetim D12-02): telemetri şeridi EKRANDAN KALKTI.
+        # Beş öğenin beşinin de ikinci bir yüzeyi vardı — model üst çubuk
+        # kapsülünde, bellek sağ graf panelinde, yetenek ve MCP sol dikey
+        # gezinmede, sistem durumu üst çubuk durum kümesinde. Nesneler
+        # **silinmedi**: olay veri yolu abonelikleri, ipuçları ve testler
+        # bunlara adıyla bağlı; görünmez tutulup ipucu kaynağı olarak
+        # kullanılırlar (kaldırma değil yönlendirme).
         self.zen_telemetry_status = QLabel("Sistem hazır")
         self.zen_telemetry_status.setProperty("role", "statusDot")
         self.zen_telemetry_status.setProperty("tone", "ok")
         self.zen_telemetry_status.setAccessibleName("Sistem durumu")
-        row.addWidget(self.zen_telemetry_status)
+        self.zen_telemetry_status.setParent(strip)
+        self.zen_telemetry_status.setVisible(False)
 
         self.badge_memory = QLabel("Bellek: 0 Düğüm")
         self.badge_skills = QLabel("Yetenekler: 0 Aktif")
         self.badge_mcp = QLabel("MCP: Pasif")
         initial_model = self.bridge.selected_model or config.model_fallback_name
         self.badge_model = QLabel(f"[{initial_model}]")
+        #: Gizli telemetri etiketleri (tek kaynak: `_update_telemetry_badges`).
+        self.telemetry_badges = [
+            self.badge_memory, self.badge_skills, self.badge_mcp, self.badge_model,
+        ]
         for badge, name in (
             (self.badge_memory, "Bellek"),
             (self.badge_skills, "Yetenekler"),
@@ -575,7 +619,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         ):
             badge.setProperty("role", "badge")
             badge.setAccessibleName(name)
-            row.addWidget(badge)
+            badge.setParent(strip)
+            badge.setVisible(False)
 
         row.addStretch()
         row.addWidget(self.project_btn)
@@ -642,6 +687,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
              "config.amplification_lock · /lock on|off"),
             ("toggle_board_auto", "Pano otomatik dağıtım aç/kapat",
              "config.board_auto_dispatch · /board auto on|off"),
+            ("settings", "Ayarlar",
+             "Tema, yoğunluk, beyin eşiği, pano ve oturum bütçesi"),
+            ("reset_layout", "Yerleşimi sıfırla",
+             "Kayıtlı bölücü konumlarını siler"),
         ]
         items = [
             {"kind": "action", "label": label, "subtitle": subtitle, "payload": key}
@@ -672,6 +721,26 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         bus.terminal_output_received.emit(f"[Ayar] {message}\n")
         return message
 
+    @Slot()
+    def open_settings(self) -> None:
+        """Ayarlar diyaloğu (tema/yoğunluk + karar eşikleri) — Faz 12-D.2."""
+        from entropy.ui.widgets.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(parent=self)
+        self._settings_dialog = dialog
+        dialog.exec()
+
+    @Slot()
+    def reset_layout(self) -> None:
+        """Kayıtlı bölücü konumlarını siler (varsayılan yerleşime dönüş)."""
+        from entropy.ui.design.prefs import reset_layout as _reset
+
+        _reset()
+        bus.terminal_output_received.emit(
+            "[Ayar] Yerleşim sıfırlandı; bölücüler bir sonraki açılışta "
+            "varsayılana döner.\n"
+        )
+
     def run_palette_action(self, key: str) -> bool:
         """Palet eylemi yürütür; bilinmeyen anahtar için False döner."""
         if key == "desk":
@@ -684,6 +753,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             self.toggle_terminal_drawer()
         elif key in ("toggle_lock", "toggle_board_auto"):
             self._run_setting_toggle(key)
+        elif key == "settings":
+            self.open_settings()
+        elif key == "reset_layout":
+            self.reset_layout()
         elif key.startswith("mode_"):
             bus.mode_requested.emit(key.split("_", 1)[1])
         elif key.startswith("nav_"):
@@ -766,6 +839,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         bus.agent_turn_completed.connect(self._on_agent_turn_completed)
         bus.report_created.connect(self._on_report_created)
         bus.task_notification.connect(self._on_task_notification)
+        # Faz 12-D.2: otonom görev kartı (guard — sinyal 11-C'de eklendi).
+        _board_signal = getattr(bus, "board_state_changed", None)
+        if _board_signal is not None:
+            try:
+                _board_signal.connect(self.on_board_state_changed)
+            except Exception:
+                pass
         bus.cognitive_memory_updated.connect(self._update_telemetry_badges)
         bus.skills_updated.connect(self._update_telemetry_badges)
         bus.project_changed.connect(self._on_project_changed)
@@ -826,14 +906,45 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
-            f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
-            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>Yeni Araştırma Raporu Oluşturuldu</div>"
-            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
-            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
-            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Raporu Aç ve Oku ↗</a>"
+            f"<div style='background-color:{_P["surface"]}; border:1px solid {_P["accent"]}; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:{_P["accent"]}; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>Yeni Araştırma Raporu Oluşturuldu</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
+            f"<div style='color:{_P["text_muted"]}; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
+            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:{_P["accent"]}; color:{_P["bg"]}; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Raporu aç</a>"
             f"</div>"
         )
         self.chat_browser.append(card_html)
+
+    @Slot(dict)
+    def on_board_state_changed(self, payload: dict) -> None:
+        """Otonom görev kartı — Entropy bir ajana kart atadığında sohbete düşer.
+
+        Faz 12-D.2. Sözleşme (12-B `response_hooks`): `board_state_changed`
+        yükünde `event == "task.assigned"` ve `actor == "entropy"` ise kullanıcı
+        bunu **görmeden** olan bitmesin diye sohbete tek satırlık bir kart
+        yazılır. Diğer olaylar sessizce yok sayılır.
+        """
+        try:
+            data = dict(payload or {})
+        except Exception:
+            return
+        if str(data.get("event", "")) != "task.assigned":
+            return
+        if str(data.get("actor", "")) != "entropy":
+            return
+        title = html.escape(str(data.get("title", "") or data.get("card_id", "")))
+        agent = html.escape(str(data.get("agent", "") or "atanmadı"))
+        card_html = (
+            f"<div style='background-color:{_P["surface"]}; border:1px solid {_P["accent"]};"
+            f" border-radius:8px; padding:8px 12px; margin:6px 0;'>"
+            f"<div style='color:{_P["accent"]}; font-size:11px; font-weight:bold;'>Otonom görev</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px;'>"
+            f"Entropy görev verdi: {title} &rarr; {agent}</div>"
+            f"</div>"
+        )
+        browser = getattr(self, "chat_browser", None)
+        if browser is not None:
+            browser.append(card_html)
 
     @Slot(str, str, str)
     def _on_task_notification(self, task_id: str, task_name: str, path_or_content: str):
@@ -851,14 +962,14 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.add_notification_pill(title=task_name, path_or_content=path_or_content, is_task=True)
 
         card_html = (
-            f"<div style='background-color:#0E1420; border:1px solid #00FF9D; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
-            f"<div style='color:#00FF9D; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
-            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
-            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
+            f"<div style='background-color:{_P["surface"]}; border:1px solid {_P["ok"]}; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:{_P["ok"]}; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
+            f"<div style='color:{_P["text_muted"]}; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
         )
         if path_or_content.endswith(".md"):
             p = Path(path_or_content)
-            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Görev Raporunu Aç ↗</a>"
+            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:{_P["ok"]}; color:{_P["bg"]}; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Görev raporunu aç</a>"
         card_html += "</div>"
         self.chat_browser.append(card_html)
 
@@ -1008,6 +1119,9 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         Üst çubukta Chat kipiyle aynı sağlayıcı seçicisi bulunur; burada hem
         seçim hem de yeni köprünün model listesi yansıtılır.
         """
+        badge = getattr(self, "provider_badge", None)
+        if badge is not None:
+            badge.set_primary(str(getattr(self.bridge, "provider_name", "") or ""))
         if hasattr(self, "provider_combo"):
             try:
                 self.provider_combo.blockSignals(True)
@@ -1269,7 +1383,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
                     imported = self.skills_widget.skill_manager.import_skill_from_source(local_path)
                     if imported:
                         self.terminal_pane.append_output(f"\n[Yetenek Merkezi] Sürüklenen yetenek başarıyla yüklendi: {imported.name}\n")
-                        self.zen_telemetry_status.setText(f"<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
+                        self.zen_telemetry_status.setText(f"<span style='color:{_P["ok"]}; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
                         self._update_telemetry_badges()
 
         elif event.mimeData().hasText():
@@ -1278,7 +1392,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
                 imported = self.skills_widget.skill_manager.import_skill_from_source(text)
                 if imported:
                     self.terminal_pane.append_output(f"\n[Yetenek Merkezi] URL'den yetenek başarıyla yüklendi: {imported.name}\n")
-                    self.zen_telemetry_status.setText(f"<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
+                    self.zen_telemetry_status.setText(f"<span style='color:{_P["ok"]}; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
                     self._update_telemetry_badges()
 
     def _on_send_chat(self):
@@ -1295,7 +1409,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             imported = sm.import_skill_from_source(skill_src)
             if imported:
                 self.terminal_pane.append_output(f"\n[Yetenek Merkezi] '{imported.name}' yeteneği sisteme başarıyla kuruldu.\n")
-                self.zen_telemetry_status.setText(f"<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
+                self.zen_telemetry_status.setText(f"<span style='color:{_P["ok"]}; font-weight:bold; font-size:11px;'>Yetenek Eklendi: {imported.name}</span>")
                 self._update_telemetry_badges()
 
         # Check slash command handling (supports multiple slash commands in prompt)
@@ -1333,15 +1447,15 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
                     reg = SlashCommandRegistry(mcp_manager=default_mcp_manager)
                     all_c = reg.get_all_commands(self.bridge.active_project_dir)
                     help_html = [
-                        "<div style='border:1px solid #1F2B42; background:#0A0E17; border-radius:6px; padding:10px; margin:6px 0;'>",
-                        "<b style='color:#00F0FF; font-size:13px;'>KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
+                        f"<div style='border:1px solid {_P["line_strong"]}; background:{_P["bg"]}; border-radius:6px; padding:10px; margin:6px 0;'>",
+                        f"<b style='color:{_P["accent"]}; font-size:13px;'>KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
                     ]
                     for c in all_c:
                         help_html.append(
                             f"<div style='margin-bottom:4px;'>"
                             f"<span style='background-color:{c.color}22; color:{c.color}; border:1px solid {c.color}55; border-radius:3px; padding:1px 5px; font-size:11px; font-weight:bold;'>{c.badge}</span> "
-                            f"<b style='color:#F0F6FC; font-family:Consolas;'>{c.name}</b>: "
-                            f"<span style='color:#8B949E; font-size:11px;'>{c.description}</span>"
+                            f"<b style='color:{_P["text"]}; font-family:Consolas;'>{c.name}</b>: "
+                            f"<span style='color:{_P["text_muted"]}; font-size:11px;'>{c.description}</span>"
                             f"</div>"
                         )
                     help_html.append("</div>")
@@ -1386,7 +1500,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
                 sm = SkillManager(project_dir=self.bridge.active_project_dir)
                 detected = self.bridge.detect_skill_for_prompt(prompt, sm=sm)
                 if detected:
-                    self.zen_telemetry_status.setText(f"<span style='color:#00FF9D; font-weight:bold; font-size:11px;'>Yetenek Devrede: {detected.name}</span>")
+                    self.zen_telemetry_status.setText(f"<span style='color:{_P["ok"]}; font-weight:bold; font-size:11px;'>Yetenek Devrede: {detected.name}</span>")
                     active_skill = detected.name
             except Exception:
                 pass
@@ -1399,12 +1513,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         if matched_cmds:
             for mc in matched_cmds:
                 badge_spans.append(
-                    f"<span style='background:#0E1420; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
+                    f"<span style='background:{_P["surface"]}; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
                 )
         skill_already_badged = any(mc.category == "skill" and (mc.metadata.get("skill_name") == active_skill or mc.name.lstrip("/") == active_skill) for mc in matched_cmds)
         if active_skill and not skill_already_badged:
             badge_spans.append(
-                f"<span style='background:#0E1420; color:#00FF9D; border:1px solid #1F2B42; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold;'>Yetenek: {html.escape(active_skill)}</span>"
+                f"<span style='background:{_P["surface"]}; color:{_P["ok"]}; border:1px solid {_P["line_strong"]}; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold;'>Yetenek: {html.escape(active_skill)}</span>"
             )
         if badge_spans:
             badge_html = f"<div style='margin-bottom:4px;'>{' '.join(badge_spans)}</div>"
@@ -1414,10 +1528,10 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
 
         if self.staged_images:
             img_names = ", ".join([html.escape(Path(p).name) for p in self.staged_images])
-            display_prompt += f" <div style='color:#00F0FF; font-size:11px; margin-top:2px;'><i>[Eklenen Görsel: {img_names}]</i></div>"
+            display_prompt += f" <div style='color:{_P["accent"]}; font-size:11px; margin-top:2px;'><i>[Eklenen Görsel: {img_names}]</i></div>"
         if self.staged_pdfs:
             pdf_names = ", ".join([html.escape(Path(p).name) for p in self.staged_pdfs])
-            display_prompt += f" <div style='color:#00FF9D; font-size:11px; margin-top:2px;'><i>[Eklenen PDF: {pdf_names}]</i></div>"
+            display_prompt += f" <div style='color:{_P["ok"]}; font-size:11px; margin-top:2px;'><i>[Eklenen PDF: {pdf_names}]</i></div>"
 
         self._append_chat_message("Siz", display_prompt)
         self.chat_input.clear()
@@ -1471,7 +1585,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.submit_btn.setEnabled(False)
         self.submit_btn.setText("İşleniyor...")
         self._streaming_active = True
-        self.chat_browser.append("<div style='margin-bottom:8px;'><b style='color:#00F0FF;'>Entropy AI:</b><br/></div>")
+        self.chat_browser.append(f"<div style='margin-bottom:8px;'><b style='color:{_P["accent"]};'>Entropy AI:</b><br/></div>")
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_chunk(self, chunk: str):

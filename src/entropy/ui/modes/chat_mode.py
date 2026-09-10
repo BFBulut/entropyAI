@@ -14,6 +14,11 @@ from PySide6.QtWidgets import (
 
 import sys as _sys
 import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
+# Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
+# `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
+from entropy.ui.design.embedded import palette as _embedded_palette
+
+_P = _embedded_palette()
 # entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
 # gecmisi yardimcilari icin gercek modul gerekiyor.
 config_module = _sys.modules["entropy.core.config"]
@@ -890,17 +895,17 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             return
         self._recent_notifications[norm_key] = now
 
-        self.report_bar_lbl.setText(f"<span style='color:#00FF9D; font-weight:bold;'>Yeni Rapor:</span> <span style='color:#F0F6FC;'>{p.stem}</span>")
+        self.report_bar_lbl.setText(f"<span style='color:{_P["ok"]}; font-weight:bold;'>Yeni Rapor:</span> <span style='color:{_P["text"]};'>{p.stem}</span>")
         self.report_bar.setVisible(True)
         # Zen ile aynı davranış: rapor da yığılabilir bir bildirim pili üretir.
         self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
         card_html = (
-            f"<div style='background-color:#0E1420; border:1px solid #00F0FF; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
-            f"<div style='color:#00F0FF; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>Yeni Araştırma Raporu Oluşturuldu</div>"
-            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
-            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
-            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00F0FF; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Raporu Aç ve Oku ↗</a>"
+            f"<div style='background-color:{_P["surface"]}; border:1px solid {_P["accent"]}; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:{_P["accent"]}; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>Yeni Araştırma Raporu Oluşturuldu</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px; font-weight:bold; margin:4px 0;'>{p.stem}</div>"
+            f"<div style='color:{_P["text_muted"]}; font-size:11px; margin-bottom:8px;'>Dosya: {p.name} | Bilişsel Hafıza ve RAG'a İşlendi</div>"
+            f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:{_P["accent"]}; color:{_P["bg"]}; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Raporu aç</a>"
             f"</div>"
         )
         self.chat_browser.append(card_html)
@@ -921,14 +926,14 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self.add_notification_pill(title=task_name, path_or_content=path_or_content, is_task=True)
 
         card_html = (
-            f"<div style='background-color:#0E1420; border:1px solid #00FF9D; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
-            f"<div style='color:#00FF9D; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
-            f"<div style='color:#F0F6FC; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
-            f"<div style='color:#8B949E; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
+            f"<div style='background-color:{_P["surface"]}; border:1px solid {_P["ok"]}; border-radius:8px; padding:10px 14px; margin:8px 0;'>"
+            f"<div style='color:{_P["ok"]}; font-size:11px; font-weight:bold; letter-spacing:0.8px;'>⏰ OTONOM PLANLI GÖREV ÇALIŞTIRILDI</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px; font-weight:bold; margin:4px 0;'>{task_name}</div>"
+            f"<div style='color:{_P["text_muted"]}; font-size:11px; margin-bottom:8px;'>Görev Kimliği: {task_id}</div>"
         )
         if path_or_content.endswith(".md"):
             p = Path(path_or_content)
-            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:#00FF9D; color:#080B10; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Görev Raporunu Aç ↗</a>"
+            card_html += f"<a href='entropy-report://{p.as_posix()}' style='display:inline-block; background-color:{_P["ok"]}; color:{_P["bg"]}; font-weight:bold; font-size:11px; text-decoration:none; padding:5px 14px; border-radius:4px;'>Görev raporunu aç</a>"
         card_html += "</div>"
         self.chat_browser.append(card_html)
 
@@ -982,7 +987,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
 
             body = try_handle_local_command(prompt, self.bridge)
         except Exception as exc:
-            body = f"<b style='color:#FF6B6B;'>/desk hatası:</b> {html.escape(str(exc))}"
+            body = f"<b style='color:{_P["danger"]};'>/desk hatası:</b> {html.escape(str(exc))}"
 
         opened = False
         if prompt.strip() == "/desk":
@@ -990,9 +995,9 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
 
         if body is None:
             body = (
-                "<b style='color:#C084FC;'>Agent Desk</b><br/>"
+                f"<b style='color:{_P["neutral"]};'>Agent Desk</b><br/>"
                 + ("Ofis penceresi açıldı.<br/>" if opened else "")
-                + "<span style='color:#8B949E;'>Kullanım: "
+                + f"<span style='color:{_P["text_muted"]};'>Kullanım: "
                 "<code>/desk</code> pencereyi açar · "
                 "<code>/desk task &lt;ofis&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> "
                 "ofise kart verir.</span>"
@@ -1374,15 +1379,15 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
                     reg = SlashCommandRegistry(mcp_manager=default_mcp_manager)
                     all_c = reg.get_all_commands(self.bridge.active_project_dir)
                     help_html = [
-                        "<div style='border:1px solid #1F2B42; background:#0A0E17; border-radius:6px; padding:10px; margin:6px 0;'>",
-                        "<b style='color:#00F0FF; font-size:13px;'>KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
+                        f"<div style='border:1px solid {_P["line_strong"]}; background:{_P["bg"]}; border-radius:6px; padding:10px; margin:6px 0;'>",
+                        f"<b style='color:{_P["accent"]}; font-size:13px;'>KULLANILABİLİR KOMUTLAR, YETENEKLER VE MCP ARAÇLARI</b><br/><br/>"
                     ]
                     for c in all_c:
                         help_html.append(
                             f"<div style='margin-bottom:4px;'>"
                             f"<span style='background-color:{c.color}22; color:{c.color}; border:1px solid {c.color}55; border-radius:3px; padding:1px 5px; font-size:11px; font-weight:bold;'>{c.badge}</span> "
-                            f"<b style='color:#F0F6FC; font-family:Consolas;'>{c.name}</b>: "
-                            f"<span style='color:#8B949E; font-size:11px;'>{c.description}</span>"
+                            f"<b style='color:{_P["text"]}; font-family:Consolas;'>{c.name}</b>: "
+                            f"<span style='color:{_P["text_muted"]}; font-size:11px;'>{c.description}</span>"
                             f"</div>"
                         )
                     help_html.append("</div>")
@@ -1426,12 +1431,12 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         if matched_cmds:
             for mc in matched_cmds:
                 badge_spans.append(
-                    f"<span style='background:#0E1420; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
+                    f"<span style='background:{_P["surface"]}; color:{mc.color}; border:1px solid {mc.color}55; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>{mc.badge}: {html.escape(mc.name)}</span>"
                 )
         skill_already_badged = any(mc.category == "skill" and (mc.metadata.get("skill_name") == chosen_skill or mc.name.lstrip("/") == chosen_skill) for mc in matched_cmds)
         if chosen_skill and chosen_skill != "auto" and not skill_already_badged:
             badge_spans.append(
-                f"<span style='background:#0E1420; color:#00FF9D; border:1px solid #1F2B42; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>Yetenek: {html.escape(chosen_skill)}</span>"
+                f"<span style='background:{_P["surface"]}; color:{_P["ok"]}; border:1px solid {_P["line_strong"]}; border-radius:3px; padding:2px 8px; font-size:11px; font-weight:bold; margin-right:4px;'>Yetenek: {html.escape(chosen_skill)}</span>"
             )
         if badge_spans:
             badge_html = f"<div style='margin-bottom:4px;'>{' '.join(badge_spans)}</div>"
@@ -1441,10 +1446,10 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
 
         if self.staged_images:
             img_names = ", ".join([html.escape(Path(p).name) for p in self.staged_images])
-            display_prompt += f" <div style='color:#00F0FF; font-size:11px; margin-top:4px;'><i>[Eklenen Görsel: {img_names}]</i></div>"
+            display_prompt += f" <div style='color:{_P["accent"]}; font-size:11px; margin-top:4px;'><i>[Eklenen Görsel: {img_names}]</i></div>"
         if self.staged_pdfs:
             pdf_names = ", ".join([html.escape(Path(p).name) for p in self.staged_pdfs])
-            display_prompt += f" <div style='color:#00FF9D; font-size:11px; margin-top:4px;'><i>[Eklenen PDF: {pdf_names}]</i></div>"
+            display_prompt += f" <div style='color:{_P["ok"]}; font-size:11px; margin-top:4px;'><i>[Eklenen PDF: {pdf_names}]</i></div>"
 
         self._append_message("Siz", display_prompt)
         self.input_field.clear()
@@ -1493,7 +1498,7 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         self._streaming_active = True
         self.terminal_drawer.setVisible(True)
         self._sync_terminal_button()
-        self.chat_browser.append("<div style='margin-bottom:8px;'><b style='color:#00F0FF;'>Entropy AI:</b><br/></div>")
+        self.chat_browser.append(f"<div style='margin-bottom:8px;'><b style='color:{_P["accent"]};'>Entropy AI:</b><br/></div>")
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_chunk(self, chunk: str):

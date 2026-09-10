@@ -162,9 +162,33 @@ def _light_overrides() -> Dict[str, str]:
     }
 
 
+def _light_viz_overrides() -> Dict[str, str]:
+    """Açık temanın `viz.*` karşılığı (Faz 12-D.2).
+
+    Koyu temanın parlak tonları beyaz zeminde 1,7–2,7:1 kalıyordu; gömülü
+    belge köprüsü açık temada da WCAG 1.4.3'ü karşılamak zorunda olduğu için
+    aile ayrı ayrı koyulaştırıldı (hepsi `surface` üzerinde ≥ 4,5:1).
+    """
+    return {
+        "add": "#0E7A55",
+        "del": "#B02A24",
+        "hunk": "#0A6EB4",
+        "meta": "#55637A",
+        "kind1": "#4351B8",
+        "kind2": "#0A6EB4",
+        "kind3": "#0E7A55",
+        "kind4": "#7A5A00",
+        "kind5": "#7A5A1F",
+        "kind6": "#9B3C77",
+        "kind7": "#1C5E8C",
+        "neutral": "#55637A",
+    }
+
+
 LIGHT_TOKENS: Dict[str, Any] = deepcopy(DARK_TOKENS)
 LIGHT_TOKENS["name"] = "light"
 LIGHT_TOKENS["color"].update(_light_overrides())
+LIGHT_TOKENS["viz"].update(_light_viz_overrides())
 
 
 TOKENS: Dict[str, Any] = DARK_TOKENS
