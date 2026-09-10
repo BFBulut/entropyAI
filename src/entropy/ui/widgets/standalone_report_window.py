@@ -9,9 +9,10 @@ from entropy.core.config import config
 from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 
 _ACTIVE_STANDALONE_REPORT_WINDOW: Optional["StandaloneReportWindow"] = None
 

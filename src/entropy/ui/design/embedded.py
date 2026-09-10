@@ -26,6 +26,7 @@ Kullanım:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any, Dict, List
 
 from entropy.ui.design.tokens import TOKENS, get_tokens
@@ -110,6 +111,42 @@ def palette(theme: str | None = None, density: str = "compact") -> Dict[str, Any
         "space": t["space"],
         "theme": theme,
     }
+
+
+class LivePalette(Mapping):
+    """Tema degisince KENDILIGINDEN donen palet gorunumu.
+
+    Faz 12-F QA bulgusu: 10 arayuz modulu `_P = palette()` diyerek paleti
+    ICE AKTARMA aninda donduruyordu; kullanici calisirken acik temaya
+    gecince gomulu HTML govdeleri (rapor okuyucu, sohbet balonlari, graf)
+    KOYU kalyordu. Bu sinif `_P["bg"]` kullanimini bozmadan her okumada
+    guncel temayi cozer.
+    """
+
+    __slots__ = ("_density",)
+
+    def __init__(self, density: str = "compact") -> None:
+        self._density = density
+
+    def _snapshot(self) -> Dict[str, Any]:
+        return palette(None, self._density)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._snapshot()[key]
+
+    def __iter__(self):
+        return iter(self._snapshot())
+
+    def __len__(self) -> int:
+        return len(self._snapshot())
+
+    def __repr__(self) -> str:  # pragma: no cover - hata ayiklama kolayligi
+        return f"LivePalette(theme={self._snapshot()['theme']!r})"
+
+
+def live_palette(density: str = "compact") -> "LivePalette":
+    """Modul duzeyinde guvenle saklanabilen, temaya CANLI baglanan palet."""
+    return LivePalette(density)
 
 
 def _flat_pairs(p: Dict[str, Any]):

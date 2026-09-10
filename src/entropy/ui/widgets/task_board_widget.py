@@ -28,10 +28,11 @@ from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 from entropy.ui.design.prefs import install_splitter_persistence
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 
 # Kanban sütunu için en küçük okunur genişlik (kart başlığı + kenar boşlukları).
 # Faz 11-C: yedi sütun olunca 190 px pano genişliğini 1.400 px'e zorluyordu.

@@ -7,9 +7,9 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.8.0** (Faz 11-A sonrası etiket adayı: v0.9.0) |
+| Sürüm | **v0.10.0** (Faz 12 kapanış) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, **Faz 12-E depo bakımı** (§2.5): 59 betik `_oneshot/`, 82 test dosyası `tests/_reference/`, 5 eski spec + OneFile spec arşivde, ARCHITECTURE 274→456 satır, `autostart` kaldırıldı (ADR-0006); hedefli testler **1.163 passed / 0 failed**. Önceki: **Faz 11 KAPANIŞ QA** (§2.4): tam süit **2.355 passed / 0 failed / 406 s**, build exit 0 (241 s, `dist/EntropyAI`), **K12 = 0**, 11-E sözleşmeleri §3'e yazıldı, 2 sessiz arayüz regresyonu düzeltildi, 3 açık bulgu (§5.8-10) |
+| Son güncelleme | 2026-09-10, **Faz 12 KAPANIŞ QA** (§2.6): tam süit **2.456 test / 1 bayat test düzeltildi**, build exit 0 (146 s, `dist/EntropyAI`, `--version` 0.10.0), ui gate exit 0, gerçek ekran LG %200'de Zen 4/4 köşe + 3 pencere denetimi görünür, açık tema regresyonu (gömülü gövdeler koyu kalıyordu) düzeltildi, uçtan uca otonom pano döngüsü canlı doğrulandı; kota 129.051 token (tavan 120k aşıldı), wiki derlemesi / oturum devri / skill approve **koşulmadı** (§2.6) |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -63,6 +63,166 @@ girdilerinin hepsi mevcut, silinen `tools/*` ailesinin spec'te girdisi yoktu,
 `skills/media_agency_soldier` pakete girdi (`dist/EntropyAI/_internal/skills/`).
 Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rules.py`
 **13 passed**.
+
+---
+
+## 2.6 Faz 12 KAPANIŞ QA (2026-09-10, qa-build-engineer)
+
+**Tam süit:** `QT_QPA_PLATFORM=offscreen python -m pytest tests -q -p no:cacheprovider`
+→ 1. koşum **2.456 test; 2.455 passed, 1 failed, 406,55 s**; tek hata
+`tests/test_wiki_layer_and_lint.py::test_wiki_and_lint_are_local_commands`
+**bayat testti** (12-B'de `/wiki` komut paletinden kaldırılmış, alias olarak
+yaşıyor) — test sözleşmeye göre düzeltildi. Arayüz palet düzeltmesinden sonra
+2. koşum: **2.456 passed / 0 failed / 472,55 s**.
+**Yalıtım kanıtı (önce = sonra, değişmedi):** `tasks_ledger.db` 73.728 B /
+1789012264, `skills_state.json` 112 B / 1788993407, `cognitive_memory.db`
+7.593.984 B / 1789015233.
+
+**Spec:** `tests/contracts/test_spec_sync.py` beş eksik modül bildiriyordu —
+`entropy.ui.design.embedded`, `…design.prefs`, `…widgets.office_cards_panel`,
+`…widgets.settings_dialog`, `…widgets.skill_candidates_panel` — `EntropyAI.spec`
+hiddenimports'a eklendi, **9 passed**.
+
+**Build:** `python -m PyInstaller EntropyAI.spec --noconfirm` → **exit 0, 146 s**,
+`dist/EntropyAI` **1.207 MB**, `EntropyAI.exe` 55.948.865 B; palet düzeltmesinden
+sonra 2. build **exit 0, 256 s**, `EntropyAI.exe` **55.951.182 B** (dağıtılan sürüm bu). Smoke: `--help`
+**exit 0** (stderr 0 bayt), `--version` → **`Entropy AI 0.10.0`** exit 0,
+20 sn canlı koşum (erken çıkış yok), çıktıda `traceback`/`CRITICAL` **0**,
+yeni CrashDump **yok** (en yenisi 2026-09-08).
+`scripts/ui_audit.py --gate --final` **exit 0**: `distinct_hex 0`,
+`embedded_hex_count 0`, `embedded_contrast_failure_count 0`,
+`contrast_failure_count 0`, `themes_reachable 4`, `settings_persisted_splitters
+12/12`, `interactive_count_zen_1366 50`, `header_leaf_widgets 6`.
+
+**Marka:** iki ad da (ürün + üretici) `git grep -ril` ile **0 dosya**.
+Mimari kural testleri (`tests/contracts/test_architecture_rules.py`) yeşil.
+
+### Gerçek ekran (LG ULTRAGEAR, dpr 2,0 = %200; 1920×1080, avail 1920×1032)
+
+Betikler: `scratch/ui/phase12/live_shots.py`, `live_shots2.py`, `live_shots3.py`;
+ölçümler `live_metrics.json`, `live_metrics2.json`; görüntüler `live_*.png`.
+
+| Ölçüm | Sonuç |
+|---|---|
+| Zen dört köşe ekranda | **4/4 true** (`corners_on_screen`) |
+| Zen üç pencere denetimi | `btn_minimize` / `btn_maximize` / `btn_close` **görünür ve pencere içinde** (30×30, x=632/666/700) |
+| Zen `minimumSizeHint` | **605×481** (ekran 1920×1032'ye sığar), taşma **0** |
+| Chat 1280×800 | taşma **0** |
+| Desk `minimumSizeHint` | **678×407**, `fits_avail` **true**, taşma **0** |
+| Bölücü sürükleme (gerçek fare olayı, `shellSplitter`) | 573/375 → **660/288**; kapat/aç sonrası **660/288** → **konum korunuyor** |
+| Ayarlar diyaloğundan tema | `dark → light` uygulandı (`SettingsDialog.apply()`), `ui_theme()` **light** |
+
+**Bulunan ve düzeltilen arayüz regresyonu (R-12F-1):** açık temaya geçince
+**rapor okuyucu ve tüm gömülü HTML gövdeleri KOYU kalıyordu** (kanıt:
+`scratch/ui/phase12/live_reader_light.png` önce/sonra). İki kök neden:
+(a) 17 arayüz modülü paleti **içe aktarma anında** donduruyordu
+(`_P = palette()`); (b) `ui/themes/cyber_theme.py` `CYBER_THEME` ve
+`READING_TOKENS` tablolarını doğrudan koyu `TOKENS` üzerinden kuruyordu.
+Düzeltme: `ui/design/embedded.py` içine **`LivePalette` / `live_palette()`**
+(her okumada güncel temayı çözen `Mapping`), 17 modülde `_P = _live_palette()`;
+`cyber_theme.py` içinde **`_LiveTable`** + `_build_cyber` / `_build_reading`
+(`CYBER_THEME`, `READING_TOKENS` artık canlı). Ölçüm:
+`READING_TOKENS["surface_base"]` light `#F5F7FA` / dark `#0B0F14`.
+Eski `STYLESHEET` bilinçli olarak donuk bırakıldı (ürün yolunda
+`apply_design_system()` onun yerine geçiyor) — **açık iş**.
+Graf tuvali açık temada `grab()` ile **boş** döndü (QWebEngineView ayrı
+compositor'da çizer) — bu yolla **ölçülemedi**; HTML tarafı `css_variables`
+üzerinden temaya bağlı (`ui/widgets/knowledge_graph.py:3059`).
+
+### Uçtan uca canlı pano döngüsü (gerçek koşum)
+
+(a) Sohbette Entropy'ye "arastirmaci ajanına şu görevi ver: Python
+`dataclasses` ile `attrs` farkını 6 maddede özetle, kaynak ver" →
+ham yanıtta **`[PANO board_create]` bloğu var** (`scratch/_p12f_chat_raw.txt`),
+gösterilen metinde blok **yok** + `Görev oluşturuldu: … → arastirmaci` makbuz
+satırı (`scratch/_p12f_chat_shown.txt`). Kart
+`20260910-100914-python-dataclasses-vs-at` **assigned**; tetikleyici koştu →
+`taken → running → review`; `events.jsonl` seq 17-20
+(`task.assigned / task.claimed / run.started / run.finished ok:true`);
+**`projection.json` yazıldı** ve `TASKBOARD.md` başlığındaki
+**Projeksiyon karması DOLU** (`ee40492057ef9fb0` → `480ef90f3287c9b5`).
+**`report_path` artık kartta dolu** (11-C açık işi kapandı).
+
+(b) Aynı ajana 3 kısa kart daha (A/B/C) koşuldu — hepsi `review`.
+Ledger: **28.678 + 31.049 + 33.251 = 92.978 token** (`provider: claude`),
+`session.json` → `cards_in_session 3`, `tokens_in_session 92.978`.
+**Devir (rotation) TETİKLENMEDİ ve doğrulanamadı:** eşikler
+`agent_session_max_cards = 3` / `agent_session_max_tokens = 60.000`; 3. kart
+başlarken sayaçlar 2 kart / 59.727 token idi (ikisi de eşiğin altında), yani
+devir **4. kartta** tetiklenecekti. 4. kart **kota tavanı** nedeniyle
+KOŞULMADI → `handoff.md` **yok**, `--resume` argv kanıtı bu turda **alınmadı**
+(11-C QA'sında alınmıştı). **Açık iş.**
+
+(c) `board_checkpoint` **gerçekten dosyaya yazıldı**: B kartının `checkpoint`
+alanı → `…/Desk/Offices/entropy/workspace/checkpoints/20260910-102335-kisa-not-b.md`
+(350 B). **Uyarı:** Entropy kartının kontrol noktası **Desk veri kökünün
+altına** düşüyor (ayrı kök kuralı) — açık iş.
+**Özet blok sızıntısı:** bu QA'da koşan **4 kartın 4'ünde de 0**; sızıntılı
+3 kart (`…064253`, `…064722`, `…064948`) 12-B temizleyicisinden **önceki**
+11-C QA kartlarıdır (geçmiş veri).
+
+(d) **Beyin kısayolu ÇALIŞMIYOR (yeni bulgu).** Dört kartın dördünde de
+`amplification.brain_lookup(...)` → `has_answer=True` (13.104 karakterlik
+yanıt), ama `amplification.is_research_card(card)` → **False**, bu yüzden
+`tasks._brain_shortcut` erken dönüyor ve CLI **her seferinde** çağrılıyor.
+Kök neden: `board_create` kartın `kind` alanını doldurmuyor
+(`agents/board_autonomy.py`), sezgi ise "…yaz", "…özetle" gibi hedeflerde
+`_WRITE_HINTS` yüzünden reddediyor (`agents/amplification.py:52-58`,
+`:77-85`). Öneri: Entropy kart üretirken `kind` yazsın (araç sözleşmesine
+zorunlu alan). **Açık iş.**
+
+**Sağlayıcı notu:** (a) kartı `provider: agy` ile koştu — `arastirmaci` ajan
+şartnamesinin kendisi `provider: agy, model: gemini-3.8-flash-high` diyor
+(`AgentRegistry.get('arastirmaci')`), `config.provider` `claude` olsa da
+şartname kazanıyor (`tasks.py:1375-1378`). (b)'deki üç kart `provider: claude`
+ile açıkça oluşturulup saf kipte koşturuldu.
+
+### Hafıza turları
+
+Yedek: `~/.entropy/backups/cognitive_memory.qa12f.*.db`.
+
+- `/skill synth media-agency-soldier`: **kotasız kol** koşuldu (`turns 0`),
+  3 dosya üretildi, `validate_candidate` → **`draft`**, bulgu
+  "eksik/boş bölüm: Girdiler, Çıktılar". Bu **tasarım gereği**dir: iskelet
+  `"- (… doldurulacak)"` yazıyor (`memory/skill_synthesis.py:299-300`) ve
+  doğrulayıcı "doldurulacak" içeren bölümü eksik sayıyor (`:556-558`).
+  Yani **kotasız kol asla `validated` olamaz**; tek turluk zenginleştirme
+  **kota tavanı** nedeniyle koşulmadı → `/skill approve` ve kasada
+  `Skills/<ad>/SKILL.md` adımı **doğrulanamadı**. Açık iş.
+- `/memory merge`: gri kuyruk turdan önce **0**, sonra **2 pending**
+  (`~/.entropy/memory/gray_queue.jsonl`) — bugünkü kart raporları kapıdan
+  gri banda düştü. Birleştirme turu köprü (model) gerektirdiği için
+  **koşulmadı** (kota). Açık iş.
+- `/distill wiki compile financial-auditor --turns 25`: **KOŞULMADI** — kota
+  tavanı aşıldığı için tek başına en pahalı kalem. `WIKI.state.json`, sayfa
+  sayısı ve lint ölçümü bu QA'da **yok**. Açık iş.
+
+### K tablosu (`scripts/brain_metrics.py --context --json`, önce → sonra)
+
+| Ölçüt | Önce | Sonra |
+|---|---:|---:|
+| düğüm | 729 | **734** |
+| K1 yineleme | %5,49 | **%5,59** |
+| K2 Hit@1 / Hit@5 | 9/10 · 10/10 | **9/10 · 10/10** |
+| K3 gürültü | %0,0 | **%0,0** |
+| K4 bağlam bütçe payı | %70,19 | **%70,19** |
+| K5 damıtılmış pay | %37,21 | **%37,21** |
+| K6 wiki payı | %29,00 | **%29,00** |
+| K7 kategori | sem 651 / proc 59 / epi 19 | **sem 652 / proc 59 / epi 23** |
+| K9 gri kuyruk (pending) | 0 | **2** |
+| K10 fikstür | 0 | **0** |
+| K11 kapı gecikmesi (medyan) | 85,5 ms | **90,8 ms** |
+| K12 kaynaksız L2 | 0 | **0** |
+| `brain_has_answer` (5 sorgu) | 3/5 | **3/5** |
+
+K4/K5/K6 değişmedi çünkü wiki derlemesi koşulmadı (K6'yı büyütecek tek kalem oydu).
+
+### Kota
+
+Bu QA'da ledger'a düşen gerçek model tüketimi: **129.051 token**
+(36.073 agy + 92.978 claude), tavan **120.000** → **%7,5 aşıldı**; aşımı
+gördüğüm anda canlı turlar durduruldu. Sohbet turunun (a) tüketimi ledger'a
+**yazılmıyor** (sohbet yolu ledger'sız) — ölçülemedi.
 
 ---
 
@@ -692,6 +852,60 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
     `toggle_board_auto_dispatch()` işlevlerini çağırır → `(durum, mesaj)`
     döner, ayarı kalıcılaştırır, **model çağırmaz**. Slash karşılıkları
     `/lock on|off` ve `/board auto on|off` aynı işlevleri kullanır.
+  - **Gömülü belge köprüsü (Faz 12-D.2, YENİ):** `ui/design/embedded.py` tek
+    kaynaktır. `palette(theme=None, density="compact")` düz onaltılık tablo
+    döndürür (QTextBrowser/QTextDocument için; Qt CSS değişkeni tanımaz),
+    `css_variables()` `:root { --viz-*: … }` bloğu, `js_palette_json()` aynı
+    paletin JSON'u (QWebEngine tuvali). `theme=None` ise kullanıcının
+    `QSettings` seçimi okunur. `EMBEDDED_CONTRAST_REQUIREMENTS` gömülü paletin
+    kapı listesidir; `READER_LAYOUT_CSS()` `<pre>` sarma + akışkan görsel
+    kurallarını verir ve `reading_css()`'in sonuna eklenir.
+    `LIGHT_TOKENS["viz"]` **ayrı** koyu tonlara sahiptir (açık zeminde koyu
+    temanın parlak serisi 1,7–2,7:1 kalıyordu).
+  - **Graf tuvali sözleşmesi (DEĞİŞTİ):** ham şablon
+    `knowledge_graph.GRAPH_TEMPLATE_SOURCE` (`__VIZ_CSS__`, `__VIZ_JSON__`
+    yer tutucuları, **hiç düz renk yok**); kullanıma hazır hâli
+    `graph_html_template(theme=None)` ve modül düzeyindeki
+    `GRAPH_HTML_TEMPLATE` (varsayılan tema enjekte edilmiş). JS mantığı
+    (fizik, yerleşim, etiket çakışması) DEĞİŞMEDİ; renkler `VIZ.*` /
+    `VIZ.series[i]` üzerinden okunur.
+  - **Okuma genişliği:** `markdown_renderer.set_reader_width(px)` /
+    `reader_width()`; `render_markdown_to_html(..., reader_width=px)`.
+    SVG'ler mantıksal `viewBox` + kutuya sığan `width/height` ile üretilir →
+    1366 ve 460 px'te yatay kaydırma 0.
+  - **Arayüz tercihleri (Faz 12-D.2, YENİ):** `ui/design/prefs.py` (`QSettings`,
+    kök `Entropy/EntropyAI`). `ui_theme()/ui_density()` +
+    `set_ui_theme/set_ui_density`, `save_splitter/restore_splitter/
+    install_splitter_persistence(name, splitter)/reset_layout(names)`.
+    Test kancası `set_settings_factory(factory)`. `ui/manager.py` açılışta
+    `apply_design_system(app, theme=ui_theme(), density=ui_density())` çağırır.
+    **Her `QSplitter` `install_splitter_persistence` ile kaydedilir** (kapı:
+    `splitters_unpersisted = 0`).
+  - **Ayarlar diyaloğu (YENİ):** `ui/widgets/settings_dialog.SettingsDialog`
+    (`values()`, `apply()`); palet anahtarları `settings` ve `reset_layout`.
+    Alanlar: tema, yoğunluk, `brain_confidence_threshold` (0,20–0,60),
+    `amplification_lock`, `board_auto_dispatch`, `agent_session_max_cards`,
+    `agent_session_max_tokens` — hepsi `getattr` guard'lı (12-B alanı yoksa
+    satır kurulmaz).
+  - **Telemetri şeridi KALDIRILDI (D12-02):** `zen_telemetry_status`,
+    `badge_memory/skills/mcp/model` nesneleri **duruyor** ama görünmez
+    (`setVisible(False)`); bilgi model kapsülü ve durum kümesinde. Token ve
+    bağlam rozetleri üst çubuktan **model kapsülünün içine** taşındı → canlı
+    üst çubuk yaprak sayısı 8 → 6. `ProviderStatusBadge.set_primary(provider)`
+    çubukta yalnızca aktif sağlayıcıyı gösterir (diğeri ipucunda).
+  - **Rapor sayacı tek kaynak (D12-03):** `report_center.total_count()` ve
+    `reports_viewer.total_report_count()` aynı sayıyı verir.
+  - **Birleşik pano (YENİ):** `ui/widgets/office_cards_panel.OfficeCardsPanel`
+    — Zen "Görevler" sekmesinde **salt okunur** Desk ofis kartı listesi
+    (`TaskBoard.list(office=ALL_CARDS)`, `office` boş ya da `"entropy"` olanlar
+    süzülür), `bus.board_state_changed` ile tazelenir. Tek yön kuralı korunur.
+  - **Beceri adayları (YENİ):** `ui/widgets/skill_candidates_panel.
+    SkillCandidatesPanel` — 12-C `memory.skill_synthesis.list_candidates/
+    promote_skill/reject_skill` sözleşmesi (guard'lı; modül yoksa panel boş).
+    `decide(candidate_id, approve) -> bool`; onaysız etkinleşme yok.
+  - **Otonom görev kartı:** `ZenModeWindow.on_board_state_changed(payload)` —
+    `event == "task.assigned"` ve `actor == "entropy"` ise sohbete
+    "Entropy görev verdi: <başlık> → <ajan>" kartı yazılır.
   - **Odak halkası:** odaklanabilir her denetimin QSS `:focus` halkası ve
     `setAccessibleName` değeri vardır (110 erişilebilir ad, WCAG 4.1.2).
 - **Kimlik düğümü kaynağı (Faz 11 kapanışı):** `gate.IDENTITY_PROVENANCE =

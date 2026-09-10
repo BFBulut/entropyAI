@@ -17,9 +17,10 @@ import sys as _sys
 import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 # entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
 # gecmisi yardimcilari icin gercek modul gerekiyor.
 config_module = _sys.modules["entropy.core.config"]

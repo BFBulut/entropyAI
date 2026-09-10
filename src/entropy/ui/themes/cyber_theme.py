@@ -21,10 +21,55 @@ Yeni kod bu dosyayı kullanmaz:
 from entropy.ui.design.embedded import READER_LAYOUT_CSS as _READER_LAYOUT_CSS
 from entropy.ui.design.tokens import TOKENS
 
+# Faz 12-F QA bulgusu: bu dosya belirteçleri İÇE AKTARMA anında donduruyordu
+# (`TOKENS` = koyu tema tablosu). Sonuç: kullanıcı açık temaya geçtiğinde rapor
+# okuyucu ve sohbet balonları KOYU kalıyordu (gerçek ekran kanıtı
+# `scratch/ui/phase12/live_reader_light.png`). Artık her okuma güncel temayı
+# çözer; `CYBER_THEME["bg_root"]` / `READING_TOKENS["surface_base"]` kullanımı
+# değişmez.
+# Eski `STYLESHEET` (aşağıda) hâlâ içe aktarma anında kurulan düz tabloyu
+# kullanır; ürün yolunda `apply_design_system()` bunun yerine geçtiği için
+# canlıya çevrilmedi (açık iş).
 _C = TOKENS["color"]
 _T = TOKENS["type"]
 _F = TOKENS["font"]
 _R = TOKENS["radius"]
+
+from collections.abc import Mapping as _Mapping  # noqa: E402
+
+from entropy.ui.design.tokens import get_tokens as _get_tokens  # noqa: E402
+
+
+def _active_tokens():
+    try:
+        from entropy.ui.design.prefs import ui_theme
+        return _get_tokens(ui_theme())
+    except Exception:
+        return TOKENS
+
+
+class _LiveTable(_Mapping):
+    """Temaya CANLI bağlanan salt okunur belirteç tablosu."""
+
+    __slots__ = ("_builder",)
+
+    def __init__(self, builder):
+        self._builder = builder
+
+    def _snapshot(self):
+        return self._builder(_active_tokens())
+
+    def __getitem__(self, key):
+        return self._snapshot()[key]
+
+    def __iter__(self):
+        return iter(self._snapshot())
+
+    def __len__(self):
+        return len(self._snapshot())
+
+    def __repr__(self):  # pragma: no cover
+        return repr(self._snapshot())
 
 # ---------------------------------------------------------------------------
 # Takma ad 1: CYBER_THEME (eski anahtarlar korunur, değerler yeni belirteçten)
@@ -33,21 +78,27 @@ _R = TOKENS["radius"]
 # mor tamamen kaldırıldı (dört farklı mor vardı, hiçbiri anlam taşımıyordu),
 # tek vurgu kuralı gereği vurgu rolüne düşürüldü.
 # ---------------------------------------------------------------------------
-CYBER_THEME = {
-    "bg_root": _C["bg"],
-    "bg_surface": _C["surface"],
-    "bg_card": _C["surface.raised"],
-    "bg_terminal": _C["terminal"],
-    "border": _C["line"],
-    "border_focus": _C["accent"],
-    "accent_cyan": _C["accent"],
-    "accent_amber": _C["warn"],
-    "accent_purple": _C["accent"],
-    "accent_emerald": _C["ok"],
-    "text_primary": _C["text"],
-    "text_secondary": _C["text.muted"],
-    "text_muted": _C["text.muted"],
-}
+def _build_cyber(_tokens):
+    _C = _tokens["color"]
+    return {
+        "bg_root": _C["bg"],
+        "bg_surface": _C["surface"],
+        "bg_card": _C["surface.raised"],
+        "bg_terminal": _C["terminal"],
+        "border": _C["line"],
+        "border_focus": _C["accent"],
+        "accent_cyan": _C["accent"],
+        "accent_amber": _C["warn"],
+        "accent_purple": _C["accent"],
+        "accent_emerald": _C["ok"],
+        "text_primary": _C["text"],
+        "text_secondary": _C["text.muted"],
+        "text_muted": _C["text.muted"],
+    }
+
+
+CYBER_THEME = _LiveTable(_build_cyber)
+
 
 # ---------------------------------------------------------------------------
 # Takma ad 2: READING_TOKENS (okuma yüzeyi: sohbet balonu + rapor okuyucu)
@@ -56,35 +107,44 @@ CYBER_THEME = {
 # kullanıcı tarafından "bulanık, kirli" olarak algılanan geçişin nedeniydi.
 # Artık aynı belirteçlerden türer.
 # ---------------------------------------------------------------------------
-READING_TOKENS = {
-    # Yüzeyler: kök → kart → yükseltilmiş. Hiçbiri saf siyah değil.
-    "surface_base": _C["bg"],
-    "surface_raised": _C["surface"],
-    "surface_soft": _C["surface.raised"],
-    # Ayırıcı çizgiler
-    "divider": _C["line.strong"],
-    "divider_soft": _C["line"],
-    # Yazı
-    "text": _C["text"],
-    "text_body": _C["text"],
-    "text_dim": _C["text.muted"],
-    # Vurgular (tek vurgu + iki durum)
-    "accent": _C["accent"],
-    "accent_soft": _C["accent.soft"],
-    "accent_alt": _C["ok"],
-    "accent_warn": _C["warn"],
-    # Tipografi (CSS dizeleri — Qt zengin metin motoru için)
-    "font_body": _F["sans"],
-    "font_mono": _F["mono"],
-    "font_size_body": f"{_T['body']['size']}px",
-    "font_size_small": f"{_T['label']['size']}px",
-    "font_size_mono": f"{_T['mono']['size']}px",
-    "line_height": "1.55",
-    # Aralıklar
-    "radius": f"{_R['md']}px",
-    "radius_small": f"{_R['sm']}px",
-    "block_margin": f"{TOKENS['space']['4']}px",
-}
+def _build_reading(_tokens):
+    _C = _tokens["color"]
+    _T = _tokens["type"]
+    _F = _tokens["font"]
+    _R = _tokens["radius"]
+    return {
+        # Yüzeyler: kök → kart → yükseltilmiş. Hiçbiri saf siyah değil.
+        "surface_base": _C["bg"],
+        "surface_raised": _C["surface"],
+        "surface_soft": _C["surface.raised"],
+        # Ayırıcı çizgiler
+        "divider": _C["line.strong"],
+        "divider_soft": _C["line"],
+        # Yazı
+        "text": _C["text"],
+        "text_body": _C["text"],
+        "text_dim": _C["text.muted"],
+        # Vurgular (tek vurgu + iki durum)
+        "accent": _C["accent"],
+        "accent_soft": _C["accent.soft"],
+        "accent_alt": _C["ok"],
+        "accent_warn": _C["warn"],
+        # Tipografi (CSS dizeleri — Qt zengin metin motoru için)
+        "font_body": _F["sans"],
+        "font_mono": _F["mono"],
+        "font_size_body": f"{_T['body']['size']}px",
+        "font_size_small": f"{_T['label']['size']}px",
+        "font_size_mono": f"{_T['mono']['size']}px",
+        "line_height": "1.55",
+        # Aralıklar
+        "radius": f"{_R['md']}px",
+        "radius_small": f"{_R['sm']}px",
+        "block_margin": f"{_tokens['space']['4']}px",
+    }
+
+
+READING_TOKENS = _LiveTable(_build_reading)
+
 
 
 def reading_css() -> str:

@@ -27,10 +27,11 @@ from entropy.ui.widgets.ui_polish import apply_list_polish
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design import icon as design_icon
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 from entropy.ui.design.prefs import install_splitter_persistence
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 

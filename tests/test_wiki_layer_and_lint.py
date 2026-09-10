@@ -441,8 +441,13 @@ def test_wiki_and_lint_are_local_commands(monkeypatch, tmp_path):
     out2 = sc.try_handle_local_command("/lint all", bridge=None)
     assert out2 is not None and "Wiki Denetimi" in out2 and calls["lint"] == "denetci"
 
+    # Faz 12-B: slash yuzeyi 34 -> 31. `/wiki` komut paletinden kaldirildi
+    # (yerine `/distill wiki ...`), ama alias olarak yasamaya devam ediyor —
+    # yukaridaki `/wiki denetci` cagrisi bunun kaniti.
     names = {c.name for c in sc.LOCAL_COMMANDS}
-    assert {"/wiki", "/lint"} <= names
+    assert "/lint" in names
+    assert "/wiki" not in names, "/wiki paletten kaldirilmisti (12-B)"
+    assert "/distill" in names
 
 
 # --------------------------------------------------------------------------

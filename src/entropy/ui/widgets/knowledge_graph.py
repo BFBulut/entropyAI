@@ -26,9 +26,10 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME
 # renk yerine `TOKENS` / `TOKENS["viz"]` koprusu.
 from entropy.ui.design.embedded import css_variables as _css_variables
 from entropy.ui.design.embedded import js_palette_json as _js_palette_json
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 
 # Rapor kümesi açma/kapama düğümleri kaldırıldı (2026-09-08): "87 rapor" halkası
 # tıklandığında görünüm baştan kuruluyor, kullanıcı yerini kaybediyordu. Artık

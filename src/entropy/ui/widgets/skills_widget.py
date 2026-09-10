@@ -18,9 +18,10 @@ from entropy.skills.manager import SkillManager, SkillDefinition
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design.embedded import palette as _embedded_palette
+from entropy.ui.design.embedded import live_palette as _live_palette
 
-_P = _embedded_palette()
+# Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
+_P = _live_palette()
 
 class AddSkillDialog(QDialog):
     """Dialog to manually register or synthesize a new skill."""
