@@ -59,6 +59,8 @@ ACTION_SUPERSEDE = "supersede"
 VALID_ACTIONS = (ACTION_MERGE, ACTION_KEEP_BOTH, ACTION_SUPERSEDE)
 
 MERGE_LOG_FILENAME = "gray_merge_log.jsonl"
+#: Kasadaki insan okunur tur gunlugu (Faz 12-C): dream_log.md ile ayni desen.
+VAULT_MERGE_LOG_SUBPATH = "Entropy/Memory/merge_log.md"
 
 # İptal bayrağı süreç genelinde tekil: kullanıcı "durdur" dediğinde süren tur
 # bir sonraki adayda kesilir (damıtmadaki `_CANCELLED` deseni).
@@ -121,6 +123,8 @@ class MergeResult:
     decisions: List[Dict[str, Any]] = field(default_factory=list)
     queue_path: Optional[str] = None
     prompt: str = ""
+    #: Kasadaki insan okunur gunluk satirinin dosyasi (Faz 12-C).
+    vault_log: Optional[str] = None
 
     @property
     def applied(self) -> int:
@@ -442,7 +446,67 @@ def _append_log(memory: Any, res: MergeResult) -> Optional[Path]:
         return None
 
 
+def merge_log_path(vault_path: Optional[Path] = None) -> Path:
+    """Kasadaki insan okunur tur gunlugu (`Entropy/Memory/merge_log.md`)."""
+    from entropy.core.paths import vault_root
+
+    return vault_root(vault_path) / VAULT_MERGE_LOG_SUBPATH
+
+
+def append_vault_merge_log(res: "MergeResult",
+                           vault_path: Optional[Path] = None) -> Optional[Path]:
+    """
+    Tur sonucunu kasaya TEK SATIR olarak yazar (ruya gunlugunun kardesi).
+
+    JSONL gunlugu (`gray_merge_log.jsonl`) makine icin, bu dosya insan icin:
+    kullanici birlestirmenin ne yaptigini kasadan gorebilmeli.
+    """
+    try:
+        path = merge_log_path(vault_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("# Gri Bant Birleştirme Günlüğü\n\n", encoding="utf-8")
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        line = (
+            f"- **{stamp}** - {res.candidates} aday - {res.turns} tur - "
+            f"birlestirildi {res.merged} - ikisi de kaldi {res.kept} - "
+            f"ustlendi {res.superseded} - atlandi {res.skipped}"
+        )
+        if res.cancelled:
+            line += " - IPTAL"
+        if res.errors:
+            line += f" - hata: {res.errors[0][:120]}"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        return path
+    except OSError as exc:  # pragma: no cover - gunluk turu bozmaz
+        logger.warning("Kasa birlestirme gunlugu yazilamadi: %s", exc)
+        return None
+
+
 def run_merge_round(
+    memory: Any = None,
+    send_prompt: Optional[Callable[[str], str]] = None,
+    limit: int = DEFAULT_BATCH,
+    gate: Any = None,
+    graph: Any = None,
+    vault_path: Optional[Path] = None,
+) -> MergeResult:
+    """
+    Tek tur + kasa gunlugu (Faz 12-C).
+
+    Asagidaki gerceklestirimi cagirir ve aday bulunan her turu
+    `Entropy/Memory/merge_log.md` dosyasina tek satir olarak yazar.
+    """
+    res = _merge_round_impl(memory, send_prompt, limit, gate, graph)
+    if res.candidates:
+        path = append_vault_merge_log(res, vault_path=vault_path)
+        if path is not None:
+            res.vault_log = str(path)
+    return res
+
+
+def _merge_round_impl(
     memory: Any = None,
     send_prompt: Optional[Callable[[str], str]] = None,
     limit: int = DEFAULT_BATCH,
@@ -513,5 +577,6 @@ __all__ = [
     "ACTION_KEEP_BOTH", "ACTION_MERGE", "ACTION_SUPERSEDE", "DEFAULT_BATCH",
     "GrayCandidate", "MergeResult", "apply_decisions", "build_merge_prompt",
     "cancel_merge", "gray_stats", "is_cancelled", "mark_done",
+    "append_vault_merge_log", "merge_log_path", "VAULT_MERGE_LOG_SUBPATH",
     "parse_merge_response", "pending_candidates", "reset_cancel", "run_merge_round",
 ]

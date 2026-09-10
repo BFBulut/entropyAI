@@ -58,6 +58,11 @@ MIN_CONTEXT_CHARS = 300
 # sonuna eklenir, bütçesi kimliğin bütçesinden AYRIDIR.
 BUDGET_RULES = 600
 
+# Pano araçlarının (Faz 12-C) payı: araç sözleşmesinin sonuna eklenir, kendi
+# tavanı vardır. Entropy sohbette bu blokla ajanına kart açar; blok büyürse
+# araç sözleşmesinin geri kalanını ezmesin diye ayrı kelepçelenir.
+BUDGET_BOARD_TOOLS = 600
+
 # Kırpma önceliği: sona doğru gidildikçe önce düşer. Kurallar bağlamdan sonra
 # düşer: kullanıcının "kalıcı yap" dediği bir kural, geri çağrılan bir nottan
 # daha bağlayıcıdır.
@@ -164,6 +169,25 @@ def tool_contract_section(commands: Optional[List[str]] = None) -> str:
             "komutu taklit etme: " + " ".join(cmds)
         )
     return "\n".join(lines)
+
+
+def board_tools_section(max_chars: int = BUDGET_BOARD_TOOLS) -> str:
+    """
+    Bölüm 2'nin eki: Entropy'nin pano araçları (`[PANO board_create]`).
+
+    Metnin tek kaynağı agy tarafındaki `agents.board_tools.entropy_tools_section`
+    (Faz 12-B). Sembol yoksa bölüm sessizce **atlanır**: hafıza katmanı pano
+    sözleşmesinin kopyasını tutmaz, tuttuğu anda iki metin ayrışır.
+    """
+    try:
+        from entropy.agents.board_tools import entropy_tools_section  # type: ignore
+    except Exception:
+        return ""
+    try:
+        text = entropy_tools_section() or ""
+    except Exception:  # pragma: no cover - araç metni istemi düşürmez
+        return ""
+    return _trim(str(text).strip(), max(0, int(max_chars or 0)))
 
 
 def entropy_command_names(limit: int = 24) -> List[str]:
@@ -334,6 +358,23 @@ def _trim(text: str, limit: int) -> str:
     return cut.rstrip()
 
 
+def _tools_block(is_claude: bool, kind: str) -> str:
+    """
+    Bölüm 2 = araç sözleşmesi (+ sohbette pano araçları).
+
+    Pano bloğu YALNIZCA `kind="chat"`te eklenir: kart kipinde koşan ajanın
+    kendi araç metni zaten ajan tarafında verilir, Entropy'nin kart açma
+    yetkisi sohbete aittir.
+    """
+    if not is_claude:
+        return ""
+    text = _trim(tool_contract_section(), BUDGET_TOOL_CONTRACT)
+    if kind != "chat":
+        return text
+    board = board_tools_section()
+    return (text + "\n\n" + board) if board else text
+
+
 def build_system_prompt(
     kind: str,
     *,
@@ -381,7 +422,7 @@ def build_system_prompt(
     sections: Dict[str, str] = {
         "identity": _trim(identity_section(desk_rows), BUDGET_IDENTITY),
         "rules": promoted_rules_section(),
-        "tools": _trim(tool_contract_section(), BUDGET_TOOL_CONTRACT) if is_claude else "",
+        "tools": _tools_block(is_claude, kind),
         "manifest": _trim(
             manifest_section(agent_spec if kind == "card" else None), BUDGET_MANIFEST
         ),

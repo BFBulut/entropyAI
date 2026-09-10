@@ -289,6 +289,151 @@ def gray_queue_count(db_path: Path) -> int:
         return sum(1 for line in handle if line.strip())
 
 
+def gray_queue_report(db_path: Path, nodes: int) -> Dict[str, Any]:
+    """
+    K9 (Faz 12-C): kuyruk/düğüm oranı + **son turun özeti**.
+
+    Kuyruk satırı ve tur günlüğü DB'nin yanındaki `memory/` klasöründedir;
+    ikisi de salt okunur okunur, hiçbir tur başlatılmaz.
+    """
+    base = Path(db_path).parent / "memory"
+    queue = base / "gray_queue.jsonl"
+    pending = done = total = 0
+    if queue.exists():
+        for line in queue.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            total += 1
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(row.get("status") or "pending") == "pending":
+                pending += 1
+            else:
+                done += 1
+    last: Optional[Dict[str, Any]] = None
+    rounds = 0
+    log = base / "gray_merge_log.jsonl"
+    if log.exists():
+        for line in log.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                last = json.loads(line)
+                rounds += 1
+            except json.JSONDecodeError:
+                continue
+    return {
+        "rows": total,
+        "pending": pending,
+        "done": done,
+        "nodes": nodes,
+        "ratio_pct": round(100.0 * total / nodes, 2) if nodes else 0.0,
+        "rounds": rounds,
+        "last_round": last,
+    }
+
+
+# --------------------------------------------------------------------------
+# K4/K5/K6 — bağlam kurucu payları (Faz 12-C: kalıcı hesaplayıcı)
+# --------------------------------------------------------------------------
+
+#: K6'nın sabit sorgu kümesi. Beş genel sorgu: yetenek adı VERİLMEZ, çünkü
+#: wiki payının en zayıf olduğu yol genel sohbettir (araştırma A §4.6).
+DEFAULT_CONTEXT_QUERIES: Tuple[str, ...] = (
+    "hafıza sistemi nasıl çalışıyor",
+    "bir raporu nasıl damıtıyoruz",
+    "beceri paketi şeması neleri zorunlu kılar",
+    "gri bant birleştirme turu ne yapar",
+    "bağlam bütçesi hangi bölümlere dağılıyor",
+)
+
+#: "Damıtılmış" sayılan bölümler (K5): ham rapor/kod değil, işlenmiş bilgi.
+DISTILLED_KINDS = ("playbook", "wiki_pages", "general_brain")
+
+K6_MIN_WIKI_PCT = 15.0
+
+
+def _wiki_tokens(ctx: Any) -> int:
+    """
+    Bağlamdaki wiki payı (token).
+
+    `wiki_pages` bölümü tamamen wiki'dir; genel beyin paketinde wiki bir alt
+    bloktur (`[Wiki]`), o yüzden yalnızca o bloğun kendisi sayılır — bölümün
+    tamamını saymak payı şişirirdi.
+    """
+    from entropy.memory.playbook import estimate_tokens
+
+    total = 0
+    for section in getattr(ctx, "sections", []) or []:
+        kind = getattr(section, "kind", "")
+        body = getattr(section, "body", "") or ""
+        if kind == "wiki_pages":
+            total += int(getattr(section, "tokens", 0) or 0)
+        elif kind == "general_brain" and "[Wiki]" in body:
+            total += estimate_tokens(body.split("[Wiki]", 1)[1])
+    return total
+
+
+def context_metrics(
+    queries: Optional[Sequence[str]] = None,
+    skill: Optional[str] = None,
+    builder: Any = None,
+    token_budget: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    K4 (bütçe kullanımı), K5 (damıtılmış pay), K6 (wiki payı) — 5 sorgu.
+
+    Model çağırmaz, hafızaya yazmaz: yalnızca `CognitiveContextBuilder.build`
+    çağrılır ve bölüm token sayıları toplanır.
+    """
+    from entropy.memory.context_builder import (
+        DEFAULT_TOKEN_BUDGET,
+        CognitiveContextBuilder,
+    )
+
+    builder = builder or CognitiveContextBuilder()
+    budget = int(token_budget or DEFAULT_TOKEN_BUDGET)
+    rows: List[Dict[str, Any]] = []
+    for query in list(queries or DEFAULT_CONTEXT_QUERIES):
+        # `include_handoff=False`: aktarım bölümü okundugunda TÜKETİLİR
+        # (sayfa arşivlenir). Ölçüm salt okunur olmalı, kasayı değiştirmemeli.
+        ctx = builder.build(query, skill_name=skill, token_budget=budget,
+                            include_handoff=False)
+        total = int(ctx.tokens)
+        wiki = _wiki_tokens(ctx)
+        distilled = sum(
+            int(getattr(s, "tokens", 0) or 0)
+            for s in ctx.sections
+            if getattr(s, "kind", "") in DISTILLED_KINDS
+        )
+        rows.append({
+            "query": query,
+            "tokens": total,
+            "budget": budget,
+            "wiki_tokens": wiki,
+            "wiki_pct": round(100.0 * wiki / total, 2) if total else 0.0,
+            "distilled_pct": round(100.0 * distilled / total, 2) if total else 0.0,
+            "budget_pct": round(100.0 * total / budget, 2) if budget else 0.0,
+            "brain_has_answer": bool(ctx.brain_has_answer),
+        })
+
+    def _mean(key: str) -> float:
+        return round(statistics.fmean([r[key] for r in rows]), 2) if rows else 0.0
+
+    return {
+        "queries": len(rows),
+        "skill": skill or "",
+        "K4_budget_pct": _mean("budget_pct"),
+        "K5_distilled_pct": _mean("distilled_pct"),
+        "K6_wiki_pct": _mean("wiki_pct"),
+        "rows": rows,
+    }
+
+
 # --------------------------------------------------------------------------
 # toplu rapor
 # --------------------------------------------------------------------------
@@ -298,6 +443,8 @@ def collect(
     include_recall: bool = True,
     include_latency: bool = True,
     dup_threshold: float = DUP_THRESHOLD,
+    include_context: bool = False,
+    context_skill: Optional[str] = None,
 ) -> Dict[str, Any]:
     rows = read_rows(db_path)
     report: Dict[str, Any] = {
@@ -308,6 +455,7 @@ def collect(
         "K10_fixture_leak": fixture_leak(rows),
         "K12_unsourced_l2": unsourced_l2(rows),
         "K9_gray_queue_rows": gray_queue_count(db_path),
+        "K9_gray_queue": gray_queue_report(db_path, len(rows)),
     }
     if include_recall:
         from memory_blind_test import run as blind_run  # noqa: WPS433
@@ -321,6 +469,11 @@ def collect(
         }
     if include_latency:
         report["K11_gate_latency"] = gate_latency(Path(db_path))
+    if include_context:
+        try:
+            report["K4_K5_K6_context"] = context_metrics(skill=context_skill)
+        except Exception as exc:  # pragma: no cover - kasa yoksa ölçüm düşer
+            report["K4_K5_K6_context"] = {"error": str(exc)}
     report["verdict"] = verdict(report)
     return report
 
@@ -346,6 +499,9 @@ def verdict(report: Dict[str, Any]) -> Dict[str, Any]:
     lat = report.get("K11_gate_latency")
     if lat:
         out["K11"] = "PASS" if lat["median_ms"] <= K11_MAX_GATE_MS else "FAIL"
+    ctx = report.get("K4_K5_K6_context")
+    if ctx and not ctx.get("error"):
+        out["K6"] = "PASS" if ctx["K6_wiki_pct"] >= K6_MIN_WIKI_PCT else "FAIL"
     uns = report.get("K12_unsourced_l2")
     if uns:
         out["K12"] = "PASS" if uns["count"] <= K12_MAX_UNSOURCED else "FAIL"
@@ -359,6 +515,10 @@ def main() -> int:
     ap.add_argument("--skip-recall", action="store_true", help="K2/K3'ü atla")
     ap.add_argument("--skip-latency", action="store_true", help="K11'i atla")
     ap.add_argument("--dup-threshold", type=float, default=DUP_THRESHOLD)
+    ap.add_argument("--context", action="store_true",
+                    help="K4/K5/K6'yı da ölç (bağlam kurucu, 5 sorgu, model çağrısı yok)")
+    ap.add_argument("--context-skill", default=None,
+                    help="K6'yı bir yetenek kapsamında ölç (varsayılan: genel sohbet)")
     args = ap.parse_args()
 
     db = Path(args.db)
@@ -371,6 +531,8 @@ def main() -> int:
         include_recall=not args.skip_recall,
         include_latency=not args.skip_latency,
         dup_threshold=args.dup_threshold,
+        include_context=args.context,
+        context_skill=args.context_skill,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -385,7 +547,18 @@ def main() -> int:
         print(f"K3 gürültü  : %{r['noise_ratio_pct']}")
     cats = report["K7_categories"]
     print(f"K7 kategori : {cats['distinct']} ad · kanonik dışı: {cats['non_canonical'] or 'yok'}")
-    print(f"K9 gri kuyruk: {report['K9_gray_queue_rows']} satır")
+    q = report["K9_gray_queue"]
+    print(f"K9 gri kuyruk: {q['rows']} satır (bekleyen {q['pending']}, biten {q['done']}, "
+          f"düğüm payı %{q['ratio_pct']}, tur {q['rounds']})")
+    if q.get("last_round"):
+        lr = q["last_round"]
+        print(f"   son tur    : {lr.get('candidates', 0)} aday · "
+              f"{lr.get('merged', 0)} birleşti · {lr.get('kept', 0)} ikisi de · "
+              f"{lr.get('superseded', 0)} üstlendi · {lr.get('turns', 0)} tur")
+    if "K4_K5_K6_context" in report and not report["K4_K5_K6_context"].get("error"):
+        c = report["K4_K5_K6_context"]
+        print(f"K4 bütçe    : %{c['K4_budget_pct']} · K5 damıtılmış: %{c['K5_distilled_pct']} "
+              f"· K6 wiki: %{c['K6_wiki_pct']} ({c['queries']} sorgu)")
     print(f"K10 fikstür : {report['K10_fixture_leak']['count']}")
     if "K11_gate_latency" in report:
         print(f"K11 kapı    : medyan {report['K11_gate_latency']['median_ms']} ms")

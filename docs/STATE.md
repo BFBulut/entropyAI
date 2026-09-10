@@ -564,6 +564,62 @@ Exe koşumu veritabanına yazmadı (mtime değişmedi).
   log, lint, reason}`; `lint = {total, counts, stats}` (`lint.lint_skill`).
   Gerçek koşu tavanı: `financial-auditor` 50 rapor ≈ 50 tur → QA'da
   `budget_turns` ile bölünerek koşulur.
+  **Faz 12-C'de canlı sözleşme testine bağlandı** (`tests/test_phase12_skill_synthesis.py`):
+  `WIKI.state.json` gerçekten yazılıyor/okunuyor (iki çağrı: 2 tur → 0 tur);
+  parçalı koşu ölçüldü (5 rapor, `budget_turns=2` → 2 + 2 + 1 tur,
+  `remaining` 3 → 1 → 0, aynı rapor iki kez turlanmıyor); köprüsüz çağrı 0 tur.
+- **Pano araçları sistem isteminde (Faz 12-C):**
+  `system_prompt.board_tools_section(max_chars=BUDGET_BOARD_TOOLS=600)` metni
+  **yalnızca** `agents.board_tools.entropy_tools_section()`ten alır (12-B'nin
+  sunacağı sembol). Sembol yoksa bölüm sessizce atlanır — hafıza katmanı pano
+  metninin kopyasını TUTMAZ. Bölüm 2'ye (`_tools_block`) eklenir ve
+  **yalnızca `kind="chat"` + `provider="claude"`** yolunda görünür (kart
+  kipinde ajan kendi araç metnini alır, agy kendi varsayılan istemini korur).
+- **Gri tur kasa günlüğü (Faz 12-C):** `gray_merge.run_merge_round(...,
+  vault_path=None)` aday bulunan her turu `<kasa>/Entropy/Memory/merge_log.md`
+  dosyasına **tek satır** olarak yazar (`append_vault_merge_log`,
+  `merge_log_path`, `MergeResult.vault_log`); JSONL günlüğü
+  (`gray_merge_log.jsonl`) makine tarafı olarak yerinde kalır. Aday yoksa satır
+  yazılmaz. Gerçekleştirim `_merge_round_impl`e taşındı, davranış değişmedi.
+- **Ölçüm paketi genişledi (Faz 12-C, `scripts/brain_metrics.py`):**
+  `gray_queue_report(db, nodes)` → K9 `{rows, pending, done, nodes, ratio_pct,
+  rounds, last_round}` (son turun özeti dahil);
+  `context_metrics(queries=None, skill=None, builder=None)` → K4 bütçe payı,
+  K5 damıtılmış pay, **K6 wiki payı** (`DEFAULT_CONTEXT_QUERIES` = 5 genel
+  sorgu, `K6_MIN_WIKI_PCT = 15.0`). Wiki payı = `wiki_pages` bölümünün tamamı +
+  genel beyin paketindeki `[Wiki]` bloğu. CLI: `--context [--context-skill X]`.
+  **Salt okunur:** bağlam `include_handoff=False` ile kurulur (aktarım sayfası
+  okunduğunda tüketilir; ölçüm kasayı değiştirmemeli). Model çağrısı yok.
+- **Beceri sentezi v1 (Faz 12-C, `memory/skill_synthesis.py`, SKILLFOUNDRY):**
+  Girdi: bir yetenek (playbook + wiki + raporlar) ya da tekrarlayan iş sinyali
+  (`recurring_signals(vault_path, store, min_reports=MIN_RECURRENCE=3)`).
+  Çıktı **aday**: `<kasa>/Entropy/Skills/_candidates/<ad>/{SKILL.md,
+  scripts/<ad>.py, tests/test_<ad>.py, CANDIDATE.json}`.
+  `SKILL.md` şeması yedi zorunlu bölüm (`REQUIRED_SECTIONS`): *Ne zaman
+  kullanılır, Ortam varsayımları, Girdiler, Çıktılar, Adımlar, Sonlandırma
+  ölçütü, Kaynaklar* (+ ön bilgi `name/description/version/schema_version/
+  source_skill`); kaynak (provenance) **zorunlu**.
+  `synthesize_skill(skill, name=None, send_prompt=None, vault_path=None,
+  store=None)`: `send_prompt` yoksa **kotasız iskelet** (playbook bölümlerinden,
+  `turns=0`), varsa **tek tur** zenginleştirme (`bridge_prompt` sözleşmesi;
+  ayrıştırılamayan yanıt iskeleti bozmaz, `Kaynaklar` modelden ALINMAZ).
+  Öz-doğrulama kotasız: `validate_candidate` → `checks {schema_complete,
+  has_provenance, steps_testable, no_leak, has_script, has_test}`; hepsi
+  geçerse `status=validated`, aksi hâlde `draft`. `no_leak` marka adını
+  (parçalı sabit) ve uygulama adının sızmasını arar.
+  Onay yüzeyi: `list_candidates(vault_path)` (kural onay paneliyle aynı yerde;
+  **bus sinyali yayılmaz**, arayüz listeyi okur), `promote_skill(ad)` adayı
+  `<kasa>/Skills/<ad>/` altına kopyalar (`CANDIDATE.json` kopyalanmaz,
+  `status=approved`) — **doğrulamadan geçmeyen aday `force=True` olmadan
+  yükseltilmez**; `reject_skill(ad, reason)` `status=rejected` yazar, **dosya
+  silmez**. Yükseltilen paket `skills.manager.SkillManager(root_skills_dir=
+  <kasa>/Skills)` ile keşfediliyor (test edildi).
+- **Slash komut sözleşmesi (agy 12-B bağlayacak):** `/skill synth <yetenek>`
+  → `skill_synthesis.synthesize_skill(<yetenek>, send_prompt=<köprü|None>)`
+  (köprü verilirse **tek tur**), `/skill approve <ad>` → `promote_skill`,
+  `/skill reject <ad> [gerekçe]` → `reject_skill`, `/skill candidates` →
+  `list_candidates`. Üçü de köprüyü çağırandan alır; modül kendi başına tur
+  açmaz.
 - **Genel sohbet beyin paketi (Faz 11.9):** `context_builder.BUDGET_GENERAL_BRAIN
   = 1500` (`BRAIN_IDENTITY_TOKENS=300`, `BRAIN_RULES_TOKENS=400`,
   `BRAIN_WIKI_PAGES=4`). Yalnızca `skill_name` **boşken** ödenir; içerik =
