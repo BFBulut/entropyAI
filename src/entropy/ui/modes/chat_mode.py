@@ -575,21 +575,26 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         # metin ipucuna iner, renk `tone` belirtecinden gelir.
         self.brand.set_state(state)
 
+    # Faz 13-A2 madde 4 — ÇEKİRDEK DURUMU YALNIZCA ENTROPY'NİN KENDİ TURUDUR.
+    #
+    # Üç işleyici de `brand.set_state(...)` çağırıyordu: bir ajan kartı ya da
+    # bir damıtma arka planda koşarken çekirdek "yürütülüyor" rengine geçiyor,
+    # kullanıcı Entropy'nin kendisinin düşündüğünü sanıyordu. Arka plan işinin
+    # durumu ajan rozetlerinde ve gezinme noktasında yaşar; çekirdek yalnızca
+    # `bus.core_state_changed`'i (yani köprünün kendi turunu) yansıtır.
+    # Bilgi kaybolmuyor: her üçü de rozet ipucunda duruyor.
     @Slot(str, str)
     def _on_task_triggered(self, task_id: str, task_name: str):
-        self.brand.set_state("executing")
         self.state_badge.setToolTip(f"Arka plan görevi çalışıyor: {task_name} ({task_id})")
 
     @Slot(str, bool)
     def _on_task_completed(self, task_id: str, success: bool):
-        self.brand.set_state("idle" if success else "error")
         self.state_badge.setToolTip(
             "Entropy AI çekirdek durumu" if success else "Arka plan görevi hata verdi"
         )
 
     @Slot(str, int, int)
     def _on_distill_progress(self, skill_name: str, done: int, total: int):
-        self.brand.set_state("executing")
         self.state_badge.setToolTip(f"'{skill_name}' için yordam damıtma sürüyor: {done}/{total} rapor")
 
     # ------------------------------------------------ görev & yetenek paneli

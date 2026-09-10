@@ -15,6 +15,7 @@ from typing import Callable, List, Dict, Optional, Tuple
 from PySide6.QtCore import QObject, Signal
 
 from entropy.core.event_bus import bus
+from entropy.platform.proc import popen_kwargs
 import sys as _sys
 import entropy.core.config  # noqa: F401  (alt modulun yuklenmesi icin)
 # entropy.core paketi 'config' adini config NESNESINE baglar; sohbet
@@ -581,8 +582,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
-                timeout=10
+                **popen_kwargs(creationflags=creationflags, timeout=10),
             )
             if res.returncode == 0:
                 models = []
@@ -638,8 +638,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
-                timeout=15,
+                **popen_kwargs(creationflags=creationflags, timeout=15),
             )
         except Exception as e:
             return {"provider": "agy", "logged_in": False, "error": str(e)}
@@ -1414,8 +1413,10 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     bufsize=1,
                     encoding="utf-8",
                     errors="replace",
-                    creationflags=creationflags,
-                    cwd=str(project_dir) if project_dir.exists() else None
+                    **popen_kwargs(
+                        creationflags=creationflags,
+                        cwd=str(project_dir) if project_dir.exists() else None,
+                    ),
                 )
                 stdin_writer = self._feed_stdin(proc, stdin_payload, keep_open=interactive)
                 with self._lock:
@@ -1724,7 +1725,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     if proc and proc.poll() is None:
                         pid = proc.pid
                         if sys.platform == "win32" or os.name == "nt":
-                            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, **popen_kwargs(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
                         else:
                             proc.terminate()
                         proc.wait(timeout=2.0)
@@ -2110,8 +2111,10 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=creationflags,
-                cwd=str(project_dir) if project_dir.exists() else None
+                **popen_kwargs(
+                    creationflags=creationflags,
+                    cwd=str(project_dir) if project_dir.exists() else None,
+                ),
             )
             stdin_writer = self._feed_stdin(self._current_process, stdin_payload)
 
@@ -2521,7 +2524,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
         try:
             pid = proc.pid
             if sys.platform == "win32":
-                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, **popen_kwargs(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             else:
                 proc.terminate()
             try:
@@ -2541,7 +2544,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
             try:
                 pid = proc.pid
                 if sys.platform == "win32" or os.name == "nt":
-                    subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, **popen_kwargs(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
                 else:
                     proc.terminate()
                 try:
@@ -2571,7 +2574,9 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 # uygulama kapandıktan sonra da CPU/port tutmaya devam ederler.
                 subprocess.run(
                     f"taskkill /F /T /PID {pid}",
-                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    shell=True,
+                    **popen_kwargs(stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL),
                 )
             else:
                 proc.terminate()

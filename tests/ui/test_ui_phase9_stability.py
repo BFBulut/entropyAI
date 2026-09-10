@@ -386,7 +386,16 @@ def test_provider_badge_width_budget(qapp):
         badge.set_status("claude", {"logged_in": True, "plan": "max"})
         badge.adjustSize()
         assert MAX_BADGE_WIDTH * 2 + 6 <= 160
-        assert badge.sizeHint().width() <= 160
+        # Faz 13-A2 madde 5: üretimde üst çubukta AYNI ANDA TEK sağlayıcı
+        # rozeti görünür (`set_primary`, D12-06); ikincisi ipucundadır. Bütçe
+        # bu yüzden tek rozete uygulanır. 76 px'lik SABİT tavan kaldırıldı:
+        # "Claude ✓ max" kırpılıp "Claude ✓ ma…" görünüyordu.
+        badge.set_primary("claude")
+        badge.adjustSize()
+        assert badge.sizeHint().width() <= 160, "tek rozet bütçesi aşıldı"
+        label = badge.labels["claude"]
+        needed = label.fontMetrics().horizontalAdvance("Claude ✓ max")
+        assert label.maximumWidth() >= needed, "rozet metni kırpılıyor"
     finally:
         badge.close()
         badge.deleteLater()

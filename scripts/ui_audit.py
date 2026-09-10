@@ -124,6 +124,8 @@ FINAL_GATES_12D2: Dict[str, int] = {
     "header_leaf_widgets": 6,             # beyan değil canlı yaprak sayımı
     "embedded_h_overflow": 0,             # 1366 ve 460'ta yatay kaydırma yok
     "button_contrast": 0,                 # Faz 13: metin >= 4,5:1, ikon >= 3:1
+    "orphan_reparents": 0,                # Faz 13-A2: setParent(None) = hayalet pencere
+    "unnamed_icon_buttons": 0,            # metni de adı da olmayan düğme (WCAG 4.1.2)
 }
 
 #: Faz 13 kapı seti (araştırma notu §1.7). Dördü de **canlı** ölçülür.
@@ -165,9 +167,45 @@ def empty_interactive_widgets(root) -> List[str]:
             continue
         if btn.text().strip():
             continue
-        if not btn.icon().isNull():
+        # Faz 13-A2 madde 2: `icon().isNull()` YETMEZ. QtAwesome bilinmeyen bir
+        # ad için de, ikon hiç atanmadığında da bu denetimden geçebilen bir
+        # nesne bırakabiliyor; kullanıcı ekranda BOŞ KARE görüyordu. Kapı artık
+        # ikonun gerçekten **çizilebilir** olduğunu ölçer.
+        if is_icon_drawable(btn.icon()):
             continue
-        if btn.accessibleName().strip():
+        # Erişilebilir ad WCAG 4.1.2'yi karşılar ama GÖRSEL boşluğu kapatmaz;
+        # yine de ihlal sayılır (ui-design §0.10: metin yoksa ikon zorunlu).
+        offenders.append(btn.objectName() or btn.accessibleName() or type(btn).__name__)
+    return offenders
+
+
+def is_icon_drawable(ico) -> bool:
+    """İkon ekranda GERÇEKTEN piksel üretiyor mu (boş `QIcon` nesnesi değil)?
+
+    Üç kademe: nesne var mı · `isNull()` · 16 px pixmap boş mu. Üçüncüsü
+    QtAwesome'ın ad bulunamadığında döndürdüğü boş ikonu da yakalar.
+    """
+    if ico is None:
+        return False
+    try:
+        if ico.isNull():
+            return False
+        if not ico.availableSizes() and ico.pixmap(16, 16).isNull():
+            return False
+        return not ico.pixmap(16, 16).isNull()
+    except (AttributeError, RuntimeError):
+        return False
+
+
+def unnamed_icon_buttons(root) -> List[str]:
+    """Metni de erişilebilir adı da olmayan düğmeler (ekran okuyucu boşluğu)."""
+    from PySide6.QtWidgets import QAbstractButton
+
+    offenders: List[str] = []
+    for btn in root.findChildren(QAbstractButton):
+        if not btn.isVisible() or btn.visibleRegion().isEmpty():
+            continue
+        if btn.text().strip() or btn.accessibleName().strip():
             continue
         offenders.append(btn.objectName() or type(btn).__name__)
     return offenders
@@ -335,10 +373,16 @@ def static_metrics(paths: List[str]) -> Dict[str, Any]:
     arrow_glyphs = 0
     midpoint_separators = 0
     pure_spectrum: set[str] = set()
+    orphan_reparents: List[str] = []
 
     for f in _iter_files(paths):
         rel = _rel(f)
         text = f.read_text(encoding="utf-8", errors="ignore")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            # `lifecycle.py` bu desenin PANZEHİRİ; belge dizesinde adı geçer.
+            if ".setParent(None)" in code and not rel.endswith("widgets/lifecycle.py"):
+                orphan_reparents.append(f"{rel}:{lineno}")
         # Yasaklı desenler yalnızca **kullanıcıya görünen** metinde sayılır:
         # yorum satırları ve belge dizeleri (`#`, `"""`) sayıma girmez, aksi
         # hâlde ölçüm kendi açıklamamızı cezalandırırdı.
@@ -415,6 +459,13 @@ def static_metrics(paths: List[str]) -> Dict[str, Any]:
         "embedded_hex": sorted(set(embedded_hex)),
         "arrow_glyphs": arrow_glyphs,
         "midpoint_separators": midpoint_separators,
+        # Faz 13-A2 madde 7 kapısı: `setParent(None)` bir widget'ı ÜST DÜZEY
+        # PENCEREYE çevirir (Qt sözleşmesi). Silinmeden önceki o kısa aralıkta
+        # Windows masaüstünde boş bir kare olarak parlar; kullanıcı bir görev
+        # koşarken ~20 tanesini gördü. Yerine `widgets.lifecycle.discard_widget`
+        # kullanılır. Kapı: kaynak ağacında 0.
+        "orphan_reparents": len(orphan_reparents),
+        "orphan_reparent_sites": orphan_reparents,
         "pure_spectrum_colors": sorted(pure_spectrum),
     }
 
@@ -547,6 +598,51 @@ def _phase13_live_metrics(app) -> Dict[str, Any]:
         )
         # Tıklama yolunda diske yazım olmamalı (A3).
         out["click_wrote_state_file"] = (tmp / "report_inbox.json").exists()
+
+        # --- Faz 13-A2 madde 1: Yetenekler "Etkin" kutusu da G13-3'e girer ---
+        # Kullanıcı gerçek ekranda burada DONMA yaşadı (Windows "yanıt
+        # vermiyor"). Ölçüm 26 yetenekle yapılır ve `click_latency_ms` bu
+        # ekranı da kapsar: kapı iki ölçümün EN BÜYÜĞÜNÜ alır.
+        try:
+            from entropy.skills.manager import SkillManager, SkillDefinition
+            from entropy.ui.widgets.skills_widget import SkillsWidget
+
+            skills_root = tmp / "skills"
+            for i in range(26):
+                folder = skills_root / f"sentetik-yetenek-{i:02d}"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "SKILL.md").write_text(
+                    f"---\nname: sentetik-yetenek-{i:02d}\n"
+                    f"description: Sentetik olcum yetenegi {i}\n---\n\nGovde.\n",
+                    encoding="utf-8",
+                )
+            manager = SkillManager()
+            manager._isolated_root = skills_root
+            manager.root_skills_dir = skills_root
+            manager.project_skills_dir = None
+            manager.global_skills_dir = skills_root
+            manager.state_file = tmp / "skills_state.json"
+            panel = SkillsWidget(skill_manager=manager)
+            panel.resize(900, 700)
+            panel.show()
+            app.processEvents()
+            names = [s.name for s in (panel._skills_cache or [])]
+            out["skill_toggle_rows"] = len(names)
+            if names:
+                target = names[0]
+                out["skill_toggle_ms"] = measure_click_latency_ms(
+                    lambda: panel._on_toggle(target, True)
+                )
+            else:
+                out["skill_toggle_ms"] = 0
+            out["skill_rebuild_ms"] = int(panel.last_rebuild_ms)
+            out["click_latency_ms"] = max(
+                int(out.get("click_latency_ms") or 0), int(out["skill_toggle_ms"])
+            )
+            panel.close()
+            panel.deleteLater()
+        except Exception as exc:  # pragma: no cover - ölçüm kolu
+            out["skill_toggle_error"] = f"{type(exc).__name__}: {exc}"
 
         from entropy.ui.widgets.reports_viewer import ReportsViewerWidget
 
@@ -688,11 +784,45 @@ def live_metrics() -> Dict[str, Any]:
         out["min_button_height"] = min(heights) if heights else 0
         out["buttons_measured"] = len(heights)
 
-        # --- Faz 13 kapıları (G13-1 … G13-4) -------------------------------
-        empty = empty_interactive_widgets(win)
+        # --- Faz 13-A2: BÜTÜN gezinme ekranları taranır --------------------
+        #
+        # 13-A'da kapı yalnızca AÇILIŞTAKİ ekranı ölçüyordu; kullanıcının boş
+        # kare gördüğü düğmeler (Yetenekler satırları, Ajanlar kart eylemleri)
+        # başka sekmelerdeydi ve kapıdan hiç geçmiyorlardı. Artık her sekmeye
+        # tek tek geçilir ve ihlaller birleştirilir.
+        empty: List[str] = []
+        unnamed: List[str] = []
+        ghost: List[str] = []
+        screens: List[str] = []
+        nav = getattr(win, "left_tabs", None)
+        pages = range(nav.count()) if nav is not None else range(0)
+        for index in pages:
+            try:
+                nav.setCurrentIndex(index)
+                app.processEvents()
+            except Exception:
+                continue
+            label = nav.tabText(index) or f"#{index}"
+            screens.append(label)
+            for name in empty_interactive_widgets(win):
+                empty.append(f"{label}/{name}")
+            for name in unnamed_icon_buttons(win):
+                unnamed.append(f"{label}/{name}")
+            for name in ghost_button_contrast_failures(win):
+                ghost.append(f"{label}/{name}")
+        if nav is not None and nav.count():
+            nav.setCurrentIndex(0)
+            app.processEvents()
+        # Açılış ekranı (gezinme dışı üst çubuk/bindirmeler) da eklenir.
+        for name in empty_interactive_widgets(win):
+            if f"başlangıç/{name}" not in empty:
+                empty.append(f"başlangıç/{name}")
+        out["screens_swept"] = screens
+        out["screens_swept_count"] = len(screens)
         out["empty_interactive_count"] = len(empty)
         out["empty_interactive_names"] = empty
-        ghost = ghost_button_contrast_failures(win)
+        out["unnamed_icon_buttons"] = len(unnamed)
+        out["unnamed_icon_button_names"] = unnamed
         out["ghost_button_contrast"] = len(ghost)
         out["ghost_button_contrast_failures"] = ghost
         out.update(_phase13_live_metrics(app))
@@ -806,6 +936,9 @@ def main(argv: List[str] | None = None) -> int:
             "interactive_count_zen_1366", "header_leaf_widgets",
             "embedded_h_overflow_count", "button_contrast", "min_button_height",
             "empty_interactive_count", "ghost_button_contrast",
+            # Faz 13-A2 sayaçları: hesaplanıyordu ama BASILMIYORDU, yani
+            # kapı yeşilken bile kanıt raporuna geçmiyorlardı.
+            "orphan_reparents", "unnamed_icon_buttons", "screens_swept_count",
             "click_latency_ms", "click_latency_cards",
             "min_width_declaration_failures", "reader_min_width",
             "board_view_mode_1366",

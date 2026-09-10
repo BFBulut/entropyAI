@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from entropy.platform.proc import popen_kwargs
+
 SCHEMA_VERSION = 1
 
 # Bu oranı aşan kötüleşme raporda işaretlenir.
@@ -77,13 +79,15 @@ def git_sha(cwd: Optional[Path] = None) -> Dict[str, Any]:
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(cwd), capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True,
+            **popen_kwargs(cwd=str(cwd), timeout=20),
         )
         if sha.returncode == 0:
             info["sha"] = sha.stdout.strip()
         st = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True,
+            **popen_kwargs(cwd=str(cwd), timeout=30),
         )
         if st.returncode == 0:
             info["dirty"] = bool(st.stdout.strip())

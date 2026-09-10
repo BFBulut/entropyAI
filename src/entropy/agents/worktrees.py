@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from entropy.core import paths as _paths
+from entropy.platform.proc import popen_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +110,7 @@ def _git(cwd: Path | str, *args: str, timeout: int = 120) -> subprocess.Complete
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+            **popen_kwargs(timeout=timeout),
         )
     except subprocess.TimeoutExpired as exc:
         raise WorktreeError(f"git komutu zaman aşımına uğradı: {' '.join(args)}") from exc
@@ -180,8 +180,8 @@ def _longpaths_enabled() -> bool:
     try:
         proc = subprocess.run(
             ["git", "config", "--get", "core.longpaths"],
-            capture_output=True, text=True, timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            capture_output=True, text=True,
+            **popen_kwargs(timeout=15),
         )
     except Exception:
         return False

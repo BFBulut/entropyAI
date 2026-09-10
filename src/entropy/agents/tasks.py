@@ -236,6 +236,12 @@ class TaskCard:
     # etmez, ajan çalışmaya devam eder; ama panoda "burada bir soru asılı"
     # görünmeli. `notes` bunu taşıyamazdı (serbest metin, aranamaz).
     review: str = ""
+    # Faz 13-A2. `brain_only`: kullanıcının AÇIK tercihi — "bu kartı canlı
+    # koşturma, beyinde yanıt varsa oradan kapat". Otomatik kısa devre
+    # varsayılan kapalı olduğu için (`config.brain_shortcut_enabled`) kısa
+    # devrenin tek meşru kapısı budur; `amplification.brain_only_requested`
+    # önce bu alana, sonra metindeki `--brain-only` işaretine bakar.
+    brain_only: bool = False
 
     def to_frontmatter(self) -> Dict[str, object]:
         return {
@@ -272,11 +278,21 @@ class TaskCard:
             "event_seq": int(self.event_seq or 0),
             "kind": self.kind,
             "review": self.review,
+            "brain_only": bool(self.brain_only),
             # Kanıt ön bilgide tek satıra sıkıştırılır: YAML çok satırlı değer
             # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
             # sonucu ikiye bölerdi.
             "proof": " ".join((self.proof or "").split())[:400],
         }
+
+
+def _as_bool(value: object) -> bool:
+    """YAML ön bilgisinden gelen bayrağı okur ("true"/"1"/"evet" de kabul)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("true", "1", "yes", "evet", "on")
 
 
 def _now() -> str:
@@ -764,6 +780,7 @@ class TaskBoard:
             event_seq=event_seq,
             kind=str(front.get("kind") or "").strip().lower(),
             review=str(front.get("review") or ""),
+            brain_only=_as_bool(front.get("brain_only")),
         )
 
     # -- yazma ---------------------------------------------------------
@@ -827,9 +844,37 @@ class TaskBoard:
             payload["event_seq"] = int(written.get("seq") or 0)
         new_card = _board_fsm.transition(card, event, payload)
         new_card = self._write(new_card)
+        self._sync_agent_live_state(new_card, row.target)
         self._announce_state(new_card, event, row.target)
         self.rewrite_taskboard()
         return new_card
+
+    def _sync_agent_live_state(self, card: TaskCard, target: str) -> None:
+        """
+        Kartın durumunu ajanın CANLI DURUM dosyasına yansıtır (Faz 13-A2).
+
+        Neden `apply_event` içinde: koşuya giriş/çıkışın tek boğazı burası.
+        `run()` içine yazsaydık iptal, kilit düşmesi ve uzlaştırma yollarında
+        rozet "koşuyor" takılı kalırdı — kullanıcının gördüğü hata da buydu.
+
+        Ofis kartları HARİÇ: Desk'in ajanları kendi kökünde yaşar, Entropy'nin
+        pano dizinine yazmaları ayrı kök kuralını çiğnerdi.
+        """
+        agent = str(getattr(card, "agent", "") or "").strip()
+        if not agent or str(getattr(card, "office", "") or "").strip():
+            return
+        try:
+            from entropy.core.identity import agent_session_store
+
+            store = agent_session_store(self.vault_path)
+            if target in ("taken", "running"):
+                store.mark_running(agent, card_id=card.id, card_title=card.title,
+                                   provider=str(getattr(card, "provider", "") or ""))
+            else:
+                store.mark_idle(agent)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Ajan canlı durumu güncellenemedi: %s", agent, exc_info=True)
 
     def reset_card(self, card_id: str, reason: str = "",
                    actor: str = "system") -> Optional[TaskCard]:
@@ -844,6 +889,7 @@ class TaskBoard:
                            attempt_id=int(card.attempt or 0) + 1,
                            idempotency_key=f"{card.id}-reset-{_now()}")
         new_card = self._write(new_card)
+        self._sync_agent_live_state(new_card, new_card.status)
         self._announce_state(new_card, "task.reset", new_card.status)
         self.rewrite_taskboard()
         return new_card
@@ -934,13 +980,20 @@ class TaskBoard:
             ", ".join(f"{d['id']}({d['card']}≠{d['projection']})" for d in drift[:5]),
         )
         try:
+            # Korelasyon KENDİNE ait (Faz 13-A2): `correlation_id` boş
+            # bırakılınca `append` onu `task_id`den türetiyordu, yani ayrışma
+            # gözlemi ilk ayrışan kartın koşu zincirine ekleniyor ve o kartın
+            # olay akışını okuyan herkes gözlemi o koşunun parçası sanıyordu.
+            # Ayrışma N kartın ORTAK gözlemidir; zinciri projeksiyon karmasıdır.
+            phash = str(view.get("projection_hash") or "")
             self.events.append(
                 task_id=drift[0]["id"],
                 actor="system",
                 action="board.drift",
+                correlation_id=f"drift:{phash[:16]}" if phash else "drift",
                 payload={"count": len(drift), "cards": drift[:20],
-                         "projection_hash": str(view.get("projection_hash") or "")},
-                idempotency_key=f"drift:{view.get('projection_hash') or ''}",
+                         "projection_hash": phash},
+                idempotency_key=f"drift:{phash}",
             )
         except Exception:
             logging.getLogger(__name__).debug("Ayrışma olayı yazılamadı", exc_info=True)
@@ -1581,7 +1634,7 @@ class TaskBoard:
             from entropy.agents import amplification
 
             return amplification.brain_lookup(
-                f"{card.title or ''}\n{card.goal or ''}".strip()
+                f"{card.title or ''}\n{card.goal or ''}".strip(), card=card
             )
         except Exception:
             logging.getLogger(__name__).debug("Beyne sorulamadı", exc_info=True)

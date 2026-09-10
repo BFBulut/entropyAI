@@ -6,7 +6,7 @@ description: >-
   mevcut bir ekranı sadeleştirirken veya "arayüz modern görünmüyor" türü bir istek
   geldiğinde kullanılır.
 tags: ui, design, pyside6, accessibility, tokens
-version: 1.2.0
+version: 1.3.0
 ---
 
 # ui-design — Entropy arayüz tasarımı
@@ -48,6 +48,17 @@ Belirteçler: `src/entropy/ui/design/tokens.py` · QSS: `design/qss.py` · ikon:
    geçerlidir: `setMinimumWidth` beyanı `minimumSizeHint()` hesabından küçükse
    beyan **yalandır** (Faz 13'te Görevler panosu 220 px beyan edip 1.356 px
    istiyordu).
+
+12. **İkon nesnesi ≠ çizilen ikon.** `setIcon()` çağrılmış olması yetmez;
+   `icon().pixmap(16,16).isNull()` **False** olmalıdır. QtAwesome bilinmeyen
+   bir ada boş `QIcon` döndürür ve düğme ekranda boş kare olur. Metni olmayan
+   her düğmede hem çizilebilir ikon hem `accessibleName` bulunur.
+13. **`setParent(None)` yasak.** Widget'ı üst düzey pencereye çevirir; silinene
+   kadar masaüstünde parlar. Yerine `ui/widgets/lifecycle.discard_widget()`.
+14. **Tıklama ağır iş tetiklemez.** Bir denetim (kutu, anahtar, düğme) yalnızca
+   durumu yazar ve kendi satırını günceller. Katalog/kasa taraması gibi ağır iş
+   ≥ 300 ms birleştirilerek ertelenir ya da işçi iş parçacığına gider.
+   Bir sinyalin kendi yazdığımız değişiklikten geri tepmesi bastırılır.
 
 ## 1. Süreç (her arayüz işi bu sırayla)
 
@@ -154,11 +165,23 @@ dördü de **canlı** offscreen Qt kolunda ölçülür, `--live` ya da `--final`
 | **G13-3** tıklama gecikmesi | `click_latency_ms` | ≤ 50 (uyarı 100) | Rapor Merkezi, **sessiz bölüm AÇIK**, ≥ 150 sentetik küme; `QElapsedTimer` ile "okundu" tıklaması (RAIL) | **6 ms / 180 kart** |
 | **G13-4** okuyucu asgarisi + beyan doğruluğu | `reader_min_width` ≥ 560 · `min_width_declaration_failures` | 560 · 0 | okuma kipinde gövde genişliği; panel beyanı ≥ `minimumSizeHint().width()` | **875 px · 0** |
 
-Kapıların **gerçekten ölçtüğü** `tests/ui/test_phase13_ux.py` içinde kanıtlanır:
+Faz 13-A2'de **sertleşen ve eklenen** kapılar (kullanıcı gerçek ekranda
+v0.10.1'de yedi kusur bildirdi; üçü 13-A kapılarından geçmişti):
+
+| Kapı | Alan | Eşik | Ne değişti | Ölçüm (2026-09-10) |
+|---|---|---:|---|---:|
+| **G13-1** (sert) | `empty_interactive_count` | 0 | `icon().isNull()` YETMEZ: ikon `pixmap(16)` ile **gerçekten çizilebilir** olmalı; `accessibleName` artık kapıyı susturmaz (boş kare görsel bir kusurdur). Tarama **bütün gezinme ekranlarını** dolaşır (7/7), yalnızca açılış ekranını değil | **0** (önce 8) |
+| **G13-1b** ekran okuyucu | `unnamed_icon_buttons` | 0 | metni de erişilebilir adı da olmayan düğme (WCAG 4.1.2) — ayrı sayaç | **0** |
+| **G13-3** (genişledi) | `click_latency_ms` | ≤ 50 | Rapor Merkezi'ne ek olarak **Yetenekler "Etkin" kutusu** (26 yetenek) de ölçülür; kapı ikisinin en büyüğünü alır | **6 ms** (toggle önce **152 ms**, panel içi 1.961 ms) |
+| **G13-5** hayalet pencere | `orphan_reparents` | 0 | kaynak ağacında `setParent(None)` sayısı; desen widget'ı üst düzey pencereye çevirir | **0** (önce 12) |
+
+Kapıların **gerçekten ölçtüğü** `tests/ui/test_phase13_ux.py` ve
+`tests/ui/test_phase13a2_ux.py` içinde kanıtlanır:
 bilerek adsız bırakılmış bir düğme G13-1'i, 200 ms uyuyan bir işleyici G13-3'ü,
 yalan beyanlı bir panel G13-4'ü kırmızıya çevirir.
 
-Bilgi (kapı değil): `midpoint_separators` (bugün 74), `emoji_raw`,
+Bilgi (kapı değil): `screens_swept` (7), `skill_toggle_ms`, `skill_rebuild_ms`,
+`midpoint_separators` (bugün 77), `emoji_raw`,
 `splitters_total`, `click_latency_cards`, `board_view_mode_1366`.
 
 ## 7. Gerçek ekran kontrol listesi (offscreen'in kapatamadığı boşluk)

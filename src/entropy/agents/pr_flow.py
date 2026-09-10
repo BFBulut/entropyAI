@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from entropy.agents import worktrees as _wt
+from entropy.platform.proc import popen_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,11 @@ def _run(args: List[str], cwd: Optional[Path | str] = None,
          timeout: int = 180) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
-        cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        **popen_kwargs(cwd=str(cwd) if cwd else None, timeout=timeout),
     )
 
 

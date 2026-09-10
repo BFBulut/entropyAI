@@ -211,8 +211,8 @@ _ENTROPY_TOOL_TEXT = """[PANO board_create]
 [/PANO]
   Bir işi devretmeye karar verdiğinde kart doğurur. Kartı SEN koşturmazsın:
   pano sıradaki turda ajanı uyandırır.
-  `kind` ZORUNLU: `research` kartı hafızada yanıt varsa CLI'ya HİÇ gitmez;
-  `write`/`code`/`ops` her zaman koşar. Yazmazsan başlıktan sezilir."""
+  `kind` ZORUNLU; yazmazsan başlıktan sezilir. Her kart CANLI koşar:
+  `research` kartı da ajana gider, hafıza yalnızca `[BEYİN]` bağlamıdır."""
 
 
 def tools_section(for_entropy: bool = False) -> str:

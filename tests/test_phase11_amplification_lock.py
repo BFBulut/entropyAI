@@ -121,7 +121,7 @@ def test_card_answered_from_brain_never_calls_the_cli(vault, monkeypatch):
 
     builder = FakeBuilder(FakeCtx(0.91))
     monkeypatch.setattr(amplification, "brain_lookup",
-                        lambda q, builder=builder: amplification.BrainAnswer(
+                        lambda q, builder=builder, card=None: amplification.BrainAnswer(
                             has_answer=True, confidence=0.91, text="Beyindeki yanıt."))
 
     calls = []

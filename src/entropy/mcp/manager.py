@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from entropy.platform.proc import popen_kwargs
+
 # --- agy'nin MCP yapılandırması ---------------------------------------------
 #
 # Yerel kurulumdan ve agy.EXE içindeki belge/sürüm-notu dizgelerinden doğrulandı:
@@ -305,8 +307,8 @@ class MCPManager:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    creationflags=self._get_creationflags(),
-                    timeout=10
+                    **popen_kwargs(creationflags=self._get_creationflags(),
+                                   timeout=10),
                 )
                 if res.returncode == 0:
                     lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]

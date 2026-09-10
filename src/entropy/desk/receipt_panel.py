@@ -26,6 +26,7 @@ from entropy.desk.receipt import (
 )
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import spec_field
+from entropy.ui.widgets.lifecycle import discard_widget
 
 # Açılışta açık gelen bölümler: kullanıcı önce "ne yapıldı / kanıt ne" diye
 # bakıyor; Plan ve Yorumlar katlı başlar.
@@ -173,8 +174,7 @@ class ReceiptPanel(QFrame):
     def _clear(self) -> None:
         for widget in self._sections_widgets:
             self.container_layout.removeWidget(widget)
-            widget.setParent(None)
-            widget.deleteLater()
+            discard_widget(widget)
         self._sections_widgets = []
 
     def _rebuild(self, title: str = "") -> None:

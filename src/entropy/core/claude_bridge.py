@@ -40,6 +40,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+from entropy.platform.proc import popen_kwargs
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject
@@ -508,9 +510,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=self._creationflags(),
-                env=self.process_env(),
-                timeout=20,
+                **popen_kwargs(creationflags=self._creationflags(),
+                               env=self.process_env(), timeout=20),
             )
         except Exception as e:
             return {"provider": "claude", "logged_in": False, "error": str(e)}
@@ -1792,9 +1793,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=self._creationflags(),
-                env=self.process_env(),
-                cwd=self.run_cwd(project_dir),
+                **popen_kwargs(creationflags=self._creationflags(),
+                               env=self.process_env(),
+                               cwd=self.run_cwd(project_dir)),
             )
             writer = self._feed_stdin(proc, stdin_payload)
             with self._lock:
@@ -2417,9 +2418,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     bufsize=1,
                     encoding="utf-8",
                     errors="replace",
-                    creationflags=self._creationflags(),
-                    env=self.process_env(),
-                    cwd=self.run_cwd(project_dir),
+                    **popen_kwargs(creationflags=self._creationflags(),
+                                   env=self.process_env(),
+                                   cwd=self.run_cwd(project_dir)),
                 )
                 writer = self._feed_stdin(proc, stdin_payload, keep_open=interactive)
                 with self._lock:
@@ -2575,8 +2576,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 subprocess.run(
                     f"taskkill /F /T /PID {proc.pid}",
                     shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    **popen_kwargs(stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL),
                 )
             else:
                 proc.terminate()

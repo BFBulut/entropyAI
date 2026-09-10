@@ -76,6 +76,22 @@ def status_mark(status: Optional[Dict[str, Any]]) -> str:
 #: Rozet basina hedef azami genislik (px). Iki rozet + bosluk <= 160 px.
 MAX_BADGE_WIDTH = 76
 
+#: Zengin metin etiketindeki çerçeve + dolgunun yatay maliyeti
+#: (`padding:2px 8px` + 1 px kenarlık, iki yan) — asgari genişlik hesabı için.
+BADGE_CHROME_PX = 2 * (8 + 1) + 2
+
+
+def badge_width_for(widget, text: str) -> int:
+    """Rozetin metnini KIRPMADAN gösterebileceği genişlik (px).
+
+    Faz 13-A2 madde 5'in kök nedeni: rozet `setMaximumWidth(76)` ile sabit
+    tavana vuruyordu ve "Claude ✓ max" yazısı üst çubukta "Claude ✓ ma…"
+    diye kırpılıyordu. Genişlik artık **yazı tipi ölçüsünden** gelir; 76 px
+    yalnızca bir TABAN, tavan değil.
+    """
+    metrics = widget.fontMetrics()
+    return int(metrics.horizontalAdvance(text)) + BADGE_CHROME_PX
+
 #: Kisa plan etiketinde gosterilecek azami karakter.
 PLAN_CHARS = 5
 
@@ -168,7 +184,11 @@ class ProviderStatusBadge(QFrame):
             # kirmizi kare" ikincil adayi); metin yoksa etiket gizlenir.
             hidden_by_primary = bool(self.primary) and provider != self.primary
             widget.setVisible(bool(text.strip()) and not hidden_by_primary)
-            widget.setMaximumWidth(MAX_BADGE_WIDTH)
+            # Metin kırpılmasın: asgari genişlik yazı tipinden hesaplanır,
+            # tavan da en az o kadar olur (76 px yalnızca taban).
+            needed = badge_width_for(widget, text)
+            widget.setMinimumWidth(needed)
+            widget.setMaximumWidth(max(MAX_BADGE_WIDTH, needed))
             widget.setText(
                 f"<span style='color:{color}; border:1px solid {color};"
                 f" border-radius:8px; padding:2px 8px; font-size:{LABEL_PX}px;"

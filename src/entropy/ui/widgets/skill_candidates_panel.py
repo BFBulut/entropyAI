@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from entropy.core.event_bus import bus
 from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
+from entropy.ui.widgets.lifecycle import discard_widget
 
 __all__ = ["SkillCandidatesPanel", "skill_synthesis_api", "candidate_field"]
 
@@ -114,8 +115,7 @@ class SkillCandidatesPanel(QFrame):
             item = self.body_layout.takeAt(0)
             widget = item.widget() if item else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
 
         items = self.candidates()
         self.title_label.setText(

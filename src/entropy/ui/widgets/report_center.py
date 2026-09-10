@@ -57,6 +57,7 @@ from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design import TOKENS as _TOKENS, icon as design_icon
 from entropy.ui.design.embedded import live_palette as _live_palette
+from entropy.ui.widgets.lifecycle import discard_widget
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
@@ -1425,8 +1426,7 @@ class ReportCenterWidget(QFrame):
                 item = self.cards_layout.takeAt(0)
                 widget = item.widget() if item else None
                 if widget is not None:
-                    widget.setParent(None)
-                    widget.deleteLater()
+                    discard_widget(widget)
             self.card_widgets = []
             for card in visible:
                 widget = DigestCardWidget(card, self)

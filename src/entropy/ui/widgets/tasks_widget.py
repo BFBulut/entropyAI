@@ -20,7 +20,9 @@ from entropy.memory.supabase.cognitive_memory import CognitiveMemorySystem
 from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
-from entropy.ui.design import TOKENS, icon as design_icon
+from entropy.ui.design import (
+    TOKENS, icon as design_icon, section_expanded, set_section_expanded,
+)
 from entropy.ui.design.embedded import live_palette as _live_palette
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
@@ -51,9 +53,22 @@ class TasksWidget(QFrame):
 
         # Header
         header = QHBoxLayout()
-        title_label = QLabel("Arka plan görevleri")
-        title_label.setProperty("role", "heading")
-        header.addWidget(title_label)
+        # Faz 13-A2 madde 6: Görevler ekranı üç bölümü birden açıyor ve
+        # kalabalık görünüyordu. "Arka plan görevleri" artık KATLANABİLİR ve
+        # varsayılan olarak KAPALI açılır; pano tek ekranın hâkimi olur.
+        # Bölüm başlığının kendisi düğmedir (hedef ≥ 24 px, ad okunur).
+        self.collapse_btn = QPushButton("Arka plan görevleri")
+        self.collapse_btn.setObjectName("tasksSectionToggle")
+        self.collapse_btn.setAccessibleName("Arka plan görevleri bölümünü aç/kapat")
+        self.collapse_btn.setProperty("variant", "ghost")
+        self.collapse_btn.setCheckable(True)
+        self.collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.collapse_btn.toggled.connect(self.set_expanded)
+        header.addWidget(self.collapse_btn)
+        self.count_label = QLabel("")
+        self.count_label.setObjectName("tasksSectionCount")
+        self.count_label.setProperty("role", "badge")
+        header.addWidget(self.count_label)
         header.addStretch()
 
         # Faz 13: birincil eylem ikonlu ve belirgin (kullanıcı: "düğmeler görünmüyor").
@@ -83,12 +98,37 @@ class TasksWidget(QFrame):
         # Task list
         self.list_widget = QListWidget()
         self.layout.addWidget(self.list_widget)
+        #: Katlandığında gizlenen öğeler (başlık satırı hep görünür kalır).
+        self._collapsible = [
+            self.list_widget, add_btn, self.clear_ledger_btn, refresh_btn,
+        ]
 
         # Connect signals
         bus.task_triggered.connect(self._on_task_triggered)
         bus.task_completed.connect(self._on_task_completed)
 
         self.refresh_tasks()
+        self.collapse_btn.setChecked(section_expanded("tasks.background", default=False))
+        self.set_expanded(self.collapse_btn.isChecked())
+
+    @Slot(bool)
+    def set_expanded(self, expanded: bool) -> None:
+        """Bölümü açar/kapatır; seçim `QSettings`'e yazılır (ui-design §0.9)."""
+        expanded = bool(expanded)
+        for widget in getattr(self, "_collapsible", ()):
+            widget.setVisible(expanded)
+        self.collapse_btn.setChecked(expanded)
+        self.collapse_btn.setToolTip(
+            "Bölümü kapat" if expanded
+            else "Bölümü aç: zamanlanmış arka plan görevlerinin listesi"
+        )
+        # Katlıyken bölüm yalnızca başlık satırı kadar yer kaplar.
+        self.setMaximumHeight(16777215 if expanded else self.sizeHint().height())
+        self.setProperty("expanded", "1" if expanded else "0")
+        set_section_expanded("tasks.background", expanded)
+
+    def is_expanded(self) -> bool:
+        return bool(self.collapse_btn.isChecked())
 
     def _seed_default_tasks(self):
         """Seed default autonomous background cognitive tasks."""
@@ -118,6 +158,12 @@ class TasksWidget(QFrame):
         """Populate the task list with modern custom cybernetic row widgets."""
         self.list_widget.clear()
         running_ids = self.running_task_ids()
+        # Katlıyken bile sayı görünür: bölümü açmadan kaç görev olduğu bilinir.
+        total = len(self.scheduler.tasks)
+        active = sum(1 for t in self.scheduler.tasks.values() if t.enabled)
+        if hasattr(self, "count_label"):
+            self.count_label.setText(f"{active}/{total}")
+            self.count_label.setToolTip(f"{active} etkin / {total} zamanlanmış görev")
 
         for t_id, task in self.scheduler.tasks.items():
             item = QListWidgetItem()

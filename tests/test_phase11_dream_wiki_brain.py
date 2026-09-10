@@ -445,7 +445,7 @@ def test_general_brain_section_only_when_no_skill(skill_vault, mem):
     assert "playbook" in {s.kind for s in scoped.sections}
 
 
-def test_general_brain_contains_identity_rules_and_cross_skill_wiki(skill_vault, mem):
+def test_general_brain_contains_rules_and_cross_skill_wiki_but_no_identity(skill_vault, mem):
     vault, store, skill = skill_vault
     mem.record_memory(
         category="ego",
@@ -468,7 +468,12 @@ def test_general_brain_contains_identity_rules_and_cross_skill_wiki(skill_vault,
     section = builder._general_brain_section("nakit akışı tablosu", BUDGET_GENERAL_BRAIN)
     assert section is not None
     assert section.kind == "general_brain"
-    assert "[Kimlik]" in section.body
+    # Faz 13-A2: KİMLİK bloğu beyin paketinden ÇIKARILDI. Kimlik sistem
+    # isteminin 1. bölümünde zaten var; bağlamda ikinci kopyası hem 300 token
+    # boşa gidiyordu hem de `brain_lookup` onu "yanıt" sanıp araştırma
+    # kartlarını kapatıyordu (gerçek ekran kanıtı, STATE §2.9).
+    assert "[Kimlik]" not in section.body
+    assert "kendi becerilerini öğrenen" not in section.body
     assert "ölçüm olmadan iddia yazılmaz" in section.body
     assert "[Wiki]" in section.body
     assert section.tokens <= BUDGET_GENERAL_BRAIN

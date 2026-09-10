@@ -350,6 +350,23 @@ rezerve üst şeridinde, ≥ 48 px, ayardan gizlenebilir — sözleşme testi
 (3) **model kapsülü** (`modelCapsule` — hangi modelin konuştuğu her an görünür).
 Bir tur bu öğelerden birini küçültürse gerekçesini faz raporuna yazar.
 
+**Çekirdek durumunun anlamı (Faz 13-A2, sözleşme).** Çekirdek — `brandCluster`
+durum noktası ve `core_visualizer` — YALNIZCA **Entropy'nin kendi turunu**
+gösterir: kaynağı tek bir sinyaldir, `bus.core_state_changed`, ve onu yalnızca
+etkin köprü `send_message` yolunda yayar (`idle`/`thinking`/`executing`/`error`).
+Bir **ajan kartı**, arka plan görevi ya da yordam damıtma koştuğunda çekirdek
+durum DEĞİŞTİRMEZ; bu işlerin durumu ajan kartındaki koşu rozetinde
+(`ui/widgets/agent_run_state.py`), gezinmedeki "Ajanlar ●n" noktasında ve rozet
+ipucunda yaşar. Arka plan sürecinin durumunu çekirdeğe bağlamak yasaktır
+(sözleşme testi `tests/ui/test_phase13a2_ux.py`).
+
+**Widget yaşam döngüsü (Faz 13-A2, sözleşme).** Bir widget düzenden çıkarılıp
+silinecekse `ui/widgets/lifecycle.discard_widget()` kullanılır. `setParent(None)`
+**yasaktır**: Qt sözleşmesine göre widget'ı üst düzey pencereye çevirir ve
+`deleteLater()` işleyene kadar masaüstünde boş bir kare olarak parlar
+(kullanıcı bir görev koşarken ~20 tanesini gördü). Kapı: `ui_audit`
+`orphan_reparents = 0`.
+
 ### 8.1 Tasarım sistemi (Faz 11-E, **sözleşme**)
 
 **Tek belirteç kaynağı** `ui/design/tokens.py` → `TOKENS`. Aileler: `color` (12 arayüz

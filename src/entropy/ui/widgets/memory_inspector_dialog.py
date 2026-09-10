@@ -16,6 +16,7 @@ from entropy.memory.obsidian.vault_manager import ObsidianVaultManager
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design.embedded import live_palette as _live_palette
+from entropy.ui.widgets.lifecycle import discard_widget
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
@@ -158,8 +159,7 @@ class MemoryInspectorDialog(QDialog):
         if section.text():
             self.layout.addWidget(section)
         else:
-            section.setParent(None)
-            section.deleteLater()
+            discard_widget(section)
 
     def _render_node_details(self):
         # Clear previous layout if any

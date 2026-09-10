@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
@@ -28,6 +28,7 @@ from entropy.ui.widgets.ui_polish import BODY_PX, BODY_STRONG_PX, LABEL_PX
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design.embedded import live_palette as _live_palette
+from entropy.ui.widgets.lifecycle import discard_widget
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
@@ -795,24 +796,41 @@ class AgentCard(QFrame):
         )
         self.session_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.session_reset_btn.clicked.connect(self._reset_session)
+        # Faz 13-A2 madde 4: CANLI koşu rozeti. Oturum rozeti "kalıcı oturum ·
+        # claude · 2 sa önce" derken kart "Çalışıyor" olabiliyordu; kullanıcı
+        # ajanın çalıştığını hiçbir yerden göremiyordu. Bu rozet ajanın ŞU ANKİ
+        # durumunu söyler ve koşarken saniyede bir tazelenir.
+        self.run_badge = QLabel("")
+        self.run_badge.setObjectName(f"agent_run_badge_{self.agent_name}")
+        self.run_badge.setProperty("role", "badge")
+        self.run_badge.setAccessibleName(f"{self.agent_name} koşu durumu")
+        session_row.insertWidget(0, self.run_badge)
+        self._run_timer = QTimer(self)
+        self._run_timer.setInterval(1000)
+        self._run_timer.timeout.connect(self.refresh_run_badge)
+
         session_row.addWidget(self.session_reset_btn)
         session_row.addStretch()
         text_col.addLayout(session_row)
         self.refresh_session_badge()
+        self.refresh_run_badge()
 
         layout.addLayout(text_col, 1)
 
+        # Faz 13-A2 madde 2: bu dört düğmenin metni de ikonu da BOŞTU; ekranda
+        # boş kare görünüyorlardı ve ekran okuyucu adlarını okuyamıyordu.
+        # (attr, ikon adı, ad/ipucu, işleyici)
         buttons = [
-            ("assign_btn", "▶", "Görev ver", self._assign),
-            ("edit_btn", "", "Düzenle", self._edit),
-            ("open_btn", "", "Tanım dosyasını aç", self._open_file),
-            ("delete_btn", "", "Sil", self._delete),
+            ("assign_btn", "play", "Görev ver", self._assign),
+            ("edit_btn", "edit", "Düzenle", self._edit),
+            ("open_btn", "go-to-file", "Tanım dosyasını aç", self._open_file),
+            ("delete_btn", "trash", "Sil", self._delete),
         ]
         # Ofis kipinde (Agent Desk roster paneli) rol atama düğmeleri eklenir.
         if getattr(panel, "office", ""):
             buttons[1:1] = [
-                ("make_orchestrator_btn", "", "Bu ofisin orkestratörü yap", self._make_orchestrator),
-                ("make_evaluator_btn", "", "Bu ofisin değerlendiricisi yap", self._make_evaluator),
+                ("make_orchestrator_btn", "organization", "Bu ofisin orkestratörü yap", self._make_orchestrator),
+                ("make_evaluator_btn", "law", "Bu ofisin değerlendiricisi yap", self._make_evaluator),
             ]
         # Dört düğme tek sıraya sığıyor; ofis kipinde altı düğme oluyor ve tek sıra
         # dar roster sütununda taşıp yatay kaydırma çubuğu çıkarıyordu. Altı
@@ -826,10 +844,18 @@ class AgentCard(QFrame):
         else:
             btn_grid = None
 
-        for index, (attr, glyph, tip, handler) in enumerate(buttons):
-            btn = QPushButton(glyph)
+        from entropy.ui.design import TOKENS as _T, icon as _icon
+
+        for index, (attr, icon_name, tip, handler) in enumerate(buttons):
+            btn = QPushButton()
             btn.setProperty("role", "icon")
+            btn.setAccessibleName(tip)
             btn.setToolTip(tip)
+            ico = _icon(icon_name, color=_T["color"]["text"])
+            if ico is not None and not ico.pixmap(16, 16).isNull():
+                btn.setIcon(ico)
+            else:  # ikon çizilemiyorsa düğme boş kalmaz (ui-design §0.10)
+                btn.setText(tip[:1].upper())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(handler)
             if btn_grid is not None:
@@ -871,6 +897,41 @@ class AgentCard(QFrame):
         style = self.session_label.style()
         style.unpolish(self.session_label)
         style.polish(self.session_label)
+
+    def run_status(self) -> Dict[str, Any]:
+        """Ajanın canlı durumu (test bunu ezebilir)."""
+        from entropy.ui.widgets.agent_run_state import agent_status
+
+        return agent_status(self.agent_name, getattr(self.panel, "_card_cache", []) or [])
+
+    @Slot()
+    def refresh_run_badge(self) -> None:
+        """Koşu rozetini tazeler ve saniyelik zamanlayıcıyı açıp kapar.
+
+        Zamanlayıcı **yalnızca koşarken** döner: boştaki 20 ajan kartı saniyede
+        20 kez boş iş yapmaz.
+        """
+        from entropy.ui.widgets.agent_run_state import run_badge_text
+
+        try:
+            info = self.run_status()
+        except Exception:
+            info = None
+        running = bool(info) and info.get("state") == "running"
+        self.run_badge.setText(run_badge_text(info))
+        self.run_badge.setProperty("tone", "ok" if running else "muted")
+        title = str((info or {}).get("card_title") or "")
+        self.run_badge.setToolTip(
+            f"Şu anda çalışıyor: {title}" if running and title
+            else ("Şu anda çalışıyor" if running else "Ajan boşta")
+        )
+        style = self.run_badge.style()
+        style.unpolish(self.run_badge)
+        style.polish(self.run_badge)
+        if running and not self._run_timer.isActive():
+            self._run_timer.start()
+        elif not running and self._run_timer.isActive():
+            self._run_timer.stop()
 
     @Slot()
     def _reset_session(self):
@@ -941,6 +1002,9 @@ STATUS_COLORS = {
 
 class AgentsWidget(QFrame):
     """Ajan kayıt defterinin okunaklı listesi ve yönetim eylemleri."""
+
+    #: Koşan ajan sayısı değişti (gezinmedeki "Ajanlar ●n" noktası dinler).
+    running_changed = Signal(int)
 
     def __init__(
         self,
@@ -1212,8 +1276,7 @@ class AgentsWidget(QFrame):
             item = self.list_layout.takeAt(0)
             widget = item.widget() if item else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self.cards = []
 
         agents = self.list_agents()
@@ -1232,6 +1295,14 @@ class AgentsWidget(QFrame):
             card = AgentCard(spec, self)
             self.cards.append(card)
             self.list_layout.insertWidget(self.list_layout.count() - 1, card)
+        self.running_changed.emit(self.running_count())
+
+    def running_count(self) -> int:
+        """Şu anda koşan ajan sayısı (gezinmedeki nokta bunu gösterir)."""
+        return sum(
+            1 for card in self.cards
+            if (card.run_status() or {}).get("state") == "running"
+        )
 
     # ------------------------------------------------------------ eylemler
 

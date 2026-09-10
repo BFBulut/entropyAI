@@ -9,10 +9,16 @@ raporunu okur, "yeni" bulgu diye geri yazar ve hafıza kendi yankısıyla şişe
 (Manufactured Confidence). Ölçülen sonuç: 1.544 düğümün yarısından çoğu yakın
 kopya. Bu modül o döngüyü üç yerden keser:
 
-1. **AÇIK TESPİTİ** (`brain_lookup`) — koşudan ÖNCE. Beyinde (L2/L3) yeterli
-   güvende bir yanıt varsa (`AssembledContext.brain_has_answer`, CRAG eşiği
-   0.45) kart CLI'ya HİÇ gitmez; "beyinden yanıtlandı" notuyla `review`e düşer.
-   Kota harcamayan tek doğru cevap budur.
+1. **AÇIK TESPİTİ** (`brain_lookup`) — koşudan ÖNCE. **Faz 13-A2'de
+   varsayılan KAPATILDI** (`config.brain_shortcut_enabled = False`).
+   Gerçek ekranda ölçülen hata: kullanıcı "araştırma yap" dedi, kart
+   `kind=research` oldu ve 0,49 güvenle "beyinden yanıtlandı" diye kapandı —
+   gösterilen "yanıt" Entropy'nin KİMLİK düğümüydü. Kullanıcının bağlayıcı
+   kuralı: "araştır" dendiğinde araştırma CANLI koşar; beyin ajana
+   **bağlamdır**, araştırmanın yerine geçmez. Artık bulunan bilgi isteme
+   `[BEYİN]` bölümü olarak girer; kart CLI'ya gider. Kısa devre yalnızca
+   açık tercihle (`brain_only`) ve yüksek eşikle (0,75, kaynaklı, kimlik
+   dışı) açılır ve kart özetinde "canlı araştırma yapılmadı" yazar.
 2. **YENİLİK KOTASI** (`admit_report`) — koşudan SONRA. Rapor hafızaya
    `MemoryGate`ten geçerken ADD/NOOP/gri sayılır; ADD oranı %30'un altındaysa
    tur yinelenen araştırmadır. Kart notuna "düşük yenilik" yazılır ve AYNI
@@ -44,8 +50,8 @@ logger = logging.getLogger(__name__)
 MIN_NOVELTY_RATIO = 0.30
 
 # Kartın niteliği: `TaskCard.kind` alanının sözleşmesi (Faz 12 kapanışı).
-# Dört değer var çünkü beyin kısayolu YALNIZCA `research` kartında uygulanır;
-# diğer üçünde beyin paketi yalnızca isteme girer (kısayol yok).
+# Faz 13-A2: `kind` artık kısa devreyi BELİRLEMEZ (dört kartın dördü de CLI'ya
+# gider); yönlendirme, istem şablonu ve yenilik kotası için tutulur.
 CARD_KINDS = ("research", "write", "code", "ops")
 #: `kind` hiçbir sezgiye takılmazsa yazılan değer. `write` seçilmesi bilinçli:
 #: kısayol açmaz (yanlış pozitif riski yok) ama beyin paketini isteme sokar.
@@ -63,6 +69,10 @@ _RESEARCH_HINTS = (
     "kaynak topla", "literatür", "literatur", "son gelişme", "son gelismeler",
     "web taraması", "web taramasi", "survey", "investigate", "piyasa analizi",
     "incele ve raporla", "karşılaştır", "karsilastir",
+    # Faz 13-A2: "incele" ve "tara" tek başlarına da araştırma fiilidir
+    # ("piyasayı tara", "raporu incele"); eskiden yalnızca birleşik kalıp
+    # ("incele ve raporla") yakalanıyordu.
+    "incele", "tara", "taraması yap", "taramasi yap",
 )
 # KOD fiilleri: kartı kesinlikle CLI'ya götürür (kısayol yok).
 _CODE_HINTS = ("kodla", "uygula", "düzelt", "duzelt", "refactor", "test ekle",
@@ -139,52 +149,136 @@ def has_sources(text: str) -> bool:
 # 1. Açık tespiti
 # ---------------------------------------------------------------------------
 
+# Faz 13-A2 — AÇIK TERCİHLİ KISA DEVRE EŞİĞİ. Otomatik kısayol kapandı
+# (`config.brain_shortcut_enabled = False`); kullanıcı açıkça "yalnız beyin"
+# dediğinde bile eşik CRAG eşiğinden (0,40) çok daha yüksek tutulur, çünkü
+# burada verilen karar "canlı araştırma HİÇ yapılmasın" kararıdır.
+SHORTCUT_MIN_CONFIDENCE = 0.75
+
+#: Kartta ya da istekte "yalnız beyinden yanıtla" işareti. Kart alanı
+#: (`card.brain_only`) birinci kaynaktır; metindeki işaret `/task --brain-only`
+#: gibi kullanıcı yazımlarını da yakalar.
+BRAIN_ONLY_MARKERS = (
+    "--brain-only", "[brain-only]", "brain_only", "brain-only",
+    "yalnız beyin", "yalniz beyin", "sadece beyin", "sadece hafıza",
+    "sadece hafiza",
+)
+
+
+def brain_only_requested(card: Any = None, query: str = "") -> bool:
+    """
+    Kullanıcı bu iş için AÇIKÇA "yalnız beyinden yanıtla" dedi mi?
+
+    Varsayılan **hayır**: kullanıcının bağlayıcı kuralı, "araştır" dendiğinde
+    araştırmanın CANLI koşmasıdır. Kısa devre yalnız burada True dönerse
+    açılır.
+    """
+    if card is not None:
+        value = getattr(card, "brain_only", None)
+        if isinstance(value, bool):
+            if value:
+                return True
+        elif isinstance(value, str) and value.strip().lower() in ("1", "true", "evet", "yes"):
+            return True
+    text = " ".join(str(part or "") for part in (
+        query,
+        getattr(card, "title", "") if card is not None else "",
+        getattr(card, "goal", "") if card is not None else "",
+    )).lower()
+    return any(marker in text for marker in BRAIN_ONLY_MARKERS)
+
+
+def _shortcut_enabled() -> bool:
+    """`config.brain_shortcut_enabled` — Faz 13-A2'den beri varsayılan KAPALI."""
+    try:
+        from entropy.core.config import config as _config
+
+        return bool(getattr(_config, "brain_shortcut_enabled", False))
+    except Exception:
+        return False
+
+
 @dataclass
 class BrainAnswer:
-    """`brain_lookup` sonucu. `has_answer` False ise koşu normal ilerler."""
+    """
+    `brain_lookup` sonucu.
+
+    Faz 13-A2'de anlamı KESKİNLEŞTİ: `has_answer` artık "beyinde bir şey
+    bulundu" değil, **"bu kart canlı koşmadan kapatılabilir"** demektir.
+    Çağıran (`TaskBoard._brain_shortcut`) tek bu alana bakıyor; bulunan bilgi
+    kısa devre açılmadığında da KAYBOLMAZ, `prompt_section()` ile isteme
+    `[BEYİN]` bölümü olarak girer. `brain_hit`/`confidence` ham sinyali taşır
+    (ölçüm ve günlük için).
+    """
 
     has_answer: bool = False
     confidence: float = 0.0
     text: str = ""
     sources: List[str] = field(default_factory=list)
+    #: Ham CRAG sinyali: beyinde eşiği geçen bir karşılık var mı?
+    brain_hit: bool = False
+    #: Kısa devre neden açılmadı (insan okur; boş = açıldı ya da sinyal yok).
+    shortcut_reason: str = ""
 
     def prompt_section(self) -> str:
         """
-        İsteme giren `[BEYİN]` bölümü — kısayolun uygulanmadığı kartlar için.
+        İsteme giren `[BEYİN]` bölümü — Faz 13-A2'den beri NORMAL yol.
 
-        `research` DIŞINDAKİ kartlarda (write/code/ops) beyin cevabı kartı
-        kapatmaz ama CLI turunu KISALTIR: ajan aynı bilgiyi yeniden aramak
-        yerine hazır paketle başlar. Boş yanıtta boş dize döner (istem
-        kirlenmesin).
+        Kart türü ne olursa olsun (research dâhil) beyin cevabı kartı
+        kapatmaz; CLI turunu KISALTIR: ajan aynı bilgiyi yeniden aramak
+        yerine hazır, kaynaklı paketle başlar ve doğrular. Boş yanıtta boş
+        dize döner (istem kirlenmesin).
         """
         body = (self.text or "").strip()
         if not body:
             return ""
-        head = (f"[BEYİN]\nHafızandan bu görev için hazır bulunan bilgi "
-                f"(güven {self.confidence:.2f}). Doğrula ve KULLAN; aynı şeyi "
-                f"baştan araştırma:")
+        head = (f"[BEYİN]\nHafızamdan bu görev için hazır bulunan bilgi "
+                f"(güven {self.confidence:.2f}). BAĞLAMDIR, yanıt değildir: "
+                f"doğrula, güncelliğini sınayıp KULLAN. Araştırma isteniyorsa "
+                f"bu paket canlı araştırmanın yerine GEÇMEZ:")
         tail = ""
         if self.sources:
             tail = "\nKaynaklar: " + ", ".join(str(s) for s in self.sources[:10])
         return f"{head}\n\n{body}{tail}"
 
     def note(self) -> str:
-        """Kart özetine yazılacak insan okur metin."""
+        """
+        Kart özetine yazılacak insan okur metin — kısa devre AÇIKÇA yazılır.
+
+        Faz 13-A2: kullanıcı sohbet kartında "canlı araştırma yapılmadı"
+        cümlesini görmeden bu kapanışı ayırt edemiyordu.
+        """
         return (
-            f"Beyinden yanıtlandı (güven {self.confidence:.2f} ≥ CRAG eşiği): "
-            f"bu soru için hafızada yeterli yanıt var, CLI turu açılmadı.\n\n"
+            f"Beyinden yanıtlandı — CANLI ARAŞTIRMA YAPILMADI "
+            f"(açık tercih: yalnız beyin; güven {self.confidence:.2f}). "
+            f"Bu yanıt hafızadaki kayıtlardan derlendi, web/CLI turu "
+            f"açılmadı; tazelik gerekiyorsa kartı 'yalnız beyin' işareti "
+            f"olmadan yeniden aç.\n\n"
             + (self.text or "")
         )
 
 
-def brain_lookup(query: str, builder: Any = None) -> BrainAnswer:
+def brain_lookup(query: str, builder: Any = None, card: Any = None) -> BrainAnswer:
     """
-    Beyinde bu soruya yeterli yanıt var mı (CRAG sinyali).
+    Beyinden bu iş için bağlam toplar; kısa devreye YALNIZCA açık tercihle izin verir.
 
-    `builder` testler için enjekte edilebilir; verilmezse
-    `entropy.memory.context_builder` kullanılır. Hafıza katmanı yoksa ya da
-    hata verirse "yanıt yok" döner — kilit ASLA bir kartı yanlışlıkla
-    kapatmamalı.
+    Faz 13-A2 (kullanıcı geri bildirimi, bağlayıcı): "araştır" dendiğinde
+    araştırma canlı koşar. Bu yüzden dönen `has_answer` artık ham CRAG
+    sinyali değil, şu beş koşulun BİRLİKTE sağlanmasıdır:
+
+    1. Açık tercih: kartta `brain_only` (ya da metinde `--brain-only`), veya
+       `config.brain_shortcut_enabled` açıksa `kind="research"` kartı.
+    2. Beyinde eşiği geçen bir karşılık var (`ctx.brain_has_answer`) —
+       kimlik (`identity:core`) ve `legacy:pre-v2` düğümleri bu skora
+       KATILMAZ (`context_builder.is_answer_node`).
+    3. Güven ≥ `SHORTCUT_MIN_CONFIDENCE` (0,75).
+    4. Yanıt metni boş değil.
+    5. Yanıt KAYNAKLI (URL ya da dosya yolu gösteriyor).
+
+    Koşullar sağlanmasa da `text` doldurulur: çağıran onu `prompt_section()`
+    ile isteme `[BEYİN]` bölümü olarak koyar. `builder`/`card` testler için
+    enjekte edilebilir. Hafıza katmanı yoksa ya da hata verirse "yanıt yok"
+    döner — kilit ASLA bir kartı yanlışlıkla kapatmamalı.
     """
     text = (query or "").strip()
     if not text:
@@ -215,8 +309,34 @@ def brain_lookup(query: str, builder: Any = None) -> BrainAnswer:
                 body = str(render() or "").strip()
     except Exception:
         return BrainAnswer()
-    return BrainAnswer(has_answer=has, confidence=conf, text=body,
-                       sources=list(getattr(ctx, "sources", []) or []))
+    sources = list(getattr(ctx, "sources", []) or [])
+    answer = BrainAnswer(has_answer=False, confidence=conf, text=body,
+                         sources=sources, brain_hit=bool(has))
+    answer.has_answer, answer.shortcut_reason = _shortcut_decision(
+        answer, card=card, query=text)
+    return answer
+
+
+def _shortcut_decision(answer: BrainAnswer, card: Any = None,
+                       query: str = "") -> Tuple[bool, str]:
+    """Kısa devre açılsın mı? (True, "") ya da (False, gerekçe)."""
+    explicit = brain_only_requested(card, query)
+    if not explicit:
+        if not _shortcut_enabled():
+            return False, ("otomatik kısa devre kapalı; araştırma canlı koşar "
+                           "(beyin yalnızca bağlam)")
+        if card is not None and not is_research_card(card):
+            return False, "araştırma kartı değil"
+    if not answer.brain_hit:
+        return False, "beyinde eşiği geçen karşılık yok"
+    if answer.confidence < SHORTCUT_MIN_CONFIDENCE:
+        return False, (f"güven {answer.confidence:.2f} < "
+                       f"{SHORTCUT_MIN_CONFIDENCE:.2f}")
+    if not (answer.text or "").strip():
+        return False, "beyin paketi boş"
+    if not (has_sources(answer.text) or answer.sources):
+        return False, "yanıt kaynaksız (URL ya da dosya yolu yok)"
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +644,7 @@ def _notify(card: Any, outcome: LockOutcome) -> None:
 
 __all__ = [
     "MIN_NOVELTY_RATIO", "RESEARCH_KINDS", "CARD_KINDS", "DEFAULT_KIND",
+    "SHORTCUT_MIN_CONFIDENCE", "BRAIN_ONLY_MARKERS", "brain_only_requested",
     "infer_kind", "card_kind", "BrainAnswer", "NoveltyReport",
     "LockOutcome", "is_research_card", "has_sources", "brain_lookup",
     "split_claims", "admit_report", "topic_tokens", "same_topic",

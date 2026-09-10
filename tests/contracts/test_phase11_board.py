@@ -73,12 +73,14 @@ def seed_agent(vault, name="arastirmaci", **kw):
 # A. Durum makinesi
 # --------------------------------------------------------------------------
 
-def test_status_set_has_eight_values_and_table_has_twelve_rows():
+def test_status_set_has_eight_values_and_table_has_thirteen_rows():
     assert board_fsm.STATUSES == (
         "backlog", "assigned", "taken", "running",
         "review", "done", "failed", "canceled",
     )
-    assert len(board_fsm.TRANSITIONS) == 12
+    # Faz 13-A2: T13 (`review`/`failed` → `canceled`, gerekçe zorunlu) eklendi;
+    # QA artığı kartların arşivlenmesi bu satırdan geçer.
+    assert len(board_fsm.TRANSITIONS) == 13
     # Faz 12-B: 12 geçiş olayı + 1 GÖZLEM olayı (`board.drift`, durum
     # değiştirmez; `INFO_EVENTS` ile ayrılır).
     assert len(board_fsm.EVENTS) == 13

@@ -487,7 +487,7 @@ def _brain(monkeypatch, confidence: float, text: str = "Beyindeki yanıt."):
 
     monkeypatch.setattr(
         amplification, "brain_lookup",
-        lambda q, builder=None: amplification.BrainAnswer(
+        lambda q, builder=None, card=None: amplification.BrainAnswer(
             has_answer=True, confidence=confidence, text=text))
 
 

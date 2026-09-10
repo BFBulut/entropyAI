@@ -60,7 +60,18 @@ def test_chat_mode_reacts_to_same_bus_signals_as_zen(qapp):
     bus.distill_progress.emit("financial-auditor", 2, 5)
     assert "2/5" in chat.state_badge.toolTip()
 
+    # Faz 13-A2 madde 4: ÇEKİRDEK arka plan işinden ETKİLENMEZ. Önceki
+    # sözleşme `task_triggered`/`task_completed`in çekirdeği "yürütülüyor"a
+    # ve geri "hazır"a çevirmesini istiyordu; kullanıcı bir ajan kartı
+    # koşarken Entropy'nin kendisi düşünüyor sanıyordu. Arka plan işinin
+    # durumu ipucunda ve ajan rozetlerinde yaşar, çekirdekte değil.
     bus.task_completed.emit("task-1", True)
+    assert dot.property("tone") == "danger", (
+        "arka plan görevi çekirdek durumunu değiştirdi"
+    )
+
+    # Çekirdeği yalnızca köprünün kendi turu döndürür.
+    bus.core_state_changed.emit("idle")
     assert dot.property("tone") == "ok"
 
     chat.close()

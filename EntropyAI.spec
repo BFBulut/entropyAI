@@ -218,6 +218,9 @@ a = Analysis(
         'entropy.scheduler.cron_engine',
         'entropy.platform',
         'entropy.platform.clipboard',
+        'entropy.platform.proc',
+        'entropy.ui.widgets.agent_run_state',
+        'entropy.ui.widgets.lifecycle',
         'entropy.desk',
         # Faz 12-A: Faz 11'de eklenen 15 modul spec'te hic gecmiyordu (arastirma
         # B §2.3). Cogu statik import ile cagriliyor, ama spec ile kaynak

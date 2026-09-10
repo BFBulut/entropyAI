@@ -32,9 +32,12 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+from entropy.platform.proc import popen_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +107,8 @@ class ProviderStatus:
 
 
 def _creationflags() -> int:
-    if os.name == "nt":
-        return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    return 0
+    """Geriye dönük uyumluluk sarmalayıcısı; asıl kaynak `platform.proc`."""
+    return int(popen_kwargs().get("creationflags") or 0)
 
 
 def _now() -> str:
@@ -143,9 +145,7 @@ def probe_claude(runner: Optional[Callable] = None) -> ProviderStatus:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=_creationflags(),
-            env=env,
-            timeout=20,
+            **popen_kwargs(creationflags=_creationflags(), env=env, timeout=20),
         )
     except Exception as exc:
         status.last_error = str(exc)[:300]
@@ -234,8 +234,7 @@ def probe_agy(runner: Optional[Callable] = None) -> ProviderStatus:
             text=True,
             encoding="utf-8",
             errors="replace",
-            creationflags=_creationflags(),
-            timeout=20,
+            **popen_kwargs(creationflags=_creationflags(), timeout=20),
         )
     except Exception as exc:
         status.last_error = str(exc)[:300]
@@ -839,6 +838,183 @@ class AgentSessionStore:
         self.record(agent, provider, conversation_id=str(session_id),
                     session_id=str(session_id) if provider == "claude" else "",
                     cwd=cwd)
+
+    # -- canlı durum (Faz 13-A2) ----------------------------------------
+    #
+    # Neden AYRI dosya (`state.json`): `session.json` şeması SAĞLAYICI
+    # anahtarlıdır ve `run_kwargs`/`rotate` onu sık sık baştan yazar. Koşu
+    # durumu ise ajanın tamamına aittir ve koşu ortasında çöken bir sürecin
+    # ardında kalmalıdır. İkisini aynı dosyada tutmak bir devir (rotate)
+    # sırasında canlı durumu silerdi.
+
+    def state_path(self, agent: str) -> Path:
+        """`Entropy/Board/agents/<ad>/state.json` — `session.json`ın yanı."""
+        return self.path_for(agent).with_name("state.json")
+
+    def _load_state(self, agent: str) -> Dict[str, object]:
+        try:
+            data = json.loads(self.state_path(agent).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_state(self, agent: str, data: Dict[str, object]) -> None:
+        path = self.state_path(agent)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".json.tmp{os.getpid()}")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            logger.warning("Ajan canlı durumu yazılamadı: %s", path)
+
+    def current_provider(self, agent: str) -> str:
+        """
+        Ajanın ŞU ANKİ sağlayıcısı: şartname > uygulama varsayılanı.
+
+        Rozet hatasının kökü buydu: `session.json` sağlayıcı anahtarlı ve
+        rozet "en taze kayıt"ı seçiyordu; ajan agy'ye geçtikten sonra bile
+        saatler önceki claude oturumu gösteriliyordu. Güncel sağlayıcı kartın
+        koşum kuralıyla AYNI kaynaktan gelmeli (`tasks.py`: kart > şartname >
+        varsayılan), yoksa rozet koşan şeyi anlatmaz.
+        """
+        name = str(agent or "").strip()
+        provider = ""
+        if name:
+            try:
+                from entropy.agents.registry import AgentRegistry
+
+                spec = AgentRegistry().get(name)
+                provider = str(getattr(spec, "provider", "") or "")
+            except Exception:
+                provider = ""
+        if not provider:
+            try:
+                from entropy.core.config import config
+
+                getter = getattr(config, "default_provider", None)
+                provider = str(getter() if callable(getter)
+                               else getattr(config, "provider", "") or "")
+            except Exception:
+                provider = ""
+        provider = provider.strip().lower()
+        return provider if provider in PROVIDERS else "claude"
+
+    def mark_running(self, agent: str, card_id: str = "", card_title: str = "",
+                     provider: str = "") -> Dict[str, object]:
+        """Kart `taken`/`running`e geçti: canlı durumu yaz (`last_run_at` BAŞTA)."""
+        name = str(agent or "").strip()
+        if not name:
+            return {}
+        data = self._load_state(name)
+        now = time.time()
+        data.update({
+            "state": "running",
+            "running_since": now,
+            "current_card": str(card_id or ""),
+            "current_card_title": str(card_title or ""),
+            "provider": str(provider or "").strip().lower()
+                        or self.current_provider(name),
+            "pid": os.getpid(),
+            # `last_run_at` hem başta hem sonda güncellenir: koşu ortasında
+            # çöken uygulamada "en son ne zaman çalıştı" yine de doğru kalsın.
+            "last_run_at": now,
+        })
+        self._save_state(name, data)
+        return dict(data)
+
+    def mark_idle(self, agent: str, provider: str = "") -> Dict[str, object]:
+        """Koşu bitti/başarısız/iptal: canlı durum temizlenir, `last_run_at` yenilenir."""
+        name = str(agent or "").strip()
+        if not name:
+            return {}
+        data = self._load_state(name)
+        if not data and not provider:
+            return {}
+        data.update({
+            "state": "idle",
+            "running_since": None,
+            "current_card": "",
+            "current_card_title": "",
+            "pid": 0,
+            "last_run_at": time.time(),
+        })
+        if provider:
+            data["provider"] = str(provider).strip().lower()
+        self._save_state(name, data)
+        return dict(data)
+
+    def status(self, name: str) -> Dict[str, object]:
+        """
+        Ajanın canlı durumu — arayüz rozetinin TEK sözleşmesi.
+
+        Dönüş: `{state, since, card_id, card_title, last_run_at, provider,
+        session, stale_sessions}`.
+
+        * `state` — `"running"` yalnızca canlı durum dosyası öyle diyorsa;
+        * `since` — koşunun başladığı zaman damgası (`None` ise boşta);
+        * `provider` — ajanın GÜNCEL sağlayıcısı (bkz. `current_provider`);
+        * `session` — o sağlayıcının oturum kaydı ("" ise oturum yok);
+        * `stale_sessions` — BAŞKA sağlayıcılarda kalmış eski oturumlar;
+          rozet bunları "kalıcı oturum" diye göstermez, ama kaybolmasınlar.
+        """
+        agent = str(name or "").strip()
+        provider = self.current_provider(agent)
+        live = self._load_state(agent)
+        state = "running" if str(live.get("state") or "") == "running" else "idle"
+        since = live.get("running_since") if state == "running" else None
+        try:
+            since = float(since) if since is not None else None
+        except (TypeError, ValueError):
+            since = None
+        if state == "running" and since is None:
+            # Yarım yazılmış dosya: "koşuyor" demek yanıltıcı olurdu.
+            state, since = "idle", None
+        try:
+            last_run_at = float(live.get("last_run_at"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            last_run_at = None
+        sessions = self.load(agent)
+        current = dict(sessions.get(provider) or {})
+        stale = []
+        for other, entry in sessions.items():
+            if str(other).strip().lower() == provider or not isinstance(entry, dict):
+                continue
+            if not (entry.get("session_id") or entry.get("conversation_id")):
+                continue
+            stale.append({"provider": str(other),
+                          "model": str(entry.get("model") or ""),
+                          "updated_at": entry.get("updated_at") or ""})
+        return {
+            "state": state,
+            "since": since,
+            "card_id": str(live.get("current_card") or "") if state == "running" else "",
+            "card_title": str(live.get("current_card_title") or "") if state == "running" else "",
+            "last_run_at": last_run_at,
+            "provider": provider,
+            "session": current,
+            "stale_sessions": sorted(stale, key=lambda d: d["provider"]),
+        }
+
+    def clear_live_state(self, agent: str) -> bool:
+        """
+        Sahipsiz `running` durumunu düşürür (açılış uzlaştırması).
+
+        Uygulama koşu ortasında çökerse `state.json` "running" kalır ve rozet
+        sonsuza dek dönen bir çark gösterirdi; `dispatcher.reconcile` kartı
+        kurtarırken bunu da çağırır.
+        """
+        name = str(agent or "").strip()
+        if not name:
+            return False
+        data = self._load_state(name)
+        if str(data.get("state") or "") != "running":
+            return False
+        data.update({"state": "idle", "running_since": None,
+                     "current_card": "", "current_card_title": "", "pid": 0})
+        self._save_state(name, data)
+        return True
 
 
 _agent_session_store = AgentSessionStore()

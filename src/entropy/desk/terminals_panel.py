@@ -35,6 +35,7 @@ from entropy.core.event_bus import bus
 from entropy.ui.design import TOKENS
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.design.prefs import install_splitter_persistence
+from entropy.ui.widgets.lifecycle import discard_widget, detach_widget
 
 # Bölmede tutulan en fazla olay: uzun koşu belleği şişirmesin.
 MAX_EVENTS = 400
@@ -510,8 +511,7 @@ class TerminalsPanel(QFrame):
             return
         self.office = office or ""
         for pane in list(self.panes.values()):
-            pane.setParent(None)
-            pane.deleteLater()
+            discard_widget(pane)
         self.panes = {}
         self._focused = ""
         self._sync_layout()
@@ -559,7 +559,7 @@ class TerminalsPanel(QFrame):
             self.archive_tabs.removeTab(0)
         for index in reversed(range(self.split.count())):
             widget = self.split.widget(index)
-            widget.setParent(None)
+            detach_widget(widget)
 
         tabbed = len(active) > SPLIT_LIMIT
         for pane in active:

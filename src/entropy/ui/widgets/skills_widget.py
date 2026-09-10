@@ -3,8 +3,8 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
-from PySide6.QtCore import Qt
+from typing import Any, Dict, List, Optional
+from PySide6.QtCore import Qt, QElapsedTimer, QTimer, Slot
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -19,9 +19,46 @@ from entropy.ui.themes.cyber_theme import CYBER_THEME
 # Gömülü HTML gövdelerinin renk kaynağı (Faz 12-D.2): düz onaltılık yerine
 # `TOKENS`/`TOKENS["viz"]` köprüsü. Bkz. `entropy.ui.design.embedded`.
 from entropy.ui.design.embedded import live_palette as _live_palette
+from entropy.ui.design import TOKENS, icon as design_icon
+from entropy.ui.widgets.lifecycle import clear_layout
 
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
+
+#: Ağır yeniden kurulumların birleştirme penceresi (ms). Arama kutusuna
+#: yazarken ya da salvo hâlinde sinyal gelirken tek yeniden kurulum yapılır.
+REBUILD_DEBOUNCE_MS = 300
+
+#: Satır düğmelerinin ikon adları (Codicons). Faz 13-A2 madde 2: bu düğmeler
+#: `QPushButton("")` olarak kuruluyor ve ikon HİÇ atanmıyordu; ekranda boş kare
+#: görünüyorlardı. `accessibleName` dolu olduğu için G13-1 kapısı da onları
+#: geçiriyordu — kapı artık `pixmap(16)` ile GERÇEKTEN çizilebilirlik ölçüyor.
+ROW_ICONS = {
+    "distill": "beaker",       # damıt (artımlı)
+    "refresh": "refresh",      # tazele (tüm arşiv)
+    "edit": "edit",            # SKILL.md düzenle
+    "folder": "folder-opened",
+    "delete": "trash",
+}
+
+
+def apply_row_icon(button, key: str, tone: str = "muted") -> bool:
+    """Satır düğmesine ikon koyar; QtAwesome yoksa metin yedeğine düşer.
+
+    Döner değer: ikon gerçekten çizilebilir mi. `QIcon()` boş nesnesi
+    `isNull()` ile yakalanmaz olabildiği için `pixmap(16)` denetlenir —
+    "boş kare" hatasının kök nedeni buydu.
+    """
+    color = TOKENS["color"]["text"] if tone == "muted" else TOKENS["color"].get(tone, TOKENS["color"]["text"])
+    ico = design_icon(ROW_ICONS.get(key, key), color=color)
+    drawable = ico is not None and not ico.isNull() and not ico.pixmap(16, 16).isNull()
+    if drawable:
+        button.setIcon(ico)
+        return True
+    # Yedek: ikon çizilemiyorsa düğme BOŞ kalmaz (ui-design §0.10).
+    fallback = {"distill": "D", "refresh": "T", "edit": "E", "folder": "K", "delete": "X"}
+    button.setText(button.text() or fallback.get(key, "?"))
+    return False
 
 class AddSkillDialog(QDialog):
     """Dialog to manually register or synthesize a new skill."""
@@ -214,6 +251,32 @@ class SkillsWidget(QFrame):
         # köprü verilmezse damıtma düğmesi pasif kalır, panel yine çalışır.
         self.bridge = bridge
 
+        # ---- Faz 13-A2 madde 1: donma önlemi -------------------------------
+        # "Etkin" kutusuna basınca uygulama gerçekten kilitleniyordu (Windows
+        # "yanıt vermiyor" diyaloğu). Ölçüm (22 yetenek, offscreen):
+        #   list_skills()            232 ms   (tüm SKILL.md'lerin diskten okunup ayrıştırılması)
+        #   PlaybookStore.status x22 1.058 ms (yetenek başına kasa taraması)
+        #   _on_toggle               1.961 ms (ikisi de İKİ KEZ: doğrudan çağrı + bus.skills_updated)
+        # Toggle'ın hiçbiri için gerekçesi yok: etkinlik durumu ne katalogu ne
+        # de yordam durumunu değiştirir. Artık toggle yalnızca durumu yazar ve
+        # o satırın rozetini günceller; katalog + yordam durumu önbellekte
+        # tutulur ve yalnızca gerçekten değiştiklerinde (rapor/yordam/proje
+        # sinyali ya da "Yenile") yeniden hesaplanır.
+        self._skills_cache: Optional[List[SkillDefinition]] = None
+        self._playbook_states: Dict[str, Dict[str, Any]] = {}
+        self._catalog_dirty = True
+        #: Kendi yazdığımız durumun geri tepen `skills_updated` sinyali
+        #: yüzünden tam yeniden kurulum yapılmaz.
+        self._suppress_bus_refresh = False
+        #: Salvo hâlinde gelen sinyalleri tek yeniden kurulumda birleştirir.
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(REBUILD_DEBOUNCE_MS)
+        self._rebuild_timer.timeout.connect(self.refresh_skills)
+        #: Son yeniden kurulumun ana iş parçacığı süresi (ms) — kapı ölçer.
+        self.last_rebuild_ms: float = 0.0
+        self.last_toggle_ms: float = 0.0
+
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 8, 10, 8)
         self.layout.setSpacing(6)
@@ -238,7 +301,7 @@ class SkillsWidget(QFrame):
 
         self.sync_btn = QPushButton("Yenile")
         self.sync_btn.setAccessibleName("Yenile")
-        self.sync_btn.clicked.connect(self.refresh_skills)
+        self.sync_btn.clicked.connect(self.reload_from_disk)
         header_layout.addWidget(self.sync_btn)
 
         self.layout.addLayout(header_layout)
@@ -246,7 +309,8 @@ class SkillsWidget(QFrame):
         # Search Bar
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Yetenek ara (örn: pdf, finans, medya)...")
-        self.search_input.textChanged.connect(self._filter_skills)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_search_changed)
         self.layout.addWidget(self.search_input)
 
         # Scroll Area for Skill Cards
@@ -265,7 +329,7 @@ class SkillsWidget(QFrame):
         # alıcısı olmadığı için widget silindikten sonra da çağrılmaya devam eder
         # ve "Internal C++ object already deleted" hatası üretir. Bound method'da
         # ise Qt, alıcı yok edilince bağlantıyı kendiliğinden koparır.
-        bus.skills_updated.connect(self.refresh_skills)
+        bus.skills_updated.connect(self._on_skills_updated)
         bus.project_changed.connect(self._on_project_changed)
         bus.playbook_updated.connect(self._on_playbook_updated)
         bus.distill_progress.connect(self._on_distill_progress)
@@ -296,32 +360,65 @@ class SkillsWidget(QFrame):
         else:
             self.skill_manager.project_skills_dir = None
             self.skill_manager.root_skills_dir = self.skill_manager.global_skills_dir
+        self._catalog_dirty = True
         self.refresh_skills()
 
-    def refresh_skills(self):
-        """Reload list of skills from filesystem."""
-        while self.skills_layout.count():
-            item = self.skills_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    # ------------------------------------------------------------ önbellek
 
+    def _load_catalog(self) -> List[SkillDefinition]:
+        """Katalog + yordam durumları; yalnızca kirliyse diskten okunur.
+
+        İkisi de **diske gider** (SKILL.md ayrıştırma + kasa taraması) ve
+        birlikte ~1,3 sn sürer; bu yüzden tek bir "kirli" bayrağına bağlıdır.
+        Etkinlik durumu bu verilerin hiçbirini değiştirmez.
+        """
+        if not self._catalog_dirty and self._skills_cache is not None:
+            return self._skills_cache
         skills = self.skill_manager.list_skills()
-        filter_text = self.search_input.text().strip().lower()
-
-        # Yordam durumları tek geçişte hesaplanır; kart başına tekrar tekrar
-        # kasa taraması yapmamak için. Hata durumunda paneli düşürmez, rozet gri kalır.
-        self._playbook_states = {}
+        states: Dict[str, Dict[str, Any]] = {}
         try:
             from entropy.memory.playbook import PlaybookStore
 
             store = PlaybookStore()
             for s in skills:
                 try:
-                    self._playbook_states[s.name] = store.status(s.name)
+                    states[s.name] = store.status(s.name)
                 except Exception:
-                    self._playbook_states[s.name] = {}
+                    states[s.name] = {}
         except Exception:
             pass
+        self._skills_cache = skills
+        self._playbook_states = states
+        self._catalog_dirty = False
+        return skills
+
+    def schedule_refresh(self, dirty: bool = False) -> None:
+        """Yeniden kurulumu 300 ms'de birleştirir (salvo tek turda toplanır)."""
+        if dirty:
+            self._catalog_dirty = True
+        self._rebuild_timer.start()
+
+    @Slot()
+    def _on_skills_updated(self):
+        """`bus.skills_updated` — kendi toggle yazımımızsa tam kurulum yapılmaz."""
+        if self._suppress_bus_refresh:
+            return
+        self.schedule_refresh(dirty=True)
+
+    @Slot()
+    def _on_search_changed(self):
+        # Her tuş vuruşunda tam kurulum yapmak panelde 1 sn'lik takılma
+        # üretiyordu; süzgeç katalogu değiştirmez, yalnızca satırları eler.
+        self.schedule_refresh(dirty=False)
+
+    def refresh_skills(self):
+        """Satırları yeniden kurar (katalog önbellekten gelir)."""
+        elapsed = QElapsedTimer()
+        elapsed.start()
+        clear_layout(self.skills_layout)
+
+        skills = self._load_catalog()
+        filter_text = self.search_input.text().strip().lower()
 
         for s in skills:
             if filter_text and filter_text not in s.name.lower() and filter_text not in s.description.lower():
@@ -346,6 +443,7 @@ class SkillsWidget(QFrame):
             
             title_text = f"<b style='color:{_P["text"]}; font-size:13px;'>{s.name}</b> &nbsp; {status_badge} &nbsp; {script_badge}"
             name_lbl = QLabel(title_text)
+            name_lbl.setObjectName(f"skill_title_{s.name}")
             name_lbl.setProperty("role", "label")
 
             desc_lbl = QLabel(f"<span style='color:{_P["text_muted"]}; font-size:11px;'>{s.description[:85]}</span>")
@@ -358,6 +456,8 @@ class SkillsWidget(QFrame):
 
             # Active toggle
             cb = QCheckBox("Etkin")
+            cb.setObjectName(f"skill_toggle_{s.name}")
+            cb.setAccessibleName(f"{s.name} yeteneğini etkinleştir")
             cb.setChecked(s.enabled)
             cb.toggled.connect(lambda checked, s_name=s.name: self._on_toggle(s_name, checked))
             card_layout.addWidget(cb)
@@ -405,8 +505,10 @@ class SkillsWidget(QFrame):
                 + (f"Tıkla: {unread} yeni raporu damıt (artımlı, AGY kotası harcar)"
                    if unread else "Okunmamış rapor yok; tazelemek için düğmesini kullan")
             )
+            pb_btn.setAccessibleName(f"{s.name}: yeni raporları damıt")
             pb_btn.setProperty("role", "icon")
             pb_btn.setProperty("tone", pb_tone)
+            apply_row_icon(pb_btn, "distill", pb_tone)
             pb_btn.setEnabled(self.bridge is not None and unread > 0)
             pb_btn.clicked.connect(lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc))
             card_layout.addWidget(pb_btn)
@@ -418,8 +520,10 @@ class SkillsWidget(QFrame):
                 f"Tazele: '{s.name}' için {n_src} raporun TAMAMI yeniden okunur.\n"
                 "Pahalıdır; yalnızca yordamın bozulduğunu düşünüyorsan kullan."
             )
+            rf_btn.setAccessibleName(f"{s.name}: yordamı tazele (tüm arşiv)")
             rf_btn.setProperty("role", "icon")
             rf_btn.setProperty("tone", pb_tone)
+            apply_row_icon(rf_btn, "refresh", pb_tone)
             rf_btn.setEnabled(self.bridge is not None and n_src > 0)
             rf_btn.clicked.connect(
                 lambda _, s_name=s.name, s_desc=s.description: self._on_distill(s_name, s_desc, refresh=True)
@@ -439,10 +543,11 @@ class SkillsWidget(QFrame):
 
             # Edit button: SKILL.md'yi uygulama içi editörde açar
             edit_btn = QPushButton("")
-            edit_btn.setAccessibleName("SKILL.md dosyasını düzenle (uygulama içi editör / sistem edi")
+            edit_btn.setAccessibleName("SKILL.md dosyasını düzenle")
             edit_btn.setObjectName(f"skill_edit_{s.name}")
             edit_btn.setProperty("role", "icon")
             edit_btn.setToolTip("SKILL.md dosyasını düzenle (uygulama içi editör / sistem editörü)")
+            apply_row_icon(edit_btn, "edit")
             edit_btn.clicked.connect(lambda _, s_name=s.name, s_path=s.path: self._on_edit_skill(s_name, s_path))
             card_layout.addWidget(edit_btn)
 
@@ -452,6 +557,7 @@ class SkillsWidget(QFrame):
             folder_btn.setObjectName(f"skill_folder_{s.name}")
             folder_btn.setProperty("role", "icon")
             folder_btn.setToolTip("Yetenek Klasörünü Aç")
+            apply_row_icon(folder_btn, "folder")
             folder_btn.clicked.connect(lambda _, s_path=s.path: self._open_folder(Path(s_path).parent))
             card_layout.addWidget(folder_btn)
 
@@ -460,15 +566,25 @@ class SkillsWidget(QFrame):
             del_btn.setAccessibleName("Yeteneği Sil")
             del_btn.setProperty("role", "icon")
             del_btn.setToolTip("Yeteneği Sil")
+            apply_row_icon(del_btn, "delete", "danger")
             del_btn.clicked.connect(lambda _, s_name=s.name: self._on_delete(s_name))
             card_layout.addWidget(del_btn)
 
             self.skills_layout.addWidget(card)
 
         self.skills_layout.addStretch()
+        self.last_rebuild_ms = elapsed.elapsed()
+
+    @Slot()
+    def reload_from_disk(self):
+        """"Yenile" düğmesi: önbelleği ATAR, katalogu ve yordam durumlarını
+        diskten yeniden okur. Kullanıcının bilerek beklemeyi kabul ettiği tek yol."""
+        self._catalog_dirty = True
+        self.refresh_skills()
 
     def _filter_skills(self):
-        self.refresh_skills()
+        """Geriye dönük ad (testler kullanıyor); süzgeç birleştirilir."""
+        self.schedule_refresh(dirty=False)
 
     def _on_distill(self, skill_name: str, description: str = "", refresh: bool = False):
         """
@@ -536,7 +652,7 @@ class SkillsWidget(QFrame):
             )
 
     def _on_playbook_updated(self, _skill_name: str):
-        self.refresh_skills()
+        self.schedule_refresh(dirty=True)
 
     def _on_reports_updated(self, _skill_name: str = ""):
         """Kaynak raporlar değişti: durum yeniden hesaplanmalı (sayaç/düğme canlı)."""
@@ -546,7 +662,7 @@ class SkillsWidget(QFrame):
             clear_file_facts_cache()
         except Exception:
             pass
-        self.refresh_skills()
+        self.schedule_refresh(dirty=True)
 
     def _on_distill_progress(self, skill_name: str, done: int, total: int):
         """Tur bittiğinde sayaç tam yenileme beklemeden güncellenir."""
@@ -558,8 +674,48 @@ class SkillsWidget(QFrame):
             repolish(counter)
 
     def _on_toggle(self, skill_name: str, enabled: bool):
-        self.skill_manager.toggle_skill(skill_name, enabled)
-        self.refresh_skills()
+        """"Etkin" kutusu: YALNIZCA durumu yazar ve o satırın rozetini çevirir.
+
+        Faz 13-A2 madde 1'in kök nedeni buradaydı: eskiden hem doğrudan
+        `refresh_skills()` çağrılıyor hem de `toggle_skill` içindeki
+        `bus.skills_updated` ikinci bir tam kurulumu tetikliyordu; her kurulum
+        22 SKILL.md ayrıştırması + 22 kasa taraması demekti (ölçüm: 1.961 ms,
+        gerçek ekranda "yanıt vermiyor"). Etkinlik durumu ne katalogu ne de
+        yordam durumunu değiştirdiği için ikisine de gerek yok.
+        """
+        elapsed = QElapsedTimer()
+        elapsed.start()
+        self._suppress_bus_refresh = True
+        try:
+            self.skill_manager.toggle_skill(skill_name, enabled)
+        finally:
+            self._suppress_bus_refresh = False
+        # Önbellekteki tanım da döner: sonraki kurulum doğru kutuyu çizsin.
+        for skill in (self._skills_cache or []):
+            if skill.name == skill_name:
+                try:
+                    skill.enabled = enabled
+                except Exception:
+                    pass
+                break
+        self._update_row_state(skill_name, enabled)
+        self.last_toggle_ms = elapsed.elapsed()
+
+    def _update_row_state(self, skill_name: str, enabled: bool) -> None:
+        """Tek satırın AKTİF/PASİF rozetini yerinde günceller (kurulum yok)."""
+        label = self.findChild(QLabel, f"skill_title_{skill_name}")
+        if label is None:
+            return
+        text = label.text()
+        active = (
+            f"<span style='color:{_P["ok"]}; font-size:11px;"
+            f" font-weight:bold;'>● AKTİF</span>"
+        )
+        passive = (
+            f"<span style='color:{_P["text_muted"]}; font-size:11px;'>"
+            f"○ PASİF</span>"
+        )
+        label.setText(text.replace(passive, active) if enabled else text.replace(active, passive))
 
     def _on_delete(self, skill_name: str):
         reply = QMessageBox.question(
@@ -570,6 +726,7 @@ class SkillsWidget(QFrame):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.skill_manager.delete_skill(skill_name)
+            self._catalog_dirty = True
             self.refresh_skills()
 
     def _on_edit_skill(self, skill_name: str, skill_path: str):
@@ -582,6 +739,7 @@ class SkillsWidget(QFrame):
             return None
         dlg = SkillEditorDialog(path, skill_name, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._catalog_dirty = True
             self.refresh_skills()
         return dlg
 
@@ -598,6 +756,7 @@ class SkillsWidget(QFrame):
             name, desc, inst = dlg.get_data()
             self.skill_manager.create_skill(name, desc, inst)
             QMessageBox.information(self, "Başarılı", f"'{name}' yeteneği başarıyla oluşturuldu!")
+            self._catalog_dirty = True
             self.refresh_skills()
 
     def _open_download_dialog(self):
@@ -607,13 +766,14 @@ class SkillsWidget(QFrame):
             skill = self.skill_manager.download_skill_from_url(url, custom_name)
             if skill:
                 QMessageBox.information(self, "Başarılı", f"'{skill.name}' yeteneği internetten başarıyla indirildi!")
+                self._catalog_dirty = True
                 self.refresh_skills()
             else:
                 QMessageBox.critical(self, "Hata", "Yetenek URL'den indirilemedi. Lütfen bağlantıyı kontrol edin.")
 
     def closeEvent(self, event):
         try:
-            bus.skills_updated.disconnect(self.refresh_skills)
+            bus.skills_updated.disconnect(self._on_skills_updated)
         except Exception:
             pass
         try:

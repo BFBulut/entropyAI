@@ -85,6 +85,17 @@ def create_card_from_args(
     if kind not in amplification.CARD_KINDS:
         kind = amplification.infer_kind(title, goal)
 
+    # `brain_only`: JSON alanı ya da başlık/hedef metnindeki açık işaret
+    # (`--brain-only`, "yalnız beyin"). Kısa devrenin tek meşru kapısı bu
+    # olduğu için karta ALAN olarak yazılır; metinde bırakılırsa kart yeniden
+    # okunduğunda niyet kaybolurdu.
+    raw_flag = args.get("brain_only")
+    brain_only = bool(raw_flag) if isinstance(raw_flag, bool) else (
+        str(raw_flag or "").strip().lower() in ("true", "1", "yes", "evet", "on")
+    )
+    if not brain_only:
+        brain_only = amplification.brain_only_requested(None, f"{title}\n{goal}")
+
     note = ""
     spec = None
     if agent:
@@ -113,6 +124,7 @@ def create_card_from_args(
         priority=priority,
         effort=effort,
         kind=kind,
+        brain_only=brain_only,
         notes=note,
     )
     if spec is not None:

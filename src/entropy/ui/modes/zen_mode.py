@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import re
 from typing import List, Optional
-from PySide6.QtCore import QEvent, Qt, Slot
+from PySide6.QtCore import QEvent, Qt, QTimer, Slot
+
+#: Ağır telemetri yenilemesinin birleştirme penceresi (ms).
+TELEMETRY_DEBOUNCE_MS = 300
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -344,6 +347,8 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         agents_tab_layout.addWidget(self.skill_candidates_panel, 1)
         self.agents_tab = agents_tab
         self.left_tabs.addTab(agents_tab, "Ajanlar", "robot")
+        # Faz 13-A2 madde 4: gezinmede "Ajanlar ●n" — kaç ajan şu anda koşuyor.
+        self.agents_widget.running_changed.connect(self._on_agents_running)
 
         # Yaşam tarzı arayüz (Faz 5.5): "bugün ne oldu" zaman çizelgesi.
         self.timeline_panel = TimelinePanel()
@@ -940,8 +945,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
                 _board_signal.connect(self.on_board_state_changed)
             except Exception:
                 pass
-        bus.cognitive_memory_updated.connect(self._update_telemetry_badges)
-        bus.skills_updated.connect(self._update_telemetry_badges)
+        # Faz 13-A2 madde 1: bu iki sinyal `_update_telemetry_badges`i DOĞRUDAN
+        # çağırıyordu; işlev bilişsel hafızanın TÜM düğümlerini + kasadaki tüm
+        # notları + tüm yetenekleri diskten okur (ölçüm: 152 ms). "Etkin"
+        # kutusuna basınca `skills_updated` yayılıyor ve donmanın ikinci yarısı
+        # burada doğuyordu. Salvo artık 300 ms'de birleştirilir.
+        bus.cognitive_memory_updated.connect(self.schedule_telemetry_refresh)
+        bus.skills_updated.connect(self.schedule_telemetry_refresh)
         bus.project_changed.connect(self._on_project_changed)
         # Sohbet gecmisi tek kaynak: Chat modu ile ayni dosyayi dinler.
         bus.chat_history_updated.connect(self._on_chat_history_updated)
@@ -1087,6 +1097,18 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         elif url_str.startswith("http://") or url_str.startswith("https://"):
             import webbrowser
             webbrowser.open(url_str)
+
+    @Slot()
+    def schedule_telemetry_refresh(self, *_args):
+        """Telemetri rozetlerinin ağır yenilemesini 300 ms'de birleştirir."""
+        timer = getattr(self, "_telemetry_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(TELEMETRY_DEBOUNCE_MS)
+            timer.timeout.connect(self._update_telemetry_badges)
+            self._telemetry_timer = timer
+        timer.start()
 
     def _update_telemetry_badges(self):
         """Dynamically refresh telemetry metric badges in the center column."""
@@ -1337,6 +1359,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         """Saglayici rozetine tiklandi: giris komutunu giris satirina yazar."""
         self.chat_input.setText(f"/login {provider} ")
         self.chat_input.setFocus()
+
+    @Slot(int)
+    def _on_agents_running(self, count: int):
+        """Gezinmedeki "Ajanlar" öğesine koşan ajan sayısını yazar."""
+        nav = getattr(self, "left_tabs", None)
+        if nav is not None and hasattr(nav, "set_activity"):
+            nav.set_activity("Ajanlar", int(count), "ajan çalışıyor")
 
     @Slot(int)
     def _on_inbox_unread(self, count: int):
@@ -1787,14 +1816,14 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             (bus.token_usage_updated, self._update_tokens),
             (bus.token_usage_detail, self._on_token_detail),
             (bus.core_state_changed, self._update_status),
+            (bus.cognitive_memory_updated, self.schedule_telemetry_refresh),
+            (bus.skills_updated, self.schedule_telemetry_refresh),
             (bus.node_selected, self._on_node_selected),
             (bus.agent_turn_started, self._on_turn_started),
             (bus.token_chunk_received, self._on_chunk),
             (bus.agent_turn_completed, self._on_agent_turn_completed),
             (bus.report_created, self._on_report_created),
             (bus.task_notification, self._on_task_notification),
-            (bus.cognitive_memory_updated, self._update_telemetry_badges),
-            (bus.skills_updated, self._update_telemetry_badges),
             (bus.project_changed, self._on_project_changed),
             (bus.chat_history_updated, self._on_chat_history_updated),
             (bus.chat_history_cleared, self._on_chat_history_cleared),

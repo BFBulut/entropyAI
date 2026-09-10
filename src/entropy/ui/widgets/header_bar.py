@@ -235,6 +235,10 @@ class StatusCluster(QFrame):
         self.row.setSpacing(_SPACE["1"])
         self._secondary: list = []
         self._compact = False
+        # Faz 13-A2 madde 5: küme, rozetlerini KIRPACAK kadar sıkışmasın.
+        # `Minimum` yatayda "sizeHint'ten küçük olamam" demektir; kalan yeri
+        # çubuğun esneyen öğeleri (marka/kapsül) paylaşır.
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
 
     #: Dar pencerede gizlenecek ikincil rozetler (kimlik ve gelen kutusu kalır).
     def add(self, widget: QWidget, secondary: bool = False) -> None:

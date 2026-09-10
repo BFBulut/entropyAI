@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from entropy.platform.proc import popen_kwargs
+
 __all__ = [
     "ClaudeBgError",
     "BgAgent",
@@ -183,17 +185,13 @@ Runner = Callable[[Sequence[str], Optional[str]], CommandResult]
 
 def _default_runner(cmd: Sequence[str], cwd: Optional[str]) -> CommandResult:
     """Gerçek süreç koşucusu. Konsol penceresi açmaz (Windows)."""
-    kwargs: Dict[str, Any] = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.run(
         list(cmd),
-        cwd=cwd or None,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        **kwargs,
+        **popen_kwargs(cwd=cwd or None),
     )
     return CommandResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 

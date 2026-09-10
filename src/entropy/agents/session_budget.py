@@ -226,15 +226,27 @@ def rotate_if_needed(agent: str, provider: str, board=None, vault_path=None) -> 
 
 
 def _announce(agent: str, provider: str, reason: str) -> None:
+    """
+    Oturum devri SESSİZ bir durum satırıdır (Faz 13-A2, kullanıcı geri bildirimi).
+
+    Eskiden `bus.task_notification` kullanılıyordu; o kanal OTONOM GÖREV SONUCU
+    kanalıdır ve sohbete "OTONOM PLANLI GÖREV ÇALIŞTIRILDI — Görev Kimliği:
+    session:<ajan>" kartı, üst çubuğa da bir görev çipi düşürüyordu. Oturum
+    yenileme bir görev değil bir bakım işidir: kullanıcının istediği iş
+    yapılmamıştır, rapor yoktur, defterde (ledger) karşılığı yoktur. Bu yüzden
+    yalnızca terminal/durum satırına yazılır ve rozetin tazelenmesi için
+    `agents_updated` tetiklenir.
+    """
     try:
         from entropy.core.event_bus import bus
 
-        bus.task_notification.emit(
-            f"session:{agent}",
-            "Ajan oturumu tazelendi",
-            f"{agent} ({provider}): {reason}. Devir sayfası yazıldı "
-            f"({HANDOFF_FILENAME}); yeni oturum onunla başlıyor.",
+        bus.terminal_output_received.emit(
+            f"[Ajanlar] '{agent}' ({provider}) oturumu tazelendi — {reason}; "
+            f"devir sayfası: {HANDOFF_FILENAME}.\n"
         )
+        signal = getattr(bus, "agents_updated", None)
+        if signal is not None:
+            signal.emit(agent)
     except Exception:
         pass
 

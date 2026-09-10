@@ -89,6 +89,24 @@ class NavList(QWidget):
             self.nav.setCurrentRow(0)
         return index
 
+    def set_activity(self, label: str, count: int, noun: str = "çalışan") -> bool:
+        """Bir gezinme öğesine canlı etkinlik noktası koyar (Faz 13-A2 madde 4).
+
+        Kullanıcı Ajanlar sekmesine girmeden bir ajanın koşup koşmadığını
+        göremiyordu. Nokta metnin sonuna eklenir (ayrı bir yüzey açılmaz,
+        ui-design §2 "aynı bilgi bir kez"), tam sayı ipucundadır.
+        Sayı 0 ise nokta kaldırılır.
+        """
+        base = str(label).split(" ●")[0]
+        for i in range(self.nav.count()):
+            item = self.nav.item(i)
+            if item is None or item.text().split(" ●")[0] != base:
+                continue
+            item.setText(f"{base} ●{count}" if count > 0 else base)
+            item.setToolTip(f"{base}: {count} {noun}" if count > 0 else base)
+            return True
+        return False
+
     def count(self) -> int:
         return self.stack.count()
 

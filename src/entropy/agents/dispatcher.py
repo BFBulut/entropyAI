@@ -360,6 +360,7 @@ class BoardDispatcherCore:
         bir oturum uygulamadan bağımsız yaşayabiliyor.
         """
         touched: List[str] = []
+        self._clear_orphan_live_states()
         for card in self.board.list():
             if card.office or card.status not in ("taken", "running"):
                 continue
@@ -386,6 +387,33 @@ class BoardDispatcherCore:
         if touched:
             self.board.rewrite_taskboard()
         return touched
+
+    def _clear_orphan_live_states(self) -> List[str]:
+        """
+        Açılışta sahipsiz kalan `running` ajan durumlarını temizler (13-A2).
+
+        Kart tarafı kurtarılsa bile ajanın `state.json`ı "koşuyor" kalabilir:
+        çöken süreç kart durumunu hiç yazamamış olabilir. Bir ajan ancak
+        gerçekten `taken`/`running` bir kartı VARSA koşuyor sayılır; kalan her
+        "running" kaydı öksüzdür.
+        """
+        cleared: List[str] = []
+        try:
+            from entropy.core.identity import agent_session_store
+
+            store = agent_session_store(self.vault_path)
+            busy = {str(c.agent or "").strip() for c in self.board.list()
+                    if not c.office and c.status in ("taken", "running")}
+            root = store.state_path("x").parent.parent
+            for entry in sorted(root.glob("*/state.json")):
+                name = entry.parent.name
+                if name in busy:
+                    continue
+                if store.clear_live_state(name):
+                    cleared.append(name)
+        except Exception:
+            logger.debug("Öksüz ajan durumu temizlenemedi", exc_info=True)
+        return cleared
 
 
 def _cfg(name: str, default):

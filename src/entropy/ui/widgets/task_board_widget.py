@@ -82,9 +82,15 @@ DETAIL_MIN_WIDTH = 180
 #: Liste görünümünün asgarisi (durum etiketi + kart başlığı okunur kalsın).
 LIST_VIEW_MIN_WIDTH = 240
 
+#: Kart önizlemesinin tavanı (Faz 13-A2 madde 6): en çok üç satır, en çok
+#: 110 karakter. Tamamı ipucunda durur.
+CARD_PREVIEW_LINES = 3
+CARD_PREVIEW_CHARS = 110
+
 #: `board_state_changed` yenileme gecikmesi (ms) — olay salvosu tek turda toplanır.
 BOARD_DEBOUNCE_MS = 150
 from entropy.ui.widgets.flow_layout import FlowHeaderFrame
+from entropy.ui.widgets.lifecycle import discard_widget
 from entropy.ui.widgets.agents_widget import (
     STATUS_COLORS, STATUS_LABELS, call_flex, list_cards_for, load_board,
     model_belongs_to, models_for_provider, spec_field
@@ -337,13 +343,18 @@ class TaskCardWidget(QFrame):
             layout.addWidget(proof_label)
 
         summary = str(spec_field(card, "summary", ""))
-        short = plain_preview(summary, 110)
+        short = plain_preview(summary, CARD_PREVIEW_CHARS)
         if short:
             summary_label = QLabel(
                 f"<span style='color:{RT['text_body']}; font-size:{LABEL_PX}px;'>"
                 f"{html.escape(short)}</span>"
             )
             summary_label.setWordWrap(True)
+            # Faz 13-A2 madde 6: önizleme EN ÇOK ÜÇ SATIR. Sarma açıkken uzun
+            # bir özet kartı beş-altı satıra çıkarıyor, pano tek ekrandan
+            # taşıyordu. Tavan yazı tipi ölçüsünden gelir (sabit piksel yok).
+            line = summary_label.fontMetrics().lineSpacing()
+            summary_label.setMaximumHeight(line * CARD_PREVIEW_LINES)
             # Kısaltılan özetin tamamı ipucunda kalır (bilgi kaybı olmasın).
             summary_label.setToolTip(summary)
             layout.addWidget(summary_label)
@@ -534,8 +545,7 @@ class TaskDetailPanel(QFrame):
             item = self.outputs_layout.takeAt(0)
             widget = item.widget() if item else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         if not has_card:
             self.title_label.setText(
                 f"<b style='color:{RT['accent']}; font-size:13px;'>GÖREV DETAYI</b>"
@@ -1142,8 +1152,7 @@ class TaskBoardWidget(QFrame):
                 item = layout.takeAt(0)
                 widget = item.widget() if item else None
                 if widget is not None:
-                    widget.setParent(None)
-                    widget.deleteLater()
+                    discard_widget(widget)
             column_cards = self.cards_in_column(key)
             label = dict(COLUMNS)[key]
             # Uç durum sütunları (Başarısız/İptal) boşken gizlenir: pano tek
@@ -1367,8 +1376,7 @@ class CompactTaskListWidget(QFrame):
             item = self.list_layout.takeAt(0)
             widget = item.widget() if item else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         cards = self.list_cards()
         open_n = self.open_count()
         color = RT["accent_warn"] if open_n else RT["text_dim"]

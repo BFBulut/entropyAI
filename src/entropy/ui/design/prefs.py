@@ -25,6 +25,8 @@ __all__ = [
     "set_ui_density",
     "zen_core_visible",
     "set_zen_core_visible",
+    "section_expanded",
+    "set_section_expanded",
     "save_splitter",
     "install_splitter_persistence",
     "restore_splitter",
@@ -100,6 +102,21 @@ def zen_core_visible() -> bool:
 def set_zen_core_visible(visible: bool) -> bool:
     settings().setValue("ui/zen_core_visible", "1" if visible else "0")
     return bool(visible)
+
+
+def section_expanded(name: str, default: bool = True) -> bool:
+    """Katlanabilir bir bölümün açık/kapalı durumu (ui-design §0.9).
+
+    Faz 13-A2 madde 6: Görevler ekranı üç bölüm birden gösterdiği için
+    kalabalıktı; "Arka plan görevleri" varsayılan olarak KATLI açılır ve
+    kullanıcının açtığı hâl oturumlar arası korunur.
+    """
+    return _get(f"ui/section/{name}", "1" if default else "0") not in ("0", "false", "False")
+
+
+def set_section_expanded(name: str, expanded: bool) -> bool:
+    settings().setValue(f"ui/section/{name}", "1" if expanded else "0")
+    return bool(expanded)
 
 
 # --------------------------------------------------------------------------- #

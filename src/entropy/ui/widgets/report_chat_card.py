@@ -104,19 +104,32 @@ def report_card_html(payload: Dict[str, Any]) -> str:
             f"<div style='color:{c['text']}; font-size:{ty['label']['size']}px;"
             f" margin:{space['2']}px 0;'>{summary}</div>"
         )
-    links = []
+    # Eylemler kendi satırında, ARALARINDA GERÇEK BOŞLUKLA.
+    #
+    # Faz 13-A2 madde 3: iki bağlantı "Raporu açSohbete al" diye bitişik
+    # çıkıyordu. Kök neden: ayırıcı olarak `margin-right` kullanılıyordu; Qt'nin
+    # zengin metin motoru **satır içi** öğelerde `margin`i yok sayar (CSS'in
+    # desteklenen alt kümesi: `margin` yalnızca blok öğelerde). Ayırma artık
+    # düzenle yapılır — her eylem kendi tablo hücresinde, hücre dolgusu Qt'de
+    # desteklenir ve düz metne de bir sekme olarak düşer.
+    cells = []
     if path:
-        links.append(
+        cells.append(
+            f"<td style='padding-right:{space['4']}px;'>"
             f"<a href='{REPORT_SCHEME}{Path(path).as_posix()}'"
             f" style='color:{c['accent']}; font-size:{ty['label']['size']}px;"
-            f" text-decoration:none; margin-right:{space['3']}px;'>Raporu aç</a>"
+            f" text-decoration:none;'>Raporu aç</a></td>"
         )
-    links.append(
+    cells.append(
+        f"<td style='padding-right:{space['4']}px;'>"
         f"<a href='{CONTEXT_SCHEME}{html.escape(data['card_id'] or data['title'])}'"
         f" style='color:{c['accent']}; font-size:{ty['label']['size']}px;"
-        f" text-decoration:none;'>Sohbete al</a>"
+        f" text-decoration:none;'>Sohbete al</a></td>"
     )
-    parts.append("<div>" + "".join(links) + "</div>")
+    parts.append(
+        f"<table cellspacing='0' cellpadding='0'"
+        f" style='margin-top:{space['2']}px;'><tr>" + "".join(cells) + "</tr></table>"
+    )
     parts.append("</div>")
     return "".join(parts)
 

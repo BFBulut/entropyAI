@@ -166,10 +166,24 @@ class BoardEventLog:
         key = idempotency_key or f"{task_id}-a{int(attempt_id or 1)}-{action}"
         with self._lock:
             self._load_state()
+            # Önbellek BAYAT olabilir: kilit örnek başına, dosya ise ortak.
+            # Gerçek günlükte `seq` 45 ve 46 AYNI idempotency anahtarıyla iki
+            # kez yazılmıştı — ikinci örnek birincinin yazımını hiç görmemişti.
+            if self._tail_seq() > int(self._seq or 0):
+                self._seq = None
+                self._keys = None
+                self._load_state()
             if key in (self._keys if self._keys is not None else set()):
                 return None
             self._rotate_if_needed()
-            seq = int(self._seq or 0) + 1
+            # `seq` DOSYADAN da doğrulanır (Faz 13-A2). `self._seq` süreç içi
+            # bir önbellek ve kilit ÖRNEK BAŞINA: ikinci bir `BoardEventLog`
+            # (ya da ikinci bir süreç) araya yazdığında bu örneğin önbelleği
+            # bayatlıyor ve aynı `seq` iki kez düşüyordu. Ölçülen yerde
+            # `board.drift` iki farklı örnekten yazılıyordu; sıra numarası
+            # projeksiyonun tek monoton ekseni olduğu için çakışma sessizce
+            # olay sırasını bozuyordu.
+            seq = max(int(self._seq or 0), self._tail_seq()) + 1
             event = {
                 "schema_version": SCHEMA_VERSION,
                 "seq": seq,
@@ -197,6 +211,25 @@ class BoardEventLog:
                 self._keys = set()
             self._keys.add(key)
         return event
+
+    def _tail_seq(self) -> int:
+        """Günlüğün SON satırındaki `seq` (dosya gerçeği; önbellek değil)."""
+        try:
+            if not self.path.is_file():
+                return 0
+            with open(self.path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 8192))
+                lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+            for raw in reversed(lines):
+                try:
+                    return int(json.loads(raw.decode("utf-8")).get("seq") or 0)
+                except Exception:
+                    continue
+        except OSError:
+            return 0
+        return 0
 
     def _rotate_if_needed(self) -> None:
         try:
@@ -388,9 +421,16 @@ def board_drift(cards, view: dict) -> List[dict]:
         if want and have and want != have:
             out.append({"id": cid, "card": have, "projection": want})
     for cid, row in projected.items():
-        if cid not in seen:
-            out.append({"id": cid, "card": "(dosya yok)",
-                        "projection": str(row.get("status") or "")})
+        if cid in seen:
+            continue
+        status = str(row.get("status") or "")
+        if status == "canceled":
+            # Arşivlenmiş kartın dosyasının OLMAMASI beklenir (Faz 13-A2):
+            # `task.canceled` zaten "bu kart panodan kalktı" demektir. Bunu
+            # ayrışma saymak, temizlenen her kartın uyarı satırını sonsuza dek
+            # yaşatırdı — ayrışma uyarısı o zaman hiçbir şey anlatmaz olurdu.
+            continue
+        out.append({"id": cid, "card": "(dosya yok)", "projection": status})
     return sorted(out, key=lambda d: d["id"])
 
 

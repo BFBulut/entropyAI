@@ -375,6 +375,17 @@ class EntropyConfig(BaseModel):
     # sayılıyor). Ayar olarak duruyor çünkü eşik korpus büyüdükçe yeniden
     # kalibre edilir.
     brain_confidence_threshold: float = 0.40
+    # Faz 13-A2 — BEYİN KISA DEVRESİ VARSAYILAN KAPALI. Gerçek ekranda
+    # ölçülen hata: kullanıcı "araştırma yap" dedi, kart `kind=research`
+    # oldu ve kart CLI'ya HİÇ gitmeden "beyinden yanıtlandı (güven 0,49)"
+    # notuyla kapandı; "yanıt" diye gösterilen metin Entropy'nin KİMLİK
+    # düğümüydü. Kullanıcının kuralı bağlayıcı: "araştır" dendiğinde
+    # araştırma CANLI koşar; beyin ajana bağlamdır, araştırmanın yerine
+    # geçmez. Bu yüzden otomatik kısayol kapalıdır ve beyin yalnızca
+    # isteme `[BEYİN]` bölümü olarak girer. Açık tercih (kartta
+    # `brain_only`) hâlâ kısa devre yapabilir; o yol bu bayraktan
+    # bağımsızdır (bkz. `agents/amplification.py: shortcut_decision`).
+    brain_shortcut_enabled: bool = False
     context_window_size: int = 20
     model_fallback_name: str = "[Model: Unknown]"
     selected_model: str = "gemini-3.1-pro-high"
@@ -517,6 +528,7 @@ class EntropyConfig(BaseModel):
                 "agent_session_max_cards": self.agent_session_max_cards,
                 "agent_session_max_tokens": self.agent_session_max_tokens,
                 "brain_confidence_threshold": self.brain_confidence_threshold,
+                "brain_shortcut_enabled": self.brain_shortcut_enabled,
                 "claude_config_dir": self.claude_config_dir,
                 "claude_isolated": self.claude_isolated,
                 "claude_workspace_dir": self.claude_workspace_dir,
@@ -578,6 +590,8 @@ class EntropyConfig(BaseModel):
                     self.board_auto_dispatch = data["board_auto_dispatch"]
                 if isinstance(data.get("amplification_lock"), bool):
                     self.amplification_lock = data["amplification_lock"]
+                if isinstance(data.get("brain_shortcut_enabled"), bool):
+                    self.brain_shortcut_enabled = data["brain_shortcut_enabled"]
                 threshold = data.get("brain_confidence_threshold")
                 if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
                     if 0.0 <= float(threshold) <= 1.0:

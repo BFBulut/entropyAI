@@ -7,9 +7,9 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.10.1** (Faz 13-A kapanış) |
+| Sürüm | **v0.10.2** (Faz 13-A2 kapanış) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-10, **Faz 13-A KAPANIŞ, etiket öncesi son doğrulama** (§2.8): sürüm **0.10.1** (tek kaynak), tam süit **2.521 passed / 0 failed / 634 s**, build exit 0 (216 s, `dist/EntropyAI`, `--version` → `Entropy AI 0.10.1`), `ui_audit --gate --final` exit 0 (`ghost_button_contrast` 0, `click_latency_ms` 8, `empty_interactive_count` 0, `reader_min_width` 875), gerçek ekran LG %200: dolgu sözcüklü başlık **0/573**, digest ghost kenarlığı **koyu 4,85:1 / açık 5,49:1** (piksel örneklemesi) → 13-A'nın son açık maddesi kapandı; yalıtım önce=sonra, marka 0/0 |
+| Son güncelleme | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -63,6 +63,333 @@ girdilerinin hepsi mevcut, silinen `tools/*` ailesinin spec'te girdisi yoktu,
 `skills/media_agency_soldier` pakete girdi (`dist/EntropyAI/_internal/skills/`).
 Marka taraması ve mimari kural testleri: `tests/contracts/test_architecture_rules.py`
 **13 passed**.
+
+---
+
+## 2.10 Faz 13-A2 KAPANIŞ (v0.10.2, 2026-09-10, qa-build-engineer) — kota: 1 canlı kart
+
+Ortam: `EntropyAI.exe` **AÇIKTI** (PID 47920, 22:22'de başlamış, v0.10.1) →
+build `--distpath dist_check --workpath build_check` ile alındı, `dist/` bozulmadı.
+Aynalama komutu (kullanıcı uygulasın):
+`robocopy C:\EntropiAI\dist_check\EntropyAI C:\EntropiAI\dist\EntropyAI /MIR`
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| Tam süit `pytest tests -q -p no:cacheprovider` (offscreen) | **2.596 passed / 0 failed / 613,0 s**, exit 0 | `scratch/_p13a2_suite2.log` |
+| İlk süit koşumu (düzeltme öncesi) | 2.591 passed / **3 failed** → hepsi test sahtesi kaynaklı (aşağıda) | `scratch/_p13a2_suite.log` |
+| `test_spec_sync.py` + `test_architecture_rules.py` | **23 passed**; spec hiddenimports'ta `entropy.platform.proc`, `entropy.ui.widgets.agent_run_state`, `entropy.ui.widgets.lifecycle` var (`EntropyAI.spec:221-223`), sürüm tek kaynak **0.10.2** | — |
+| `python scripts/ui_audit.py --gate --final` | **exit 0** | `scratch/_p13a2_audit2.log` |
+| Build `PyInstaller EntropyAI.spec --distpath dist_check` | **exit 0, 328 s**, `dist_check/EntropyAI` 1.207 MB, `EntropyAI.exe` **56.019.931 B** | `scratch/_p13a2_build.log` |
+| `EntropyAI.exe --version` / `--help` | **`Entropy AI 0.10.2`** exit 0 / exit 0 | — |
+| Paketteki yeni modüller | PYZ arşivinde (7.307 modül) **üçü de var** | `CArchiveReader` + `ZlibArchiveReader` ile doğrulandı |
+| 20 sn canlı koşum | **YAPILAMADI**: tek örnek kilidi — `dist_check` exe'si "Zaten çalışıyor; mevcut pencere öne getirildi" deyip çıktı (kullanıcının exe'si kapatılmadı) | `scratch/_p13a2_live.log` |
+| Günlükte `Traceback`/`CRITICAL` | yeni satırlarda **0** | `.entropy/logs/entropy.log` |
+| Yeni CrashDump | **yok** (en yenisi 2026-09-08) | `%LOCALAPPDATA%\CrashDumps` |
+| Marka taraması (iki ad, parçalı sabitten) | **0 / 0** | `git grep -riIl` |
+| Yalıtım | `skills_state.json` 112 B / mtime **değişmedi**; kasa `Entropy/Reports` **423 → 423**, `Entropy/Tasks` **1 → 1**; `tasks_ledger.db` ve `cognitive_memory.db` değişti ama **süit yüzünden değil** (aşağıda) | — |
+
+### Küçük düzeltmeler (dört madde)
+
+| # | Düzeltme | Dosya:satır | Test |
+|---|---|---|---|
+| (a) | `TaskCard.brain_only: bool` alanı + ön bilgi gidiş-dönüşü (`_as_bool`) | `agents/tasks.py:239-245`, `:275` (`to_frontmatter`), `:289-296` (`_as_bool`), `:783` (okuma) | `tests/contracts/test_phase13a2_closeout.py` (7 test) |
+| (a) | `/task --brain-only` — bayrak başlığa/hedefe sızmadan sökülür | `core/slash_commands.py:4` (`import re`), `:580-589`, `:621` | `test_slash_task_parses_brain_only_flag_out_of_the_title` |
+| (a) | `[PANO board_create]` `brain_only` (JSON alanı ya da metindeki işaret) | `agents/board_autonomy.py:88-93`, `:120` | `test_board_create_accepts_brain_only`, `..._reads_the_marker_in_text` |
+| (a) | `brain_lookup(..., card=card)` bağlantısı | `agents/tasks.py:1622` | `test_ask_brain_passes_the_card_to_brain_lookup`, `..._signature_accepts_card_keyword` |
+| (b) | `git branch` çağrısı `popen_kwargs()` alıyor; `PENDING_UNHIDDEN` **boşaltıldı** | `desk/projects_panel.py:28`, `:53-58`; `tests/contracts/test_phase13_board_hygiene.py:144-147`, `:202-204` | `test_every_subprocess_call_hides_its_console` |
+| (c) | `agy_bridge` `taskkill … shell=True` çağrıları — **zaten düzeltilmişti** (`:1728`, `:2527`, `:2547`, `:2575-2580` hepsi `popen_kwargs()` alıyor); yalnız kilit testi eklendi | — | `test_taskkill_calls_still_hidden` |
+| (d) | `board.drift` **kendi korelasyonunu** taşır (`drift:<hash16>`); eskiden ilk ayrışan kartın kimliğini alıyordu | `agents/tasks.py:983-996` | `test_drift_event_gets_its_own_correlation` |
+| (d) | `seq` artık **dosyanın son satırından** doğrulanıyor; bayat önbellek anahtar yinelemesine de kapatıldı | `agents/board_events.py:201-218` (`_tail_seq`), `:167-178` | `test_seq_stays_unique_across_two_log_instances`, `test_stale_instance_cannot_write_the_same_idempotency_key_twice` |
+
+**(d) gerçek kanıt.** Kullanıcının kasasındaki `Entropy/Board/events.jsonl`
+içinde `seq` **41, 45 ve 46 ikişer kez** yazılmıştı; 46 tam da bu QA sırasında
+(hâlâ koşan v0.10.1 exe'sinden) ikinci kez düştü — yani hata canlıydı.
+Dört `board.drift` olayının dördü de ilgisiz bir kartın korelasyonunu
+(`20260910-064253-kisa-teknik-not`) taşıyordu. Düzeltmeden sonra yazılan
+`seq` 61/63/65 olaylarının korelasyonu `drift:10a5df00…`, `drift:eef5ce2a…`,
+`drift:46a9b155…` — **kendi zincirleri**, yeni yinelenen `seq` yok.
+
+### Üç kırmızı testin teşhisi (gerçek hata mı test hatası mı)
+
+`test_phase12_board_autonomy.py::{test_research_card_with_brain_answer_never_calls_cli,
+test_write_card_runs_cli_with_brain_section}` ve
+`test_phase11_amplification_lock.py::test_card_answered_from_brain_never_calls_the_cli`
+**test hatasıydı**: sahte `brain_lookup` imzası `lambda q, builder=...` idi,
+üretim çağrısı `card=` eklediği anda `TypeError` doğuyor ve
+`tasks.py::_brain_consult`'un geniş `except Exception`'ı onu **sessizce**
+yutuyordu (kısa devre hiç tetiklenmiyordu, kart CLI'ya gidiyordu). Sözleşme
+§2.9'da tanımlı imza `brain_lookup(query, builder=None, card=None)`; sahteler
+ona uyduruldu (`test_phase11_amplification_lock.py:124`,
+`test_phase12_board_autonomy.py:490`) ve imzanın kendisi artık
+`test_brain_lookup_signature_accepts_card_keyword` ile kilitli.
+
+### `ui_audit --gate --final` sayaçları
+
+`orphan_reparents` **0** · `unnamed_icon_buttons` **0** ·
+`screens_swept_count` **7** · `empty_interactive_count` **0** ·
+`ghost_button_contrast` **0** · `button_contrast` **0** ·
+`click_latency_ms` **10** (182 kart) · `min_width_declaration_failures` **0** ·
+`reader_min_width` **875** · `distinct_hex` **0** · `local_stylesheets` **0** ·
+`contrast_failure_count` 0 · `small_target_count` 0 · `min_button_height` 30.
+Bu üç sayaç hesaplanıyordu ama **basılmıyordu**; `scripts/ui_audit.py:938-941`
+yazdırma listesine eklendi (kapı yeşilken bile kanıta geçmiyorlardı).
+
+### Gerçek ekran (LG ULTRAGEAR, dpr 2,0 = %200; 1920×1080, avail 1920×1032)
+
+Betikler `scratch/ui/phase13a2/{real_check.py,real_badge.py,real_ghost.py}`;
+ölçümler `real_metrics.json`, `real_badge_dpi{1,2}.json`, `real_ghost.json`;
+görüntüler `real_skills_toggle.png`, `real_agents_badge.png`,
+`real_report_card.png`, `real_tasks_panel.png`, `real_header_badge_dpi{1,2}.png`.
+
+| # | Kullanıcı bulgusu | Ölçüm | Sonuç |
+|---|---|---|---|
+| (a) | Yetenekler "Etkin" kutusu donduruyor | 26 yetenek dizini, **22** keşfedildi; 22 tıklamanın **azami 3,55 ms**, medyan 0,79 ms (eşik 50 ms); gerçek `skills_state.json` **kopyalandı**, özgün dosya bit bit aynı | **kapandı** |
+| (b) | İkonlar çizilmiyor (boş kare) | Piksel örneklemesi (alfa > 16): yetenek yüzeyi **111/111**, Ajanlar kartı **8/8** ikon çizildi — **kaynak ağacından**; paketlenmiş exe penceresi ölçülemedi (aşağıda) | **kısmen** |
+| (c) | "Raporu açSohbete al" bitişik | Kartın düz metni `…Raporu aç \| Sohbete al` — iki ayrı satır/eylem, bitişik değil | **kapandı** |
+| (d) | Ajan koşarken "2 sa önce" yazıyor | Rozetler: **"çalışıyor · 1 dk 12 sn"** ve **"son koşu: az önce"**; `running_count()` **1** | **kapandı** |
+| (e) | "Claude ✓ max" kırpılıyor | %200: etiket **103 px**, metin 83 px + çerçeve 18 px = 101 px → **sığıyor**; %100: **105 px** / 85+18 = 103 → sığıyor. `minimumWidth == maximumWidth == gereken` olduğu için kırpma yolu kapalı | **kapandı** |
+| (f) | Görevler kalabalık, QA artıkları duruyor | Kasada QA kartı **yok** (9'u `Entropy/_archive/2026-09-10/qa-cards/`); kullanıcının 3 canivopets kartı panoda **görünüyor** ama ikisinin **dosyası diskte yok** → **R-13A2-1** | **AÇIK** |
+| (g) | Görev koşarken ~20 pencere | Gerçek `QApplication` + canlı kart (`arastirmaci`, claude): **6.839 örnek / 300 s** boyunca yeni konsol penceresi **0**, `console_max` **0**, `QApplication.topLevelWidgets()` **0** | **kapandı** |
+
+### R-13A2-1 (AÇIK REGRESYON — kullanıcı verisi)
+
+Kullanıcının üç canivopets kartından **ikisinin `.md` dosyası kasada yok**;
+kartlar yalnızca olay projeksiyonunda yaşıyor, bu yüzden pano onları
+gösteriyor ama dosya kaybolmuş:
+
+```
+20260910-194435-canivopets-com-medya-uzm  (dosya yok) ≠ review
+20260910-224018-canivopets-com-medya-aja  review      ≠ assigned
+20260910-224237-canivopets-com-s-f-rdan-  (dosya yok) ≠ failed
+```
+
+Kasa genelinde arama (`find <kasa> -name "<id>*"`) **hiçbir kopya bulmadı**;
+olay günlüğünde bu iki kart için `task.canceled`/arşiv olayı **yok**, yani
+dosyalar bir olay yazılmadan silinmiş (QA kartı arşivleme diliminin yan
+etkisi olması kuvvetle muhtemel). Kartlar olaylardan yeniden kurulabilir ama
+**kullanıcı verisine yazma** olduğu için bu QA'da **yapılmadı**. Uygulama
+durumu kendisi bildiriyor (`Pano ayrışması: 3 kart` uyarısı ~dakikada bir).
+
+### Kota
+
+Adım 6(g) için **tek** canlı kart (`20260910-235141-13-a2-hayalet-pencere-ol`,
+`arastirmaci`, claude, tavan 20.000). Ledger satırı 97 → **98**;
+`sum(total_tokens)` **4.474.945 → 4.474.945** (kartın satırı `RUNNING`,
+`total_tokens` NULL kaldı: ölçüm süreci kapandığında CLI süreci öksüz kaldı).
+Kart ölçümden sonra `board.stop` ile iptal edildi ve dosyası
+`_archive/2026-09-10/qa-cards/` altına alındı (yedeği
+`~/.entropy/backups/p13a2-qa/`), ayrışma sayısı **3 → 3** (yeni ayrışma
+üretmedi). Başka model çağrısı **yok**.
+
+### Açık kalanlar / doğrulanamayanlar
+
+- **20 sn canlı exe koşumu ve exe penceresinden ikon görüntüsü alınamadı.**
+  Kullanıcının `EntropyAI.exe`'si açık (PID 47920) ve tek örnek kilidi ikinci
+  örneği hemen kapatıyor; talimat gereği kullanıcının exe'si kapatılmadı.
+  Madde (b)'nin *paketlenmiş* kanıtı bu yüzden eksik; kaynak ağacında
+  119/119 ikon çiziliyor ve QtAwesome fontu spec `datas`ında.
+- `tasks_ledger.db` (23:51:47) ve `cognitive_memory.db` (7.684.096 →
+  9.822.208 B, 23:49:13) değişti; **ikisi de süitten değil**: ledger 6(g)
+  kartının (kart kimliği 23:51:41), bilişsel DB ise **koşmakta olan
+  v0.10.1 exe'sinin** yazımı. Süit `tests/conftest.py` ile tmp'ye yalıtık ve
+  `skills_state.json` mtime'ı hiç değişmedi.
+- `scratch/ui/phase10/*.png` süit tarafından yeniden üretildi; sekizi de
+  `git show HEAD:<yol> > <yol>` ile geri yazıldı (`git checkout --`
+  kullanılmadı), o yolda `git status` **temiz**.
+- `.entropy/logs/entropy_fault.log` COM `0x8001010d` kaydı bu koşuda
+  **tekrarlamadı**; kök neden hâlâ **açık iş**.
+- `scripts/ui_audit.py --gate --final` kapanışta bir kez
+  `RuntimeError: libshiboken: Internal C++ object (EntropyEventBus) already
+  deleted` yazdırıyor (`ui/widgets/knowledge_graph.py:4064` → 
+  `core/event_bus.py:172`). Kapı çıkışını etkilemiyor (exit 0) ama gerçek bir
+  yıkım sırası hatası: eşzamansız graf işi ana nesne silindikten sonra
+  geri çağırıyor. **Açık iş.**
+
+---
+
+## 2.9 Faz 13-A2 — BEYİN KISA DEVRESİ KAPATILDI (2026-09-10, memory-rag-engineer) — kota 0
+
+**Kullanıcı geri bildirimi (bağlayıcı):** "araştır" dendiğinde araştırma CANLI
+koşar; beyin ajana **bağlamdır**, araştırmanın yerine geçmez.
+Gerçek ekran kanıtı: kullanıcı "araştırma yap" dedi → kart `kind=research` →
+kart CLI'ya hiç gitmeden *"Beyinden yanıtlandı (güven 0,49 ≥ CRAG eşiği)"*
+notuyla kapandı ve "yanıt" diye gösterilen metin Entropy'nin **kimlik
+düğümü**ydü. Entropy bunu aşmak için ikinci kartta `kind: write` seçmişti.
+
+| Karar | Nerede | Neden |
+|---|---|---|
+| Otomatik kısayol **varsayılan KAPALI** (`brain_shortcut_enabled = False`) | `core/config.py:377-388`, kaydet/yükle `:531`, `:593-594` | 12-F'nin `kind=research` kısayolu kaldırıldı; dört kart türü de CLI'ya gider |
+| `has_answer` artık "**kart canlı koşmadan kapatılabilir**" demek | `agents/amplification.py:202-259` (`BrainAnswer`), `:261-341` (`brain_lookup` + `_shortcut_decision`) | Tek anahtar burada olduğu için `agents/tasks.py`'ye (paralel ajan kapsamı) hiç dokunulmadı |
+| Kısa devre koşulları: açık tercih **VE** CRAG isabeti **VE** güven ≥ **0,75** **VE** metin dolu **VE** kaynaklı | `amplification.py:320-341`, `SHORTCUT_MIN_CONFIDENCE = 0.75` (`:156`) | Açık tercih: `card.brain_only` alanı ya da metinde `--brain-only` / `[brain-only]` / "yalnız beyin" (`BRAIN_ONLY_MARKERS`) |
+| Kısa devrede kart özeti **"CANLI ARAŞTIRMA YAPILMADI"** yazar | `amplification.py:244-259` (`note()`) | Kullanıcı bu kapanışı ayırt edebilsin |
+| Kimlik (`is_identity=1` / `identity:core`) ve `legacy:pre-v2` düğümleri **asla** yanıt sayılmaz | `memory/context_builder.py:126-152` (`is_answer_node`, `is_identity_node`), `_recall_section` `:522-539` | 0,49'luk "yanıt" tam olarak buydu; güven artık yalnız yanıt sayılabilen düğümlerden |
+| Kimlik düğümü bağlama **hiç paketlenmez** | `context_builder.py:1016-1022` (beyin paketinden `[Kimlik]` bloğu çıktı), `_recall_section` filtresi | Kimlik zaten sistem isteminin 1. bölümünde; ikinci kopya bütçe yiyordu |
+| Tazelik ipuçlu sorguda `brain_has_answer` **False** | `context_builder.py:104-123` (`FRESHNESS_HINTS`, `wants_fresh_data`), `AssembledContext.freshness_required` `:189-205`, `build()` `:1187` | "güncel / sıfırdan / yeni / bugün / web / internet / tara" + tarih deseni (`2026`, `12.09.2026`) |
+| İstem sözleşmesi artık kısa devre **vaat etmiyor** | `agents/board_tools.py:214-215` (`_ENTROPY_TOOL_TEXT`) (tek kaynak; `memory/system_prompt.board_tools_section` onu sunar) | Eski metin: "`research` kartı hafızada yanıt varsa CLI'ya HİÇ gitmez". Yeni metin 485 karakter → 600'lük `BUDGET_BOARD_TOOLS`'a **bütün** sığıyor (kırpılırsa `board_create` bloğu tümden düşüyordu) |
+| `[BEYİN]` bölümü kalıyor ve tonu değişti | `amplification.py:223-242` (`prompt_section`) | "BAĞLAMDIR, yanıt değildir: doğrula… canlı araştırmanın yerine GEÇMEZ" |
+| `infer_kind`: "incele", "tara" tek başlarına da research | `amplification.py:71-76` | Ölçülen eksik sezgi |
+
+Amplifikasyon kilidinin diğer iki kapısı (**yenilik kotası** `MIN_NOVELTY_RATIO
+= 0.30`, **kaynak zorunluluğu**) değişmedi.
+
+### K tablosu — gerçek DB **salt okunur** (`~/.entropy/cognitive_memory.db`, 737 düğüm, 7.684.096 B)
+
+Önce/sonra aynı DB üzerinde ölçüldü; "önce" eski davranış monkeypatch'le geri
+getirilerek alındı (`scratchpad/k_before.py`, `brain_metrics.context_metrics()`).
+
+| Ölçüt | Önce | Sonra | Not |
+|---|---:|---:|---|
+| K4 bağlam bütçe payı | %80,06 | **%74,59** | −5,47 puan = isteme ikinci kez konan kimlik bloğu (sorgu başına ~219 token) artık ödenmiyor |
+| K5 damıtılmış pay | %46,65 | **%42,64** | payda küçüldü; damıtılmış token miktarı aynı |
+| K6 wiki payı | %39,70 | **%42,59** | +2,89 puan: aynı bütçede wiki daha büyük pay alıyor (**PASS**) |
+| K1 / K2 / K3 / K7 / K10 / K11 / K12 | — | %5,56 · 8/10·10/10 · %0,0 · 3 · 0 · 91,3 ms · 0 | sekiz hükmün sekizi **PASS** |
+
+### Testler
+
+| Süit | Sonuç |
+|---|---|
+| `tests/contracts/test_phase13_brain_shortcut.py` (yeni, 18 test) | **18 passed / 0,40 s** |
+| `tests/contracts` + `test_phase12_skill_synthesis.py` + `test_phase11_amplification_lock.py` + `test_playbook_and_context.py` + `test_phase11_dream_wiki_brain.py` | **634 passed / 2 failed** → düzeltmelerden sonra aşağıdaki iki madde |
+| `test_phase11_dream_wiki_brain.py` + `test_phase11_amplification_lock.py` + `test_playbook_and_context.py` (düzeltme sonrası) | **76 passed / 9,54 s** |
+
+### Açık işler / doğrulanamayanlar
+
+- **`card.brain_only` alanı henüz yok.** `TaskCard` (`agents/tasks.py`) ve
+  `board_autonomy.create_card_from_args` bu kapsamın dışındaydı (paralel
+  ajanlar). Bugün açık tercih yalnızca **metindeki işaretle** çalışıyor
+  (`--brain-only`, "yalnız beyin"), çünkü `_ask_brain` beyne kartın
+  başlık+hedefini geçiyor. Alan eklendiğinde `brain_lookup(..., card=card)`
+  çağrısı tek satırlık iştir; `brain_only_requested` alanı zaten okuyor.
+- `tests/contracts/test_spec_sync.py::test_spec_lists_every_entropy_module`
+  **kırmızı** (`entropy.platform.proc`, `entropy.ui.widgets.lifecycle`
+  `EntropyAI.spec` hiddenimports'ta yok). Bu iki modül **bu çalışmaya ait
+  değil** (paralel ajanların yeni dosyaları); dokunulmadı.
+- `tests/test_phase11_amplification_lock.py` ve
+  `tests/contracts/test_phase12_board_autonomy.py` içindeki kısayol testleri
+  `brain_lookup`'ı doğrudan sahteleyip `has_answer=True` verdikleri için hâlâ
+  yeşil; artık **kapıyı değil, kapı sonrası bağlantıyı** ölçüyorlar. Kapının
+  kendisi `test_phase13_brain_shortcut.py`'de.
+- Tam süit (2.500+ test) bu dilimde **koşulmadı**; koşan kapsam yukarıdaki
+  üç satırdır.
+
+---
+
+## 2.9 Faz 13-A2 — pano/köprü hijyeni (2026-09-10, agy-integration-engineer) — kota 0
+
+Model çağrısı **0**. Kullanıcı geri bildiriminin üç maddesi (rozet yanlış
+sağlayıcı, konsol pencereleri, "Oturumu yenile" gürültüsü) + QA artığı kart
+temizliği.
+
+### Ajan canlı durum API'si (sözleşme — arayüz rozetinin TEK kaynağı)
+
+`entropy.core.identity.AgentSessionStore` (`src/entropy/core/identity.py:843`):
+
+```python
+store.status(name) -> {
+    "state": "idle" | "running",
+    "since": float | None,          # koşunun başlangıç zaman damgası
+    "card_id": str, "card_title": str,
+    "last_run_at": float | None,    # koşu BAŞINDA ve SONUNDA yazılır
+    "provider": str,                # ajanın GÜNCEL sağlayıcısı
+    "session": dict,                # o sağlayıcının oturum kaydı ({} = yok)
+    "stale_sessions": [{"provider", "model", "updated_at"}],
+}
+store.mark_running(agent, card_id="", card_title="", provider="")
+store.mark_idle(agent, provider="")
+store.clear_live_state(agent) -> bool
+store.current_provider(agent) -> str      # şartname > config varsayılanı
+store.state_path(agent) -> Path           # Entropy/Board/agents/<ad>/state.json
+```
+
+* Canlı durum `session.json`ın **yanında** `state.json`dadır: `session.json`
+  sağlayıcı anahtarlıdır ve `rotate`/`run_kwargs` onu baştan yazar; devir
+  sırasında canlı durum silinmesin diye ayrıldı.
+* Yazma boğazı **tek**: `TaskBoard.apply_event` → `_sync_agent_live_state`
+  (`src/entropy/agents/tasks.py:833`). `taken`/`running` → `mark_running`,
+  diğer her hedef → `mark_idle`. Böylece iptal, kilit düşmesi ve `reset` de
+  rozeti boşa çeker. **Ofis kartları hariç** (ayrı kök kuralı).
+* Rozet hatasının kökü: `ui/widgets/agent_session_badge.read_session` "en taze
+  sağlayıcı kaydı"nı seçiyordu; ajan agy'ye geçtikten sonra bile saatler
+  önceki claude oturumu gösteriliyordu. `status()` **güncel** sağlayıcının
+  oturumunu döndürür, diğerlerini `stale_sessions` içinde verir.
+* Çökme sonrası: `dispatcher.BoardDispatcherCore.reconcile` →
+  `_clear_orphan_live_states` (`src/entropy/agents/dispatcher.py:390`) —
+  `taken`/`running` bir kartı OLMAYAN her ajanın "running" durumu düşer.
+
+### Alt süreç konsol pencereleri
+
+Yardımcı: `src/entropy/platform/proc.py` → `popen_kwargs(**extra)`
+(Windows'ta `CREATE_NO_WINDOW` + `STARTUPINFO(SW_HIDE)`, başka platformda boş
+sözlük; çağıranın `creationflags`i EZİLMEZ, VEYA'lanır; `DETACHED_PROCESS`
+varsa `CREATE_NO_WINDOW` eklenmez — ikisi birlikte geçersizdir).
+
+Sözleşme testi `tests/contracts/test_phase13_board_hygiene.py` AST ile
+`src/entropy/**` içindeki her `subprocess.{Popen,run,check_output,check_call,call}`
+çağrısını tarar; `**popen_kwargs(...)` yoksa **kırmızı**.
+
+| Sayı | Durum |
+|---:|---|
+| 25 | toplam `subprocess.*` spawn çağrısı |
+| 19 | `popen_kwargs` ile gizlendi |
+| 5 | muaf (kullanıcıya GÖRÜNMESİ istenen açıcılar: `explorer /select,`, `open -R`, `xdg-open`) |
+| 1 | bekliyor: `desk/projects_panel.py:54` (`git branch`) — Desk arayüzü paralel ajanın kapsamı, testte `PENDING_UNHIDDEN` |
+
+Ayrıca `core/identity.py`nin iki kimlik probu (`claude auth status`,
+`agy models`) enjekte edilen `runner` üzerinden koştuğu için AST taramasına
+takılmıyordu; ikisi de elle `popen_kwargs`e bağlandı ve `_creationflags()`
+artık yardımcıya devrediyor.
+
+**Ölçüm — bir kart koşusunda kaç alt süreç açılıyor:** `subprocess.run/Popen`
+sayaçlanarak tek kart koşuldu (yalıtılmış kasa, `arastirmaci`, claude) →
+**1 spawn** (CLI'ın kendisi, `core/claude_bridge.py:2412`), **gizli**.
+Yani kullanıcının gördüğü "~20 pencere" kart koşusunun kendisinden DEĞİL;
+düzeltilen asıl kaynaklar **bayrağı hiç olmayan** çağrılardı: 4 × `taskkill
+/F /T` (`agy_bridge`), 1 × `taskkill` (`claude_bridge`), 2 × `git`
+(`perf_history`). Kalan pencereler Qt tarafındadır (paralel ajan bakıyor).
+
+### "Oturumu yenile" sessizleştirildi
+
+`agents/session_budget._announce` artık `bus.task_notification` (OTONOM GÖREV
+SONUCU kanalı) yerine `bus.terminal_output_received` + `bus.agents_updated`
+kullanıyor. Sohbete otonom görev kartı, üst çubuğa "Görev: Ajan oturumu
+tazelendi" çipi ve `session:<ajan>` görev kimliği **düşmüyor**; rapor
+yazılmıyor, deftere (ledger) görev kaydı girmiyor. Testler:
+`test_session_rotation_is_a_quiet_status_line`,
+`test_rotation_does_not_write_a_task_to_the_ledger`.
+
+### QA artığı kartların arşivi
+
+FSM'e **T13** eklendi (`board_fsm.py`): `review`/`failed` → `canceled`,
+**gerekçe (`reason`) zorunlu**; `done` terminal kalır. `board_events.board_drift`
+artık dosyası olmayan `canceled` kartı ayrışma saymaz (arşivlenen kart panodan
+kalkmış demektir).
+
+Arşiv: `<kasa>/Entropy/_archive/2026-09-10/qa-cards/<kart>.json`
+(projeksiyon anlık görüntüsü + kartın tüm olayları + gerekçe). **Hiçbir
+rapor/kontrol noktası silinmedi**; kart `.md` dosyaları bu koşumdan önce zaten
+yoktu (projeksiyonda asılıydılar).
+
+| Kart | Eski durum | Başlık | Kanıt | Olay |
+|---|---|---|---|---|
+| `20260910-064253-kisa-teknik-not` | review | Kisa teknik not | 11-C QA canlı koşu 06:42 | seq 49 |
+| `20260910-064500-kisa-teknik-not-2` | failed | Kisa teknik not 2 | 11-C QA canlı koşu 06:45 | seq 50 |
+| `20260910-064722-gil-notu` | review | GIL notu | 11-C QA canlı koşu 06:47 | seq 51 |
+| `20260910-064948-kisa-teknik-not-3` | review | Kisa teknik not 3 | 11-C QA canlı koşu 06:49 | seq 52 |
+| `20260910-100914-python-dataclasses-vs-at` | review | Python dataclasses vs attrs… | §2.6 (a) | seq 53 |
+| `20260910-102326-kisa-not-a` | review | Kisa not A | §2.6 (b) | seq 54 |
+| `20260910-102335-kisa-not-b` | review | Kisa not B | §2.6 (b) | seq 55 |
+| `20260910-102336-kisa-not-c` | review | Kisa not C | §2.6 (b) | seq 56 |
+| `20260910-200343-devir-karti-d` | review | Kisa not D | §2.7 oturum devri | seq 57 |
+
+**DOKUNULMAYAN kullanıcı kartları:** `20260910-224018-canivopets-com-medya-aja`
+(assigned), `20260910-194435-canivopets-com-medya-uzm` (review),
+`20260910-224237-canivopets-com-s-f-rdan-` (failed).
+Ayrışma **11 → 2**; kalan iki satır kullanıcının kendi kartlarının silinmiş
+`.md` dosyalarıdır (bilinçli olarak bırakıldı).
+
+`Desk/Offices/Araştırma Ofisi/cards/20260910-033508-deneme.md` (ajan Alfa)
+**bırakıldı**: Entropy panosunda değil, kullanıcının kendi ofisinin kartı ve
+`events.jsonl`de izi yok — QA kaynağı **kanıtlanamadı**.
 
 ---
 

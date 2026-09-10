@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from entropy.core.event_bus import bus
+from entropy.platform.proc import popen_kwargs
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.agents_widget import list_cards_for, load_board, spec_field
 
@@ -54,6 +55,9 @@ def git_branches(repo_path: str) -> List[str]:
         proc = subprocess.run(
             ["git", "branch", "--list", "--format=%(refname:short)"],
             cwd=str(path), capture_output=True, text=True, timeout=5,
+            # Konsolsuz exe'de `git` çağrısı yeni bir konsol penceresi
+            # açıyordu (Faz 13-A2 hayalet pencere bulgusu).
+            **popen_kwargs(),
         )
     except Exception:
         return []

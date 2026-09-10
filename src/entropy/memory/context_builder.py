@@ -93,6 +93,62 @@ BRAIN_WIKI_PAGES = 4
 # yalnizca varsayilandir.
 CRAG_MIN_SCORE = 0.40
 
+# Faz 13-A2 — YANIT SAYILMAYAN DÜĞÜMLER. Kimlik düğümü ("Ben Entropy AI'yım…")
+# her sorguya orta-yüksek benzerlikle döner çünkü her metinde geçen genel
+# sözcüklerden kuruludur; gerçek ekranda 0,49 güvenle bir ARAŞTIRMA kartını
+# kapattı ve kullanıcıya "yanıt" diye kimlik metni gösterildi. Kimlik zaten
+# sistem isteminin 1. bölümünde duruyor, bağlamda ikinci kez ödenmesi hem
+# bütçe hem sinyal kaybı. `legacy:pre-v2` düğümleri ise kaynağı doğrulanmamış
+# v2 öncesi kalıntılardır: bağlam olarak görünebilirler ama "beyinde yanıt
+# var" iddiasını TAŞIYAMAZLAR.
+NON_ANSWER_PROVENANCES = ("identity:core", "legacy:pre-v2")
+
+# Tazelik ipuçları: bu sözcükleri içeren istek CANLI bilgi ister. Hafızadaki
+# en iyi eşleşme ne kadar yüksek skorlasa da "beyinde yanıt var" DEMEZ —
+# beyin bu durumda yalnızca bağlamdır.
+FRESHNESS_HINTS = (
+    "güncel", "guncel", "sıfırdan", "sifirdan", "yeni", "bugün", "bugun",
+    "web", "internet", "tara", "taraması", "taramasi", "son durum",
+    "şu an", "su an", "canlı", "canli", "latest", "current", "today",
+)
+#: Tarih benzeri ifadeler (2026, 12.09.2026, 2026-09) de tazelik ister.
+_DATE_HINT_RE = re.compile(r"\b(19|20)\d{2}\b|\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b")
+
+
+def wants_fresh_data(query: str) -> bool:
+    """Sorgu canlı/güncel bilgi mi istiyor? (CRAG kapısını kapatır.)"""
+    text = f" {(query or '').lower()} "
+    if _DATE_HINT_RE.search(text):
+        return True
+    return any(h in text for h in FRESHNESS_HINTS)
+
+
+def is_answer_node(node: Any) -> bool:
+    """
+    Düğüm "beyinde yanıt var" iddiasını taşıyabilir mi?
+
+    Kimlik (`is_identity=1` ya da `identity:core`) ve `legacy:pre-v2`
+    düğümleri ASLA yanıt sayılmaz.
+    """
+    try:
+        if int(getattr(node, "is_identity", 0) or 0):
+            return False
+    except Exception:
+        pass
+    prov = str(getattr(node, "provenance", "") or "").strip().lower()
+    return not any(prov.startswith(p) for p in NON_ANSWER_PROVENANCES)
+
+
+def is_identity_node(node: Any) -> bool:
+    """Kimlik düğümü mü? (Bağlama HİÇ paketlenmez; sistem isteminde zaten var.)"""
+    try:
+        if int(getattr(node, "is_identity", 0) or 0):
+            return True
+    except Exception:
+        pass
+    prov = str(getattr(node, "provenance", "") or "").strip().lower()
+    return prov.startswith("identity:core")
+
 
 def crag_min_score() -> float:
     """Etkin CRAG esigi: ayar varsa ondan, yoksa modul varsayilanindan."""
@@ -130,10 +186,21 @@ class AssembledContext:
     # bakarak "beyinde yok, disariya cikmali" karari verir; onceden sistem
     # zayif sonuclari da guvenle sunuyordu.
     brain_confidence: float = 0.0
+    # Faz 13-A2: sorgu canli/guncel bilgi istiyorsa (tazelik ipucu) beyin
+    # "yanit" iddia edemez; ne kadar iyi eslesirse eslesin baglamdir.
+    freshness_required: bool = False
 
     @property
     def brain_has_answer(self) -> bool:
-        """Beyinde ise yarar bir karsilik var mi (CRAG esigi)."""
+        """
+        Beyinde ise yarar bir karsilik var mi (CRAG esigi).
+
+        Faz 13-A2: `brain_confidence` artik YALNIZCA yanit sayilabilen
+        dugumlerden (kimlik ve `legacy:pre-v2` haric) hesaplanir; tazelik
+        isteyen sorguda ise kapi tamamen kapalidir.
+        """
+        if self.freshness_required:
+            return False
         return self.brain_confidence >= crag_min_score()
 
     @property
@@ -149,6 +216,7 @@ class AssembledContext:
             "budget": self.budget,
             "brain_confidence": round(self.brain_confidence, 4),
             "brain_has_answer": self.brain_has_answer,
+            "freshness_required": self.freshness_required,
             "sections": [{"kind": s.kind, "title": s.title, "tokens": s.tokens} for s in self.sections],
         }
 
@@ -451,7 +519,11 @@ class CognitiveContextBuilder:
             logger.warning("Hafıza geri çağırma başarısız: %s", e)
             self._last_recall_best = 0.0
             return None
-        self._last_recall_best = max((score for _, score in hits), default=0.0)
+        # Faz 13-A2: CRAG güveni YALNIZCA yanıt sayılabilen düğümlerden
+        # hesaplanır. Kimlik düğümü ("Ben Entropy AI'yım…") her sorguya orta
+        # skorla döner ve tek başına bir araştırma kartını kapatabiliyordu.
+        self._last_recall_best = max(
+            (score for node, score in hits if is_answer_node(node)), default=0.0)
         if not hits:
             return None
 
@@ -460,6 +532,10 @@ class CognitiveContextBuilder:
         for node, score in hits:
             content = (node.content or "").strip()
             if not content:
+                continue
+            # Kimlik düğümü bağlama HİÇ paketlenmez: sistem isteminin
+            # 1. bölümü zaten kimliği taşıyor, ikinci kopya bütçe yer.
+            if is_identity_node(node):
                 continue
             entry = f"• ({score:.2f}) {content}"
             cost = estimate_tokens(entry)
@@ -937,12 +1013,12 @@ class CognitiveContextBuilder:
         parts: List[str] = []
         used = 0
 
-        identity = self._identity_lines(min(BRAIN_IDENTITY_TOKENS, budget - used))
-        if identity:
-            block = f"[Kimlik]\n{identity}"
-            parts.append(block)
-            used += estimate_tokens(block)
-
+        # Faz 13-A2: KİMLİK BLOĞU KALDIRILDI. Kimlik sistem isteminin
+        # 1. bölümünde zaten var; burada ikinci kez ödenmesi hem 300 token
+        # boşa gidiyordu hem de `brain_lookup` "yanıt" diye kimlik metnini
+        # okuyup araştırma kartını kapatıyordu (gerçek ekran kanıtı).
+        # `_identity_lines` işlevi duruyor: kimlik istemini kuran taraf
+        # (`system_prompt`) hâlâ kullanabilsin.
         rules = self._brain_rules(min(BRAIN_RULES_TOKENS, max(0, budget - used)))
         if rules:
             parts.append(rules)
@@ -1108,4 +1184,5 @@ class CognitiveContextBuilder:
                 remaining -= section.tokens
 
         ctx.brain_confidence = float(getattr(self, "_last_recall_best", 0.0))
+        ctx.freshness_required = wants_fresh_data(query)
         return ctx

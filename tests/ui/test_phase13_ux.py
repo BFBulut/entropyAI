@@ -559,7 +559,22 @@ def test_gate_g13_1_turns_red_for_an_unlabelled_button(qapp):
     offenders = audit.empty_interactive_widgets(host)
     assert "bozukDugme" in offenders, "kapı boş düğmeyi görmedi"
 
+    # Faz 13-A2 madde 2: sözleşme SERTLEŞTİ. Erişilebilir ad WCAG 4.1.2'yi
+    # karşılar ama kullanıcının ekranda gördüğü BOŞ KAREYİ doldurmaz; 13-A'da
+    # adı olan ikonsuz düğmeler kapıdan geçiyor, kullanıcı yine boş kare
+    # görüyordu. Ad artık G13-1'i susturmaz; yalnızca `unnamed_icon_buttons`
+    # (ekran okuyucu kapısı) yeşile döner.
     bad.setAccessibleName("Sabitle")
+    assert audit.unnamed_icon_buttons(host) == []
+    assert audit.empty_interactive_widgets(host) == ["bozukDugme"], (
+        "adı olan ama çizilemeyen düğme hâlâ boş karedir"
+    )
+
+    # Çizilebilir bir ikon konunca kapı yeşile döner.
+    from entropy.ui.design import TOKENS, icon as design_icon
+
+    bad.setIcon(design_icon("edit", color=TOKENS["color"]["text"]))
+    qapp.processEvents()
     assert audit.empty_interactive_widgets(host) == []
     assert good.text()
     host.deleteLater()

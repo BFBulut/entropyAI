@@ -1,6 +1,7 @@
 """Dynamic Slash Commands Registry and Discovery Engine for Antigravity & Entropy AI."""
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -577,6 +578,16 @@ def _handle_task(args: str) -> str:
         return (f"<b>📋 Görev Durduruldu</b><br/>{_html_escape(card.title)} "
                 f"({'süreç sonlandırıldı' if killed else 'kart kapatıldı'}).")
 
+    # `--brain-only`: kullanıcının AÇIK tercihi (Faz 13-A2). Bayrak metnin
+    # herhangi bir yerinde durabilir; başlığa/hedefe sızmasın diye komut
+    # ayrıştırmasından ÖNCE sökülür ve karta ALAN olarak yazılır. Metinde
+    # bırakmak yetmezdi: `amplification.brain_only_requested` metni ancak
+    # başlık+hedef birleşiminden görüyor, kartın kendi niyeti kalıcı değildi.
+    brain_only = False
+    if "--brain-only" in args.lower():
+        brain_only = True
+        args = re.sub(r"(?i)\s*--brain-only\b", " ", args).strip()
+
     head, sep, goal = args.partition("::")
     parts = head.split()
     if len(parts) < 2:
@@ -607,6 +618,7 @@ def _handle_task(args: str) -> str:
         # `kind` sezgisi burada da uygulanır (Faz 12 kapanışı): `/task` ile
         # açılan kart `kind`siz kalınca beyin kısayolu hiç tetiklenmiyordu.
         kind=_amplification.infer_kind(title, goal or title),
+        brain_only=brain_only,
     )
     try:
         card = board.create(card)

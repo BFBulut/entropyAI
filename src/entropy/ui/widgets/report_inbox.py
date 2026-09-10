@@ -40,6 +40,7 @@ from entropy.core.config import STATE_DIR
 from entropy.ui.design import TOKENS as DS_TOKENS, icon as design_icon
 from entropy.ui.themes.cyber_theme import READING_TOKENS as RT
 from entropy.ui.widgets.ui_polish import BODY_PX, LABEL_PX, apply_no_hscroll
+from entropy.ui.widgets.lifecycle import discard_widget
 
 # "Gelen" penceresi: son 24 saat. Daha uzun tutulsa şerit arşive dönerdi.
 INBOX_WINDOW_HOURS = 24
@@ -645,8 +646,7 @@ class ReportInboxStrip(QFrame):
             item = self.items_layout.takeAt(0)
             widget = item.widget() if item else None
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                discard_widget(widget)
         self.item_widgets = []
 
         visible = self.visible_entries()

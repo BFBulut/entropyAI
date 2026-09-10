@@ -155,6 +155,20 @@ def _guard_rejected(card: dict, payload: dict) -> Optional[str]:
     return None
 
 
+def _guard_archived(card: dict, payload: dict) -> Optional[str]:
+    """
+    `review`/`failed` bir kartın arşivlenmesi (T13) yalnızca GEREKÇEYLE.
+
+    Neden ayrı satır: T12 "koşan işi durdur" demek, bu ise "bitmiş ama artık
+    panoda durmasın" demek. İkisini birleştirmek her tamamlanmış kartı
+    gerekçesiz iptal edilebilir yapardı; `done` ise terminal kalır (kabul
+    edilmiş iş geri alınmaz).
+    """
+    if not str(payload.get("reason") or "").strip():
+        return "arşivleme gerekçesi (reason) boş olamaz"
+    return None
+
+
 def _guard_expired(card: dict, payload: dict) -> Optional[str]:
     if payload.get("pid_alive"):
         return "sahiplenen süreç hâlâ canlı"
@@ -189,6 +203,8 @@ TRANSITIONS: Tuple[Transition, ...] = (
                "attempt += 1"),
     Transition("T12", ("backlog", "assigned", "taken", "running"), "task.canceled",
                "canceled", None, "süreç öldürülür"),
+    Transition("T13", ("review", "failed"), "task.canceled", "canceled",
+               _guard_archived, "arşivleme: gerekçe ZORUNLU"),
 )
 
 # Tabloda YER ALMAYAN ama gerekli tek kaçış: uzlaştırıcının `failed` bir kartı

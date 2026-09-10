@@ -3146,10 +3146,19 @@ class KnowledgeGraphWidget(QFrame):
         header.addWidget(self.scope_combo)
 
         # Isolation toggle button: "Sadece Seçili Dalı Göster"
+        # Faz 13-A2 madde 2: metni de ikonu da yoktu; ekranda boş kareydi
+        # (erişilebilir adı kırpılmış bir ipucu metniydi, o da yanlıştı).
         self.isolate_btn = QPushButton("")
-        self.isolate_btn.setAccessibleName("Açık: Yalnızca seçili dal ve alt düğümlerini gösterir (tüm d")
+        self.isolate_btn.setAccessibleName("Yalnızca seçili dalı göster")
         self.isolate_btn.setCheckable(True)
         self.isolate_btn.setProperty("role", "icon")
+        from entropy.ui.design import TOKENS, icon as design_icon
+
+        _iso_icon = design_icon("filter", color=TOKENS["color"]["text"])
+        if _iso_icon is not None and not _iso_icon.pixmap(16, 16).isNull():
+            self.isolate_btn.setIcon(_iso_icon)
+        else:
+            self.isolate_btn.setText("Dal")
         self.isolate_btn.setToolTip("Açık: Yalnızca seçili dal ve alt düğümlerini gösterir (tüm diğer dalları gizler).\nKapalı: Tüm hafıza görünümünde seçili dalı vurgular, diğerlerini saydamlaştırır.")
         self.isolate_btn.toggled.connect(self._on_isolate_toggled)
         header.addWidget(self.isolate_btn)
