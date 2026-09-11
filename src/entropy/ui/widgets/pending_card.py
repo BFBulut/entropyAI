@@ -192,7 +192,8 @@ class PendingWorkCard(QFrame):
         """İki satırlık kart: başlık + risk, altında ayrıntı ve kararlar.
 
         Tek satır denendi ve 420 px'lik sağ panelde düğme metinleri kırpıldı
-        ("Onayla" → "nayl"); karar düğmesi kırpılmış bir kartta okunmaz.
+        ("Onayla" yerine "nayl" görünüyordu); karar düğmesi kırpılmış bir
+        kartta okunmaz.
         """
         row = QFrame(self)
         row.setProperty("role", "panel")

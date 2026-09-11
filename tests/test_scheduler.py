@@ -89,3 +89,24 @@ def test_scheduler_remove_task(tmp_path):
 
     # Removing non-existent task returns False
     assert scheduler.remove_task("non-existent") is False
+
+
+# --- Faz 14-F: yalıtım sözleşmesi -------------------------------------------
+
+
+def test_scheduler_storage_is_isolated_from_user_home(tmp_path, monkeypatch):
+    """`ENTROPY_SCHEDULER_TASKS` verildiğinde gerçek `~/.entropy` dosyasına
+    dokunulmaz (tam süit sırasında ölçülen sızıntının kapısı)."""
+    from pathlib import Path
+
+    from entropy.scheduler.cron_engine import SCHEDULER_TASKS_ENV, TaskScheduler
+
+    target = tmp_path / "sched" / "scheduler_tasks.json"
+    monkeypatch.setenv(SCHEDULER_TASKS_ENV, str(target))
+    scheduler = TaskScheduler()
+    assert scheduler.storage_path == target
+    assert Path.home() / ".entropy" / "scheduler_tasks.json" != scheduler.storage_path
+
+    monkeypatch.delenv(SCHEDULER_TASKS_ENV, raising=False)
+    default = TaskScheduler()
+    assert default.storage_path == Path.home() / ".entropy" / "scheduler_tasks.json"

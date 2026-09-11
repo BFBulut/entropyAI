@@ -201,8 +201,6 @@ a = Analysis(
         'pypdf',
         'yaml',
         'entropy.brain',
-        # Faz 13-B uyumluluk şimi (eski `entropy.memory` adı; v0.12.0'da silinecek)
-        'entropy.memory',
         'entropy.brain.playbook',
         'entropy.brain.distiller',
         'entropy.brain.context_builder',

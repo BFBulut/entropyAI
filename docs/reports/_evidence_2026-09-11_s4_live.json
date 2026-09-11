@@ -1,0 +1,14 @@
+{
+  "recall_check_after_run": {
+    "question": "canivopets.com ne satıyor, ana ürün grubu ne?",
+    "new_nodes_in_top5": 1,
+    "top5": [
+      "semantic-c2f864135c5f1adb",
+      "semantic-f703303f9b43a8b8",
+      "semantic-d178ef2f18954284",
+      "semantic-b6bc85aede2cc9ec",
+      "semantic-8703e2f01ea5540f"
+    ],
+    "note": "beş yeni düğüm gerçek DB'de, provenance=report; ana bulgu düğümü recall top-5 içinde; sohbet yanıtı ayrıca depo dosyalarını okuyarak da kaynak gösterdi"
+  }
+}

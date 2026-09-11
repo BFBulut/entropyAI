@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "entropy-ai"
-version = "0.11.3"
+version = "0.12.0"
 description = "Autonomous Agentic Operating System & Desktop Interface for Antigravity"
 readme = "GEMINI.md"
 requires-python = ">=3.11"

@@ -100,6 +100,8 @@ CONTENT_MIN_WIDTH = 560
 #: Sağ panelin (Sohbet / Hafıza) varsayılan ve asgari genişliği.
 RIGHT_PANEL_WIDTH = 420
 RIGHT_PANEL_MIN_WIDTH = 320
+#: Sağ panelin pencere genişliğine oranı (varsayılan açılış).
+RIGHT_PANEL_RATIO = 0.40
 #: Dar pencerede (bu eşiğin altında) geniş asgariler geri düşer.
 LAYOUT_WIDE_THRESHOLD = 1100
 
@@ -601,11 +603,15 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         right_panel.setMinimumWidth(RIGHT_PANEL_MIN_WIDTH)
         body_splitter.addWidget(right_panel)
 
-        # Genişlikler: içerik ≥ 560 px (G13-4), sağ panel varsayılan 420 px.
+        # Genişlikler: içerik ≥ 560 px (G13-4); sağ panel (Sohbet/Hafıza)
+        # pencerenin ~%40'ı (Faz 14-F, kullanıcının isteği) ve pencere büyürken
+        # oranını korur — sabit 420 px, geniş ekranda paneli ince bırakıyordu.
         self.content_region.setMinimumWidth(CONTENT_MIN_WIDTH)
-        body_splitter.setSizes([CONTENT_MIN_WIDTH + 320, RIGHT_PANEL_WIDTH])
-        body_splitter.setStretchFactor(0, 1)
-        body_splitter.setStretchFactor(1, 0)
+        _win_w = max(ZEN_PREFERRED_SIZE[0], self.width())
+        _right = max(RIGHT_PANEL_WIDTH, int(_win_w * RIGHT_PANEL_RATIO))
+        body_splitter.setSizes([max(CONTENT_MIN_WIDTH, _win_w - _right), _right])
+        body_splitter.setStretchFactor(0, 6)
+        body_splitter.setStretchFactor(1, 4)
         install_splitter_persistence("zen.body", body_splitter)
         self.body_splitter = body_splitter
         #: Geriye uyum: eski adlar tek bölücüye işaret eder (çağıran kod ve

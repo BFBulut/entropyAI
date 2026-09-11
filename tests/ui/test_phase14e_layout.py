@@ -20,7 +20,8 @@ import ui_audit  # noqa: E402
 from entropy.core.agy_bridge import AgyProcessBridge
 from entropy.ui.design import apply_design_system
 from entropy.ui.modes.zen_mode import (
-    CONTENT_MIN_WIDTH, RIGHT_PANEL_MIN_WIDTH, ZEN_PREFERRED_SIZE, ZenModeWindow,
+    CONTENT_MIN_WIDTH, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_RATIO,
+    ZEN_PREFERRED_SIZE, ZenModeWindow,
 )
 
 
@@ -101,6 +102,18 @@ def test_single_shell_splitter_and_right_panel(zen, app):
     assert zen.knowledge_graph.isAncestorOf(zen.knowledge_graph)
     assert zen.memory_tab.isAncestorOf(zen.knowledge_graph)
     assert zen.memory_tab.isAncestorOf(zen.memory_inspector_btn)
+
+
+def test_right_panel_default_is_about_40_percent(zen, app):
+    """Sağ panel varsayılanı pencerenin ~%40'ı (Faz 14-F)."""
+    sizes = zen.body_splitter.sizes()
+    total = sum(sizes)
+    assert total > 0
+    ratio = sizes[1] / total
+    assert 0.33 <= ratio <= 0.47, sizes
+    assert ratio >= RIGHT_PANEL_RATIO - 0.07
+    # Pencere büyürken panel oranını korur (stretch 6/4 → yatay stretch > 0).
+    assert zen.right_panel.sizePolicy().horizontalStretch() > 0
 
 
 def test_core_visual_and_brand_preserved(zen, app):

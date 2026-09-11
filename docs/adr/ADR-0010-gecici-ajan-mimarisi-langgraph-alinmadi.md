@@ -1,6 +1,22 @@
 # ADR-0010 — Geçici ajan mimarisi; LangGraph çalışma zamanı olarak alınmadı, dört desen alındı
 
-- **Durum:** Kabul edildi (Faz 14 açılışı, 2026-09-11)
+- **Durum:** Kabul edildi (Faz 14 açılışı, 2026-09-11) · **Uygulandı: 14-A…14-E**
+  (2026-09-11, v0.11.1 → v0.11.3; belge kapanışı 14-F). Kod karşılıkları:
+  `agents/ephemeral.py`, `core/pending.py`, `core/permission_server.py`,
+  `brain/agent_memory_writer.py`, `ui/widgets/nav_strip.py` — sözleşmeler
+  `docs/ARCHITECTURE.md` §6.4, §6.4-D, §6.5, §6.6, §6.7, §8, §10.2.
+  LangGraph **alınmadı** (park), dört desen alındı.
+
+### Canlı kanıt özeti (S1–S3, 2026-09-11, `claude` 2.1.268)
+
+| Senaryo | Tarih/saat | Sonuç | Taze / ham token | Kanıt |
+|---|---|---|---:|---|
+| **S1** sohbet sürekliliği | 2026-09-11 | GEÇTİ — 1. tur `resume=false`, 2. tur aynı `session_id` ile `--resume`, konu doğru anıldı | ölçülmedi / **39.040** | `docs/reports/_evidence_2026-09-11_s1_live.json` |
+| **S2** gerçek onay | 2026-09-11 07:08–07:19 | GEÇTİ — onayda komut koştu (dosya silindi), rette koşmadı ve `permission_denials`'a 1 kayıt düştü; yalnız `entropy` MCP sunucusu yüklü | 534 / **55.234** | `docs/reports/_evidence_2026-09-11_s2_live.json` |
+| **S3** geçici ajan | 2026-09-11 07:44 ve 07:46 | GEÇTİ — `--agents`/`--session-id`/`--no-session-persistence`/izin aracı argv'de, akış + tek bildirim + H1 raporu, `workdir` silindi, ledger `ephemeral` | 4.525 / **63.272** | `docs/reports/_evidence_2026-09-11_s3_live.json`, `scratch/phase14/s3_live.json` |
+
+**S4** (alt ajan hafızası, canlı) ve **S5** (yeni düzen, gerçek ekran) 14-F kapanış
+QA'sında doğrulanacak; 14-D'nin offline kısmı ve 14-E'nin kapıları yeşildir.
 - **Bağlam belgeleri:** `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (§0, §4, §6, §7),
   `docs/reports/2026-09-11_Faz14_Arastirma_A_Mevcut_Mimari_ve_Hata_Izi.md` (§1, §2, §5),
   `docs/reports/2026-09-11_Faz14_Arastirma_B_Istenen_Mimari_ve_Fark_Analizi.md` (§3, §5, §6, §9),
@@ -124,6 +140,13 @@ parçaların çoğu zaten var (`bus.agent_stream`, `MemoryGate`, `report_title`,
 - **Ölçülemeyen:** MCP onay aracının birebir JSON şeması resmî belgede
   yayımlanmamıştır (B notu §8); 30 sn'lik bağlantı zaman aşımının kullanıcı
   bekleme süresini kapsamadığı **doğrulanmadı**.
+  > **14-B güncellemesi (2026-09-11):** şema artık **ölçüldü**
+  > (`scratch/phase14/permission_spike/README.md`, 5 canlı koşum): sonuç nesnesi
+  > yalnız tek `text` parçası + `isError` taşır, karar o metnin içinde düz JSON'dur,
+  > `structuredContent` eklemek koşumu kırar. 30 sn **bağlantı** zaman aşımıdır;
+  > 45 sn'lik karar beklemesi sorunsuz geçti, üst sınır hâlâ ölçülmedi.
+  > Ayrıca ölçüldü: CLI'ın yerleşik "güvenli komut" sınıfı izin kancasından **önce**
+  > koşar; "her araç sorulur" garantisi verilemez (ARCHITECTURE §6.6).
 - Faz 14 dilimleri bu karara dayanır: 14-A (süreklilik), 14-B (onay),
   14-C (geçici ajan), 14-D (hafıza yazarı), 14-E (düzen), 14-F (kapanış).
 

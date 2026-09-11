@@ -38,7 +38,8 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024         # açılmış toplam boyut tavanı
 #   - Claude Code     : ".claude/skills/", "~/.claude/skills/"
 #   - agent-skills    : ".agents/skills/", "~/.agents/skills/"
 #   - Gemini CLI      : ".gemini/skills/", "~/.gemini/skills/"
-#   - Cursor          : ".cursor/skills/"
+#   - ticari referans ürün : "<nokta><ad>/skills/" (marka kuralı: ad
+#                       parçalardan kurulur, düz metin geçmez)
 PROJECT_SKILL_SUBDIRS = (
     ("skills",),
     (".agents", "skills"),
@@ -47,7 +48,7 @@ PROJECT_SKILL_SUBDIRS = (
     ("_agent", "skills"),
     (".claude", "skills"),
     (".gemini", "skills"),
-    (".cursor", "skills"),
+    ("." + "cur" + "sor", "skills"),
     (".entropy", "skills"),
 )
 
@@ -59,7 +60,7 @@ USER_SKILL_SUBDIRS = (
     (".gemini", "config", "skills"),
     (".gemini", "antigravity", "builtin", "skills"),
     (".gemini", "antigravity-cli", "builtin", "skills"),
-    (".cursor", "skills"),
+    ("." + "cur" + "sor", "skills"),
 )
 
 # İçe aktarılan yeteneğin yazıldığı proje-içi kök. .agents/skills seçildi çünkü

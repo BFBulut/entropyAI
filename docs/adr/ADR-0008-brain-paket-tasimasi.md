@@ -55,6 +55,11 @@ bu bir risk kapısı değildi ve yüzey her fazda büyüyordu (41 → 45 → 48 
   spec'te şim girdisi.
 - **Geri alma:** taşıma tek commit olduğu için `git revert <commit>` yeterlidir;
   veri göçü olmadığı için geri almanın yan etkisi yoktur.
-- v0.12.0 açılırken yapılacak: `src/entropy/memory/` silinir, spec'ten
+- **Şim v0.12.0'da kaldırıldı (Faz 14-F, 2026-09-11):** `src/entropy/memory/`
+  silindi, `EntropyAI.spec` hiddenimports'tan `'entropy.memory'` çıkarıldı,
+  `tests/contracts/test_brain_package_move.py` "kaldırıldı" sözleşmesine
+  çevrildi (`import entropy.memory` → `ModuleNotFoundError`; atıf sayacı 0;
+  spec'te şim girdisi yok). Kullanıcı verisine dokunulmadı.
+- ~~v0.12.0 açılırken yapılacak~~ (tamamlandı): `src/entropy/memory/` silinir, spec'ten
   `'entropy.memory'` girdisi çıkarılır, `test_brain_package_move.py`'nin şim
   testleri kaldırılır (atıf sayacı testi kalır).

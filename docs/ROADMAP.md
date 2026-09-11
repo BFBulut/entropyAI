@@ -87,21 +87,44 @@ Mimari karar: [ADR-0010](adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md
 | **S4** | S3'ten sonra yeni sohbet | Entropy bulguyu **kaynaklı** hatırlar; K3 ≤ %5, K12 artmaz |
 | **S5** | Yeni düzen | 7 düğme üstte, sağda tam panel (Sohbet/Hafıza); `ui_audit --gate --final` exit 0 |
 
-| Dilim | İş | Senaryo | Ajan | Kota | Etiket |
-|---|---|---|---|---:|---|
-| **14-A** Sohbet sürekliliği | sabit sistem istemi, bağlam kullanıcı mesajına iner, `_forget_stale_session` yalnız model/efor değişiminde, ledger `model` düzeltmesi, sohbette proje kökü salt okunur | S1 | agy-integration-engineer | 10–15k | v0.11.1 |
-| **14-B** Gerçek onay | stdio MCP onay sunucusu + `--permission-prompt-tool`; skip bayrağı koşullu; **tek** bekleyen işler kuyruğu (`core/pending.py`) + onay kartı; izin reddi olayı köprüde | S2 | agy + ui | 15–25k | v0.11.2 |
-| **14-C** Geçici ajan döngüsü | `agent.md` üretici, geçici oturum, canlı akış satırı, adım tavanı yeteneğe göre (aşınca `review`), kendini silme, tek bildirim; kalıcı kadro **gizlenir** | S3 | agy + ui | 40–60k | v0.11.3 |
-| **14-D** Hafıza yazarı alt ajan | kapıya hata/günlük/yığın izi reddi bandı; 12 pytest artığı düğüm **arşive**; alt ajan JSON → kapı | S4 | memory-rag-engineer | 10–20k | v0.11.4 |
-| **14-E** Yeni düzen | 7 düğme üstte, sağ tam panel Sohbet/Hafıza, çekirdek üstte, tek durum satırı; üst çubuk kapısı `navStrip` ayrı grup | S5 | ui-engineer + repo-curator | 0 | v0.11.5 |
-| **14-F** Kapanış | tam süit, build, **`dist/` kullanıcının ikilisi**, veri kökü tek kaynak (`core/paths.py`), R-13A2-1 drift döngüsü, ARCHITECTURE ölçümle eşit, S1–S5 gerçek ekranda birlikte | tümü canlı | qa-build-engineer | 0–20k | **v0.12.0** (`entropy.memory` şimi kaldırılır) |
+| Dilim | İş | Senaryo | Ajan | Etiket | Durum |
+|---|---|---|---|---|---|
+| **14-A** Sohbet sürekliliği | sabit sistem istemi, bağlam kullanıcı mesajına iner, imza yalnız sabit bölümlerden, tek oturum kimliği, ledger `model`/`effort`, sohbette proje kökü salt okunur | S1 | agy-integration-engineer | **v0.11.1** | **tamamlandı** (canlı S1 GEÇTİ) |
+| **14-B** Gerçek onay | stdio MCP onay sunucusu + `--permission-prompt-tool`; skip bayrağı koşullu; tek bekleyen işler kuyruğu (`core/pending.py`) + onay kartı; CLI keşif yedekleri | S2 | agy + ui | **v0.11.2** | **tamamlandı** (canlı S2 GEÇTİ: onay/ret) |
+| **14-C** Geçici ajan döngüsü | `agents/ephemeral.py`: `agent.md` üretici, tek seferlik oturum, canlı akış satırı, yeteneğe göre adım tavanı (aşınca `review`), kendini silme, tek bildirim; kalıcı kadro **gizlendi** | S3 | agy + ui | **v0.11.3** | **tamamlandı** (canlı S3 iki koşum GEÇTİ) |
+| **14-D** Hafıza yazarı alt ajan | kapıda hata/günlük/yığın izi reddi bandı; 16 artık düğüm **arşive** (silme yok); alt ajan `[HAFIZA]` JSON → kapı | S4 | memory-rag-engineer | v0.11.4 (ayrı etiket atılmadı) | **offline tamamlandı**; **canlı S4 kapanışta doğrulanacak** |
+| **14-E** Yeni düzen | 7 düğme üstte (`navStrip`), sağ tam panel Sohbet/Hafıza, çekirdek sohbetin üstünde, tek durum satırı; `ui-design` G14-1 / G14-1b kapıları | S5 | ui-engineer + repo-curator | v0.11.5 (ayrı etiket atılmadı) | **tamamlandı**; **gerçek ekranda S5 kapanışta doğrulanacak** |
+| **14-F** Kapanış | tam süit, build, **`dist/` kullanıcının ikilisi**, veri kökü tek kaynak (`core/paths.py`), `entropy.memory` şiminin kaldırılması, R-13A2-1 drift döngüsü, ARCHITECTURE ölçümle eşit, S1–S5 gerçek ekranda birlikte | tümü canlı | qa-build-engineer + repo-curator | **v0.12.0** | **yürürlükte** (belge kapanışı yapıldı; QA açık) |
 
-Sıra: 14-A → 14-B → 14-C → 14-D → 14-E → 14-F (14-E, 14-A ile paralel koşabilir).
-**Kota tavanı 150k** (gerçekçi beklenti 75–140k); canlı doğrulamalar **ayrı turlarda**
-koşulur — 13-C dersi: tek tur tavanı aşabiliyor.
+**Ölçüm (14-E sonu):** kaynak **167 dosya / 85.520 satır** (Faz 14 farkı +9 modül /
++4.327 satır), test dosyası **209**; toplanan test sayısı ve `dist/` ölçümü kapanış
+QA'sındadır. Kanıtlar: `docs/reports/_evidence_2026-09-11_s{1,2,3}_live.json`,
+`scratch/phase14/s3_live.json`, `scratch/phase14/permission_spike/README.md`.
+Faz 14 raporu: `docs/reports/2026-09-11_Faz14_Ilerleme_Raporu_v0.12.0.md`.
+
+Sıra: 14-A → 14-B → 14-C → 14-D → 14-E → 14-F (14-E, 14-A ile paralel koştu).
+**Kota tavanı 150k**; 14-A…14-E'de harcanan **ham ≈ 194k / taze ≈ 6k** — ham sayı
+CLI'ın önbellek okumalarını da sayar, abonelik penceresini yakan **taze** sayıdır
+(ayrıntı: faz raporu §3). 14-C'nin koşum başına 60k'lık ham tavanı iki koşumun
+toplamında 3.272 token aşıldı.
+
+### Faz 14 sonrası aday işler (sıralanmadı, kota onayı gerekir)
+
+| # | İş | Neden | Dayanak |
+|---|---|---|---|
+| 1 | **agy kolunun canlı doğrulaması** | geçici ajan agy yolunda yalnız birim testiyle ölçüldü (`agent.md` yazılır/silinir) | STATE §2.15-C açık (c) |
+| 2 | **"Güvenli komut" sınıfının onay kapsamına alınması** | `echo`/`ls` izin kancasından önce koşuyor; "her araç sorulur" garantisi yok. Önce **belge/bayrak araştırması** (`--permission-prompts none` + beyaz liste maliyeti) | ARCHITECTURE §6.6, spike README §1 |
+| 3 | **Rapor yolu kararı** | geçici ajan raporu `Entropy/Skills/<yetenek>/Reports/` altına düşüyor, yeteneksiz koşuda `Entropy/Reports/`; tek yol mu, iki yol mu — ADR gerekir | STATE §2.15-C açık (b) |
+| 4 | **Wiki ikinci partisi** (~30k) | 13-C'de kota nedeniyle koşulmadı | Faz 13 kalanı |
+| 5 | **Veri kökü tekleştirmesinin kalanı** | 7 modül hâlâ `Path.home()` sabit yazıyor; yenileri `paths.data_root()` kullanıyor | ARCHITECTURE §3.0 |
+| 6 | **Desk — Faz 10 kalanları** | ofis/orkestratör yüzeyi Faz 13'ten beri beklemede | ADR-0001, Faz 10 raporu |
+| 7 | **F-13D-1** açılışta fault günlüğüne COM istisnası · **R-13A2-1** drift döngüsü | açık bulgular | STATE §2.14, §2.10 |
+| 8 | **LangGraph — parkta** | yeniden açılırsa izole venv'de ~10k'lık spike; `pyproject.toml` değişmez | ADR-0010 "Geri alma" |
 
 Faz 14'e devreden eski açık işler: wiki ikinci partisi (~30k, kota onayı), F-13D-1 kök
-nedeni, R-13A2-1 drift döngüsü, `entropy.memory` şiminin v0.12.0'da kaldırılması.
+nedeni, R-13A2-1 drift döngüsü, `entropy.memory` şiminin v0.12.0'da kaldırılması
+(**yapıldı, 14-F** — [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)); kalanlar
+yukarıdaki aday iş tablosuna taşındı.
 
 **Hafıza sıfırlanmaz (şimdilik):** şema Faz 11-B'de temizlendi, değişen **yazar**dır.
 Tetik ölçütü 14-D sonrası K3 > %5 ya da K12 artışı → önce `dream.forget_stale` + gri tur.

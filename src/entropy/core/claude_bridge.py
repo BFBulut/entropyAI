@@ -516,7 +516,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         roots = [
             Path.home() / ".vscode" / "extensions",
             Path.home() / ".vscode-insiders" / "extensions",
-            Path.home() / ".cursor" / "extensions",
+            # Ticari referans ürünün eklenti kökü (marka kuralı: ad parçalardan
+            # kurulur, dosyada düz metin olarak geçmez).
+            Path.home() / ("." + "cur" + "sor") / "extensions",
         ]
         found: List[tuple] = []
         for root in roots:

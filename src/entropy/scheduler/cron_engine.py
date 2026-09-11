@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -9,6 +10,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from entropy.core.event_bus import bus
+
+#: Zamanlayıcı kayıt dosyasını yönlendiren ortam değişkeni (testler için).
+SCHEDULER_TASKS_ENV = "ENTROPY_SCHEDULER_TASKS"
+
 
 @dataclass
 class ScheduledTask:
@@ -44,9 +49,19 @@ class TaskScheduler:
 
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
-            entropy_home = Path.home() / ".entropy"
-            entropy_home.mkdir(parents=True, exist_ok=True)
-            self.storage_path = entropy_home / "scheduler_tasks.json"
+            # Faz 14-F: yalıtım kaçağı ölçüldü — tam süit sırasında zamanlayıcı
+            # KULLANICININ gerçek `~/.entropy/scheduler_tasks.json` dosyasına
+            # yazıyor ve saatlik işleri (obsidian-sync, rag-reindex) gerçekten
+            # koşuyordu. Ledger ve bilişsel DB gibi burası da bir ortam
+            # değişkeniyle yönlendirilebilir; değişken yoksa davranış aynıdır.
+            override = os.environ.get(SCHEDULER_TASKS_ENV)
+            if override:
+                self.storage_path = Path(override).expanduser()
+                self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                entropy_home = Path.home() / ".entropy"
+                entropy_home.mkdir(parents=True, exist_ok=True)
+                self.storage_path = entropy_home / "scheduler_tasks.json"
         else:
             self.storage_path = Path(storage_path)
 

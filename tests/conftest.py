@@ -24,6 +24,13 @@ os.environ["ENTROPY_TASK_LEDGER_DB"] = str(_USER_STATE_TMP / "tasks_ledger.db")
 os.environ.setdefault(
     "ENTROPY_COGNITIVE_DB", str(_USER_STATE_TMP / "cognitive_memory.db")
 )
+# Faz 14-F: zamanlayici da yalitilir. Olculen sizinti: tam suit sirasinda
+# TaskScheduler kullanicinin gercek `~/.entropy/scheduler_tasks.json`
+# dosyasini guncelliyor ve saatlik isleri (obsidian-sync, rag-reindex)
+# gercekten kosuyordu (dosya mtime suit penceresinde degisti).
+os.environ.setdefault(
+    "ENTROPY_SCHEDULER_TASKS", str(_USER_STATE_TMP / "scheduler_tasks.json")
+)
 
 @pytest.fixture
 def sample_config():

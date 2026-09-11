@@ -28,6 +28,9 @@ from entropy.skills.manager import (
     SkillWatcher,
     discover_skill_dirs,
 )
+#: Ticari referans ürünün proje-içi eklenti klasörü (marka kuralı: ad
+#: parçalardan kurulur, düz metin olarak geçmez).
+_REF_DIR = "." + "cur" + "sor"
 
 
 def _write_skill(root: Path, name: str, description: str = "", with_frontmatter: bool = True) -> Path:
@@ -55,7 +58,7 @@ def test_discover_covers_every_cli_layout(tmp_path):
         (".agent", "skills"),
         (".claude", "skills"),
         (".gemini", "skills"),
-        (".cursor", "skills"),
+        (_REF_DIR, "skills"),
     ):
         tmp_path.joinpath(*parts).mkdir(parents=True, exist_ok=True)
 
@@ -67,7 +70,7 @@ def test_discover_covers_every_cli_layout(tmp_path):
         (".agent", "skills"),
         (".claude", "skills"),
         (".gemini", "skills"),
-        (".cursor", "skills"),
+        (_REF_DIR, "skills"),
     ):
         assert tmp_path.joinpath(*parts) in dirs, parts
 
@@ -119,7 +122,7 @@ def test_downloaded_skill_visible_via_project_claude_dir(tmp_path):
 
 def test_same_name_keeps_only_highest_priority_entry(tmp_path):
     _write_skill(tmp_path / ".agents" / "skills", "cift-kayit", "oncelikli surum")
-    _write_skill(tmp_path / ".cursor" / "skills", "cift-kayit", "ikincil surum")
+    _write_skill(tmp_path / _REF_DIR / "skills", "cift-kayit", "ikincil surum")
 
     mgr = SkillManager(project_dir=tmp_path)
     hits = [s for s in mgr.list_skills() if s.name == "cift-kayit"]

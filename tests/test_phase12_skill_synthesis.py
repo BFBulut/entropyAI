@@ -88,7 +88,10 @@ def test_board_tools_section_uses_the_real_12b_symbol_within_budget():
     section = system_prompt.board_tools_section()
     assert "[PANO board_create]" in section
     assert "[/PANO]" in section, "blok bütünlüğü korunur (yarım JSON şablonu yok)"
-    assert len(section) <= system_prompt.BUDGET_BOARD_TOOLS <= 600
+    # Faz 14-C tavanı bilerek 600'den 1000'e çıkardı (geçici ajan bloğu da
+    # bu bölüme giriyor, 600'de `board_create` bloğu kırpılıyordu). Sözleşme:
+    # bölüm tavana sığar ve tavan 1000'i AŞMAZ (sessiz büyümeye kapı yok).
+    assert len(section) <= system_prompt.BUDGET_BOARD_TOOLS <= 1000
 
     chat = system_prompt.build_system_prompt("chat", provider="claude")
     assert "[PANO board_create]" in chat

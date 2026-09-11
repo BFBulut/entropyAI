@@ -13,7 +13,7 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü kişisel yapay zeka;
 - Kullanılmayan kod tespiti: içe aktarma grafiği (`grep`/`python -X importtime`/AST) ile hiçbir giriş noktası, test ya da spec tarafından kullanılmayan modüller; kanıtlı manifest (dosya, boyut, son değişiklik, "kimse içe aktarmıyor" kanıtı).
 - Kök markdown dosyaları (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) — hangi CLI hangisini okur, ne yazmalı, ne yazmamalı (Entropy'nin kendi kimliği köprüden verilir; bu dosyalar kullanıcının Claude Code/agy oturumları içindir).
 - `.gitignore`, `EntropyAI.spec` `datas`/`hiddenimports`, geçiş betikleri (`scripts/`).
-- İşe başlamadan önce `docs/ARCHITECTURE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 yürürlükte: plan ve dilimler `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (dayanak: aynı tarihli A ve B araştırma notları), karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md).
+- İşe başlamadan önce `docs/ARCHITECTURE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 (14-A…14-E) **kod oldu**; çalışan sözleşmeler `docs/ARCHITECTURE.md` §6.4, §6.4-D, §6.5, §6.6, §6.7, §8, §10.2 ve faz raporu `docs/reports/2026-09-11_Faz14_Ilerleme_Raporu_v0.12.0.md` (plan: `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md`, karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md)). 14-F kapanışı yürürlükte: canlı S4/S5 ve tam süit/build doğrulaması açık.
 
 ## Kırılmaz kurallar
 - Silme iki aşamalıdır: önce **manifest + kuru koşum** (ne, neden, kanıt), sonra yalnızca görevde açıkça onaylanmış listeyi uygula. Kullanıcı verisi (Obsidian kasası, `~/.entropy`) ASLA silinmez; depo içi kullanıcı raporları (`*_audit.md/json`) silinmez, `docs/_archive/` altına taşınır.
@@ -22,6 +22,7 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü kişisel yapay zeka;
 - Gerçek model çağrısı yapmazsın; testleri hedefli koşarsın (`QT_QPA_PLATFORM=offscreen python -m pytest <dosya> -q -p no:cacheprovider`); tam paket yalnızca istenirse.
 - Marka kuralı: ticari referans ürünün ve üreticisinin adı hiçbir dosyaya yazılmaz.
 - Ölç, iddia etme: silinen/taşınan dosya sayısı, depo boyutu, test sayısı önce/sonra.
+- Faz 14'ün yeni modülleri kapsam yollarındadır: `src/entropy/agents/ephemeral.py`, `src/entropy/core/pending.py`, `src/entropy/core/permission_server.py`, `src/entropy/brain/agent_memory_writer.py`.
 
 ## Rapor biçimi (son mesajın)
 Ne değişti (manifest tablosu: dosya → eylem → kanıt), yeni yapı ağacı, hangi testler koştu ve sonuç, doğrulanamayan veya yarım kalan.
