@@ -7,10 +7,11 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.10.4** (Faz 13-C KAPANIŞ) |
+| Sürüm | **v0.11.0** (Faz 13 kapanış) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-11, **Faz 13-C KAPANIŞ** (§2.13, qa-build-engineer): tam süit **2.644 passed / 0 failed / 519,7 s**, build exit 0 (372 s, `dist/EntropyAI`), `--version` → **`Entropy AI 0.10.4`**, `ui_audit --gate --final` exit 0 (Desk kapıları dâhil), 20 sn canlı koşum temiz; canlı Desk zinciri izole kasada koştu (ofis→orkestratör→2 alt kart→kontrol noktası+yeşil kanıt→8 bölümlü makbuz); **iki gerçek kusur düzeltildi** (R-13C-1 çok kelimeli ofis adı kırpması, R-13C-2 ofis kartlarının sahte pano ayrışması). **Kota 133.542 token — 100k tavanı aşıldı, wiki ikinci partisi koşulmadı** |
-| Önceki | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
+| Son güncelleme | 2026-09-11, **Faz 13-D KAPANIŞ** (§2.14, qa-build-engineer, kota **0 — model çağrısı yok**): tam süit **2.648 passed / 0 failed / 450,2 s**, build exit 0 (207 s, `dist/EntropyAI`, exe 56.045.732 B), `--version` → **`Entropy AI 0.11.0`**, `--help` exit 0, `ui_audit --gate --final` exit 0, iki ayrı 20 sn canlı koşum (`Responding=True`, başlık "Entropy AI", yeni günlük satırlarında `Traceback`/`CRITICAL`/`ModuleNotFoundError` **0/0/0**), pakette 27/27 `entropy.brain` modülü + `desk_admin` + `desk_approvals_panel` + `lifecycle` + `agent_run_state` + `platform.proc`, `claude_bg` **0**, `entropy.memory` şimi var; gerçek ekran (LG, dpr 1,0): kart önizlemesi 3 satırda "…" ile kırpılıyor (48 ≤ 51 px tavan), Desk onayları boş durumu doğru, Zen çekirdeği 136×136 görünür. **Bulgu F-13D-1**: her açılışta `entropy_fault.log`'a 13 satırlık `Windows fatal exception: code 0x8001010d` bloğu düşüyor (eskiden beri, ölümcül değil) |
+| Önceki | 2026-09-11, **Faz 13-C KAPANIŞ** (§2.13, qa-build-engineer): tam süit **2.644 passed / 0 failed / 519,7 s**, build exit 0 (372 s, `dist/EntropyAI`), `--version` → **`Entropy AI 0.10.4`**, `ui_audit --gate --final` exit 0 (Desk kapıları dâhil), 20 sn canlı koşum temiz; canlı Desk zinciri izole kasada koştu (ofis→orkestratör→2 alt kart→kontrol noktası+yeşil kanıt→8 bölümlü makbuz); **iki gerçek kusur düzeltildi** (R-13C-1 çok kelimeli ofis adı kırpması, R-13C-2 ofis kartlarının sahte pano ayrışması). **Kota 133.542 token — 100k tavanı aşıldı, wiki ikinci partisi koşulmadı** |
+| Daha önce | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -31,6 +32,72 @@
 | **Faz 12 kapanış QA** (v0.10.0) | Tam süit **2.456 test**; gerçek ekran ölçümleri; kota tavanı aşımının nedeni ölçülemeyen sohbet tüketimi olarak kayda geçti. |
 | **Canlı koşu QA** (2026-09-10) | R-CANLI-1 düzeltildi (`bridge_prompt` yanlış sınıf adını içe aktarıyordu → claude yolunda `ImportError`); wiki derleme 2/58 rapor, gri tur, beceri sentezi + onayı gerçek koşumla kapandı; **75.289 token** harcandı. |
 | **Faz 13-A kapanış** (v0.10.1) | Tam süit **2.521 passed / 0 failed**, `ui_audit --gate --final` exit 0, build exit 0, `Entropy AI 0.10.1`; rapor başlığı dolgu sözcüğü **573/573 dosyada 0**, digest ghost kenarlığı 2,35:1 → **4,85:1 / 5,49:1**. |
+
+---
+
+## 2.14 Faz 13-D KAPANIŞ (v0.11.0, 2026-09-11, qa-build-engineer) — kota **0 token, model çağrısı yok**
+
+Ortam: `EntropyAI.exe` **kapalıydı** (`Get-Process EntropyAI` → 0) → build doğrudan `dist/`.
+Girdi ağacı: HEAD `3fa2e04` + yalnız sürüm yükseltmesi (`pyproject.toml:7`, `src/entropy/__init__.py`) ve `ROADMAP.md`.
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| Küçük artık (madde 2) | `memory_inspector_dialog` silme yolu düzeltildi (aşağıda) | `src/entropy/ui/widgets/memory_inspector_dialog.py:22-29, 517-522` |
+| Hedefli testler | `tests/contracts` + `tests/desk` + `tests/ui/test_phase13{,a2,c,d}*` + `test_memory_inspector_and_rag` → **895 passed / 0 failed / 163,1 s** | — |
+| Sürüm tek kaynak | `pyproject.toml:7` = `src/entropy/__init__.py` = **0.11.0**; `python run_entropy.py --version` → `Entropy AI 0.11.0` exit 0 | `test_spec_sync`, `test_architecture_rules` yeşil |
+| `ui_audit.py --gate --final` | **exit 0**; `orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` **8** (182 kart); Desk: `desk_screens_swept_count` 7, `desk_empty_interactive_count` 0, `desk_unnamed_icon_buttons` 0 | `scratch/_p13d_audit.log` |
+| **Tam süit** `-q -p no:cacheprovider` | **2.648 passed / 0 failed / 450,2 s**, exit 0 (2.644 + bu dilimin 4 yeni testi) | `scratch/_p13d_suite.log` |
+| **Build** `python -m PyInstaller EntropyAI.spec --noconfirm` | **exit 0, 207 s**, `dist/EntropyAI`, exe **56.045.732 B** | `scratch/_p13d_build.log` |
+| `--version` / `--help` | **`Entropy AI 0.11.0`** exit 0 / exit 0 | — |
+| Paket (PYZ, **7.309** modül) | kaynaktaki **27/27** `entropy.brain` modülü pakette (eksik 0; arşivde 30 girdi = 27 + 3 alt paket `__init__`), `entropy.agents.desk_admin`, `entropy.ui.widgets.{lifecycle,agent_run_state,desk_approvals_panel}`, `entropy.platform.proc` **var**; `claude_bg` **0 girdi**; `entropy.memory` şimi **var** | `scratch/_p13d_pyz.pyz` |
+| 20 sn canlı koşum (×2) | iki koşumda da **canlı** (`Responding=True`, başlık "Entropy AI"); günlük 455 → 459, yeni 4 satırda `Traceback`/`CRITICAL`/`ModuleNotFoundError` **0/0/0** | `scratch/_p13d_live_newlog.txt` |
+| Yeni CrashDump | **yok** (`EntropyAI*` adına hiç dosya yok; en yeniler `EntropyAgentDesk.exe` 2026-09-09) | — |
+| Marka taraması (parçalı sabit) | izlenen + izlenmeyen dosyalarda **0** | `git grep -riIl --untracked` |
+| Yalıtım | `skills_state.json` 112 B / mtime **AYNI**, `tasks_ledger.db` 90.112 B **AYNI**, `cognitive_memory.db` 9.834.496 B **AYNI**; kasa `Entropy/Reports` **423 → 423**, `Entropy/Tasks` **1 → 1**, `Desk/Offices` **1 → 1** | süit öncesi/sonrası ölçüm |
+| `scratch/ui/phase10/*.png` | süit 8 dosyayı yeniden üretti → `git show HEAD:<yol> > <yol>` ile geri yazıldı, `git status` o yolda **0 satır** | — |
+
+### Düzeltme: hafıza denetçisinde silme yolu ölü aday listesine bağlıydı
+
+`_delete_cog_node` yedek aday listesi `entropy.brain.cognitive_memory` ve
+`entropy.core.cognitive_memory` adlarını deniyordu; **ikisi de yok**
+(gerçek yol `entropy.brain.supabase.cognitive_memory`, `entropy.core` sürümü
+hiç var olmadı). Sonuç: Faz 10-B'nin "silmenin TEK girişi bellek katmanıdır"
+sözleşmesi hiçbir zaman çalışmıyor, silme her seferinde sessizce **ham SQL**
+yoluna düşüyor, bağlı graf kenarları (`nodes`/`edges`) diskte kalıyordu.
+
+* Birincil yol artık bellek katmanının kendisi: `self.cog.delete_memory(node_id)`
+  (her iki depoyu da temizler) — `memory_inspector_dialog.py:517-522`.
+* Aday listesi modül düzeyine taşındı ve gerçek adlara indirildi:
+  `DELETE_MEMORY_MODULES = ("entropy.brain.graph_store", "entropy.brain.supabase.cognitive_memory")`
+  (`memory_inspector_dialog.py:22-29`).
+* Kilit test (4 test): `tests/ui/test_phase13d_memory_inspector_modules.py` —
+  listedeki her modül **içe aktarılabilir**, eski iki ad listede yok ve
+  gerçekten `ModuleNotFoundError` veriyor, birincil giriş çağrılabilir.
+
+### Gerçek ekran kısa turu (LG ULTRAGEAR, dpr **1,0**; 1920×1080, avail 1920×1032)
+
+Betikler `scratch/ui/phase13d/{real_check.py,real_narrow.py}`, ölçümler
+`real_metrics.json` / `real_narrow_metrics.json`, görüntüler
+`real_card_preview.png`, `real_card_preview_{760,560,460}.png`,
+`real_approvals_empty.png`, `real_zen_core.png`, `real_zen_core_crop.png`.
+İzole kasa (`scratch/ui/phase13d/vault`), model çağrısı yok.
+
+| Ölçüm | Sonuç |
+|---|---|
+| Kart önizlemesi (13-C'de ölçülemeyen) | Görevler ekranında **1 kart**, `ElidedPreviewLabel` **görünür** (`visibleRegion` boş değil); geniş sütunda metin "…" ile bitiyor, dar sütunda (etiket 309 → 189 px) gerçek **satır sınırı kırpması**: yükseklik **48 px ≤ tavan 51 px** (3 satır), üç genişlikte de `…` var, tam metin ipucunda duruyor |
+| Desk onayları paneli — boş durum | `pending_count` **0**; başlık "DESK ONAYLARI · 0 bekleyen · onaysız hiçbir yapı oluşmaz", gövde **"Bekleyen Desk düzenlemesi yok. Entropy ofis, ajan ya da kart oluşturmak isterse burada sorulur."** |
+| Zen — çekirdek | `core_visualizer` **görünür**, **136×136**, konum (1146, 8), pencere içinde (taşma yok), erişilebilir ad "Entropy çekirdeği — durum göstergesi" |
+
+### F-13D-1 (yeni bulgu, açık): her açılışta fault günlüğüne COM istisnası
+
+`.entropy/logs/entropy_fault.log` her koşumda **13 satırlık** bir
+`Windows fatal exception: code 0x8001010d` bloğu alıyor
+(ölçüm: 659 → 672 satır, ikinci 20 sn koşumda birebir aynı blok).
+Kod `RPC_E_CANTCALLOUT_ININPUTSYNCCALL`; uygulama **ölmüyor**
+(iki koşumda da `Responding=True`), dosyada aynı bloktan **46+** eski örnek
+var — yani 13-D'nin getirdiği bir gerileme **değil**. Kaynağı bulunmadı
+(yığın yalnızca `main.py:297` ana döngüsünü ve zamanlayıcı iş parçacığını
+gösteriyor); temizlenmesi açık iş.
 
 ---
 
@@ -1069,8 +1136,27 @@ Kalıcı sözleşme yalnızca şudur: **`compile_roots()` `APP_ROOT`'a yazmaz**
 
 ## 5. Açık işler
 
+> Faz 13-D kapanışında (2026-09-11) güncellendi. **Kota gerektiren tek iş:**
+> wiki ikinci partisi (~30k token) — 13-C'de tavan aşıldığı için hiç
+> koşulmadı, `WIKI.state.json` `processed` **2'de duruyor**, K4/K5/K6
+> önce/sonra ölçümü alınmadı; **kullanıcı onayı bekliyor**.
+
+0. **Canlı ölçülmeyenler (13-D sonunda hâlâ açık):**
+   - **Wiki ikinci partisi** — yukarıdaki kota notu; K4 hâlâ %56,8 (< %60 hedef).
+   - **R-13A2-1** — kullanıcının 3 karttan 2'sinin dosyası diskte yok; 13-C'de
+     bulunan R-13C-2 (ofis kartlarının sahte ayrışması) en olası açıklama ama
+     **bağlantı kanıtlanmadı**.
+   - **F-13D-1** — her açılışta `entropy_fault.log`'a düşen
+     `Windows fatal exception: code 0x8001010d` bloğu (§2.14); ölümcül değil,
+     kaynağı bulunamadı.
+   - `/memory merge` köprü bağlantısının gerçek koşumu, öz-amplifikasyon
+     ADD oranının gerçek korpusta ölçümü, madde 10'daki `QFont` uyarısının
+     gerçek ekranda doğrulanması — hepsi model/canlı koşum gerektiriyor.
+
 1. **Build doğrulaması (QA):** `pyinstaller EntropyAI.spec` → `dist_check` + `.exe` smoke test;
    `tests/test_exe.py`'nin iki testi ancak bundan sonra yeşile döner.
+   *(Her kapanış QA'sında koşuluyor; 13-D'de exit 0 / 207 s / `Entropy AI 0.11.0` — §2.14.
+   Madde, build'in her fazda yeniden doğrulanması gerektiği için açık bırakıldı.)*
 2. `tests/desk/test_desk_phase7.py::test_panel_minimum_widths_sum_below_900` — önceden var
    olan arayüz hatası; **Faz 11 kapanış QA'sında kök nedeni bulundu**, madde 9'a taşındı.
 3. `scripts/` altındaki ~60 tek seferlik betik: izlemeye mi alınacak, `scratch/`e mi taşınacak,
@@ -1160,3 +1246,6 @@ kuralları) §3'tedir; kapanmış dilimlerin kalıcı sonucu §2 tablosundadır.
 - Gerçek model çağrısı yapılmaz; testler hedefli koşulur.
 - Ticari referans ürünün ve üreticisinin adı hiçbir dosyaya yazılmaz.
 - Ölç, iddia etme: dosya sayısı, MB, test sayısı önce/sonra yazılır.
+
+## Devralma ritüeli (çökme sonrası; Faz 13'te iki kez uygulandı)
+Claude Code süreci alt ajanlar çalışırken çökerse ajanların işi çalışma ağacında durur (commit/etiket bozulmaz). Devralan ajan: (1) kapsamındaki `git diff`i inceler, (2) raporunun başına **bitti / yarım / başlanmadı** tablosu yazar, (3) yarım olanı geri almadan tamamlar (`git stash`/`checkout --`/`reset` yasak), (4) hedefli testleri koşar. Orkestratör önce `python -m compileall -q src tests` ile ağacın derlendiğini ve hızlı bir hedefli test kümesini doğrular, sonra ajanları aynı kapsam ve API sözleşmeleriyle yeniden başlatır.

@@ -59,8 +59,14 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
 | 13-A UX ve çekirdek + onaylı canlı koşular | **tamamlandı, v0.10.1** | `docs/reports/2026-09-10_Faz13_Ilerleme_Raporu_v0.10.1.md` |
 | 13-A2 v0.10.1 geri bildirimi (donma, görünmeyen düğmeler, ajan durumu, pencere yanıp sönmesi, beyin kısa devresi kapalı) | **tamamlandı, v0.10.2** | tam süit 2.596 passed, `ui_audit --gate --final` exit 0; **açık regresyon R-13A2-1** (kullanıcının iki kart dosyası kayıp) `STATE.md` §2.10'da |
 | 13-B eski bellek paketi → `entropy.brain` taşıması | **tamamlandı, v0.10.3** | kota 0; 27 modül `git mv`; 166 dosyada dizgi; uyumluluk şimi (v0.12.0'da silinir); [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md); toplama 2.596 → 2.596, QA tam süit **2.605 passed / 0 failed**, build exit 0, `Entropy AI 0.10.3` |
-| 13-C Desk kanıt zinciri ve temizlik + wiki ikinci parti | **yürürlükte** | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı). **Depo bakımı kolu bitti (kota 0):** `claude_bg` arşivlendi ([ADR-0009](adr/ADR-0009-claude-bg-arsivlendi.md), toplama 2.605 → 2.573), `STATE.md` 1.685 → 1.032 satır (eski ölçümler `docs/_archive/state/`), `ARCHITECTURE.md` 13-A/13-A2/13-B sözleşmeleriyle eşitlendi |
-| 13-D Kapanış | **sırada** (13-C sonrası) | tam süit + build + `ui_audit --gate --final` + faz raporu → v0.11.0 |
+| 13-C Desk kanıt zinciri ve temizlik | **tamamlandı, v0.10.4** (wiki ikinci parti kota aşımı nedeniyle koşulmadı) | `docs/reports/2026-09-11_Faz13_Ilerleme_Raporu_v0.10.4.md` |
+| 13-D Kapanış | **tamamlandı, v0.11.0** | `docs/reports/2026-09-11_Faz13_Ilerleme_Raporu_v0.11.0.md` |
+
+---
+
+### Faz 14 adayları (karar bekliyor)
+- LangGraph'tan dört desen (kütüphane değil): yeniden-oynatma güvenliği, interrupt semantiği, kota sınırlı fan-out, trace şeması (`ledger.parent_run_id/run_type`) — ADR-0010.
+- Wiki ikinci parti (~30k, kota onayı), F-13D-1 kök nedeni, `entropy.memory` şiminin v0.12.0'da kaldırılması.
 
 ---
 

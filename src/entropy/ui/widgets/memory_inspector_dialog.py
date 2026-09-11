@@ -21,6 +21,14 @@ from entropy.ui.widgets.lifecycle import discard_widget
 # Faz 12-F: canli palet — tema degisince gomulu govdeler de doner.
 _P = _live_palette()
 
+# Faz 13-D: düğüm silmede denenen yedek modüller. Liste eskiden taşınma öncesi
+# `entropy.brain.cognitive_memory` / `entropy.core.cognitive_memory` adlarını
+# taşıyordu; ikisi de içe aktarılamadığı için yol sessizce ham SQL'e düşüyordu.
+DELETE_MEMORY_MODULES = (
+    "entropy.brain.graph_store",
+    "entropy.brain.supabase.cognitive_memory",
+)
+
 
 def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:
     """Parse YAML frontmatter returning (metadata_dict, clean_body)."""
@@ -506,11 +514,12 @@ class MemoryInspectorDialog(QDialog):
             # arayüz doğrudan SQL çalıştırınca bağlı kenarlar/indeksler geride
             # kalıyordu. Sözleşme yoksa (paralel ajan yazıyor) eski yola düşülür.
             deleted = False
-            for module_path in (
-                "entropy.brain.graph_store",
-                "entropy.brain.cognitive_memory",
-                "entropy.core.cognitive_memory",
-            ):
+            try:
+                removed = self.cog.delete_memory(node_id)
+                deleted = any(int(v) > 0 for v in dict(removed).values())
+            except Exception:
+                deleted = False
+            for module_path in () if deleted else DELETE_MEMORY_MODULES:
                 try:
                     import importlib
 
