@@ -761,7 +761,11 @@ def test_orchestrator_cli_tools_are_read_only(board, offices, tmp_path, monkeypa
     for banned in ("Edit", "Write", "Bash"):
         assert banned not in _tools(plan_cmd)
     # İzin kipi değişmedi: yasak araç listesinde, izin isteminde değil.
-    assert plan_cmd[plan_cmd.index("--permission-mode") + 1] == "acceptEdits"
+    # Faz 14-B: onay yüzeyi açıkken izin kipi `default` olmak ZORUNDA —
+    # `acceptEdits` dosya yazımını izin kancasından ÖNCE otomatik onaylıyordu
+    # (canlı S2 ölçümü). Salt okunurluk hâlâ araç listesinde zorlanıyor.
+    assert plan_cmd[plan_cmd.index("--permission-mode") + 1] == "default"
+    assert "--permission-prompt-tool" in plan_cmd
 
     worker_cmd = _cmd_for("GÖREV SÖZLEŞMESİ")
     assert "Write" in _tools(worker_cmd) and "Bash" in _tools(worker_cmd)

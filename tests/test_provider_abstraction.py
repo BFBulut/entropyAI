@@ -148,6 +148,10 @@ def test_long_prompt_moves_to_stdin_ndjson():
 
 
 def test_real_claude_bridge_background_task_streams_and_accounts_usage(tmp_path, monkeypatch):
+    # Faz 14-B: onay yüzeyi açıkken kart koşusu izin ATLAMAZ; izin isteği
+    # Entropy'nin MCP aracına sorulur. Veri kökü teste sabitlenir ki
+    # `--mcp-config` dosyası kullanıcının gerçek kökünde oluşmasın.
+    monkeypatch.setenv("ENTROPY_DATA_ROOT", str(tmp_path / "data"))
     b = ClaudeCodeBridge()
     b.active_project_dir = tmp_path
 
@@ -183,8 +187,14 @@ def test_real_claude_bridge_background_task_streams_and_accounts_usage(tmp_path,
     assert ok is True
     assert text == "Görev tamamlandı."
 
-    # Arka plan görevi izin sorusuna takılmamalı.
-    assert "--dangerously-skip-permissions" in captured_cmd["cmd"]
+    # Faz 14-B sözleşmesi: onay yüzeyi açıkken (varsayılan) izin atlama bayrağı
+    # HİÇ gönderilmez — gönderilseydi CLI izin aracını çağırmaz ve onay kartı
+    # hiç doğmazdı (canlı S2 ölçümü). İzin kipi de `default` olmak zorunda:
+    # `acceptEdits` dosya yazımını kancadan önce otomatik onaylıyor.
+    cmd = captured_cmd["cmd"]
+    assert "--dangerously-skip-permissions" not in cmd
+    assert cmd[cmd.index("--permission-prompt-tool") + 1] == "mcp__entropy__approve"
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
 
     # usage: girdi + çıktı + önbellek kalemleri toplanır.
     assert b.last_background_usage["input_tokens"] == 1200
@@ -197,6 +207,50 @@ def test_real_claude_bridge_background_task_streams_and_accounts_usage(tmp_path,
     assert row["status"] == "SUCCESS"
     assert row["provider"] == "claude"
     assert row["total_tokens"] == 9600
+
+
+def test_real_claude_bridge_falls_back_to_skip_flag_when_approvals_disabled(
+    tmp_path, monkeypatch
+):
+    """
+    Onay yüzeyi KAPALIYKEN (Faz 13 davranışı) kart koşusu eski bayrağı alır.
+
+    İki bayrak birbirini dışlar; bu test ikinci kolun canlı kalmasını sağlar
+    (gerçek `send_background_task_async` yolu, sahte `Popen`).
+    """
+    from entropy.core.config import config as cfg
+
+    monkeypatch.setenv("ENTROPY_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setattr(cfg, "approvals_enabled", False, raising=False)
+
+    b = ClaudeCodeBridge()
+    b.active_project_dir = tmp_path
+    monkeypatch.setattr(
+        "entropy.core.claude_bridge.task_ledger", TaskLedger(db_path=tmp_path / "l.db")
+    )
+
+    captured_cmd = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        return _FakeProc(_stream_lines("Bitti."))
+
+    monkeypatch.setattr("entropy.core.claude_bridge.subprocess.Popen", fake_popen)
+
+    done = threading.Event()
+    b.send_background_task_async(
+        task_id="t-2",
+        task_name="Deneme",
+        prompt="bir şey yap",
+        project_path=str(tmp_path),
+        on_result=lambda text, ok: done.set(),
+        save_report=False,
+    )
+    assert done.wait(10), "arka plan görevi bitmedi"
+
+    cmd = captured_cmd["cmd"]
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--permission-prompt-tool" not in cmd
 
 
 def test_stream_adapter_emits_bus_signals_and_reads_session():

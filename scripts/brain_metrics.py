@@ -44,6 +44,8 @@ from entropy.brain.categories import CANONICAL_CATEGORIES  # noqa: E402
 from entropy.brain.gate import (  # noqa: E402
     IDENTITY_PROVENANCE,
     LEGACY_PROVENANCE,
+    artifact_provenance_match,
+    error_log_match,
 )
 from entropy.brain.supabase.cognitive_memory import (  # noqa: E402
     CognitiveMemorySystem,
@@ -204,7 +206,30 @@ def category_report(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 def fixture_leak(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     hits = [r["id"] for r in rows if FIXTURE_RE.search(r.get("content") or "")]
-    return {"count": len(hits), "sample_ids": hits[:5]}
+    # Faz 14-D: "hata/günlük reddi" satırı. Fikstür süzgeci yalnız İÇERİĞE
+    # bakıyordu; gerçek DB'deki 12 pytest izli düğümün izi `provenance`
+    # alanındaydı ve bu sayaç onları hiç görmedi. Kapının 14-D bandı artık
+    # ikisini de reddediyor; burada aynı bant HAFIZAYA YAZILMIŞ düğümlere
+    # uygulanır (salt okunur ölçüm).
+    error_hits: List[str] = []
+    artifact_hits: List[str] = []
+    for r in rows:
+        # Arşivlenmiş düğüm etkin hafızada değildir; bant sayımına girmez.
+        if int(r.get("archived") or 0) == 1:
+            continue
+        if error_log_match(r.get("content") or ""):
+            error_hits.append(r["id"])
+        prov_blob = f"{r.get('provenance') or ''} {r.get('metadata_json') or ''}"
+        if artifact_provenance_match(prov_blob):
+            artifact_hits.append(r["id"])
+    return {
+        "count": len(hits),
+        "sample_ids": hits[:5],
+        "error_log_nodes": len(error_hits),
+        "error_log_sample_ids": error_hits[:5],
+        "artifact_provenance_nodes": len(artifact_hits),
+        "artifact_provenance_sample_ids": artifact_hits[:5],
+    }
 
 
 def unsourced_l2(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -560,6 +585,9 @@ def main() -> int:
         print(f"K4 bütçe    : %{c['K4_budget_pct']} · K5 damıtılmış: %{c['K5_distilled_pct']} "
               f"· K6 wiki: %{c['K6_wiki_pct']} ({c['queries']} sorgu)")
     print(f"K10 fikstür : {report['K10_fixture_leak']['count']}")
+    print(f"K10 hata/günlük reddi bandı (etkin düğümlerde kalan): "
+          f"hata/günlük {report['K10_fixture_leak'].get('error_log_nodes', 0)} · "
+          f"pytest/geçici dizin izi {report['K10_fixture_leak'].get('artifact_provenance_nodes', 0)}")
     if "K11_gate_latency" in report:
         print(f"K11 kapı    : medyan {report['K11_gate_latency']['median_ms']} ms")
     print(f"K12 kaynaksız L2: {report['K12_unsourced_l2']['count']}"

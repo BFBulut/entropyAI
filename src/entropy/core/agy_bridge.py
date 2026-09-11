@@ -1390,16 +1390,28 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     saved_report_path = str(rep_path)
 
                     # Store distilled summary in cognitive memory
-                    try:
-                        cog = CognitiveMemorySystem()
-                        cog.store_node(
-                            category="semantic",
-                            content=f"Otonom Görev Özeti [{task_name}]: {full_text[:300]}",
-                            importance=0.85,
-                            metadata={"source": "scheduled_task", "task_id": task_id, "path": str(rep_path)}
-                        )
-                    except Exception:
-                        pass
+                    # Faz 14-D: BAŞARISIZ turun çıktısı hafızaya YAZILMAZ. Hata
+                    # metni raporda ve ledger'da kalır; hafıza "ne öğrenildi"yi
+                    # tutar, "ne patladı"yı değil (A notu §1 satır 3c).
+                    if success:
+                        try:
+                            cog = CognitiveMemorySystem()
+                            cog.store_node(
+                                category="semantic",
+                                content=f"Otonom Görev Özeti [{task_name}]: {full_text[:300]}",
+                                importance=0.85,
+                                metadata={"source": "scheduled_task", "task_id": task_id,
+                                          "path": str(rep_path), "success": True}
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            task_ledger.record_task_failure(
+                                task_id=task_id, error=full_text[:300]
+                            )
+                        except Exception:
+                            pass
 
                     bus.task_notification.emit(task_id, task_name, str(rep_path))
                     bus.cognitive_memory_updated.emit()
@@ -2461,20 +2473,26 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                     distilled_summary = paragraphs[0][:250] if paragraphs else full_text[:200]
 
                     # Also store distilled summary in cognitive memory graph
-                    try:
-                        cog = CognitiveMemorySystem()
-                        cog.store_node(
-                            category="semantic",
-                            content=f"Araştırma/Görev Özeti [{clean_title}]: {distilled_summary}",
-                            importance=0.88,
-                            metadata={
-                                "source": "task_or_research",
-                                "path": str(rep_path),
-                                "skill": target_skill.name if target_skill else None
-                            }
-                        )
-                    except Exception:
-                        pass
+                    # Faz 14-D: yalnız BAŞARILI tur hafızaya yazılır; `ret_code`
+                    # sıfır değilse (ya da hata metni yakalandıysa) özet rapora
+                    # ve ledger'a kalır, hafızaya girmez.
+                    run_succeeded = (ret_code == 0) and not is_err
+                    if run_succeeded:
+                        try:
+                            cog = CognitiveMemorySystem()
+                            cog.store_node(
+                                category="semantic",
+                                content=f"Araştırma/Görev Özeti [{clean_title}]: {distilled_summary}",
+                                importance=0.88,
+                                metadata={
+                                    "source": "task_or_research",
+                                    "path": str(rep_path),
+                                    "skill": target_skill.name if target_skill else None,
+                                    "success": True,
+                                }
+                            )
+                        except Exception:
+                            pass
 
                     if is_task_prompt:
                         bus.task_notification.emit(task_name, task_name, str(rep_path))

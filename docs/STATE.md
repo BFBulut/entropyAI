@@ -96,6 +96,119 @@ bilgiyi **alt ajan** yazar. Kalıcı adlı kadro istenmiyor (gizlenir, **silinme
 
 **Bu dilimde kod, test ve `dist/` DEĞİŞMEDİ** — yalnız `docs/**` ve `.claude/agents/**`.
 
+### §2.15-B Faz 14-B — gerçek onay yüzeyi (2026-09-11, agy-integration-engineer) — kota **taze 534 / ham 55.234 token (canlı S2 KOŞTU, GEÇTİ)**
+
+**Sözleşme (bundan sonra bağlayıcı):**
+
+1. **Tek kuyruk.** `core/pending.py` → `PendingQueue(root)`: `add(kind, title,
+   detail, risk="low", source="", payload=None) -> id`, `list(kind=None,
+   status="pending")`, `resolve(id, "approve"|"reject", note="")`,
+   `wait(id, timeout_s) -> dict|None`, `expire(id)`. Depolama TEK veri kökünde:
+   `core/paths.data_root()` (kaynak `config.STATE_DIR`, `ENTROPY_DATA_ROOT` ile
+   ezilir) altında `pending/<id>.json`. Türler: `tool_permission`, `desk_change`,
+   `rule_candidate`, `skill_candidate`. Çözülen kayıt SİLİNMEZ (`status` +
+   `decision` + `decided_at` + `note`); bekleyenler `list()` ile, tümü
+   `list(status=None)` ile okunur.
+2. **Sinyal.** `bus.pending_changed(dict)` — `{"action": "added"|"resolved"|
+   "expired", "item": <künye>}`; `bus.tool_permission_event(dict)` —
+   `{"phase": "requested"|"decided"|"denied", "tool", "input_summary",
+   "tool_use_id", "pending_id", "message"}`. Eski
+   `tool_approval_requested/responded` DURUYOR ve yanlarında yayılır.
+3. **Ayrı süreç habercisi.** İzin isteğini yazan taraf CLI'ın çocuğu olan MCP
+   sunucusudur; onun `add()` çağrısı uygulamanın veriyoluna erişemez. Bu yüzden
+   `pending.PendingWatcher` (0,5 sn yoklama) kuyruğu izler ve olayı uygulamada
+   yayar. Köprü `approval_argv()` çağrısında yoklayıcıyı açar.
+4. **İzin sunucusu.** `core/permission_server.py` — bağımlılıksız stdio MCP
+   (NDJSON JSON-RPC 2.0; `initialize` / `tools/list` / `tools/call` / `ping`),
+   tek araç `mcp__entropy__approve`. Giriş noktası
+   `python -m entropy.core.permission_mcp_main`; paketlenmiş sürümde AYNI ikili
+   `EntropyAI.exe --entropy-mcp-permission` ile (Qt kurulmadan) sapar.
+   Risk bandı: `Bash` → high, `Write/Edit` → medium, `Read/Glob/Grep/WebSearch/
+   WebFetch` → low, **bilinmeyen araç → medium** (sessizce "low" sayılmaz).
+   Karar tavanı 15 dk (`ENTROPY_PERMISSION_TIMEOUT_S`), dolunca `deny` +
+   kayıt `expired`. Aynı `tool_use_id` ikinci kez sorulmaz (önbellek).
+5. **Şema kararı — ÖLÇÜLDÜ, varsayım değil** (`scratch/phase14/permission_spike/README.md`,
+   `claude` 2.1.268 ile 5 canlı koşum): CLI'dan gelen `arguments` yalnız
+   `tool_name`, `input`, `tool_use_id` taşır; karar `content[0].text` içinde
+   **düz JSON metni** olarak kabul edilir (`{"behavior":"allow","updatedInput":…}`
+   / `{"behavior":"deny","message":…}`, `isError: false` şart).
+   Sonuç nesnesi **yalnız** `content` (tek text parçası) + `isError` taşır:
+   canlı S2'nin ilk koşumunda `structuredContent` de eklenmişti ve CLI kararı
+   hiç okumadan araç hatası verdi — `Permission prompt tool returned an invalid
+   result. Expected a single text block param with type="text" and a string
+   text value.` — komut koşmadı, ret bile `permission_denials`a düşmedi.
+   İleri uyum için ikinci biçimi taşımak bu sürümde YASAK
+   (`permission_server._tool_result`). İzin İSTEĞİ stream-json'da hiç görünmez; ret `result.
+   permission_denials` altında görünür ve koşumu başarısız YAPMAZ. Yanıt
+   süresine üst sınır ölçülmedi (45 sn sorunsuz); belgedeki 30 sn BAĞLANTI
+   zaman aşımıdır. `echo` gibi "güvenli komut" sınıfı izin kancasından ÖNCE
+   koşar — "her araç sorulur" garantisi verilemez.
+6. **Köprü argv'si.** `config.approvals_enabled` (varsayılan **True**) açıkken
+   sohbet turu ve kart koşusu `--permission-prompt-tool mcp__entropy__approve`
+   + `--mcp-config <veri kökü>/mcp/permission_mcp.json` alır ve
+   `--dangerously-skip-permissions` HİÇ eklenmez; kapalıyken tam tersi (Faz 13
+   davranışı). İki bayrak `build_command` içinde birbirini dışlar. Sunucuyu
+   Entropy BAŞLATMAZ: stdio sunucusunu CLI doğurur, hazırlığı da o bekler.
+7. **"onaylıyorum" CLI'ya gitmez.** `response_hooks.resolve_approval_message`
+   tek bekleyen işi çözer ("✔ onaylandı: …" / "⛔ reddedildi: …"), birden
+   fazlaysa listeyi ve kimliği tek satırda sorar ("onayla <kimlik>"), hiç yoksa
+   "Bekleyen onay yok." der. Köprü bu turu kısa devre yapar (kota 0, model
+   uydurması yok). **Faz 14-A testindeki 3. tur bu yüzden değişti**: "onaylıyorum"
+   artık süreklilik ölçemez.
+8. **Desk köprüsü.** `desk_admin` istekleri `kind="desk_change"` olarak aynı
+   listede görünür (dosya TAŞINMAZ, sarmalayıcı); `resolve()` onları
+   `apply_pending` / `reject_pending`'e yönlendirir.
+
+9. **CLI keşfi.** `find_claude_executable()` sırası: `config.claude_path` →
+   PATH → npm global shim (`%APPDATA%/npm/claude.cmd`) → `~/.local/bin` →
+   `%LOCALAPPDATA%/Programs/claude` → editör eklentileri (`.vscode`, `.vscode-insiders`, `.cursor`;
+   `resources/native-binary/claude(.exe)`, **en yüksek sürüm**). Hiçbiri yoksa
+   artık sessiz çıkış 127 yerine tek satırlık teşhis yayılır
+   (`CLAUDE_CLI_MISSING_MESSAGE`, veriyolu + sohbet). Sıra testle sabit:
+   `tests/contracts/test_phase14b_approvals.py::test_executable_discovery_order_and_diagnostic`.
+
+
+**Sözleşme testleri:** `tests/contracts/test_phase14b_approvals.py` (30 test;
+biri gerçek alt süreçle canlı el sıkışma, biri gerçek `send_background_task_async`
+yolunu sahte `Popen` ile ölçer). `tests/contracts` + `tests/test_agent_commands_and_claude_chat.py`
+→ **732 passed / 0 failed** (`tests/contracts` + `tests/test_provider_abstraction.py`
++ `tests/test_agent_commands_and_claude_chat.py` + `tests/ui/test_phase14e_layout.py`).
+`test_spec_sync` yeşil: yeni `core/**`, `brain/**` ve `ui/widgets/**` modülleri
+`EntropyAI.spec`'e eklendi. `test_provider_abstraction` içindeki izin bayrağı
+beklentisi sözleşmeye göre güncellendi (onay açıkken izin atlama bayrağı YOK,
+`--permission-prompt-tool` + `--permission-mode default` VAR) ve kapalı kol için
+ikinci bir gerçek-yol testi eklendi.
+
+**Canlı S2 — KOŞTU ve GEÇTİ** (2026-09-11 07:0x–07:2x, `claude` 2.1.268 VS Code
+eklenti ikilisi; kanıt `scratch/phase14/s2_live.json`, ham akışlar
+`s2_approve.jsonl` / `s2_reject.jsonl`). Argv ürün yolundan
+(`ClaudeCodeBridge.approval_argv()` + `build_command()`), izole veri kökü/kasa:
+
+| Ölçüt | approve | reject |
+|---|---|---|
+| Kuyruğa düşen `tool_permission` | 2 (`Bash`, risk **high**) | 1 (`Bash`, high) |
+| `system.init.permissionMode` | `default` | `default` |
+| `system.init.mcp_servers` | **yalnız** `entropy` (connected) | **yalnız** `entropy` |
+| Komut koştu mu | evet, hedef dosya **silindi** | hayır, dosya **duruyor** |
+| `result.permission_denials` | `[]` | **1 kayıt** (tool_input dâhil) |
+| çıkış / süre | 0 / 31,0 sn | 0 / 17,2 sn |
+| taze girdi+çıktı | 252 | 282 |
+
+Ret mesajı modele araç hatası olarak ulaştı ve yanıtta göründü ("izin katmanı
+tarafından reddedildi"). İzolasyon kanıtı: `--strict-mcp-config` +
+`--mcp-config <bizim>` + `--setting-sources ""` ile `mcp_servers` listesinde
+kullanıcının hiçbir MCP sunucusu yok.
+
+**Doğrulanamayan / açık:** (a) canlı koşumda `bus.pending_changed` yakalaması
+boş kaldı — sebebi ürün değil ölçüm betiğiydi (sinyal zayıf referansla
+bağlanmıştı; düzeltildi), veriyolu davranışı `test_watcher_announces_out_of_process_writes`
+ile kapalı. (b) "Güvenli komut" sınıfı (ör. `echo`, `ls`) hâlâ izin kancasından
+ÖNCE koşuyor: reject koşumunda modelin ilk `ls -la` komutu sorulmadan çalıştı.
+(c) `find_claude_executable()` npm'in yarım kurulumundaki gizli
+`node_modules/.../.claude-code-*` klasörünü bilerek TARAMAZ.
+
+---
+
 ### §2.15-A Faz 14-A — sohbet sürekliliği (2026-09-11, agy-integration-engineer) — kota **0 token, canlı S1 KOŞULAMADI**
 
 **Sözleşme (bundan sonra bağlayıcı):**
@@ -130,6 +243,64 @@ bilgiyi **alt ajan** yazar. Kalıcı adlı kadro istenmiyor (gizlenir, **silinme
 
 **Sözleşme testleri:** `tests/contracts/test_phase14a_chat_continuity.py` (8 test),
 `tests/test_agy_bridge.py::test_stream_close_survives_non_file_stdout`.
+
+---
+
+### §2.15-D Faz 14-D — hafıza yazarı alt ajan, OFFLINE kısım (2026-09-11, memory-rag-engineer) — kota **0 token, model çağrısı yok; canlı S4 ERTELENDİ (Claude Code CLI kurulu değil)**
+
+**Sözleşme (bundan sonra bağlayıcı):**
+
+1. **Kapının hata/günlük reddi bandı** (`brain/gate.py`): `admit()` içinde,
+   kategori kontrolünden ÖNCE koşar. `success=False` beyanı kategoriden bağımsız
+   reddedilir; katı kipte ayrıca hata/yığın izi kalıpları (`Traceback`, `Error:`,
+   `Exception`, `object has no attribute`, `[Otonom Görev Hata]`, `yürütülemedi`,
+   `[ADIM SINIRI]`, `Timeout`), tek satırlık günlük çıktısı, `provenance`/metadata'da
+   pytest ya da geçici dizin izi (`pytest-of-`, `pytest-<n>`, `Temp\pytest`, `\tmp\`)
+   ve 40 karakterin altındaki içerik reddedilir. Karar: `action=reject`,
+   `reject_code=REJECT_ERRORLOG`, neden dolu. Sayaç `gate.stats[REJECT_ERRORLOG]`.
+2. **Hafızayı ALT AJAN yazar** (`brain/agent_memory_writer.py`): rapor sonundaki
+   `[HAFIZA] {"items":[…]} [/HAFIZA]` bloğu ayrıştırılır, doğrulanır (kategori
+   kapalı küme, provenance zorunlu, en çok 8 madde, madde ≤ 600 karakter) ve
+   **yalnız** `MemoryGate.admit` → `record_memory(decision=…)` yolundan yazılır
+   (kapı bir kez koşar). `success=False` ya da kanıtsız koşuda blok **okunmaz**.
+   `[HAFIZA]` bloğu `core/report_title.strip_machine_blocks` ile görüntüden silinir.
+3. **Başarısız tur hafızaya yazılmaz** (`core/agy_bridge.py`): arka plan görevi
+   yolunda `if success:` (aksi hâlde `task_ledger.record_task_failure`),
+   rapor/araştırma yolunda `run_succeeded = ret_code == 0 and not is_err`.
+4. **Artık arşivi silme değildir** (`brain/artifact_archive.py`): `archived=1` +
+   `metadata.archived_reason`, graf kenarlarına dokunulmaz, yazmadan önce tam DB
+   yedeği `~/.entropy/backups/p14d-<zaman>/`, varsayılan kuru koşum, her koşum
+   kasadaki `Entropy/Memory/archive_log.md` dosyasına bir satır yazar.
+
+**Gerçek DB ölçümü (`~/.entropy/cognitive_memory.db`, 740 düğüm — silme yok):**
+
+| Ölçüt | Önce (yedek `p14d-20260911-061007`) | Sonra |
+|---|---|---|
+| Düğüm (toplam / etkin) | 740 / 716 | 740 / **700** |
+| Arşivlenen (14-D) | 0 | **16** (12 pytest izli + 3 hata metni + 1 türev özet) |
+| K2 Hit@1 / Hit@5 | 8/10 · 10/10 | **8/10 · 10/10** (düşmedi) |
+| K3 gürültü | %0,0 | **%0,0** |
+| K10 fikstür | 0 | 0 |
+| K10 hata/günlük bandı (etkin düğümde kalan) | hata/günlük **5** · pytest izi **12** | **0 · 0** |
+| K12 kaynaksız L2 | 0 | 0 |
+| K11 kapı gecikmesi | 76,6 ms | 75,8 ms |
+
+> Not: K1 yineleme oranı arşivden **etkilenmedi** (yedek ve canlı DB'de aynı: %5,81 / 697 küme).
+> Dilimin başında ölçülen %2,3 değeri aynı kodla tekrar üretilemedi; arşiv öncesi yedek
+> üzerinde de %5,81 çıkıyor, yani fark arşivin değil, gün içinde DB'ye dokunan başka bir
+> koşumun sonucudur — açık, izlenecek.
+
+**Testler:** `tests/test_phase14d_memory_writer.py` (20 test: 8 örnekli red bandı,
+pytest izi, başarısız tur, blok ayrıştırma/doğrulama/yazım, gizleme, arşiv kuru
+koşum + uygulama + idempotans) **20 passed**; `tests/test_phase11_memory_gate.py`,
+`test_memory*.py`, `test_phase11_dream_wiki_brain.py`, `test_agy_bridge.py`
+**113 passed**. Tam süit: **2.724 passed / 2 failed** — ikisi de 14-D dışı
+(`test_spec_sync` yeni ui modülleri; `test_provider_abstraction` skip bayrağının
+14-B'de koşullu olması). Spec'e yalnız iki brain modülü eklendi.
+
+**Yarım kalan:** canlı **S4** (14-C raporu → alt ajan `[HAFIZA]` bloğu → kapı →
+yeni sohbette kaynaklı hatırlama) CLI kurulu olmadığı için koşulmadı; betik hazır:
+`scratch/phase14/s4_live.py` (varsayılan kuru koşum, tavan 20k).
 
 ---
 

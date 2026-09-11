@@ -33,6 +33,8 @@ _LINE_TAGS = ("[KURAL]",)
 _BRACKET_LINE_RE = re.compile(r"^\[[^\]]+\]\s*$")
 _PANO_OPEN_RE = re.compile(r"\[PANO\b[^\]]*\]", re.IGNORECASE)
 _PANO_CLOSE = "[/PANO]"
+_HAFIZA_OPEN_RE = re.compile(r"\[HAFIZA\b[^\]]*\]", re.IGNORECASE)
+_HAFIZA_CLOSE = "[/HAFIZA]"
 
 #: "Tamamdır, şimdi …" gibi sohbet açılışları başlık olamaz.
 _CHAT_OPENERS = (
@@ -59,15 +61,17 @@ def strip_frontmatter(text: str) -> str:
 
 
 def strip_machine_blocks(text: str) -> str:
-    """`[PANO …] … [/PANO]`, `[KANIT]`, `[KONTROL NOKTASI]`, `[KURAL]` siler."""
+    """`[PANO …] … [/PANO]`, `[HAFIZA] … [/HAFIZA]`, `[KANIT]`, `[KONTROL NOKTASI]`, `[KURAL]` siler."""
     out = str(text or "")
-    while True:
-        m = _PANO_OPEN_RE.search(out)
-        if m is None:
-            break
-        end = out.upper().find(_PANO_CLOSE, m.end())
-        stop = len(out) if end == -1 else end + len(_PANO_CLOSE)
-        out = out[: m.start()] + out[stop:]
+    # Faz 14-D: alt ajanın hafıza bloğu da makine bloğudur, kullanıcıya gösterilmez.
+    for open_re, close_tag in ((_PANO_OPEN_RE, _PANO_CLOSE), (_HAFIZA_OPEN_RE, _HAFIZA_CLOSE)):
+        while True:
+            m = open_re.search(out)
+            if m is None:
+                break
+            end = out.upper().find(close_tag, m.end())
+            stop = len(out) if end == -1 else end + len(close_tag)
+            out = out[: m.start()] + out[stop:]
 
     kept = []
     skipping = False

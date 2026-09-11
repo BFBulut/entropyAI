@@ -141,7 +141,15 @@ class PendingWorkCard(QFrame):
     # ------------------------------------------------------------- veri
 
     def entries(self) -> List[Dict[str, Any]]:
-        """Birleşik bekleyen öğe listesi (Entropy kuyruğu + Desk istekleri)."""
+        """
+        Bekleyen öğe listesi — birincil kaynak `PendingQueue`.
+
+        `PendingQueue.list()` Desk isteklerini `desk_change` türüyle ZATEN
+        katıyor; kart ayrıca `desk_pending_entries()` de eklediği için her Desk
+        isteği karta iki kez düşüyordu (14-B ölçümü). Artık kimliğe göre
+        tekilleştiriliyor: yardımcı yalnız kuyruğun görmediği (ya da kuyruğun
+        hiç kurulamadığı) durumda satır ekler.
+        """
         rows: List[Dict[str, Any]] = []
         lister = getattr(self._queue, "list", None) if self._queue else None
         if lister is not None:
@@ -151,7 +159,9 @@ class PendingWorkCard(QFrame):
                         rows.append(dict(row))
             except Exception:
                 pass
-        rows.extend(desk_pending_entries())
+        seen = {str(r.get("id") or "") for r in rows}
+        rows.extend(r for r in desk_pending_entries()
+                    if str(r.get("id") or "") not in seen)
         return [r for r in rows if str(r.get("status") or "pending") == "pending"]
 
     # ------------------------------------------------------------ görünüm

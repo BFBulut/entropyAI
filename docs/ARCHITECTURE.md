@@ -513,7 +513,7 @@ döndüğü için model "onay penceresinde bekliyor" diye **uyduruyordu**.
 - Entropy kendi **stdio MCP onay sunucusunu** ayrı bir süreçte açar
   (`platform/proc.popen_kwargs` zorunlu, §4.3), `--mcp-config` ile tanıtır,
   `--strict-mcp-config` ile yalnız onu bırakır ve CLI'ya
-  `--permission-prompt-tool mcp__entropy__ask` verir.
+  `--permission-prompt-tool mcp__entropy__approve` verir.
 - Sunucu **CLI'dan önce** ayakta olmalıdır (bağlantı zaman aşımı); kullanıcının onayı
   beklemesi aracın kendi süresidir.
 - `--dangerously-skip-permissions` **koşullu** olur: açıkken izin aracı hiç çağrılmaz.

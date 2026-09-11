@@ -313,6 +313,11 @@ class EntropyConfig(BaseModel):
     # kullanıcının profili kullanılır — çünkü izole profile geçmek yeniden giriş
     # demektir ve bu kullanıcının açık kararı olmalı.
     claude_config_dir: str = ""
+
+    # Claude Code CLI ikilisinin tam yolu. BOŞSA kopru kendi keşif sırasını
+    # koşar (PATH -> npm shim -> ~/.local/bin -> Programs -> editör eklentisi).
+    # Kurulumu bozuk makinelerde tek ayarla düzeltme yolu.
+    claude_path: str = ""
     # "Entropy Saf Kip" (Faz 9.2): Claude Code kullanıcının kendi kurulumundan
     # yalıtılır — varsayılan sistem istemi DEĞİŞTİRİLİR (eklenmez), kullanıcının
     # MCP sunucuları/ayar dosyaları/yetenek kataloğu yüklenmez ve süreç git
@@ -320,6 +325,12 @@ class EntropyConfig(BaseModel):
     # (`--append-system-prompt-file` + proje dizininde cwd) dönülür; geri dönüş
     # yolu bilinçli olarak tek ayar.
     claude_isolated: bool = True
+    # Gerçek onay yüzeyi (Faz 14-B, ARCHITECTURE §6.6). Açıkken CLI'ya
+    # `--permission-prompt-tool` + Entropy'nin stdio MCP onay sunucusu verilir
+    # ve `--dangerously-skip-permissions` HİÇ eklenmez; kapatıldığında Faz 13
+    # davranışına (izin atlama) dönülür. Varsayılan AÇIK: kullanıcı "iki komut
+    # onay bekliyor" dediğinde gerçekten bekleyen bir kart olmalı.
+    approvals_enabled: bool = True
     # Saf kipte Claude'un cwd'si. Boş = %USERPROFILE%\.entropy\workspace.
     # Bir git deposunun içinde OLMAMALI (bkz. claude_workspace_path).
     claude_workspace_dir: str = ""
@@ -530,7 +541,9 @@ class EntropyConfig(BaseModel):
                 "brain_confidence_threshold": self.brain_confidence_threshold,
                 "brain_shortcut_enabled": self.brain_shortcut_enabled,
                 "claude_config_dir": self.claude_config_dir,
+                "claude_path": self.claude_path,
                 "claude_isolated": self.claude_isolated,
+                "approvals_enabled": self.approvals_enabled,
                 "claude_workspace_dir": self.claude_workspace_dir,
                 # Kullanıcının "Proje" düğmesiyle seçtiği kök kalıcı olmalıydı:
                 # kaydedilmediği için her açılışta APP_ROOT'a (paketlenmiş
@@ -606,8 +619,12 @@ class EntropyConfig(BaseModel):
                         setattr(self, key, value)
                 if isinstance(data.get("claude_config_dir"), str):
                     self.claude_config_dir = data["claude_config_dir"]
+                if isinstance(data.get("claude_path"), str):
+                    self.claude_path = data["claude_path"]
                 if isinstance(data.get("claude_isolated"), bool):
                     self.claude_isolated = data["claude_isolated"]
+                if isinstance(data.get("approvals_enabled"), bool):
+                    self.approvals_enabled = data["approvals_enabled"]
                 if isinstance(data.get("claude_workspace_dir"), str):
                     self.claude_workspace_dir = data["claude_workspace_dir"]
                 if isinstance(data.get("default_project_path"), str) and data["default_project_path"]:

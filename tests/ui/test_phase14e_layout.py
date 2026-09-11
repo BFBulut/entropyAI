@@ -362,3 +362,34 @@ def test_nav_strip_gate_turns_red_on_unnamed_button(zen, app):
         btn.setAccessibleName(old_name)
         btn.setText(old_name)
         btn.setIcon(old_icon)
+
+
+def test_desk_request_appears_once_when_queue_already_has_it(app, monkeypatch):
+    """
+    Çift sayım kapandı: kuyruk Desk isteğini zaten katıyor.
+
+    `PendingQueue.list()` Desk isteklerini `desk_change` olarak döndürüyor; kart
+    ayrıca `desk_pending_entries()` de ekleyince aynı istek iki satır oluyordu.
+    """
+    from entropy.ui.widgets import pending_card as pc
+
+    desk_row = {
+        "id": "d1", "kind": pc.DESK_KIND, "title": "Yeni ofis: medya",
+        "detail": "medya", "risk": "medium", "created_at": "",
+        "source": "desk", "payload": {"name": "medya"}, "status": "pending",
+    }
+    fake = types.SimpleNamespace(
+        list_pending=lambda: [{"id": "d1", "kind": "office",
+                               "summary": "Yeni ofis: medya",
+                               "payload": {"name": "medya"}, "created_at": ""}],
+        apply_pending=lambda rid: {"ok": True, "id": rid},
+        reject_pending=lambda rid, reason="": True,
+    )
+    import entropy.agents as agents_pkg
+
+    monkeypatch.setitem(sys.modules, "entropy.agents.desk_admin", fake)
+    monkeypatch.setattr(agents_pkg, "desk_admin", fake, raising=False)
+    card = pc.PendingWorkCard(queue=_FakeQueue([desk_row]))
+    rows = card.entries()
+    assert [r["id"] for r in rows] == ["d1"], rows
+    card.deleteLater()

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 import re
 import shutil
@@ -80,6 +81,8 @@ from entropy.core.provider import (
     list_agent_definitions,
 )
 from entropy.core.task_ledger import TaskStatus, task_ledger
+
+logger = logging.getLogger(__name__)
 
 # Windows CreateProcess sınırı AGY köprüsündekiyle aynı gerekçeyle burada da
 # geçerli; eşik bilinçli olarak ortak tutuldu (bkz. agy_bridge.ARGV_PROMPT_SAFE_LIMIT).
@@ -179,6 +182,26 @@ REPLACE_SYSTEM_PROMPT_FILE_FLAG = "--system-prompt-file"
 # ANTHROPIC_API_KEY ister. Kullanıcının kimliği claude.ai aboneliği olduğu için
 # saf kip `--bare` ile kurulamaz.
 ISOLATION_FORBIDDEN_FLAGS = ("--bare",)
+
+# CLI hiç bulunamadığında kullanıcıya gösterilen TEK satır (sessiz çıkış 127
+# yerine). Sohbete ve veriyoluna aynı metin düşer.
+CLAUDE_CLI_MISSING_MESSAGE = (
+    "Claude Code CLI bulunamadı — `npm install -g @anthropic-ai/claude-code` "
+    "ile kurun ya da Ayarlar'da Claude yolunu elle verin."
+)
+
+
+def _extension_version_key(folder_name: str) -> tuple:
+    """
+    `anthropic.claude-code-2.1.268-win32-x64` → (2, 1, 268) sıralama anahtarı.
+
+    Sürüm alanı bulunamazsa en düşük anahtar döner; böylece adlandırması
+    beklenmedik bir klasör sağlam sürümün önüne geçemez.
+    """
+    match = re.search(r"claude-code-(\d+(?:\.\d+)*)", folder_name)
+    if not match:
+        return (-1,)
+    return tuple(int(part) for part in match.group(1).split("."))
 
 # Sohbet turunun araç seti. Salt okuma varsayılan; yazma niyeti tespit edilen
 # turda düzenleme araçları eklenir. Varsayılan sistem istemi düştüğü için araç
@@ -397,6 +420,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         # mesaj stdin'e taşındığı için argv'den okunamaz.
         self.last_user_message: str = ""
         self.last_total_cost_usd: float = 0.0
+        # İzin isteği stream'de görünmez (ölçüldü): tek haberci kuyruktur.
+        # Kuyruğa `tool_permission` düştüğü an sohbete "izin istendi" satırı
+        # basılır; karar verildiğinde "verildi/reddedildi".
+        try:
+            bus.pending_changed.connect(self._on_pending_changed)
+        except Exception:
+            logger.debug("pending_changed bağlanamadı", exc_info=True)
 
         self.total_tokens_used: int = 0
         self.background_total_tokens: int = 0
@@ -463,24 +493,105 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         """
         return config_module.is_claude_model_name(name)
 
+    @staticmethod
+    def _editor_extension_candidates() -> List[Path]:
+        """
+        Editör eklentilerinin içindeki `native-binary/claude(.exe)` adayları.
+
+        Ölçüldü (14-B ön spike §0): bu makinede npm global kurulumu yarım
+        kalmış (`%APPDATA%\\npm\\claude.cmd` hiç yazılmamış), diskteki tek
+        sağlam ikili editör eklentisinin içindekiydi. Birden fazla sürüm
+        kuruluysa EN YÜKSEK sürüm seçilir (ad sonundaki sürüm alanına göre).
+        """
+        roots = [
+            Path.home() / ".vscode" / "extensions",
+            Path.home() / ".vscode-insiders" / "extensions",
+            Path.home() / ".cursor" / "extensions",
+        ]
+        found: List[tuple] = []
+        for root in roots:
+            try:
+                if not root.is_dir():
+                    continue
+                entries = list(root.glob("anthropic.claude-code-*"))
+            except Exception:
+                continue
+            for entry in entries:
+                for name in ("claude.exe", "claude"):
+                    binary = entry / "resources" / "native-binary" / name
+                    try:
+                        if not binary.is_file():
+                            continue
+                    except Exception:
+                        continue
+                    found.append((_extension_version_key(entry.name), binary))
+                    break
+        found.sort(key=lambda item: item[0], reverse=True)
+        return [binary for _key, binary in found]
+
+    def claude_executable_candidates(self) -> List[Path]:
+        """`find_claude_executable`in PATH'ten sonra denediği sıra (test edilebilir)."""
+        appdata = os.environ.get("APPDATA", "")
+        local = os.environ.get("LOCALAPPDATA", "")
+        candidates: List[Path] = []
+        configured = (getattr(config, "claude_path", "") or "").strip()
+        if configured:
+            candidates.append(Path(configured).expanduser())
+        if appdata:
+            candidates.append(Path(appdata) / "npm" / "claude.cmd")
+            candidates.append(Path(appdata) / "npm" / "claude")
+        candidates.append(Path.home() / ".local" / "bin" / "claude.exe")
+        candidates.append(Path.home() / ".local" / "bin" / "claude")
+        if local:
+            candidates.append(Path(local) / "Programs" / "claude" / "claude.exe")
+        candidates.extend(self._editor_extension_candidates())
+        return candidates
+
     def find_claude_executable(self) -> str:
-        """Claude Code CLI ikilisini PATH'te ya da npm global kurulumunda bulur."""
+        """
+        Claude Code CLI ikilisini bulur; bulunamazsa TEŞHİS yayar.
+
+        Sıra: `config.claude_path` → PATH → npm global shim → `~/.local/bin`
+        → `%LOCALAPPDATA%\\Programs\\claude` → editör eklentileri (en yüksek
+        sürüm). Hiçbiri yoksa eskiden çıplak `"claude"` dönüyordu ve süreç
+        sessizce çıkış 127 ile ölüyordu; artık veriyoluna ve sohbete tek
+        satırlık kurulum teşhisi düşer.
+        """
+        configured = (getattr(config, "claude_path", "") or "").strip()
+        if configured:
+            resolved = Path(configured).expanduser()
+            try:
+                if resolved.is_file():
+                    return str(resolved)
+            except Exception:
+                pass
         path = shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe")
         if path:
             return path
-        fallbacks = [
-            Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
-            Path(os.environ.get("APPDATA", "")) / "npm" / "claude",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "claude" / "claude.exe",
-            Path.home() / ".local" / "bin" / "claude",
-        ]
-        for fb in fallbacks:
+        for fb in self.claude_executable_candidates():
             try:
-                if fb.exists():
+                if fb.is_file():
                     return str(fb)
             except Exception:
                 continue
+        self._emit_missing_cli_diagnostic()
         return "claude"
+
+    def _emit_missing_cli_diagnostic(self) -> None:
+        """CLI bulunamadı teşhisini bir kez veriyoluna ve sohbete düşürür."""
+        if getattr(self, "_missing_cli_reported", False):
+            return
+        self._missing_cli_reported = True
+        logger.error(CLAUDE_CLI_MISSING_MESSAGE)
+        try:
+            bus.terminal_output_received.emit(CLAUDE_CLI_MISSING_MESSAGE)
+        except Exception:
+            pass
+        try:
+            # Sohbette de aynı satır görünsün: sessiz 127 yerine tek teşhis.
+            bus.agent_turn_completed.emit(CLAUDE_CLI_MISSING_MESSAGE)
+        except Exception:
+            pass
 
     @staticmethod
     def _creationflags() -> int:
@@ -694,6 +805,47 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
     # Komut kurulumu
     # ------------------------------------------------------------------
 
+    def approvals_enabled(self) -> bool:
+        """Gerçek onay yüzeyi açık mı (`config.approvals_enabled`, varsayılan açık)."""
+        return bool(getattr(config, "approvals_enabled", True))
+
+    def approval_argv(self) -> Dict[str, object]:
+        """
+        Onay yüzeyinin argv parçaları: `{"mcp_config", "permission_tool",
+        "skip_permissions"}`.
+
+        Kapalıysa (`approvals_enabled=False`) eski davranış döner: izin atlama
+        bayrağı, izin aracı yok. Açıkken `--mcp-config` dosyası yazılır ve
+        `--permission-prompt-tool mcp__entropy__approve` verilir.
+
+        **Sunucuyu Entropy BAŞLATMAZ.** Ölçüldü (spike §2): stdio MCP sunucusunu
+        CLI'ın kendisi doğurur ve el sıkışmayı (`initialize` → `tools/list`) o
+        bekler; belgedeki 30 sn BAĞLANTI zaman aşımıdır. Bize düşen, giriş
+        noktasının çalıştırılabilir olduğunu doğrulamak; doğrulanamazsa onay
+        yüzeyi açılmaz ve tur izin atlamayla koşar (sessiz asılmaktansa).
+        """
+        if not self.approvals_enabled():
+            return {"mcp_config": None, "permission_tool": None,
+                    "skip_permissions": True}
+        try:
+            from entropy.core import permission_server
+
+            path = permission_server.write_mcp_config()
+            # Yazan taraf ayrı süreç: dosya kuyruğunu yoklayan haberciyi aç.
+            from entropy.core.pending import start_watcher
+
+            start_watcher()
+            return {
+                "mcp_config": str(path),
+                "permission_tool": permission_server.PERMISSION_TOOL,
+                "skip_permissions": False,
+            }
+        except Exception:
+            logger.warning("İzin sunucusu yapılandırılamadı; onay yüzeyi kapalı.",
+                           exc_info=True)
+            return {"mcp_config": None, "permission_tool": None,
+                    "skip_permissions": True}
+
     def build_command(
         self,
         prompt: str,
@@ -713,6 +865,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         agents_json: Optional[str] = None,
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
+        permission_tool: Optional[str] = None,
     ) -> List[str]:
         """
         Başsız bir Claude Code çağrısının argv'sini kurar.
@@ -740,12 +893,19 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             system_prompt = f"{system_prompt}\n\n{append_system_prompt}"
             append_system_prompt = None
 
+        # Faz 14-B ölçümü: `acceptEdits` dosya yazımını izin kancasından ÖNCE
+        # otomatik onaylıyor (canlı S2'nin ilk koşumunda `queued_item: null`
+        # çıkmasının sebebi buydu). Onay aracı verildiğinde kip `default`
+        # olmalı, yoksa onay yüzeyi hiç çalışmaz.
+        permission_mode = (
+            "default" if permission_tool else normalize_permission_mode(mode)
+        )
         cmd = [
             self.find_claude_executable(),
             "-p", prompt,
             "--output-format", "stream-json",
             "--verbose",
-            "--permission-mode", normalize_permission_mode(mode),
+            "--permission-mode", permission_mode,
         ]
         run_model = self.model_for_run(model)
         if run_model:
@@ -838,7 +998,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 cmd.extend(["--agents", agents_json])
         elif mcp_config:
             cmd.extend(["--mcp-config", mcp_config])
-        if skip_permissions:
+        if permission_tool:
+            # Faz 14-B: izin isteği Entropy'nin stdio MCP sunucusuna sorulur.
+            # `--mcp-config` yukarıda zaten eklendi (saf kipte `--strict-mcp-
+            # config` ile birlikte), burada yalnızca aracın adı verilir. İzin
+            # atlama bayrağıyla BİRLİKTE gönderilmez: atlama açıkken CLI izin
+            # aracını hiç çağırmaz ve onay kartı hiç doğmazdı.
+            cmd.extend(["--permission-prompt-tool", permission_tool])
+        elif skip_permissions:
             cmd.append("--dangerously-skip-permissions")
         # Adım tavanı: CLI bayrağı bu sürümde YOK (bkz. CLAUDE_SUPPORTS_MAX_TURNS).
         # Bayrak geldiği gün tek satır açılır; yaptırım her hâlükârda
@@ -1269,6 +1436,13 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 result_usage = parse_usage(data.get("usage"))
                 if result_usage:
                     usage = result_usage
+                # Faz 14-B: reddedilen araçlar. Ölçüldü (spike §4): izin
+                # İSTEĞİ stream'de HİÇ görünmez (onu yalnız MCP sunucusu
+                # bilir), ama ret `result.permission_denials` altında sayılır
+                # ve `subtype` "success" kalır. Model bu yüzden "onay
+                # penceresinde bekliyor" uydurabiliyordu; artık sohbete gerçek
+                # satır düşer ve arayüz olayı alır.
+                self._emit_permission_denials(data.get("permission_denials"))
                 # Turun kapanışı: hata "error" (sahnede kırmızı), yoksa "idle"
                 # (volta). Sahne bunu kartın bittiği an olarak okur.
                 if is_error:
@@ -1290,6 +1464,112 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             "step_limit_hit": step_limit_hit,
             "stopped_on_result": stopped_on_result,
         }
+
+    # ------------------------------------------------------------------
+    # İzin yüzeyi (Faz 14-B)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def consume_approval_message(prompt: str) -> Optional[str]:
+        """
+        "onaylıyorum / reddet" mesajını kuyrukta çözer.
+
+        Döner: sohbete basılacak tek satır, ya da `None` (mesaj onay komutu
+        değil → normal tur). Hata yutulur: çözüm patlarsa tur CLI'ya gider.
+        """
+        try:
+            from entropy.core.response_hooks import resolve_approval_message
+
+            return resolve_approval_message(prompt)
+        except Exception:
+            logger.debug("Onay komutu çözülemedi", exc_info=True)
+            return None
+
+    def _on_pending_changed(self, payload) -> None:
+        """Kuyruk olayını sohbet satırına çevirir (yalnız `tool_permission`)."""
+        try:
+            item = dict((payload or {}).get("item") or {})
+            if item.get("kind") != "tool_permission":
+                return
+            action = str((payload or {}).get("action") or "")
+            data = dict(item.get("payload") or {})
+            tool = str(data.get("tool_name") or "Araç")
+            summary = str(item.get("title") or "")
+            if summary.startswith(f"{tool}: "):
+                summary = summary[len(tool) + 2:]
+            if action == "added":
+                phase = "requested"
+            elif item.get("status") == "approved":
+                phase = "decided"
+            else:
+                phase = "denied"
+            self.announce_permission(
+                phase, tool, summary,
+                tool_use_id=str(data.get("tool_use_id") or ""),
+                pending_id=str(item.get("id") or ""),
+                message=str(item.get("note") or ""),
+            )
+        except Exception:
+            logger.debug("İzin olayı işlenemedi", exc_info=True)
+
+    @staticmethod
+    def announce_permission(phase: str, tool: str, summary: str = "",
+                            tool_use_id: str = "", pending_id: str = "",
+                            message: str = "") -> str:
+        """
+        Sohbete tek satır düşürür ve `bus.tool_permission_event` yayar.
+
+        `phase`: "requested" | "decided" | "denied". Satır TEK kaynaktır:
+        model artık "onay bekliyor" uyduramaz çünkü satır ancak gerçek bir
+        kuyruk kaydı ya da gerçek bir ret olduğunda basılır.
+        """
+        tool = str(tool or "Araç")
+        summary = str(summary or "")
+        if phase == "requested":
+            line = f"\n[⏳ İZİN İSTENDİ: {tool}] {summary}\n"
+        elif phase == "denied":
+            line = f"\n[⛔ İZİN REDDEDİLDİ: {tool}] {summary}\n"
+        else:
+            line = f"\n[✔ İZİN VERİLDİ: {tool}] {summary}\n"
+        bus.terminal_output_received.emit(line)
+        bus.tool_permission_event.emit(
+            {
+                "phase": phase,
+                "tool": tool,
+                "input_summary": summary,
+                "tool_use_id": str(tool_use_id or ""),
+                "pending_id": str(pending_id or ""),
+                "message": str(message or ""),
+            }
+        )
+        if phase == "requested":
+            bus.tool_approval_requested.emit(tool, summary, str(tool_use_id or ""))
+        else:
+            bus.tool_approval_responded.emit(str(tool_use_id or ""),
+                                             phase != "denied")
+        return line
+
+    def _emit_permission_denials(self, denials) -> None:
+        """`result.permission_denials` → olay + sohbet satırı (hata yutulur)."""
+        if not isinstance(denials, list) or not denials:
+            return
+        try:
+            from entropy.core.permission_server import summarize_input
+        except Exception:
+            summarize_input = lambda name, value: str(value)  # noqa: E731
+        for item in denials:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("tool_name") or "Araç")
+            try:
+                summary = summarize_input(name, item.get("tool_input"))
+            except Exception:
+                summary = ""
+            self.announce_permission(
+                "denied", name, summary,
+                tool_use_id=str(item.get("tool_use_id") or ""),
+                message="Kullanıcı izin vermedi.",
+            )
 
     # ------------------------------------------------------------------
     # Token muhasebesi
@@ -1807,6 +2087,21 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         project_path: Optional[str] = None,
         agent: Optional[str] = None,
     ) -> None:
+        # Faz 14-B: "onaylıyorum" CLI'ya GİTMEZ. Bekleyen iş kuyruğunda gerçek
+        # bir kayıt varsa karar burada verilir (kota harcanmaz, model uydurmaz).
+        approval_line = self.consume_approval_message(prompt)
+        if approval_line is not None:
+            bus.agent_turn_started.emit(prompt)
+            bus.terminal_output_received.emit(f"\n{approval_line}\n")
+            try:
+                self._save_chat_turn(prompt, approval_line)
+            except Exception:
+                logger.debug("Onay turu geçmişe yazılamadı", exc_info=True)
+            bus.agent_turn_completed.emit(approval_line)
+            bus.core_state_changed.emit("idle")
+            self._drain_queue()
+            return
+
         project_dir = Path(project_path).resolve() if project_path else Path(self.active_project_dir).resolve()
         if not project_dir.exists():
             try:
@@ -1909,6 +2204,8 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             else:
                 append_system_prompt = context_prompt
 
+            # Faz 14-B: sohbet turu da gerçek onay yüzeyinden geçer.
+            approval = self.approval_argv()
             cmd = self.build_command(
                 user_message,
                 mode=mode,
@@ -1921,6 +2218,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 system_prompt=system_prompt,
                 tools=self.chat_tools(mode, needs_write=is_write, isolated=isolated),
                 agents_json=self.entropy_agents_json() if isolated else None,
+                mcp_config=approval["mcp_config"],
+                permission_tool=approval["permission_tool"],
+                # Sohbet turu izin ATLAMAZ (hiç atlamıyordu); onay kapalıysa
+                # CLI'ın kendi varsayılan davranışına bırakılır.
             )
             # Ölçüm/teşhis kancası: prompt uzunsa argv'den stdin'e taşındığı
             # için son kullanıcı mesajı argv'de görünmez; sözleşme testleri ve
@@ -2319,12 +2620,17 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 except Exception:
                     pass
 
+            # Faz 14-B: kart koşusu da onay yüzeyinden geçer. Onay kapalıysa
+            # (config.approvals_enabled=False) eski davranış — izin atlama.
+            approval = self.approval_argv()
             cmd = self.build_command(
                 prompt,
                 mode=mode,
                 project_dir=project_dir,
                 agent=agent,
-                skip_permissions=True,
+                skip_permissions=bool(approval["skip_permissions"]),
+                mcp_config=approval["mcp_config"],
+                permission_tool=approval["permission_tool"],
                 resume_id=resume_id,
                 max_steps=max_steps,
                 system_prompt=card_system_prompt,

@@ -74,6 +74,10 @@ __all__ = [
     "legacy_desk_roots",
     "legacy_desk_offices_dirs",
     "migrate_desk_root",
+    "DATA_ROOT_ENV",
+    "PENDING_SUBDIR",
+    "data_root",
+    "pending_root",
 ]
 
 # --- sözleşme ---------------------------------------------------------------
@@ -125,6 +129,44 @@ def vault_root(vault_path: Optional[Path | str] = None) -> Path:
     from entropy.core.config import config
 
     return Path(config.obsidian_vault_path)
+
+
+# --- tek veri kökü (Faz 14-B) ------------------------------------------------
+# Uygulamanın KASA DIŞI verisi (ayarlar, defterler, bekleyen işler) tek kökten
+# okunur. Faz 14 analizinde ölçülen arıza: kök üç parçaya dağılmıştı
+# (`<repo>/.entropy`, `~/.entropy`, `%LOCALAPPDATA%\EntropyAI`) ve 7 modül
+# `Path.home()/".entropy"` yolunu sabit yazıyordu; exe ile dev ağacı farklı
+# kuyruklara bakıyordu. Kaynak `config.STATE_DIR`'dir; buradaki sarmalayıcı onu
+# `core.paths` üzerinden tek adresten sunar ve çocuk süreçlerin (izin MCP
+# sunucusu) kökü devralabilmesi için ortam değişkeniyle geçersiz kılınabilir.
+DATA_ROOT_ENV = "ENTROPY_DATA_ROOT"
+PENDING_SUBDIR = "pending"
+
+
+def data_root() -> Path:
+    """Kasa DIŞI veri kökü (`config.STATE_DIR` ya da `ENTROPY_DATA_ROOT`)."""
+    import os
+
+    env = os.environ.get(DATA_ROOT_ENV)
+    if env:
+        return Path(env).expanduser()
+    from entropy.core.config import STATE_DIR
+
+    return Path(STATE_DIR)
+
+
+def pending_root(root: Optional[Path | str] = None) -> Path:
+    """
+    `<veri kökü>/pending` — bekleyen işler kuyruğunun tek klasörü.
+
+    `root` verilirse: adı zaten `pending` ise olduğu gibi, değilse altına
+    `pending` eklenir. Çağıran (arayüz, testler) hangi seviyeyi verdiğini
+    karıştırsa bile kuyruk ikiye bölünmez.
+    """
+    base = Path(root) if root is not None else data_root()
+    if base.name == PENDING_SUBDIR:
+        return base
+    return base / PENDING_SUBDIR
 
 
 def desk_root(vault_path: Optional[Path | str] = None) -> Path:

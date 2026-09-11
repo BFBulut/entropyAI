@@ -79,6 +79,9 @@ a = Analysis(
         # Faz 10: Desk veri koku, ofis calisma alani, kontrol noktalari,
         # terfi eden kurallar ve bunlarin arayuz karsiliklari.
         'entropy.core.paths',
+        'entropy.core.pending',
+        'entropy.core.permission_server',
+        'entropy.core.permission_mcp_main',
         'entropy.brain.office_workspace',
         'entropy.brain.checkpoints',
         'entropy.brain.promoted_rules',
@@ -205,6 +208,8 @@ a = Analysis(
         'entropy.brain.wiki',
         'entropy.brain.lint',
         'entropy.brain.agent_memory',
+        'entropy.brain.agent_memory_writer',
+        'entropy.brain.artifact_archive',
         # Faz 5 graf katmani
         'entropy.brain.graph_store',
         'entropy.brain.reconcile',
@@ -252,6 +257,11 @@ a = Analysis(
         'entropy.ui.widgets.agent_session_badge',
         'entropy.ui.widgets.header_bar',
         'entropy.ui.widgets.nav_list',
+        # Faz 14-E ekranları (spec eşlemesi 14-B'de kapatıldı).
+        'entropy.ui.widgets.nav_strip',
+        'entropy.ui.widgets.pending_card',
+        'entropy.ui.widgets.agent_runs_panel',
+        'entropy.ui.widgets.agent_stream_line',
         'entropy.ui.widgets.report_card_bridge',
         'entropy.ui.widgets.report_chat_card',
         # Faz 12-A: hafiza turlarinin kopru uyarlayicisi (slash komutlari

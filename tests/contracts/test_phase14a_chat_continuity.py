@@ -124,7 +124,10 @@ def test_four_consecutive_turns_keep_one_session_and_one_system_prompt(tmp_path,
     prompts = [
         "Bugünkü konumuz mor zürafa envanteri",
         "bunu biraz açar mısın",
-        "onaylıyorum",
+        # Not (Faz 14-B): burada eskiden "onaylıyorum" vardı. Artık o mesaj
+        # CLI'ya HİÇ gitmiyor (bekleyen iş kuyruğunda çözülüyor), yani süreklilik
+        # ölçümünü taşıyamaz; yerine sıradan bir takip turu kondu.
+        "peki envanterdeki en yaşlı zürafa hangisi",
         "az önce ne dedim",
     ]
     runs = [_turn(b, monkeypatch, p) for p in prompts]

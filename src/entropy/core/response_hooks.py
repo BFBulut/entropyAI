@@ -161,4 +161,107 @@ def _consume_board_create(text: str, board=None, registry=None) -> List[str]:
     return receipts
 
 
-__all__ = ["process_chat_response", "entropy_tools_section"]
+# --- "onaylıyorum" çözümü (Faz 14-B) ----------------------------------------
+#
+# Kullanıcı "onaylıyorum" yazdığında bu mesaj MODELE GİTMEZ: bekleyen iş
+# kuyruğunda (`core/pending.py`) gerçek bir kayıt varsa kararı uygulama verir.
+# Ölçülen arıza buydu — mesaj CLI'ya gidiyordu, modelin onaylanacak bir şeyi
+# olmadığı için "bağlam bana ulaşmadı" ya da "iki komut onay bekliyor" diye
+# uyduruyordu. Kuyruk boşsa yanıt TEK SATIR olur ve yine modele gidilmez.
+
+_APPROVE_WORDS = (
+    "onaylıyorum", "onayla", "onaylandı", "onay veriyorum", "evet onayla",
+    "kabul ediyorum", "izin ver", "onaylıyom",
+)
+_REJECT_WORDS = (
+    "reddet", "reddediyorum", "iptal et", "izin verme", "onaylamıyorum",
+)
+
+
+def _normalize_tr(text: str) -> str:
+    """Türkçe güvenli küçültme (`İ`/`I` Python'da yanlış eşleşiyor)."""
+    return (
+        str(text or "")
+        .replace("İ", "i")
+        .replace("I", "ı")
+        .lower()
+        .strip()
+        .strip(".!?,;: ")
+    )
+
+
+def parse_approval_command(text: str):
+    """
+    Mesajı onay komutuna çevirir: `(karar, kimlik)` ya da `None`.
+
+    Kimlik yalnızca "onayla <id>" biçiminde verilirse dolar.
+    """
+    norm = _normalize_tr(text)
+    if not norm or len(norm) > 120:
+        return None
+    parts = norm.split()
+    head = parts[0]
+    rest = " ".join(parts[1:]).strip()
+    for word in _APPROVE_WORDS:
+        if norm == word or (norm.startswith(word + " ") and len(word.split()) == 1):
+            return ("approve", rest if head == word else "")
+    for word in _REJECT_WORDS:
+        if norm == word or norm.startswith(word + " "):
+            return ("reject", rest if head == word else "")
+    return None
+
+
+def resolve_approval_message(text: str, pending_queue=None):
+    """
+    Onay komutunu kuyrukta çözer; sohbete basılacak TEK SATIRI döndürür.
+
+    `None` dönerse mesaj onay komutu değildir ve normal tur akışı sürer.
+    """
+    parsed = parse_approval_command(text)
+    if parsed is None:
+        return None
+    decision, wanted_id = parsed
+    try:
+        if pending_queue is None:
+            from entropy.core.pending import PendingQueue
+
+            pending_queue = PendingQueue()
+        items = list(pending_queue.list() or [])
+    except Exception:
+        logger.warning("Bekleyen işler okunamadı", exc_info=True)
+        return "Bekleyen onaylar okunamadı."
+    if wanted_id:
+        items = [i for i in items if str(i.get("id") or "").endswith(wanted_id)]
+        if not items:
+            return f"Bekleyen onay yok: {wanted_id}"
+    if not items:
+        return "Bekleyen onay yok."
+    if len(items) > 1:
+        lines = [
+            f"{i + 1}. [{it.get('risk', 'low')}] {it.get('title') or it.get('id')} "
+            f"(kimlik: {it.get('id')})"
+            for i, it in enumerate(items)
+        ]
+        return (
+            f"{len(items)} onay bekliyor; hangisi? "
+            + " | ".join(lines)
+            + " — 'onayla <kimlik>' yaz."
+        )
+    item = items[0]
+    try:
+        record = pending_queue.resolve(str(item.get("id")), decision)
+    except Exception as exc:
+        logger.warning("Onay uygulanamadı", exc_info=True)
+        return f"Onay uygulanamadı: {exc}"
+    title = str(record.get("title") or record.get("id") or "")
+    if decision == "approve":
+        return f"✔ onaylandı: {title}"
+    return f"⛔ reddedildi: {title}"
+
+
+__all__ = [
+    "process_chat_response",
+    "entropy_tools_section",
+    "parse_approval_command",
+    "resolve_approval_message",
+]

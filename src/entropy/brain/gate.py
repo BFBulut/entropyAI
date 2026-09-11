@@ -67,6 +67,42 @@ GATE_ADD_THRESHOLD = 0.80    # < : açıkça yeni, doğrudan yaz
 # fikstür/kısa metin süzgecinde eleniyor).
 MIN_CONTENT_CHARS = 40
 
+# Faz 14-D: hata/günlük/yığın izi reddi bandı. Kök neden (A notu §1 satır 3c):
+# başarısız bir turun HATA METNİ `success` bayrağına bakılmadan hafızaya
+# yazılıyordu; kapı yalnızca yenilik/kopya bakıyor, "bu bir hata günlüğü mü"
+# diye bakmıyordu. Gerçek DB'de `'list_iterator' object has no attribute` içeren
+# 2 düğüm ve 12 pytest izli düğüm bu yoldan girdi.
+REJECT_ERRORLOG = "REJECT_ERRORLOG"
+
+_ERROR_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    ("traceback", re.compile(r"\bTraceback\b", re.IGNORECASE)),
+    ("error_prefix", re.compile(r"\bError:", re.IGNORECASE)),
+    ("exception", re.compile(r"\bException\b")),
+    ("attribute_error", re.compile(r"object has no attribute", re.IGNORECASE)),
+    ("autonomous_task_error", re.compile(r"\[Otonom\s+Görev\s+Hata\]", re.IGNORECASE)),
+    ("not_executed", re.compile(r"yürütülemedi", re.IGNORECASE)),
+    ("step_limit", re.compile(r"\[ADIM\s+SINIRI\]", re.IGNORECASE)),
+    ("timeout", re.compile(r"\bTimeout\b", re.IGNORECASE)),
+)
+
+# Kaynak/metadata'da pytest ya da geçici dizin izi: üretim hafızasına test
+# artığı sokan tek yol buydu (izler içerikte değil `provenance` alanındaydı,
+# bu yüzden K10 fikstür süzgeci onları hiç görmedi).
+_ARTIFACT_PROVENANCE_PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
+    ("pytest_of", re.compile(r"pytest-of-", re.IGNORECASE)),
+    ("pytest_tmp", re.compile(r"[\\/]pytest-\d+[\\/]", re.IGNORECASE)),
+    ("temp_pytest", re.compile(r"Temp[\\/]+pytest", re.IGNORECASE)),
+    ("tmp_path", re.compile(r"[\\/]tmp[\\/]", re.IGNORECASE)),
+    ("pytest_word", re.compile(r"\bpytest\b", re.IGNORECASE)),
+)
+
+# Yalnız günlük satırı: "[12:00:01] INFO ..." / "WARNING: ..." gibi tek satırlık
+# çıktı hafıza değildir.
+_LOG_LINE_RE = re.compile(
+    r"^\s*(?:\[[^\]]*\]\s*)*(?:DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL|FATAL|TRACE)\b",
+    re.IGNORECASE,
+)
+
 ACTION_ADD = "add"
 ACTION_NOOP = "noop"
 ACTION_GRAY = "gray"
@@ -156,6 +192,43 @@ def derive_provenance(metadata: Optional[Dict[str, Any]], explicit: str = "") ->
     return ("; ".join(parts), False)
 
 
+def error_log_match(content: str) -> Optional[str]:
+    """Hata/yığın izi/günlük kalıbı yakalarsa kalıbın adını döndürür (14-D)."""
+    text = content or ""
+    for name, pattern in _ERROR_PATTERNS:
+        if pattern.search(text):
+            return name
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) <= 1 and lines and _LOG_LINE_RE.match(lines[0]):
+        return "log_line"
+    return None
+
+
+def artifact_provenance_match(provenance: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """`provenance`/metadata'da pytest ya da geçici dizin izi var mı (14-D)."""
+    blob = str(provenance or "")
+    if metadata:
+        try:
+            blob += " " + json.dumps(metadata, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - savunma
+            blob += " " + str(metadata)
+    for name, pattern in _ARTIFACT_PROVENANCE_PATTERNS:
+        if pattern.search(blob):
+            return name
+    return None
+
+
+def failed_run(metadata: Optional[Dict[str, Any]] = None) -> bool:
+    """Metadata başarısız turu beyan ediyor mu (`success=False`)."""
+    meta = metadata or {}
+    for key in ("success", "ok", "succeeded"):
+        if key in meta:
+            value = meta[key]
+            if value is False or str(value).strip().lower() in ("false", "0", "no"):
+                return True
+    return False
+
+
 def fixture_match(content: str) -> Optional[str]:
     """Fikstür/test kalıbı yakalarsa kalıbın adını döndürür."""
     text = content or ""
@@ -180,6 +253,8 @@ class GateDecision:
     similarity: float = 0.0
     nearest_id: Optional[str] = None
     reason: str = ""
+    #: RED kararının makine okunur kodu; 14-D bandı `REJECT_ERRORLOG` yazar.
+    reject_code: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     embedding: Optional[List[float]] = None
     embedding_status: str = ""
@@ -197,6 +272,7 @@ class GateDecision:
             "novelty": round(self.novelty, 4),
             "nearest_id": self.nearest_id,
             "reason": self.reason,
+            "reject_code": self.reject_code,
         }
 
 
@@ -220,7 +296,14 @@ class MemoryGate:
         self.counters: Dict[str, int] = {
             ACTION_ADD: 0, ACTION_NOOP: 0, ACTION_GRAY: 0,
             ACTION_SUPERSEDE: 0, ACTION_REJECT: 0,
+            # 14-D: hata/günlük reddi ayrı sayılır; `brain_metrics` K10 satırı.
+            REJECT_ERRORLOG: 0,
         }
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        """Sayaçların salt okunur kopyası (ölçüm paketi ve bellek panosu okur)."""
+        return dict(self.counters)
 
     # -- kuyruk ------------------------------------------------------------
 
@@ -321,6 +404,22 @@ class MemoryGate:
         if resolution.mapped:
             meta.setdefault("legacy_category", (category or "").strip())
 
+        # 0. Faz 14-D — hata/yığın izi/günlük reddi bandı.
+        #    Başarısız turun beyanı (`success=False`) kategoriden bağımsız olarak
+        #    reddedilir: hafıza "ne oldu"yu değil "ne öğrenildi"yi tutar.
+        if failed_run(meta):
+            return self._reject(decision, "başarısız tur çıktısı (success=False)",
+                                code=REJECT_ERRORLOG)
+        if self.strict:
+            hit = error_log_match(content)
+            if hit:
+                return self._reject(decision, f"hata/günlük kalıbı: {hit}",
+                                    code=REJECT_ERRORLOG)
+            hit = artifact_provenance_match(prov, meta)
+            if hit:
+                return self._reject(decision, f"test/geçici dizin izi (kaynak): {hit}",
+                                    code=REJECT_ERRORLOG)
+
         # 1. Kategori: kapalı küme
         if resolution.unknown and self.strict:
             return self._reject(decision, f"bilinmeyen kategori: {category!r}")
@@ -328,7 +427,11 @@ class MemoryGate:
         # 2. Ayıklama: fikstür ve çok kısa metin
         if self.strict:
             if len(content) < MIN_CONTENT_CHARS:
-                return self._reject(decision, f"çok kısa içerik ({len(content)} < {MIN_CONTENT_CHARS})")
+                return self._reject(
+                    decision,
+                    f"çok kısa içerik ({len(content)} < {MIN_CONTENT_CHARS})",
+                    code=REJECT_ERRORLOG,
+                )
             hit = fixture_match(content)
             if hit:
                 return self._reject(decision, f"fikstür kalıbı: {hit}")
@@ -376,11 +479,14 @@ class MemoryGate:
 
     # -- yardımcılar --------------------------------------------------------
 
-    def _reject(self, decision: GateDecision, reason: str) -> GateDecision:
+    def _reject(self, decision: GateDecision, reason: str, code: str = "") -> GateDecision:
         decision.action = ACTION_REJECT
         decision.reason = reason
+        decision.reject_code = code
         decision.novelty = 0.0
         self.counters[ACTION_REJECT] += 1
+        if code:
+            self.counters[code] = self.counters.get(code, 0) + 1
         logger.info("MemoryGate RED: %s | %s", reason, decision.content[:80])
         return decision
 

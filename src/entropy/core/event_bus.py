@@ -65,6 +65,20 @@ class EntropyEventBus(QObject):
     tool_approval_requested = Signal(str, str, str)  # tool_name, args_summary, tool_id
     tool_approval_responded = Signal(str, bool)     # tool_id, approved
 
+    # Bekleyen işler kuyruğu (Faz 14-B, `core/pending.py`; ARCHITECTURE §6.7).
+    # Yük: {"action": "added"|"resolved"|"expired", "item": <künye>}. Kuyruk
+    # dosya tabanlıdır ve ayrı süreçten de yazılabilir; bu sinyal yalnızca
+    # UYGULAMA içindeki yazımlarda yayılır — arayüz listeyi her sinyalde
+    # diskten yeniden okur, sinyalin yükü tek gerçek kaynak DEĞİLDİR.
+    pending_changed = Signal(dict)
+
+    # CLI izin yüzeyi (Faz 14-B): istek kuyruğa düştü / karar verildi / reddedildi.
+    # Yük: {"phase": "requested"|"decided"|"denied", "tool", "input_summary",
+    #       "tool_use_id", "decision", "pending_id", "message"}.
+    # `tool_approval_requested/responded` sinyalleri DURUYOR (eski alıcılar);
+    # bu sinyal sözlük taşıdığı için yeni alan eklendiğinde imza değişmez.
+    tool_permission_event = Signal(dict)
+
     # Task Scheduler
     task_triggered = Signal(str, str)    # task_id, task_name
     task_completed = Signal(str, bool)   # task_id, success
