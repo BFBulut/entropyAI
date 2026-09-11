@@ -76,8 +76,11 @@ Yeşil ölçüm olmadan iş "bitti" sayılmaz.
 
 ## 2. Yerleşim kuralları
 
-- Bölge sayısı sabittir (Zen: sol bağlam / orta iş / sağ hafıza). Yeni bölge açılmaz.
-- Her bölgede **aynı anda tek panel** görünür; diğerleri sol gezinme listesinden gelir.
+- Bölge sayısı sabittir (Faz 14-E Zen: üst şerit / içerik alanı / sağ panel /
+  durum satırı). Yeni bölge açılmaz.
+- Her bölgede **aynı anda tek panel** görünür; içerik alanındaki panel üst
+  şeritteki yedi bölüm düğmesinden, sağ paneldeki yüzey Sohbet/Hafıza
+  sekmesinden seçilir.
 - İç içe `QSplitter` derinliği **1**'i geçmez; bölücü konumları `QSettings`'e yazılır.
 - İkincil şeritler (bildirim, ek, terminal, yan panel) **aynı anda en fazla bir tane**
   görünür; içerik alanı pencere yüksekliğinin **%55'inin** altına inmez.
@@ -180,7 +183,19 @@ Kapıların **gerçekten ölçtüğü** `tests/ui/test_phase13_ux.py` ve
 bilerek adsız bırakılmış bir düğme G13-1'i, 200 ms uyuyan bir işleyici G13-3'ü,
 yalan beyanlı bir panel G13-4'ü kırmızıya çevirir.
 
-Bilgi (kapı değil): `screens_swept` (7), `skill_toggle_ms`, `skill_rebuild_ms`,
+Faz 14-E'de eklenen kapı (yeni düzen: yedi bölüm üst şeritte, sohbet sağda
+tam panel). Üst çubuk kapısı **gevşetilmedi**: bölüm şeridi pencere
+denetimleriyle aynı statüde AYRI bir grup olarak sayılır ve kendi kapısını
+taşır.
+
+| Kapı | Alan | Eşik | Nasıl ölçülür | Ölçüm (2026-09-11) |
+|---|---|---:|---|---:|
+| **G14-1** bölüm şeridi | `nav_strip_violations` | 0 | canlı `navStrip`: düğme sayısı **7**, her düğmede `pixmap(16)` ile çizilebilir ikon **ve** `accessibleName`, aynı anda **tek** seçili düğme | **0** |
+| **G14-1b** bölüm sayısı | `nav_strip_buttons` | ≥ 7 (`FINAL_MIN_GATES`) | aynı ölçüm | **7** |
+| `header_leaf_widgets` (değişmedi) | ≤ 6 | şerit ve pencere denetimleri hariç canlı yaprak sayımı | **6** |
+
+Bilgi (kapı değil): `content_min_width_zen` (560, 1600 px pencerede ölçülür),
+`right_panel_width_zen` (420), `screens_swept` (7), `skill_toggle_ms`, `skill_rebuild_ms`,
 `midpoint_separators` (bugün 77), `emoji_raw`,
 `splitters_total`, `click_latency_cards`, `board_view_mode_1366`.
 

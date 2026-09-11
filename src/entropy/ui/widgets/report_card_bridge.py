@@ -40,12 +40,39 @@ class ReportCardMixin:
 
     # ------------------------------------------------------------ sinyal
 
+    def should_notify_once(self, identity: str) -> bool:
+        """Aynı OLAY için ikinci kartı engeller (Faz 14-E madde 6).
+
+        Faz 14 planı §2: bir kart koşusu `report_created` + `task_report_ready`
+        + `task_notification` üreticilerinden ≥ 3 bildirim kartı basıyordu.
+        Eski çözüm 10 saniyelik zaman penceresiydi ve ikinci koşum yeni dosya
+        yazınca işe yaramıyordu; artık ölçüt **kimlik**: kart kimliği ya da
+        normalize edilmiş rapor yolu. Kimlik boşsa kart basılır (bilgi
+        kaybetmek gürültüden kötüdür).
+        """
+        ident = " ".join(str(identity or "").split()).lower()
+        if not ident:
+            return True
+        seen = getattr(self, "_notified_identities", None)
+        if seen is None:
+            seen = set()
+            self._notified_identities = seen
+        if ident in seen:
+            return False
+        seen.add(ident)
+        return True
+
     @Slot(dict)
     def _on_task_report_ready(self, payload: dict) -> None:
         """Rapor kartını sohbete basar ve bildirim merkezine girdi ekler."""
         data = normalize_report_payload(payload)
         key = data["card_id"] or data["title"]
         self.report_payloads[key] = data
+        identity = str(data.get("card_id") or "") or str(
+            resolve_report_path(data) or data.get("title") or ""
+        )
+        if not self.should_notify_once(identity):
+            return
         browser = getattr(self, "chat_browser", None)
         if browser is not None:
             browser.append(report_card_html(data))

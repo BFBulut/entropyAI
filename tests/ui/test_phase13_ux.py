@@ -760,9 +760,12 @@ def test_reports_viewer_has_a_sessions_switch(qapp):
 def test_core_overlay_does_not_cover_text_or_scrollbar(zen, qapp):
     """136 px çekirdek metnin ilk satırını ve kaydırma çubuğunu örtmemeli."""
     browser = zen.chat_browser
-    frame = browser.parentWidget()
-    splitter = frame.parentWidget()
-    splitter.setSizes([150, 800])       # sohbet gövdesine gerçek yükseklik ver
+    # Faz 14-E: sohbet artık ALTTAKİ bölücünün içinde değil, sağ panelin
+    # "Sohbet" sekmesinde. Gövdeye gerçek yükseklik vermek için pencere
+    # büyütülür (eski `splitter.setSizes` yolu artık yok).
+    zen.right_panel.setCurrentIndex(0)
+    zen.setGeometry(0, 0, 1600, 950)
+    zen.show()
     qapp.processEvents()
     browser.setHtml("<p>" + ("Satır bir. " * 400) + "</p>")
     qapp.processEvents()

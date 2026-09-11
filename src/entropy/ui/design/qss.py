@@ -142,6 +142,24 @@ QPushButton[role="icon"], QPushButton#iconButton, QToolButton {{
 QToolButton:hover {{ background-color: {c['surface.raised']}; border-radius: {r['sm']}px; }}
 QToolButton:focus {{ border: {ct['border']}px solid {c['accent']}; outline: {ring}px solid {c['accent']}; }}
 
+/* ===== Bölüm şeridi (Faz 14-E): yedi bölüm üst çubukta küçük düğme =====
+   Genel QToolButton kuralı 30x30'a kilitler; şerit düğmesi ikon + 11 px etiket
+   taşır, bu yüzden genişliği serbest bırakılır. Seçili düğme TEK vurgu
+   rengiyle işaretlenir (dekorasyon değil durum). */
+QFrame#navStrip, QWidget#navStrip {{ background-color: transparent; border: none; }}
+QToolButton#navStripButton {{
+    min-width: {ct['min_target']}px; max-width: 16777215px;
+    min-height: {ct['height_nav']}px; max-height: {ct['height_nav']}px;
+    padding: 0 {s['2']}px; border: {ct['border']}px solid transparent;
+    border-radius: {r['sm']}px;
+    color: {c['text.muted']}; font-size: {ty['label']['size']}px;
+}}
+QToolButton#navStripButton:hover {{ color: {c['text']}; background-color: {c['surface.raised']}; }}
+QToolButton#navStripButton:checked {{
+    color: {c['text']}; border-color: {c['accent']};
+    background-color: {c['surface.raised']};
+}}
+
 /* ===== Üst çubuk grupları (Faz 11-E adım 2: 18 öğe -> 4) ===== */
 QFrame[role="toolbarGroup"], QFrame#windowControls, QFrame#brandCluster,
 QFrame#modelCapsule, QFrame#statusCluster {{

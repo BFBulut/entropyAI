@@ -350,6 +350,33 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             self.brand, self.model_capsule, self.status_cluster, self.palette_btn,
         ]
 
+        # Faz 14-E: Chat kipinde üst şerit ÜÇ düğmeye iner (Sohbet, Bildirimler,
+        # palet); sohbet zaten tüm pencereyi kaplar. Zen'in yedi bölümü burada
+        # yoktur — Chat "sohbet öncelikli" kipin tanımıdır (B notu §4).
+        self.chat_nav_strip = QFrame()
+        self.chat_nav_strip.setObjectName("navStrip")
+        self.chat_nav_strip.setProperty("role", "toolbarGroup")
+        _nav_row = QHBoxLayout(self.chat_nav_strip)
+        _nav_row.setContentsMargins(0, 0, 0, 0)
+        _nav_row.setSpacing(TOKENS["space"]["1"])
+
+        # İkon düğme (28 px): 460 px'lik dar pencerede çubuk iki satırı aşmasın
+        # diye metin yerine ikon + erişilebilir ad kullanılır (ui-design §0.10).
+        self.nav_chat_btn = make_icon_button(
+            "comment", "Sohbet", "Yan paneli kapat, tüm pencere sohbet olsun",
+            self.chat_nav_strip,
+        )
+        self.nav_chat_btn.clicked.connect(self.show_chat_only)
+        _nav_row.addWidget(self.nav_chat_btn)
+
+        self.nav_notifications_btn = make_icon_button(
+            "bell", "Bildirimler", "Bildirim merkezini yan panelde aç",
+            self.chat_nav_strip,
+        )
+        self.nav_notifications_btn.clicked.connect(self.show_notifications)
+        _nav_row.addWidget(self.nav_notifications_btn)
+        h_layout.addWidget(self.chat_nav_strip)
+
         # Çubuktan kaldırılan düğmeler nesne olarak korunur (testler ve
         # palet eylemleri bunları çağırır); artık üst çubukta yer kaplamazlar.
         self.desk_btn = QPushButton("Desk")
@@ -524,6 +551,11 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
         kapsülü kısa ada döner; ikisi de ipucunda ve komut paletinde durur.
         """
         compact = self.width() < 620
+        # Faz 14-E: şerit çok dar pencerede gizlenir; iki eylem komut
+        # paletinde ve "Panel" düğmesinde kalır (bilgi kaybı yok).
+        strip = getattr(self, "chat_nav_strip", None)
+        if strip is not None:
+            strip.setVisible(not compact)
         cluster = getattr(self, "status_cluster", None)
         if cluster is not None:
             cluster.set_compact(compact)
@@ -844,6 +876,27 @@ class ChatModeWindow(ReportCardMixin, QMainWindow):
             self._inbox_report_window = open_standalone_report_window(str(path), parent=self)
         except Exception as exc:
             bus.terminal_output_received.emit(f"[Rapor Merkezi] Rapor açılamadı: {exc}\n")
+
+    @Slot()
+    def show_chat_only(self) -> bool:
+        """Üst şeritteki "Sohbet": yan panel kapanır, pencere tümüyle sohbet."""
+        self._side_panel_open = False
+        self.side_panel_container.setVisible(False)
+        self.panel_btn.setText("Panel")
+        return True
+
+    @Slot()
+    def show_notifications(self) -> bool:
+        """Üst şeritteki "Bildirimler": yan panel bildirim sekmesinde açılır."""
+        panel = self.ensure_side_panel()
+        self._side_panel_open = True
+        self.side_panel_container.setVisible(True)
+        self.panel_btn.setText("Paneli kapat")
+        for index in range(panel.count()):
+            if "Bildirim" in panel.tabText(index):
+                panel.setCurrentIndex(index)
+                return True
+        return False
 
     def toggle_side_panel(self):
         """Paneli açar/kapatır; ilk açılışta sekmeleri kurar.

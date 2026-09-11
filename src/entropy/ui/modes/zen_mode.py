@@ -43,6 +43,10 @@ from entropy.ui.widgets.header_bar import (
     context_badge_tone, repolish as _repolish,
 )
 from entropy.ui.widgets.nav_list import NavList
+from entropy.ui.widgets.nav_strip import NavStrip
+from entropy.ui.widgets.agent_stream_line import AgentStreamLine
+from entropy.ui.widgets.pending_card import PendingWorkCard
+from entropy.ui.widgets.agent_runs_panel import AgentRunsPanel
 from entropy.ui.widgets.report_inbox import InboxBadge
 from entropy.ui.widgets.command_palette import install_command_palette
 from entropy.ui.widgets.flow_layout import (
@@ -85,6 +89,19 @@ from entropy.ui.window_sizing import (
 # sohbet gövdesi önceliklidir).
 ZEN_MIN_SIZE = (860, 520)
 ZEN_SCREEN_RATIO = 0.92
+
+# Faz 14-E: istenen düzenin RAHAT çalıştığı boyut 1100x700 (B notu §4).
+# Bu bir asgari DEĞİL, tercih edilen açılış boyutudur: sert asgariyi 960x540'ın
+# altında tutan %200 DPI sözleşmesi (Faz 12-D.1) bozulmaz; 1100'ün altında
+# içerik alanı ve sağ panel dar eşiklerine düşer (`_apply_layout_density`).
+ZEN_PREFERRED_SIZE = (1100, 700)
+#: İçerik alanının (seçili bölüm paneli) asgari genişliği — G13-4 sözleşmesi.
+CONTENT_MIN_WIDTH = 560
+#: Sağ panelin (Sohbet / Hafıza) varsayılan ve asgari genişliği.
+RIGHT_PANEL_WIDTH = 420
+RIGHT_PANEL_MIN_WIDTH = 320
+#: Dar pencerede (bu eşiğin altında) geniş asgariler geri düşer.
+LAYOUT_WIDE_THRESHOLD = 1100
 
 
 class ZenModeWindow(ReportCardMixin, QMainWindow):
@@ -153,7 +170,9 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         # Denetim D-08: 18 denetim 460 px'te 6 satıra sarıyordu. Kaldırılan
         # düğmeler (Desk, Proje, Yeni, Floating/Chat, Raporlar) yok olmadı;
         # komut paletine ve sol dikey gezinmeye taşındı.
-        header = FlowHeaderFrame(margins=(16, 8, 16, 8))
+        # Faz 14-E: dikey kenar boşluğu 8 → 4; 36 px'lik bölüm düğmeleriyle
+        # birlikte şerit 48 px hedefinde kalır (ölçüm: 46 px, 1920×1080).
+        header = FlowHeaderFrame(margins=(16, 4, 16, 4))
         h_layout = header.flow()
 
         # (1) Marka + durum noktası + mod anahtarı.
@@ -164,6 +183,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         # kendi durum noktası kalır — aynı bilgi ekranda iki kez görünmez.
         self.brand = BrandCluster(current_mode="zen")
         h_layout.addWidget(self.brand)
+
+        # Faz 14-E: yedi bölüm üst şeritte küçük düğmeler (kullanıcının
+        # bağlayıcı tarifi). Şerit üst çubuğun "öğe"si DEĞİL, ayrı bir gruptur:
+        # `header_items` kapısı (≤ 4) gevşetilmez, şeridin kendi kapısı vardır
+        # (`nav_strip_buttons == 7`, `scripts/ui_audit.py`).
+        self.nav_strip = NavStrip()
+        h_layout.addWidget(self.nav_strip)
 
         h_layout.addStretch()
 
@@ -279,19 +305,18 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         header.setMinimumWidth(200)
         root_layout.addWidget(header)
 
-        # 2. Ana çalışma alanı — Faz 11-E adım 2: bölücü derinliği 4 → 2.
-        # Eskiden zincir `main_v > top_h > left_tabs > tasks_split` biçiminde
-        # dörde iniyordu ve kullanıcı bir raporu okumak için üç ayrı bölücüyü
-        # ayarlamak zorundaydı (denetim D-17).
-        main_v_splitter = QSplitter(Qt.Orientation.Vertical)
-        main_v_splitter.setObjectName("shellSplitter")
+        # 2. Gövde — Faz 14-E: TEK yatay bölücü.
+        # Eski kurgu iki kabuk bölücüsüydü (`main_v > top_h`): sohbet altta bir
+        # şeride sıkışıyor, hafıza grafiği sağı tek başına tutuyordu. Kullanıcı
+        # düzeni "sohbet sağda yukarıdan aşağıya tam panel, hafıza aynı panelde
+        # sekme" olarak tarif etti; bölücü zinciri 2 → 1'e iner.
+        body_splitter = QSplitter(Qt.Orientation.Horizontal)
+        body_splitter.setObjectName("shellSplitter")
 
-        # Üst yatay bölücü: sol bağlam (gezinme + içerik), sağ hafıza (graf).
-        top_h_splitter = QSplitter(Qt.Orientation.Horizontal)
-        top_h_splitter.setObjectName("shellSplitter")
-
-        # Sol bölge: dikey gezinme listesi (sekme değil) + içerik yığını.
-        self.left_tabs = NavList()
+        # Bölüm gezinmesi üst şeritten gelir; `left_tabs` adı korunur çünkü
+        # komut paleti, ekran taraması (`scripts/ui_audit.py`) ve testler bu
+        # `QTabWidget` alt kümesine bağlıdır (NavStrip aynı sözleşmeyi taşır).
+        self.left_tabs = self.nav_strip
         self.reports_viewer = ReportsViewerWidget()
         self.mcp_drawer = MCPDrawerWidget()
         self.tasks_widget = TasksWidget(parent=self, bridge=self.bridge)
@@ -326,10 +351,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         except AttributeError:
             pass
 
-        self.left_tabs.addTab(self.reports_viewer, "Raporlar & Notlar", "library")
+        self.left_tabs.addTab(self.reports_viewer, "Raporlar", "library",
+                              tooltip="Raporlar & Notlar")
         self.left_tabs.addTab(self.skills_widget, "Yetenekler", "target")
         self.left_tabs.addTab(tasks_tab, "Görevler", "checklist")
-        self.left_tabs.addTab(self.mcp_drawer, "MCP Sunucuları", "plug")
+        self.left_tabs.addTab(self.mcp_drawer, "MCP", "plug",
+                              tooltip="MCP Sunucuları")
         # Faz 10-B: Entropy'nin KENDİ kural adayları (ofis = "entropy").
         # Ajan bir kural keşfedince kullanıcıya burada sorulur; "Kalıcı yap"
         # denmeden kural sistem istemine girmez.
@@ -339,7 +366,15 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         agents_tab_layout = QVBoxLayout(agents_tab)
         agents_tab_layout.setContentsMargins(0, 0, 0, 0)
         agents_tab_layout.setSpacing(TOKENS["space"]["2"])
-        agents_tab_layout.addWidget(self.agents_widget, 3)
+        # Faz 14-E madde 5: kalıcı kadro rosterı ve "oturum yok" rozeti
+        # GİZLENİR (yanlış bilgi veriyordu: geçici oturumda kimlik kalıcı
+        # kaydedilmiyor). Kod silinmez — Desk roster paneli ve mevcut testler
+        # `AgentsWidget`'a bağlı. Ekranda onun yerine koşu görünümü durur.
+        self.agent_runs_panel = AgentRunsPanel(parent=self)
+        self.agent_runs_panel.pending_requested.connect(self.show_pending_work)
+        agents_tab_layout.addWidget(self.agent_runs_panel, 3)
+        self.agents_widget.setVisible(False)
+        agents_tab_layout.addWidget(self.agents_widget, 0)
         agents_tab_layout.addWidget(self.entropy_rules_panel, 1)
         # Faz 12-D.2: beceri adayları da aynı onay yüzeyinde. Hafıza bir
         # örüntüyü yeteneğe dönüştürmek isterse kullanıcı onaylamadan
@@ -351,7 +386,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         # kullanıcı artık istek kimliğini elle yazmak zorunda değil.
         self.desk_approvals_panel = DeskApprovalsPanel(parent=self)
         self.desk_approvals_panel.request_decided.connect(self._on_desk_request_decided)
-        agents_tab_layout.addWidget(self.desk_approvals_panel, 1)
+        # Faz 14-E madde 4: Desk istekleri artık sohbetteki "Bekleyen işler"
+        # kartında da (kind="desk_change") görünüyor. Aynı bilgi ekranda iki
+        # kez durmasın diye panel gizlenir; nesne ve sözleşmesi korunur
+        # (`open_desk_approvals` onu göstermeye devam eder).
+        self.desk_approvals_panel.setVisible(False)
+        agents_tab_layout.addWidget(self.desk_approvals_panel, 0)
         self.agents_tab = agents_tab
         self.left_tabs.addTab(agents_tab, "Ajanlar", "robot")
         # Faz 13-A2 madde 4: gezinmede "Ajanlar ●n" — kaç ajan şu anda koşuyor.
@@ -392,50 +432,31 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.notifications_tab = notifications_tab
         self.left_tabs.addTab(notifications_tab, "Bildirimler", "bell")
 
-        # Sol bölge = gezinme + içerik + durum şeridi (çekirdek merkezden
-        # üst çubuğa indiği için merkez sütun kaldırıldı; alan içeriğe gitti).
-        left_region = QWidget()
-        left_region.setObjectName("navRegion")
-        left_layout = QVBoxLayout(left_region)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(TOKENS["space"]["2"])
-        left_layout.addWidget(self.left_tabs, 1)
-        left_layout.addWidget(self._build_status_strip())
-        top_h_splitter.addWidget(left_region)
+        # İçerik alanı: seçili üst şerit düğmesinin paneli (`QStackedWidget`).
+        content_region = QWidget()
+        content_region.setObjectName("navRegion")
+        content_layout = QVBoxLayout(content_region)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(TOKENS["space"]["2"])
+        content_layout.addWidget(self.nav_strip.stack, 1)
+        self.content_region = content_region
+        body_splitter.addWidget(content_region)
 
-        # Sağ bölge: düğüm-bağ bilgi grafiği (hafıza).
+        # Hafıza sekmesinin gövdesi: düğüm-bağ bilgi grafiği.
         self.knowledge_graph = KnowledgeGraphWidget(parent=self, vault_manager=self.reports_viewer.vault_manager)
-        top_h_splitter.addWidget(self.knowledge_graph)
 
-        # Panellerin örtük minimumSizeHint'i (sekme başlıkları, uzun etiketler, araç
-        # çubukları) toplamda ~3070 px istiyordu; QSplitter bir çocuğu minimumundan
-        # daha dar yapamadığı için pencere 1920 px'lik ekranda taşıyordu. Açık ve
-        # küçük minimumlar vererek düzenin ekrana uymasını garanti ediyoruz; panel
-        # içerikleri kendi kaydırma alanlarında daralır.
-        for _panel, _min_w in ((left_region, 320), (self.knowledge_graph, 260)):
-            _panel.setMinimumWidth(_min_w)
-
-        top_h_splitter.setSizes([880, 400])
-        # Faz 12-D.2 (denetim D12-07): bölücü konumu QSettings'e yazılır.
-        # İlk açılışta kayıt yoksa yukarıdaki varsayılan korunur.
-        install_splitter_persistence("zen.top", top_h_splitter)
-        self.top_h_splitter = top_h_splitter
-        main_v_splitter.addWidget(top_h_splitter)
-
-        # Alt bölge: sohbet (terminal artık onun içinde katlanır çekmece).
-        # 1. Left Side: Full Interactive Chat Panel
+        # Sağ panel "Sohbet" sekmesi: çekirdek + bekleyen işler + akış satırı +
+        # mesajlar + giriş (terminal onun içinde katlanır çekmece).
         chat_card = QFrame()
         chat_card.setObjectName("cardFrame")
         chat_layout = QVBoxLayout(chat_card)
         chat_layout.setContentsMargins(12, 8, 12, 8)
         chat_layout.setSpacing(6)
 
-        # Panel başlığı: cümle düzeni, dört kademeli tipografi (BÜYÜK HARF yok).
+        # Panel başlığı yok: sekme adı ("Sohbet") zaten başlıktır; ikinci
+        # yüzey `ui-design` §2 ihlali olurdu (aynı bilgi bir kez).
         chat_hdr = QHBoxLayout()
         chat_hdr.setSpacing(TOKENS["space"]["2"])
-        chat_title = QLabel("Sohbet")
-        chat_title.setProperty("role", "heading")
-        chat_hdr.addWidget(chat_title)
 
         # Rapor hazır balonu (geçici bildirim) başlık şeridinde durur.
         self.zen_report_bubble = QPushButton("Rapor hazır")
@@ -461,6 +482,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         chat_hdr.addWidget(self.terminal_toggle_btn)
         chat_layout.addLayout(chat_hdr)
 
+        # Faz 14-E madde 4: bekleyen işler kartı sohbetin ÜSTÜNDE durur.
+        # Boşken kendini gizler (kart yalnızca karar gerektiğinde yer kaplar).
+        self.pending_card = PendingWorkCard(parent=self)
+        self.pending_card.decided.connect(self._on_pending_decided)
+        chat_layout.addWidget(self.pending_card)
+
         # Chat Browser
         self.chat_browser = QTextBrowser()
         self.chat_browser.setOpenExternalLinks(False)
@@ -480,7 +507,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         # komut kartı içindeki çıplak <table> (ör. /lint, /wiki çıktıları) Qt
         # varsayılanıyla, kalın beyaz kenarlıklarla çizilirdi.
         self.chat_browser.document().setDefaultStyleSheet(reading_css())
-        chat_layout.addWidget(self.chat_browser)
+        chat_layout.addWidget(self.chat_browser, 1)
+
+        # Faz 14-E madde 3: "Ajan: web araması yapıyor…" — canlı akış artık
+        # yalnız Desk sahnesinde değil, sohbette de tek satır olarak görünür.
+        self.agent_stream_line = AgentStreamLine(parent=self)
+        chat_layout.addWidget(self.agent_stream_line)
 
         # Faz 13: çekirdek görselleştirici (durum animasyonu) sohbet akışının
         # sağ üst köşesinde bindirme olarak durur. Yerleşimden yer ALMAZ, fare
@@ -538,19 +570,59 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.prompt_input = self.chat_input
         self.submit_btn = self.chat_send_btn
 
-        main_v_splitter.addWidget(chat_card)
-        chat_card.setMinimumWidth(260)
-        main_v_splitter.setSizes([520, 340])
-        install_splitter_persistence("zen.main", main_v_splitter)
-        self.main_v_splitter = main_v_splitter
-        root_layout.addWidget(main_v_splitter)
+        # --- Sağ panel: tam yükseklik, iki sekme (Sohbet varsayılan / Hafıza) ---
+        self.chat_card = chat_card
+        right_panel = QTabWidget()
+        right_panel.setObjectName("rightPanel")
+        right_panel.setAccessibleName("Sohbet ve hafıza paneli")
+        right_panel.addTab(chat_card, "Sohbet")
+
+        memory_tab = QWidget()
+        memory_layout = QVBoxLayout(memory_tab)
+        memory_layout.setContentsMargins(0, 0, 0, 0)
+        memory_layout.setSpacing(TOKENS["space"]["2"])
+        memory_layout.addWidget(self.knowledge_graph, 1)
+        memory_bar = QHBoxLayout()
+        memory_bar.setSpacing(TOKENS["space"]["2"])
+        memory_bar.addStretch()
+        self.memory_inspector_btn = QPushButton("Hafıza denetçisi")
+        self.memory_inspector_btn.setProperty("variant", "ghost")
+        self.memory_inspector_btn.setAccessibleName("Hafıza denetçisini aç")
+        self.memory_inspector_btn.setToolTip(
+            "Bilişsel hafıza düğümlerini incele, kaynağını gör, sil"
+        )
+        self.memory_inspector_btn.clicked.connect(self.open_memory_inspector)
+        memory_bar.addWidget(self.memory_inspector_btn)
+        memory_layout.addLayout(memory_bar)
+        self.memory_tab = memory_tab
+        right_panel.addTab(memory_tab, "Hafıza")
+        right_panel.setCurrentIndex(0)
+        self.right_panel = right_panel
+        right_panel.setMinimumWidth(RIGHT_PANEL_MIN_WIDTH)
+        body_splitter.addWidget(right_panel)
+
+        # Genişlikler: içerik ≥ 560 px (G13-4), sağ panel varsayılan 420 px.
+        self.content_region.setMinimumWidth(CONTENT_MIN_WIDTH)
+        body_splitter.setSizes([CONTENT_MIN_WIDTH + 320, RIGHT_PANEL_WIDTH])
+        body_splitter.setStretchFactor(0, 1)
+        body_splitter.setStretchFactor(1, 0)
+        install_splitter_persistence("zen.body", body_splitter)
+        self.body_splitter = body_splitter
+        #: Geriye uyum: eski adlar tek bölücüye işaret eder (çağıran kod ve
+        #: testler `top_h_splitter`/`main_v_splitter` adlarını kullanıyordu).
+        self.top_h_splitter = body_splitter
+        self.main_v_splitter = body_splitter
+        root_layout.addWidget(body_splitter, 1)
+
+        # Alt: tek satırlık durum şeridi (sağlayıcı · token · pano · bekleyen).
+        root_layout.addWidget(self._build_status_strip())
 
         # Odak modu (Ctrl+Shift+F): tek panel. Sohbet kalir, yan paneller
         # gizlenir; cikista eski gorunurluk aynen geri gelir.
         self.focus_mode = install_focus_mode(
             self,
-            primary=chat_card,
-            secondary=[left_region, self.knowledge_graph, self.terminal_pane],
+            primary=right_panel,
+            secondary=[content_region, self.terminal_pane],
         )
         # Komut paleti (Ctrl+K): komutlar, yetenekler, ajanlar, ofisler,
         # raporlar **ve pencere eylemleri** (Desk, proje, yeni sohbet, kip).
@@ -572,12 +644,36 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         ikisi de ipucunda ve komut paletinde durur.
         """
         compact = self.width() < 1000
+        # Faz 14-E: şerit etiketleri 1800 px altında gizlenir (ikon +
+        # erişilebilir ad kalır); yedi düğme hiçbir genişlikte üst çubuğu
+        # ikinci satıra sarmaz. Eşik ölçümle bulundu: etiketli şerit 874 px,
+        # diğer üst çubuk öğeleri 744 px + kenar boşlukları (1920'de sığar,
+        # 1500'de sarıyordu).
+        strip = getattr(self, "nav_strip", None)
+        if strip is not None:
+            strip.set_compact(self.width() < 1800)
+        self._apply_layout_density()
         cluster = getattr(self, "status_cluster", None)
         if cluster is not None:
             cluster.set_compact(compact)
         capsule = getattr(self, "model_capsule", None)
         if capsule is not None:
             capsule.set_compact(compact)
+
+    def _apply_layout_density(self) -> None:
+        """Dar pencerede geniş asgariler geri düşer (tek ekran kuralı).
+
+        1100 px ve üstünde içerik alanı ≥ 560 px (G13-4), sağ panel ≥ 320 px.
+        Altında ikisi de daralır: pencere 860 px sert asgarisinde (Faz 12-D.1
+        %200 DPI sözleşmesi) hâlâ taşmasız kalsın diye.
+        """
+        wide = self.width() >= LAYOUT_WIDE_THRESHOLD
+        content = getattr(self, "content_region", None)
+        if content is not None:
+            content.setMinimumWidth(CONTENT_MIN_WIDTH if wide else 260)
+        panel = getattr(self, "right_panel", None)
+        if panel is not None:
+            panel.setMinimumWidth(RIGHT_PANEL_MIN_WIDTH if wide else 240)
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -727,6 +823,32 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             badge.setAccessibleName(name)
             badge.setParent(strip)
             badge.setVisible(False)
+
+        # Faz 14-E: tek satır durum — sağlayıcı · token · pano · bekleyen onay.
+        # Dördü de başka bir yüzeyde SAYI olarak değil, burada özet olarak
+        # durur; tıklanabilir olanlar düğme, kalanlar rozettir.
+        self.provider_status_lbl = QLabel(
+            str(getattr(self.bridge, "provider_name", "") or "—")
+        )
+        self.provider_status_lbl.setProperty("role", "badge")
+        self.provider_status_lbl.setAccessibleName("Etkin sağlayıcı")
+        row.addWidget(self.provider_status_lbl)
+
+        self.token_status_lbl = QLabel("0 token")
+        self.token_status_lbl.setProperty("role", "badge")
+        self.token_status_lbl.setAccessibleName("Oturum token kullanımı")
+        row.addWidget(self.token_status_lbl)
+
+        self.board_status_lbl = QLabel("Pano: —")
+        self.board_status_lbl.setProperty("role", "badge")
+        self.board_status_lbl.setAccessibleName("Görev panosu durumu")
+        row.addWidget(self.board_status_lbl)
+
+        self.pending_status_lbl = QLabel("Bekleyen onay yok")
+        self.pending_status_lbl.setProperty("role", "badge")
+        self.pending_status_lbl.setProperty("tone", "muted")
+        self.pending_status_lbl.setAccessibleName("Bekleyen onay sayısı")
+        row.addWidget(self.pending_status_lbl)
 
         row.addStretch()
         row.addWidget(self.project_btn)
@@ -1003,16 +1125,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         p = Path(path_str)
         self.latest_report_path = str(p)
 
-        # Deduplication check: ignore if this exact path was notified in the last 10 seconds
-        import time
-        now = time.time()
-        if not hasattr(self, "_recent_notifications"):
-            self._recent_notifications = {}
-        self._recent_notifications = {k: v for k, v in self._recent_notifications.items() if now - v < 10.0}
-        norm_key = str(p.resolve()).lower()
-        if norm_key in self._recent_notifications:
+        # Faz 14-E madde 6: tekilleştirme ölçütü artık 10 saniyelik pencere
+        # değil **kimlik** (normalize rapor yolu). Aynı olay için
+        # `report_created` + `task_report_ready` + `task_notification`
+        # üreticilerinden sohbete TEK kart düşer.
+        if not self.should_notify_once(str(p.resolve())):
             return
-        self._recent_notifications[norm_key] = now
 
         self.add_notification_pill(title=p.stem, path_or_content=str(p), is_task=False)
 
@@ -1039,6 +1157,15 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
             data = dict(payload or {})
         except Exception:
             return
+        # Alt durum satırındaki "Pano" özeti her olayda tazelenir.
+        board_lbl = getattr(self, "board_status_lbl", None)
+        if board_lbl is not None:
+            event = str(data.get("event", "") or "—")
+            board_lbl.setText(f"Pano: {event}")
+            board_lbl.setToolTip(
+                f"Son pano olayı: {event} · "
+                f"kart: {data.get('title') or data.get('card_id') or '—'}"
+            )
         if str(data.get("event", "")) != "task.assigned":
             return
         if str(data.get("actor", "")) != "entropy":
@@ -1060,15 +1187,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
     @Slot(str, str, str)
     def _on_task_notification(self, task_id: str, task_name: str, path_or_content: str):
         """Handle task execution and result notification with deduplication."""
-        import time
-        now = time.time()
-        if not hasattr(self, "_recent_notifications"):
-            self._recent_notifications = {}
-        self._recent_notifications = {k: v for k, v in self._recent_notifications.items() if now - v < 10.0}
-        norm_key = str(Path(path_or_content).resolve()).lower() if path_or_content.endswith(".md") else f"task:{task_id}"
-        if norm_key in self._recent_notifications:
+        identity = (
+            str(Path(path_or_content).resolve()) if path_or_content.endswith(".md")
+            else f"task:{task_id}"
+        )
+        if not self.should_notify_once(identity):
             return
-        self._recent_notifications[norm_key] = now
 
         self.add_notification_pill(title=task_name, path_or_content=path_or_content, is_task=True)
 
@@ -1174,6 +1298,7 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
     def _on_node_selected(self, node_id: str):
         """Handle clicking any node in the knowledge graph: opens the rich inspector panel in front of the user."""
         # Rapor düğümüyse okuyucuda aç ve Raporlar sekmesini öne getir.
+        self._last_selected_node = node_id
         opened = self.reports_viewer.open_report_by_path_or_id(node_id)
         if opened and hasattr(self, "left_tabs"):
             self.left_tabs.setCurrentWidget(self.reports_viewer)
@@ -1182,6 +1307,51 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
         dialog = MemoryInspectorDialog(node_id, self)
         dialog.exec()
+
+    @Slot()
+    def open_memory_inspector(self) -> bool:
+        """Hafıza sekmesindeki denetçi girişi (seçili düğüm ya da son düğüm)."""
+        node_id = str(getattr(self, "_last_selected_node", "") or "")
+        try:
+            from entropy.ui.widgets.memory_inspector_dialog import MemoryInspectorDialog
+
+            dialog = MemoryInspectorDialog(node_id, self)
+            dialog.exec()
+            return True
+        except Exception:
+            return False
+
+    @Slot()
+    def show_pending_work(self) -> bool:
+        """Bekleyen işler kartını öne getirir (sağ panel → Sohbet sekmesi)."""
+        panel = getattr(self, "right_panel", None)
+        card = getattr(self, "pending_card", None)
+        if panel is None or card is None:
+            return False
+        panel.setCurrentIndex(0)
+        card.refresh()
+        self._update_pending_status()
+        return True
+
+    @Slot(str, bool)
+    def _on_pending_decided(self, request_id: str, approved: bool) -> None:
+        """Karar sohbete tek satır olarak düşer; durum satırı tazelenir."""
+        verb = "onaylandı" if approved else "reddedildi"
+        self._append_chat_message(
+            "Sistem", f"Bekleyen iş {verb}: {request_id}", is_system=True
+        )
+        self._update_pending_status()
+
+    def _update_pending_status(self) -> None:
+        """Durum satırındaki "bekleyen onay ●n" sayacını tazeler."""
+        label = getattr(self, "pending_status_lbl", None)
+        card = getattr(self, "pending_card", None)
+        if label is None or card is None:
+            return
+        count = len(card.entries())
+        label.setText(f"Bekleyen onay ●{count}" if count else "Bekleyen onay yok")
+        label.setProperty("tone", "warn" if count else "muted")
+        _repolish(label)
 
     @Slot(str)
     def _update_model_badge(self, model_name: str):
@@ -1246,8 +1416,13 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         seçim hem de yeni köprünün model listesi yansıtılır.
         """
         badge = getattr(self, "provider_badge", None)
+        provider_name = str(getattr(self.bridge, "provider_name", "") or "")
         if badge is not None:
-            badge.set_primary(str(getattr(self.bridge, "provider_name", "") or ""))
+            badge.set_primary(provider_name)
+        status_lbl = getattr(self, "provider_status_lbl", None)
+        if status_lbl is not None:
+            status_lbl.setText(provider_name or "—")
+            status_lbl.setToolTip(f"Etkin sağlayıcı: {provider_name or 'yok'}")
         if hasattr(self, "provider_combo"):
             try:
                 self.provider_combo.blockSignals(True)
@@ -1277,6 +1452,11 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         text, tip = format_token_badge(self.bridge)
         self.tokens_badge.setText(text)
         self.tokens_badge.setToolTip(tip)
+        # Faz 14-E: alt durum satırı aynı TEK kaynaktan beslenir.
+        status_lbl = getattr(self, "token_status_lbl", None)
+        if status_lbl is not None:
+            status_lbl.setText(text)
+            status_lbl.setToolTip(tip)
         self._apply_context_badge()
 
     @Slot(dict)

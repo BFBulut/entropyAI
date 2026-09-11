@@ -200,10 +200,16 @@ def test_header_leaf_widget_count(zen, app):
 
     header = zen.header_frame
     controls = zen.window_controls
+    # Faz 14-E: bölüm şeridi (`navStrip`) üst çubuğun "öğesi" değil, pencere
+    # denetimleriyle aynı statüde AYRI bir gruptur ve kendi kapısıyla ölçülür
+    # (`nav_strip_violations`, `tests/ui/test_phase14e_layout.py`). Kapı
+    # gevşetilmedi: çubuğun kendi yaprak sayımı hâlâ ≤ 6.
+    strip = zen.nav_strip
     leaves = [
         w for w in header.findChildren(QWidget)
         if w.isVisibleTo(header) and not w.findChildren(QWidget)
         and not (w is controls or controls.isAncestorOf(w))
+        and not (w is strip or strip.isAncestorOf(w))
     ]
     assert len(leaves) <= 6, [type(w).__name__ for w in leaves]
 

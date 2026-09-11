@@ -147,6 +147,14 @@ FINAL_GATES_13: Dict[str, int] = {
     "min_width_declaration_failures": 0,   # G13-4: beyan >= hesaplanan
 }
 
+#: Faz 14-E: yeni düzenin kapıları. Üst çubuk kapısı (`header_leaf_widgets` ≤ 6)
+#: GEVŞETİLMEZ; yedi bölüm düğmesi ayrı bir grup (`navStrip`) olarak sayılır ve
+#: kendi kapısını taşır. Böylece "üst çubuk ≤ 4 öğe" sözleşmesi ile "yedi bölüm
+#: yukarıda küçük düğme" isteği aynı anda ölçülebilir.
+FINAL_GATES_14E: Dict[str, int] = {
+    "nav_strip_violations": 0,        # sayı != 7, adsız/ikonsuz düğme, çok seçili
+}
+
 #: G13-3 uyarı eşiği (kapı 50 ms; 100 ms üstü NN/g'ye göre "kesintisiz" değil).
 CLICK_LATENCY_WARN_MS = 100
 
@@ -155,6 +163,7 @@ FINAL_MIN_GATES: Dict[str, int] = {
     "themes_reachable": 4,                # 2 tema × 2 yoğunluk
     "min_button_height": 28,              # Faz 13: tıklanabilir düğme yüksekliği
     "reader_min_width": 560,              # G13-4: okuma kipinde okuyucu gövdesi
+    "nav_strip_buttons": 7,               # Faz 14-E: yedi bölüm üst şeritte
 }
 
 
@@ -893,10 +902,15 @@ def live_metrics() -> Dict[str, Any]:
 
         header = getattr(win, "header_frame", None)
         controls = getattr(win, "window_controls", None)
+        strip = getattr(win, "nav_strip", None)
         if header is not None:
             header_leaves = [
                 w for w in leaves(header)
-                if controls is None or not (w is controls or controls.isAncestorOf(w))
+                if (controls is None or not (w is controls or controls.isAncestorOf(w)))
+                # Faz 14-E: bölüm şeridi üst çubuğun "öğesi" değil, AYRI bir
+                # gruptur (pencere denetimleriyle aynı muamele) ve kendi
+                # kapısıyla ölçülür — `nav_strip_violations`.
+                and (strip is None or not (w is strip or strip.isAncestorOf(w)))
             ]
             out["header_leaf_widgets"] = len(header_leaves)
             out["header_leaf_names"] = [type(w).__name__ for w in header_leaves]
@@ -975,6 +989,38 @@ def live_metrics() -> Dict[str, Any]:
         for name in empty_interactive_widgets(win):
             if f"başlangıç/{name}" not in empty:
                 empty.append(f"başlangıç/{name}")
+        # --- Faz 14-E: bölüm şeridi kapısı -------------------------------
+        strip_violations: List[str] = []
+        if strip is None:
+            strip_violations.append("navStrip yok")
+            out["nav_strip_buttons"] = 0
+        else:
+            buttons = list(getattr(strip, "buttons", []) or [])
+            out["nav_strip_buttons"] = len(buttons)
+            if len(buttons) != 7:
+                strip_violations.append(f"düğme sayısı {len(buttons)} != 7")
+            for btn in buttons:
+                name = btn.accessibleName() or btn.text() or "?"
+                if btn.icon().pixmap(16, 16).isNull():
+                    strip_violations.append(f"{name}: ikon çizilemiyor")
+                if not btn.accessibleName().strip():
+                    strip_violations.append(f"{name}: erişilebilir ad yok")
+            checked = sum(1 for b in buttons if b.isChecked())
+            if checked != 1:
+                strip_violations.append(f"seçili düğme {checked} != 1")
+        out["nav_strip_violations"] = len(strip_violations)
+        out["nav_strip_violation_names"] = strip_violations
+        # Genişlik beyanları GENİŞ pencerede ölçülür: 1100 px altında düzen
+        # bilerek dar eşiklerine düşer (`_apply_layout_density`).
+        content = getattr(win, "content_region", None)
+        panel = getattr(win, "right_panel", None)
+        win.resize(1600, 900)
+        app.processEvents()
+        out["content_min_width_zen"] = int(content.minimumWidth()) if content else 0
+        out["right_panel_width_zen"] = int(panel.width()) if panel else 0
+        win.resize(1366, 768)
+        app.processEvents()
+
         out["screens_swept"] = screens
         out["screens_swept_count"] = len(screens)
         out["empty_interactive_count"] = len(empty)
@@ -1063,6 +1109,7 @@ def main(argv: List[str] | None = None) -> int:
         gates.update(FINAL_GATES_12D2)
         gates.update(FINAL_GATES_13)
         gates.update(FINAL_GATES_13C_DESK)
+        gates.update(FINAL_GATES_14E)
     violations = []
     for key, limit in gates.items():
         actual = data.get(key)
@@ -1103,6 +1150,9 @@ def main(argv: List[str] | None = None) -> int:
             "click_latency_ms", "click_latency_cards",
             "min_width_declaration_failures", "reader_min_width",
             "board_view_mode_1366",
+            # Faz 14-E: üst şerit grubu ayrı sayılır (kapı gevşetilmedi).
+            "nav_strip_buttons", "nav_strip_violations",
+            "content_min_width_zen", "right_panel_width_zen",
         ] if "interactive_count_zen_1366" in data else []) + ([
             # Faz 13-C madde 6: Desk sayaçları da kanıt raporuna girer.
             "desk_screens_swept_count", "desk_empty_interactive_count",

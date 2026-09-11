@@ -190,14 +190,16 @@ def test_zen_fits_1366(app):
                 overflowing.append(child.objectName() or child.__class__.__name__)
         assert overflowing == []
 
-        # Bölücü derinliği: KABUK zinciri 2 (denetim D-17: 4 idi).
-        # Panel içi tek bölme (rapor listesi | okuyucu) kabuğa dahil değildir;
-        # kullanıcı içeriğe ulaşmak için en fazla iki kabuk bölücüsü ayarlar.
+        # Bölücü derinliği: KABUK zinciri 1 (Faz 14-E; D-17'de 4, 11-E'de 2).
+        # Sözleşme DEĞİŞTİ, gevşemedi: yeni düzende tek yatay bölücü var
+        # (içerik alanı | sağ panel); sohbet artık alttaki ikinci bölücünün
+        # içinde değil, sağ panelin "Sohbet" sekmesinde. Kullanıcı içeriğe
+        # ulaşmak için en fazla BİR kabuk bölücüsü ayarlar.
         shell = [
             sp for sp in zen.findChildren(QSplitter)
             if sp.objectName() == "shellSplitter"
         ]
-        assert len(shell) == 2
+        assert len(shell) == 1
         assert _splitter_depth(zen) <= 3
     finally:
         zen.close()

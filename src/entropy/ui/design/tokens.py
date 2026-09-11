@@ -116,8 +116,12 @@ DARK_TOKENS: Dict[str, Any] = {
         "focus_ring": 2,
         "border": 1,
         "min_target": 24,
+        # Faz 14-E: üst şeritteki bölüm düğmesi (ikon + 11 px etiket).
+        # 48 px'lik şeride sığar, WCAG 2.5.8 tabanının iki katıdır.
+        "height_nav": 36,
     },
-    "icon": {"inline": 16, "toolbar": 20},
+    # `nav`: bölüm şeridi ikonu (Faz 14-E, B notu §4 ölçüsü).
+    "icon": {"inline": 16, "toolbar": 20, "nav": 24},
     "elevation": {
         # Qt'de gölge pahalı; panel için sınır tercih edilir.
         "0": None,
