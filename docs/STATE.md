@@ -7,11 +7,13 @@
 
 | | |
 |---|---|
-| Sürüm | **v0.11.0** (Faz 13 kapanış) |
+| Durum | **Faz 14 yürürlükte** — "Geçici ajan, gerçek onay, süreklilik" (§2.15; plan: `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md`, karar: [ADR-0010](adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md)) |
+| Sürüm | **v0.11.0** (Faz 13 kapanış; Faz 14 etiketleri v0.11.1 … **v0.12.0**) |
 | Dal | `ai/v0.1.7` (ana dal: `master`) |
-| Son güncelleme | 2026-09-11, **Faz 13-D KAPANIŞ** (§2.14, qa-build-engineer, kota **0 — model çağrısı yok**): tam süit **2.648 passed / 0 failed / 450,2 s**, build exit 0 (207 s, `dist/EntropyAI`, exe 56.045.732 B), `--version` → **`Entropy AI 0.11.0`**, `--help` exit 0, `ui_audit --gate --final` exit 0, iki ayrı 20 sn canlı koşum (`Responding=True`, başlık "Entropy AI", yeni günlük satırlarında `Traceback`/`CRITICAL`/`ModuleNotFoundError` **0/0/0**), pakette 27/27 `entropy.brain` modülü + `desk_admin` + `desk_approvals_panel` + `lifecycle` + `agent_run_state` + `platform.proc`, `claude_bg` **0**, `entropy.memory` şimi var; gerçek ekran (LG, dpr 1,0): kart önizlemesi 3 satırda "…" ile kırpılıyor (48 ≤ 51 px tavan), Desk onayları boş durumu doğru, Zen çekirdeği 136×136 görünür. **Bulgu F-13D-1**: her açılışta `entropy_fault.log`'a 13 satırlık `Windows fatal exception: code 0x8001010d` bloğu düşüyor (eskiden beri, ölümcül değil) |
-| Önceki | 2026-09-11, **Faz 13-C KAPANIŞ** (§2.13, qa-build-engineer): tam süit **2.644 passed / 0 failed / 519,7 s**, build exit 0 (372 s, `dist/EntropyAI`), `--version` → **`Entropy AI 0.10.4`**, `ui_audit --gate --final` exit 0 (Desk kapıları dâhil), 20 sn canlı koşum temiz; canlı Desk zinciri izole kasada koştu (ofis→orkestratör→2 alt kart→kontrol noktası+yeşil kanıt→8 bölümlü makbuz); **iki gerçek kusur düzeltildi** (R-13C-1 çok kelimeli ofis adı kırpması, R-13C-2 ofis kartlarının sahte pano ayrışması). **Kota 133.542 token — 100k tavanı aşıldı, wiki ikinci partisi koşulmadı** |
-| Daha önce | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
+| Son güncelleme | 2026-09-11, **Faz 14 açılışı** (§2.15, repo-curator, kota 0): ADR-0010 yazıldı, `ARCHITECTURE.md` §2/§3 ölçümle eşitlendi (158 dosya / 81.193 satır; üç parçalı veri kökü), §6.4–6.7 hedef sözleşmeleri eklendi, `ROADMAP.md` Faz 14 dilimleri + iki yeni değişmez |
+| Önceki | 2026-09-11, **Faz 13-D KAPANIŞ** (§2.14, qa-build-engineer, kota **0 — model çağrısı yok**): tam süit **2.648 passed / 0 failed / 450,2 s**, build exit 0 (207 s, `dist/EntropyAI`, exe 56.045.732 B), `--version` → **`Entropy AI 0.11.0`**, `--help` exit 0, `ui_audit --gate --final` exit 0, iki ayrı 20 sn canlı koşum (`Responding=True`, başlık "Entropy AI", yeni günlük satırlarında `Traceback`/`CRITICAL`/`ModuleNotFoundError` **0/0/0**), pakette 27/27 `entropy.brain` modülü + `desk_admin` + `desk_approvals_panel` + `lifecycle` + `agent_run_state` + `platform.proc`, `claude_bg` **0**, `entropy.memory` şimi var; gerçek ekran (LG, dpr 1,0): kart önizlemesi 3 satırda "…" ile kırpılıyor (48 ≤ 51 px tavan), Desk onayları boş durumu doğru, Zen çekirdeği 136×136 görünür. **Bulgu F-13D-1**: her açılışta `entropy_fault.log`'a 13 satırlık `Windows fatal exception: code 0x8001010d` bloğu düşüyor (eskiden beri, ölümcül değil) |
+| Daha önce | 2026-09-11, **Faz 13-C KAPANIŞ** (§2.13, qa-build-engineer): tam süit **2.644 passed / 0 failed / 519,7 s**, build exit 0 (372 s, `dist/EntropyAI`), `--version` → **`Entropy AI 0.10.4`**, `ui_audit --gate --final` exit 0 (Desk kapıları dâhil), 20 sn canlı koşum temiz; canlı Desk zinciri izole kasada koştu (ofis→orkestratör→2 alt kart→kontrol noktası+yeşil kanıt→8 bölümlü makbuz); **iki gerçek kusur düzeltildi** (R-13C-1 çok kelimeli ofis adı kırpması, R-13C-2 ofis kartlarının sahte pano ayrışması). **Kota 133.542 token — 100k tavanı aşıldı, wiki ikinci partisi koşulmadı** |
+| En eski tutulan | 2026-09-10, **Faz 13-A2 KAPANIŞ** (§2.10): sürüm **0.10.2**, tam süit **2.596 passed / 0 failed / 613 s**, build exit 0 (328 s, `dist_check/EntropyAI`, `--version` → `Entropy AI 0.10.2`), `ui_audit --gate --final` exit 0 (`orphan_reparents` 0, `unnamed_icon_buttons` 0, `empty_interactive_count` 0, `screens_swept_count` 7, `click_latency_ms` 10); gerçek ekran LG %200: yetenek kutusu **azami 3,55 ms**, ikon **119/119** çizildi, canlı kart koşusunda **0 konsol / 0 hayalet pencere** (6.839 örnek); marka 0/0. **AÇIK REGRESYON R-13A2-1**: kullanıcının 3 canivopets kartından 2'sinin dosyası diskte yok |
 | Python | 3.13 · PySide6 · PyInstaller (`EntropyAI.spec`) |
 
 ---
@@ -32,6 +34,102 @@
 | **Faz 12 kapanış QA** (v0.10.0) | Tam süit **2.456 test**; gerçek ekran ölçümleri; kota tavanı aşımının nedeni ölçülemeyen sohbet tüketimi olarak kayda geçti. |
 | **Canlı koşu QA** (2026-09-10) | R-CANLI-1 düzeltildi (`bridge_prompt` yanlış sınıf adını içe aktarıyordu → claude yolunda `ImportError`); wiki derleme 2/58 rapor, gri tur, beceri sentezi + onayı gerçek koşumla kapandı; **75.289 token** harcandı. |
 | **Faz 13-A kapanış** (v0.10.1) | Tam süit **2.521 passed / 0 failed**, `ui_audit --gate --final` exit 0, build exit 0, `Entropy AI 0.10.1`; rapor başlığı dolgu sözcüğü **573/573 dosyada 0**, digest ghost kenarlığı 2,35:1 → **4,85:1 / 5,49:1**. |
+
+---
+
+## 2.15 Faz 14 AÇILIŞ (2026-09-11, repo-curator) — kota **0 token, model çağrısı yok**
+
+> Bu bölüm Faz 14'ün ortak zeminidir. **Paralel çalışan ajanlar kendi alt bölümlerini
+> (§2.15-A agy, §2.15-B ui, §2.15-C memory, §2.15-D qa) buraya ekler; çakışma olursa
+> yazı bölümün SONUNA eklenir, başkasının satırı değiştirilmez.**
+
+### Kullanıcının onayladıkları (2026-09-11)
+
+1. Plan ve dilim sırası **14-A → 14-B → 14-C → 14-D → 14-E → 14-F** (14-E, 14-A ile paralel).
+2. **Kota tavanı 150k** (gerçekçi beklenti 75–140k); canlı doğrulamalar ayrı turlarda.
+3. **LangGraph alınmaz, dört desen alınır** (spike değil) — ADR-0010.
+4. Hafıza **sıfırlanmaz**; tetik ölçütü 14-D sonrası K3 > %5 ya da K12 artışı.
+
+### Bağlayıcı tanım (kullanıcının cümlesi)
+
+Bir yetenek çalıştırılması istendiğinde Entropy `SKILL.md`'yi alır → o iş için bir
+`agent.md` üretir → ajana beyinden ilgili hafızayı verir → **ayrı bir CLI oturumu** açar →
+oturum işi yapar, raporu **anlık** iletir → **ajan kendini siler**; hafızaya girecek
+bilgiyi **alt ajan** yazar. Kalıcı adlı kadro istenmiyor (gizlenir, **silinmez**).
+
+### Kararlar ve sözleşmeler (ayrıntı: ARCHITECTURE §6.4–6.7, ADR-0010)
+
+| # | Karar | Nerede yazılı |
+|---|---|---|
+| D1 | Yetenek başına **geçici** ajan oturumu; kalıcı kadro gizlenir, silinmez | ARCHITECTURE §6.4, ADR-0010 §1 |
+| D2 | Sohbet: **sabit** sistem istemi + bağlam kullanıcı mesajının başında; imza yalnız sabit bölümlerden | §6.5 |
+| D3 | Gerçek onay: `--permission-prompt-tool` + stdio MCP; `--dangerously-skip-permissions` **koşullu** | §6.6 |
+| D4 | **Tek** bekleyen işler kuyruğu `core/pending.py` (yeni): `list(kind)`, `resolve(id, decision, note)`, sinyal `pending_changed`; türler `tool_permission`, `desk_change`, `rule_candidate`, `skill_candidate` | §6.7 |
+| D5 | Hafızaya **alt ajan** yazar; `MemoryGate` tek kapı kalır + hata/günlük reddi bandı | §6.4 adım 6, ROADMAP §4 madde 10 |
+| D6 | **Pano FSM'ine dokunulmaz**; geçici koşu `running → review → done\|failed` alt kümesini kullanır | §6.1.1, §6.4 |
+| D7 | Sohbette **proje kökü salt okunur**; kod değişikliği yalnız onaylı kart/worktree | §6.6 |
+| D8 | Yeniden oynatma güvenliği + interrupt idempotentliği + kota sınırlı fan-out + ledger `parent_run_id`/`run_type` | §6.1.1, ADR-0010 §5 |
+| D9 | Faz kapanışı = kullanıcının koşturduğu `dist/` ikilisi; başarısız turun hata metni hafızaya girmez | ROADMAP §4 madde 9–10 |
+
+### Ölçüm tabanı (Faz 14 başlangıcı, 2026-09-11)
+
+| Ölçü | Değer |
+|---|---|
+| Kaynak | **158 dosya / 81.193 satır** (`ui` 54/25.973, `brain` 27/17.448, `core` 18/14.070, `agents` 22/13.494, `desk` 20/6.712, `skills` 5/1.972, diğer 9/1.111) |
+| Test | 204 dosya / **2.648** toplanan test (13-D ölçümü) |
+| Veri kökü | **üç parçalı** (`<depo>\.entropy` ayarlar · `~/.entropy` DB'ler · bayat `%LOCALAPPDATA%`); 7 modül `Path.home()` sabit yazıyor |
+| Hafıza | 740 düğüm, **12'si pytest artığı**, `'list_iterator'` hata metni 2 düğümde |
+| Sohbet sürekliliği | 4 ardışık turda `NO-RESUME / RESUME / NO-RESUME / NO-RESUME` |
+| Onay yüzeyi | `permission_denial` / `can_use_tool` için kaynakta **0 isabet** |
+
+### Belge işi (bu dilimde yapılan)
+
+- **Yeni:** `docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md`.
+- `docs/ARCHITECTURE.md`: başlık v0.11.0 + "hedef etiketi" kuralı; §2 tablosu ölçümle
+  eşitlendi; **§3.0** üç parçalı veri kökü gerçeği; §6.1.1'e yeniden oynatma güvenliği;
+  **§6.4** geçici ajan döngüsü, **§6.5** sohbet sürekliliği, **§6.6** onay yüzeyi,
+  **§6.7** tek bekleyen işler kuyruğu (hepsi **Faz 14 hedefi** etiketli).
+- `docs/ROADMAP.md`: Faz 13 kapandı; **§3.1 Faz 14** dilimleri + S1–S5 + kota tavanı 150k
+  + etiket planı; değişmezlere madde 9 (`dist/` kapanış ölçütü) ve 10 (hata metni hafızaya girmez).
+- `.claude/agents/*.md`: kapsam yolları (`brain/`, `core/pending.py`, `platform/proc.py`) ve
+  çalışma belleği satırına Faz 14 planı eklendi.
+
+**Bu dilimde kod, test ve `dist/` DEĞİŞMEDİ** — yalnız `docs/**` ve `.claude/agents/**`.
+
+### §2.15-A Faz 14-A — sohbet sürekliliği (2026-09-11, agy-integration-engineer) — kota **0 token, canlı S1 KOŞULAMADI**
+
+**Sözleşme (bundan sonra bağlayıcı):**
+
+1. **Sabit sistem istemi.** Saf kipte sohbetin sistem istemi `build_system_prompt("chat", query="")`
+   çıktısıdır: kimlik + onaylı kurallar + araç sözleşmesi + manifest. Sorguya bağlı hiçbir
+   şey içermez (`[BİLİŞSEL BAĞLAM]`, `[ÖNCEKİ SOHBET ÖZETİ]`, yetenek afişi, ek dosya
+   yönergesi **sistem isteminde olamaz**). Ölçü: dört ardışık turda dosya karması aynı.
+2. **Bağlam bloğu kullanıcı mesajında.** Turun değişken bağlamı `build_turn_context_block`
+   ile `[BU TURUN BAĞLAMI] … [/BU TURUN BAĞLAMI]` başlığı altında kullanıcı mesajının
+   BAŞINA konur; mesajın kendisi blokla birlikte `last_user_message` alanına yazılır
+   (uzun mesaj stdin'e taştığı için argv'den okunamaz).
+3. **İmza kapsamı.** `_forget_stale_session(system_prompt, model, effort, isolated)` =
+   `sha1(sabit istem | sağlayıcı:model:izolasyon | efor)`. Yalnız bunlar değişince oturum
+   düşer (model/efor değişimi, saf kip anahtarı, onaylı kural eklenmesi).
+4. **Tek oturum kimliği.** İlk tur `--session-id <uuid>` ile kimliği önceden atar, sonraki
+   turlar `--resume <aynı kimlik>`. Akıştan kimlik gelmezse ve süreç 0 ile bittiyse önceden
+   atanan kimlik sürdürülür; hata varsa sürdürülmez.
+5. **Yeni oturuma geçmiş taşınır.** Oturum yokken (ilk tur, model/efor değişimi, çökme)
+   kullanıcı bloğuna `[ÖNCEKİ SOHBET ÖZETİ]` eklenir: **son 8 tur, mesaj başına 1.200
+   karakter** (eski `6 × 100` kırpması kaldırıldı).
+6. **Sohbette proje kökü salt okunur.** `chat_tools()` saf kipte yalnız
+   `Read, Glob, Grep, WebFetch, WebSearch` verir; yazma niyeti sezgisi artık
+   `Edit/Write/Bash` yetkisi VERMEZ. Yol belirteçli izin bayrağı bu sürümde
+   **doğrulanamadı** (`CLAUDE_SUPPORTS_TOOL_PATH_SCOPES = False`), seçilen yol araç
+   listesidir; bayrak ölçülürse yazma araçları `~/.entropy/workspace` kapsamıyla döner.
+   Kart yolu (`tools_for`) DEĞİŞMEDİ.
+7. **Defter.** Sohbet satırı modeli `current_model`den alır (var olmayan `self.model`
+   değil) ve `effort` sütunu eklendi (geriye uyumlu `ALTER TABLE`); agy köprüsünde de aynı.
+8. **Akış kapanışı.** `agy_bridge.close_stream(stream)` tek yardımcı: `close` metodu
+   olmayan (test sahtesi `iter([])`) ya da patlayan akışta tur ölmez.
+
+**Sözleşme testleri:** `tests/contracts/test_phase14a_chat_continuity.py` (8 test),
+`tests/test_agy_bridge.py::test_stream_close_survives_non_file_stdout`.
 
 ---
 
@@ -1136,12 +1234,22 @@ Kalıcı sözleşme yalnızca şudur: **`compile_roots()` `APP_ROOT`'a yazmaz**
 
 ## 5. Açık işler
 
-> Faz 13-D kapanışında (2026-09-11) güncellendi. **Kota gerektiren tek iş:**
-> wiki ikinci partisi (~30k token) — 13-C'de tavan aşıldığı için hiç
-> koşulmadı, `WIKI.state.json` `processed` **2'de duruyor**, K4/K5/K6
-> önce/sonra ölçümü alınmadı; **kullanıcı onayı bekliyor**.
+> **Faz 14 açılışında (2026-09-11) yenilendi.** Aşağıdaki 0'ıncı blok Faz 14'ün
+> taşıdığı açık işlerdir; eski numaralı maddeler olduğu gibi duruyor.
 
-0. **Canlı ölçülmeyenler (13-D sonunda hâlâ açık):**
+### 0-A. Faz 14'e devreden dört iş (dilim sahibiyle)
+
+| # | İş | Kanıt / bugünkü durum | Dilim · sahip |
+|---|---|---|---|
+| **R-13A2-1** | Silinmiş kartın **drift döngüsü**: `20260910-194435-canivopets-com-medya-uzm` her pano yazımında `board.drift` üretiyor | `Board/events.jsonl`: 5 saatte **10 olay** (seq 59…78); kartın dosyası diskte yok | 14-F (kapanış) · agy-integration-engineer |
+| **12 pytest artığı düğüm** | Üretim hafızasında pytest kaynaklı düğümler; ikisi `'list_iterator'` hata metni taşıyor, biri `pytest-of-…` kaynaklı | `~/.entropy/cognitive_memory.db` (salt okunur ölçüm) | 14-D · memory-rag-engineer — **arşivlenir, silinmez** |
+| **Veri kökü tek kaynak** | Üç parçalı kök; 7 modül `Path.home()/".entropy"` sabit yazıyor (ARCHITECTURE §3.0) | `<depo>\.entropy` ayarlar / `~/.entropy` DB'ler / bayat `%LOCALAPPDATA%` | 14-F · qa-build-engineer |
+| **Wiki ikinci partisi** | ~30k token; 13-C'de tavan aşıldığı için hiç koşulmadı, `WIKI.state.json` `processed` **2'de**, K4 %56,8 (< %60) | kullanıcı kota onayı bekliyor | 14-D sonrası · memory-rag-engineer |
+
+Ayrıca **F-13D-1** (her açılışta `entropy_fault.log`'a düşen COM istisna bloğu; ölümcül
+değil, kaynağı bulunamadı) 14-F'te bir kez daha aranır.
+
+### 0. Canlı ölçülmeyenler (13-D sonunda açılmıştı, hâlâ açık)
    - **Wiki ikinci partisi** — yukarıdaki kota notu; K4 hâlâ %56,8 (< %60 hedef).
    - **R-13A2-1** — kullanıcının 3 karttan 2'sinin dosyası diskte yok; 13-C'de
      bulunan R-13C-2 (ofis kartlarının sahte ayrışması) en olası açıklama ama

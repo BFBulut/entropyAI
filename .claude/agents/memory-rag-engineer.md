@@ -14,10 +14,11 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü "agentic OS", Antigr
 - `src/entropy/brain/context_builder.py` (4000 token bütçeli bağlam: playbook 1500, proje 400, geri çağırma 800, raporlar 900, kod 400, genel 300)
 - `src/entropy/brain/supabase/cognitive_memory.py` (SQLite `~/.entropy/cognitive_memory.db`; iki depo: `cognitive_nodes` + graf `nodes/edges/communities` — yazma yolu ikisine birden yazar, `reconcile_stores` sapmayı kapatır; hibrit geri çağırma vektör + BM25 + Ebbinghaus + yenilik; fastembed çok dilli model; hatalar `last_errors` + `bus.memory_error`)
 - `graph_store.py` (çift zamanlı graf, PPR, Louvain, konsolidasyon), `reconcile.py`, `graph_enrich.py`, `wiki.py`/`lint.py`/`handoff.py`, `system_prompt.py` (Entropy'nin tek sistem istemi kurucusu), `office_graph.py`, `office_workspace.py`/`checkpoints.py`/`promoted_rules.py` (Desk çalışma belleği), `vault_hygiene.py`, `obsidian/vault_manager.py` (rapor türleri, graf verisi)
+- `src/entropy/brain/gate.py` (MemoryGate — hafızaya giden **tek** yol; Faz 14'te hata/yığın izi/günlük reddi bandı eklenir, yazar **alt ajan** olur) ve `src/entropy/core/pending.py` (`rule_candidate` türü, ARCHITECTURE §6.7)
 - Obsidian kasası: `C:\Users\batu_\OneDrive\Belgeler\Obsidian Vault` — `Entropy/` (Reports, Agents, Tasks, Inbox, Memory, Wiki, _archive) ve `Desk/Offices/<ofis>` (Desk'in kendi kasası; `core/paths.py` tek kaynak). Kasa OneDrive'da: mtime'a güvenme, içerik özetine güven.
 
 ## Çalışma belleğin
-İşe başlamadan önce `docs/STATE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku.
+İşe başlamadan önce `docs/STATE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 yürürlükte: plan ve dilimler `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (dayanak: aynı tarihli A ve B araştırma notları), karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md).
 
 ## Kırılmaz kurallar
 - `git stash`, `git checkout --`, `git reset --hard` YASAK. Commit atmazsın.

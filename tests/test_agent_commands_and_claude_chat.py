@@ -353,12 +353,15 @@ def test_claude_chat_attachments_become_paths_and_add_dirs(tmp_path, monkeypatch
         image_attachments=[str(img)], pdf_attachments=[str(pdf)],
     )
     cmd = captured["cmd"]
-    system_prompt = captured["system_prompt"]
+    # Faz 14-A: ek dosya yönergesi turdan tura değişir, bu yüzden sistem
+    # isteminde değil KULLANICI MESAJININ başındaki bağlam bloğunda taşınır
+    # (sistem istemi sabit kalmazsa oturum düşüyordu).
+    user_message = b.last_user_message
 
     # Bulgu: CLI'da gömülü görsel için bayrak yok; Read aracı yerel yolu okuyor.
-    assert str(img.resolve()) in system_prompt
-    assert str(pdf.resolve()) in system_prompt
-    assert "Read" in system_prompt
+    assert str(img.resolve()) in user_message
+    assert str(pdf.resolve()) in user_message
+    assert "Read" in user_message
     # Dosyanın klasörü erişilebilir kılınmalı, yoksa Read izinsiz kalır.
     add_dirs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"]
     assert str(media) in add_dirs

@@ -64,9 +64,47 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
 
 ---
 
-### Faz 14 adayları (karar bekliyor)
-- LangGraph'tan dört desen (kütüphane değil): yeniden-oynatma güvenliği, interrupt semantiği, kota sınırlı fan-out, trace şeması (`ledger.parent_run_id/run_type`) — ADR-0010.
-- Wiki ikinci parti (~30k, kota onayı), F-13D-1 kök nedeni, `entropy.memory` şiminin v0.12.0'da kaldırılması.
+**Faz 13 kapandı** (v0.11.0, 2026-09-11): tam süit 2.648 passed / 0 failed, build exit 0,
+`--version` → `Entropy AI 0.11.0`, `ui_audit --gate --final` exit 0.
+
+---
+
+## 3.1 Faz 14 — "Geçici ajan, gerçek onay, süreklilik" (yürürlükte)
+
+Dayanak: `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (kullanıcı 2026-09-11'de onayladı)
++ iki salt okunur araştırma notu (A: mevcut mimari ve hata izi, B: istenen mimari ve fark)
++ `2026-09-11_Arastirma_LangChain_LangGraph_LangSmith.md`.
+Mimari karar: [ADR-0010](adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md)
+(geçici ajan mimarisi; LangGraph alınmaz, dört desen alınır).
+
+**Kabul ölçütü test sayısı değil, kullanıcının senaryosudur.**
+
+| # | Senaryo | Geçti sayılması için |
+|---|---|---|
+| **S1** | İki ardışık sohbet turu | ikinci tur birincinin konusunu doğru anar; argv'de `--resume` görünür |
+| **S2** | "google-flow ile video üret" | onay kartı (araç / komut / risk) çıkar → "onaylıyorum" → komut koşar; reddet yolu da çalışır |
+| **S3** | "media-agency-soldier ile canivopets.com'u sıfırdan araştır" | canlı akış satırı → rapor → **tek** bildirim; `agent.md` ve oturum diskte **yok**, ledger satırı **var** |
+| **S4** | S3'ten sonra yeni sohbet | Entropy bulguyu **kaynaklı** hatırlar; K3 ≤ %5, K12 artmaz |
+| **S5** | Yeni düzen | 7 düğme üstte, sağda tam panel (Sohbet/Hafıza); `ui_audit --gate --final` exit 0 |
+
+| Dilim | İş | Senaryo | Ajan | Kota | Etiket |
+|---|---|---|---|---:|---|
+| **14-A** Sohbet sürekliliği | sabit sistem istemi, bağlam kullanıcı mesajına iner, `_forget_stale_session` yalnız model/efor değişiminde, ledger `model` düzeltmesi, sohbette proje kökü salt okunur | S1 | agy-integration-engineer | 10–15k | v0.11.1 |
+| **14-B** Gerçek onay | stdio MCP onay sunucusu + `--permission-prompt-tool`; skip bayrağı koşullu; **tek** bekleyen işler kuyruğu (`core/pending.py`) + onay kartı; izin reddi olayı köprüde | S2 | agy + ui | 15–25k | v0.11.2 |
+| **14-C** Geçici ajan döngüsü | `agent.md` üretici, geçici oturum, canlı akış satırı, adım tavanı yeteneğe göre (aşınca `review`), kendini silme, tek bildirim; kalıcı kadro **gizlenir** | S3 | agy + ui | 40–60k | v0.11.3 |
+| **14-D** Hafıza yazarı alt ajan | kapıya hata/günlük/yığın izi reddi bandı; 12 pytest artığı düğüm **arşive**; alt ajan JSON → kapı | S4 | memory-rag-engineer | 10–20k | v0.11.4 |
+| **14-E** Yeni düzen | 7 düğme üstte, sağ tam panel Sohbet/Hafıza, çekirdek üstte, tek durum satırı; üst çubuk kapısı `navStrip` ayrı grup | S5 | ui-engineer + repo-curator | 0 | v0.11.5 |
+| **14-F** Kapanış | tam süit, build, **`dist/` kullanıcının ikilisi**, veri kökü tek kaynak (`core/paths.py`), R-13A2-1 drift döngüsü, ARCHITECTURE ölçümle eşit, S1–S5 gerçek ekranda birlikte | tümü canlı | qa-build-engineer | 0–20k | **v0.12.0** (`entropy.memory` şimi kaldırılır) |
+
+Sıra: 14-A → 14-B → 14-C → 14-D → 14-E → 14-F (14-E, 14-A ile paralel koşabilir).
+**Kota tavanı 150k** (gerçekçi beklenti 75–140k); canlı doğrulamalar **ayrı turlarda**
+koşulur — 13-C dersi: tek tur tavanı aşabiliyor.
+
+Faz 14'e devreden eski açık işler: wiki ikinci partisi (~30k, kota onayı), F-13D-1 kök
+nedeni, R-13A2-1 drift döngüsü, `entropy.memory` şiminin v0.12.0'da kaldırılması.
+
+**Hafıza sıfırlanmaz (şimdilik):** şema Faz 11-B'de temizlendi, değişen **yazar**dır.
+Tetik ölçütü 14-D sonrası K3 > %5 ya da K12 artışı → önce `dream.forget_stale` + gri tur.
 
 ---
 
@@ -85,7 +123,16 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
    kart arşivlenmesi FSM'de T13'tür ve **gerekçesiz yapılamaz**. Kayıt bırakmayan silme
    yoktur: her taşımanın bir ADR'si ya da olay satırı olur (R-13A2-1 tam olarak bu kural
    çiğnendiği için doğdu — iki kart dosyası olay yazılmadan kayboldu).
-9. **Araştırma kartları beyinden kısa devre yapmaz.** "Araştır" dendiğinde araştırma
+9. **Faz kapanışı = kullanıcının koşturduğu `dist/` ikilisi son sürümdür.** "Build exit 0"
+   kapanış ölçütü değildir: 13-A2'nin düzeltmesi `dist_check/`te kaldı ve kullanıcı
+   düzeltilmiş sanılan hatayı üç kez yaşadı. Kapanış raporuna `EntropyAI.exe --version`
+   çıktısı ve `dist/` ikilisinin mtime'ı yazılır (Faz 14, A notu §3 madde 2).
+10. **Başarısız turun hata metni hafızaya girmez.** Hata, yığın izi, günlük satırı ve
+   `[Otonom Görev Hata]` içerikleri `MemoryGate` tarafından reddedilir (reddedilenler gri
+   kuyruğa düşer, sessizce yutulmaz); yazma `success` bayrağına bağlıdır. Test artığı
+   düğümler silinmez, **arşivlenir**. Gerekçe: `'list_iterator'` hata metni ve 12 pytest
+   izli düğüm gerçek hafızaya bu yoldan girdi (Faz 14, A notu §1 madde 3c).
+11. **Araştırma kartları beyinden kısa devre yapmaz.** "Araştır" dendiğinde araştırma
    **canlı** koşar; beyin ajana bağlamdır, yanıtın yerine geçmez
    (`config.brain_shortcut_enabled` varsayılan **False**; tek meşru kapı kullanıcının
    açık `brain_only` tercihidir).

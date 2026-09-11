@@ -39,6 +39,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from entropy.platform.proc import popen_kwargs
@@ -133,6 +134,23 @@ CLAUDE_SUPPORTS_SYSTEM_PROMPT_FILE = True
 # Sistem istemi dosyasının bayrağı ve stdin yedeğinin blok başlığı.
 SYSTEM_PROMPT_FILE_FLAG = "--append-system-prompt-file"
 SYSTEM_CONTEXT_BLOCK_HEADER = "[SİSTEM BAĞLAMI]"
+
+# Faz 14-A: turdan tura DEĞİŞEN bağlamın (bilişsel bağlam, yetenek afişi, ek
+# dosya yönergesi, sohbet özeti) kullanıcı mesajındaki blok başlığı.
+TURN_CONTEXT_BLOCK_HEADER = "[BU TURUN BAĞLAMI]"
+
+# Yeni oturum açılırken kullanıcı bloğuna eklenen sohbet özetinin ölçüsü.
+# Eski değer 6 tur × 100 karakterdi; 100 karakter bir cümleyi bile taşımıyordu,
+# bu yüzden "az önce ne dedim" sorusu yanıtsız kalıyordu.
+CHAT_HISTORY_TURNS = 8
+CHAT_HISTORY_CHARS_PER_TURN = 1200
+
+# Araç izni yol belirteçleri (`--allowedTools "Edit(<yol>/**)"`) bu sürümde
+# DOĞRULANMADI: yalnız `--tools <ad listesi>` ölçüldü. Bayrak yol belirtecini
+# desteklediği ölçülürse bu sabit True yapılır ve sohbetin yazma araçları
+# çalışma alanına kilitlenir; False iken sohbet turu proje kökünde SALT
+# OKUNURdur (yazma yalnız onaylı kart yolundan).
+CLAUDE_SUPPORTS_TOOL_PATH_SCOPES = False
 
 # "Entropy Saf Kip" bayrağı: varsayılan sistem istemini EKLEMEZ, DEĞİŞTİRİR.
 # `--help` çıktısında belgesiz ama ikilide gerçek; kontrol probuyla ayrıldı:
@@ -296,6 +314,24 @@ def build_system_context_block(system_prompt: str, prompt: str) -> str:
     return f"{SYSTEM_CONTEXT_BLOCK_HEADER}\n{system_prompt}\n[/SİSTEM BAĞLAMI]\n\n{prompt}"
 
 
+def build_turn_context_block(context: str, prompt: str) -> str:
+    """
+    O TURUN değişken bağlamını kullanıcı mesajının başına koyar (Faz 14-A).
+
+    Neden sistem istemine değil: `--system-prompt-snapshot` açık olduğu için bir
+    konuşmanın ilk isteğindeki istem sonraki her `--resume`'de aynen taşınır.
+    Sorguya bağlı bağlam sistem isteminde durursa istem her tur değişir, imza
+    kayar ve oturum düşer — kullanıcının "bu oturumun bağlamı bana ulaşmadı"
+    arızasının kökü buydu. Sabit bölüm (kimlik + kurallar + araç sözleşmesi)
+    sistem isteminde kalır; bilişsel bağlam, yetenek afişi ve sohbet özeti bu
+    blokla kullanıcı mesajının başına iner.
+    """
+    text = (context or "").strip()
+    if not text:
+        return prompt
+    return f"{TURN_CONTEXT_BLOCK_HEADER}\n{text}\n[/BU TURUN BAĞLAMI]\n\n{prompt}"
+
+
 def normalize_permission_mode(mode: Optional[str]) -> str:
     """Entropy kip adını Claude Code'un beklediği değere çevirir."""
     if not mode:
@@ -357,6 +393,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             effort if effort in CLAUDE_EFFORT_LEVELS else DEFAULT_CLAUDE_EFFORT
         )
         self.current_session_id: Optional[str] = None
+        # Son turda modele giden kullanıcı mesajı (bağlam bloğu dâhil); uzun
+        # mesaj stdin'e taşındığı için argv'den okunamaz.
+        self.last_user_message: str = ""
         self.last_total_cost_usd: float = 0.0
 
         self.total_tokens_used: int = 0
@@ -1324,8 +1363,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         # plan görevlerini tutarken sohbet tüketimi hiçbir yerde birikmiyordu ve
         # tavan aşımının nedeni ölçülemiyordu.
         try:
-            task_ledger.record_chat_turn(usage, provider="claude",
-                                         model=getattr(self, "model", "") or "")
+            # Faz 14-A: model alanı `current_model`den okunur. `self.model` diye
+            # bir öznitelik KÖPRÜDE YOK; getattr sessizce "" döndürdüğü için
+            # defterdeki her sohbet satırı modelsiz kalıyordu (A notu §1 satır 5).
+            task_ledger.record_chat_turn(
+                usage,
+                provider="claude",
+                model=(getattr(self, "current_model", "") or self.model_for_run(None) or ""),
+                effort=str(getattr(self, "selected_effort", "") or ""),
+            )
         except Exception:
             pass
         try:
@@ -1515,20 +1561,38 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                 parts.append(f"{header}\n{body}".strip())
         return "\n\n".join(p for p in parts if p)
 
-    def _forget_stale_session(self, system_prompt: str) -> bool:
+    def _forget_stale_session(
+        self,
+        system_prompt: str,
+        model: str = "",
+        effort: str = "",
+        isolated: Optional[bool] = None,
+    ) -> bool:
         """
-        Sistem istemi değiştiyse süren sohbet oturumunu düşürür (Faz 9.9).
+        Oturum kimliği artık geçersizse süren sohbet oturumunu düşürür.
 
         `--system-prompt-snapshot` varsayılan olarak `on`: bir konuşmanın ilk
         isteğinde kaydedilen istem sonraki her `--resume`'de aynen gönderilir,
         sonraki koşuş farklı metin verse bile. Bu yüzden istem değiştiğinde tek
         doğru davranış oturumu bırakmak.
+
+        Faz 14-A — imzanın KAPSAMI daraldı: yalnız sistem isteminin SABİT bölümü
+        (kimlik + kurallar + araç sözleşmesi) ile sağlayıcı/model/efor/izolasyon.
+        Sorguya bağlı bilişsel bağlam ve yetenek afişi artık kullanıcı mesajında
+        olduğu için imzayı hiç kıpırdatmaz; eskiden 3. turdan itibaren her tur
+        yeni bir oturum açılıyordu (A notu Ölçüm B).
         """
         try:
             from entropy.core.identity import ConversationMap, conversation_map
         except Exception:
             return False
-        signature = ConversationMap.prompt_signature(system_prompt)
+        if isolated is None:
+            isolated = bool(getattr(config, "claude_isolated", False))
+        signature = ConversationMap.prompt_signature(
+            system_prompt,
+            model=f"{self.provider_name}:{model}:{'izole' if isolated else 'acik'}",
+            effort=effort,
+        )
         previous = self._system_prompt_signature
         self._system_prompt_signature = signature
         if not previous or previous == signature:
@@ -1625,6 +1689,62 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     result.append(extra)
         return result
 
+    def chat_history_summary(
+        self,
+        turns: int = CHAT_HISTORY_TURNS,
+        chars: int = CHAT_HISTORY_CHARS_PER_TURN,
+    ) -> str:
+        """
+        Yeni oturuma taşınan kısa sohbet özeti (Faz 14-A).
+
+        Yalnızca oturum YOKKEN (ilk tur, model/efor değişimi, çökme sonrası)
+        kullanılır; süren oturumda geçmişi CLI zaten taşır. Mesaj başına sınır
+        1.200 karakter: eski 100 karakterlik kırpma "az önce ne dedim" sorusunu
+        yanıtlanamaz kılıyordu.
+        """
+        history = list(self.conversation_history or [])
+        if not history:
+            return ""
+        rows = []
+        for m in history[-max(1, int(turns)):]:
+            who = "Kullanıcı" if m.get("role") == "user" else "Entropy"
+            text = str(m.get("content", "") or "").strip()
+            if len(text) > chars:
+                text = text[:chars] + "…"
+            rows.append(f"- {who}: {text}")
+        return "[ÖNCEKİ SOHBET ÖZETİ]\n" + "\n".join(rows)
+
+    def chat_tools(
+        self, mode: str, needs_write: bool = False, isolated: bool = True
+    ) -> List[str]:
+        """
+        SOHBET turunun araç listesi — proje kökü salt okunur (Faz 14-A).
+
+        Eskiden yazma niyeti sezgisi (`is_code_modifying_intent`) doğrudan
+        `Edit/Write/Bash` yetkisi veriyordu ve `--add-dir` proje kökünü de
+        kapsadığı için Entropy sohbet turunda kendi kaynak kodunu düzenleyebildi
+        (A notu §1 satır 4). Kural: kod değişikliği yalnız ONAYLI KART yolundan.
+
+        Yol belirteçli izin bayrağı (`--allowedTools "Edit(<yol>/**)"`) bu
+        sürümde doğrulanamadı (`CLAUDE_SUPPORTS_TOOL_PATH_SCOPES`), bu yüzden
+        seçilen yol ARAÇ LİSTESİDİR: saf kip sohbetinde yazma araçları hiç
+        verilmez. Bayrak ölçüldüğü gün sabit True yapılır ve yazma araçları
+        çalışma alanına (`~/.entropy/workspace`) kilitlenerek geri gelir.
+        """
+        if not isolated:
+            # İzolasyon kapalıyken argv'de `--tools` zaten kullanılmıyor;
+            # eski davranış korunur.
+            return self.tools_for(mode, needs_write=needs_write)
+        tools = list(CHAT_TOOLS_READONLY)
+        if needs_write and CLAUDE_SUPPORTS_TOOL_PATH_SCOPES:
+            try:
+                workspace = str(config_module.claude_workspace_path())
+            except Exception:
+                workspace = ""
+            if workspace:
+                tools += [f"{t}({workspace}/**)" for t in CHAT_TOOLS_WRITE]
+        return tools
+
     def build_chat_system_prompt(
         self,
         prompt: str,
@@ -1634,20 +1754,24 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         resuming: bool = False,
     ) -> str:
         """
-        `--append-system-prompt` ile enjekte edilecek metni kurar.
+        O TURUN DEĞİŞKEN bağlamını kurar (Faz 14-A'da anlamı daraldı).
 
-        Neden argv'deki prompt'a değil sistem istemine: Claude Code varsayılan
-        sistem istemini korur ve buna EKLER; bağlam oraya konduğunda kullanıcının
-        mesajı temiz kalır, `--resume` ile süren oturumda da her turda yeniden
-        gönderilmek yerine yalnızca o turun bağlamı eklenir. Sürerken (resume)
-        tam bilişsel bağlam yerine mini bağlam kullanılır: ağır bağlam zaten ilk
-        turda enjekte edildi, her turda tekrarı pencereyi boş yere doldururdu.
+        Saf kipte bu metin artık sistem istemine GİRMEZ; `build_turn_context_block`
+        ile kullanıcı mesajının başına iner (sistem istemi turdan tura sabit
+        kalsın diye). İzolasyon kapalıyken eski davranış sürer ve metin
+        `--append-system-prompt` ile gider. Sürerken (resume) tam bilişsel bağlam
+        yerine mini bağlam kullanılır: ağır bağlam ilk turda verildi, her turda
+        tekrarı pencereyi boş yere doldururdu.
         """
-        parts = [
-            "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
-            "Kullanıcıya daima Türkçe, net ve profesyonel bir üslupla yanıt ver. "
-            "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından haberdarsın."
-        ]
+        parts: List[str] = []
+        if not bool(getattr(config, "claude_isolated", False)):
+            # Saf kip kapalı: kimlik cümlesi hâlâ bu metinle taşınır.
+            parts.append(
+                "Sen Entropy AI adında otonom bir masaüstü yapay zeka işletim sistemisin. "
+                "Kullanıcıya daima Türkçe, net ve profesyonel bir üslupla yanıt ver. "
+                "Kendi hafıza sisteminden, Obsidian notlarından ve geçmiş kararlarından "
+                "haberdarsın."
+            )
         if skill_banner:
             parts.append(skill_banner)
         if attachment_directive:
@@ -1668,16 +1792,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     if agents_section and agents_section not in ctx:
                         ctx = f"{ctx}\n\n{agents_section}"
                 parts.append(ctx)
-            if self.conversation_history:
-                recent = self.conversation_history[-6:]
-                parts.append(
-                    "Önceki Sohbet Özeti:\n"
-                    + "\n".join(
-                        f"- {'Kullanıcı' if m.get('role') == 'user' else 'Entropy'}: "
-                        f"{str(m.get('content', ''))[:100]}"
-                        for m in recent
-                    )
-                )
+            summary = self.chat_history_summary()
+            if summary:
+                parts.append(summary)
         return "\n\n".join(p for p in parts if p)
 
     def _execute_prompt_worker(
@@ -1725,6 +1842,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         proc = None
         error_text = ""
         cmd: List[str] = []
+        new_session_id: Optional[str] = None
         try:
             # Yetenek çözümü ve bilişsel bağlam ortak mixin'den gelir; AGY
             # köprüsüyle aynı kararı verir, böylece sağlayıcı değiştirmek
@@ -1751,38 +1869,63 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             )
 
             system_prompt = None
+            user_message = prompt
+            new_session_id = None
             if isolated:
                 # Saf kip: Claude Code'un varsayılan istemi DEĞİŞTİRİLİR.
-                # Kimlik + araç sözleşmesi tek kurucudan gelir, o turun bilişsel
-                # bağlamı sonuna eklenir.
-                identity_prompt = self.entropy_system_prompt(
+                # Faz 14-A: sistem istemi yalnız SABİT bölümdür (kimlik +
+                # onaylı kurallar + araç sözleşmesi + manifest); `query=""`
+                # verildiği için bilişsel bağlam bölümü hiç kurulmaz ve metin
+                # turdan tura birebir aynı kalır → oturum düşmez.
+                system_prompt = self.entropy_system_prompt(
                     "chat",
                     project_path=str(project_dir),
-                    query=prompt,
-                )
-                system_prompt = "\n\n".join(
-                    p for p in (identity_prompt, context_prompt) if p
+                    query="",
                 )
                 append_system_prompt = None
-                # `--system-prompt-snapshot` açık olduğu için süren oturum eski
-                # istemi taşır; imza değiştiyse oturum düşürülüp yenisi açılır.
-                if resuming and self._forget_stale_session(system_prompt):
+                # İmza yalnız sabit bölüm + model/efor/izolasyon kapsar.
+                if self._forget_stale_session(
+                    system_prompt,
+                    model=self.model_for_run(None),
+                    effort=self.selected_effort,
+                    isolated=True,
+                ) and resuming:
                     resuming = False
+                    # Oturum düştü: bağlam bloğu geçmiş özetiyle YENİDEN kurulur,
+                    # yoksa yeni oturum sohbetin başını hiç görmezdi.
+                    context_prompt = self.build_chat_system_prompt(
+                        prompt,
+                        target_skill=target_skill,
+                        skill_banner=skill_banner,
+                        attachment_directive=attachment_directive,
+                        resuming=False,
+                    )
+                # O turun değişken bağlamı kullanıcı mesajının başına iner.
+                user_message = build_turn_context_block(context_prompt, prompt)
+                if not resuming:
+                    # Sohbetin kimliği bir kez atanır; sonraki turlar aynı
+                    # kimliği `--resume` ile sürdürür.
+                    new_session_id = str(uuid.uuid4())
             else:
                 append_system_prompt = context_prompt
 
             cmd = self.build_command(
-                prompt,
+                user_message,
                 mode=mode,
                 project_dir=project_dir,
                 agent=agent,
                 resume=resuming,
+                session_id=new_session_id,
                 extra_dirs=extra_dirs,
                 append_system_prompt=append_system_prompt,
                 system_prompt=system_prompt,
-                tools=self.tools_for(mode, needs_write=is_write),
+                tools=self.chat_tools(mode, needs_write=is_write, isolated=isolated),
                 agents_json=self.entropy_agents_json() if isolated else None,
             )
+            # Ölçüm/teşhis kancası: prompt uzunsa argv'den stdin'e taşındığı
+            # için son kullanıcı mesajı argv'de görünmez; sözleşme testleri ve
+            # `/usage` benzeri teşhisler bu alandan okur.
+            self.last_user_message = user_message
             stdin_payload = self._apply_stdin_prompt(cmd)
             proc = subprocess.Popen(
                 cmd,
@@ -1840,6 +1983,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         session_id = result.get("session_id")
         if session_id:
             self.current_session_id = str(session_id)
+        elif new_session_id and ret_code == 0:
+            # Akıştan kimlik gelmediyse ÖNCEDEN ATANAN kimlik geçerlidir
+            # (`--session-id`); aksi hâlde bir sonraki tur yine sıfırdan
+            # açılırdı. Süreç hata verdiyse kimlik sürdürülmez.
+            self.current_session_id = new_session_id
         self._apply_chat_usage(result.get("usage") or {}, float(result.get("cost_usd") or 0.0))
 
         if full_text:

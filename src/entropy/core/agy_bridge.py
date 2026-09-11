@@ -196,6 +196,26 @@ AGY_EFFORT_LEVELS = ["low", "medium", "high"]
 DEFAULT_AGY_EFFORT = "high"
 
 
+def close_stream(stream) -> bool:
+    """
+    Süreç akışını çöküşsüz kapatır (Faz 14-A; Entropy'nin kendi düzeltmesi).
+
+    `stdout` her zaman dosya nesnesi değildir: test sahteleri `iter([...])`
+    verir ve liste yineleyicisinin `close` metodu yoktur. Korumasız kapanış
+    turu `'list_iterator' object has no attribute 'close'` ile öldürüyor, hata
+    metni de hafızaya düğüm olarak yazılıyordu (araştırma notu A §1 satır 3c).
+    Dönüş: kapanış gerçekten yapılabildi mi.
+    """
+    closer = getattr(stream, "close", None)
+    if not callable(closer):
+        return False
+    try:
+        closer()
+        return True
+    except Exception:
+        return False
+
+
 class AgyProcessBridge(ProviderCommonMixin, QObject):
     """
     Bridges Entropy AI to the authenticated local Antigravity (agy) CLI.
@@ -1688,16 +1708,15 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                 if interactive_finalized:
                     # Terminal kapandı: stdin de kapatıldığı için sürecin
                     # kendiliğinden çıkması beklenir; inatçıysa finally indirir.
-                    try:
-                        proc.stdout.close()
-                    except Exception:
-                        pass
+                    close_stream(proc.stdout)
                     try:
                         ret_code = proc.wait(timeout=5.0)
                     except Exception:
                         ret_code = -1
                 else:
-                    proc.stdout.close()
+                    # stdout her zaman dosya nesnesi olmayabilir (test sahteleri
+                    # `iter([...])` verir; 1432'deki okuma da bunu tolere eder).
+                    close_stream(proc.stdout)
                     ret_code = proc.wait()
 
             except Exception as e:
@@ -2300,7 +2319,12 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
                                      "output_tokens": turn_output,
                                      "total_tokens": turn_total},
                                     provider="agy",
-                                    model=getattr(self, "model", "") or "",
+                                    # Faz 14-A: `self.model` diye bir öznitelik
+                                    # yok; defterdeki sohbet satırları bu yüzden
+                                    # modelsizdi. Kaynak `current_model`.
+                                    model=(getattr(self, "current_model", "")
+                                           or getattr(self, "selected_model", "") or ""),
+                                    effort=str(getattr(self, "selected_effort", "") or ""),
                                 )
                             except Exception:
                                 pass
@@ -2316,7 +2340,7 @@ class AgyProcessBridge(ProviderCommonMixin, QObject):
 
             if stdin_writer is not None:
                 stdin_writer.join(timeout=5.0)
-            self._current_process.stdout.close()
+            close_stream(self._current_process.stdout)
             ret_code = self._current_process.wait()
 
         except Exception as e:

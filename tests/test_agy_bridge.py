@@ -669,3 +669,65 @@ def test_kartin_acik_modeli_kalici_eforla_ezilmez():
         bridge.model_for_run("gemini-3.8-flash-medium"),
         bridge.effort_for_prompt("/boost hadi", default_effort=explicit),
     ).endswith("-high")
+
+
+def test_stream_close_survives_non_file_stdout(bridge, monkeypatch):
+    """
+    `stdout.close()` sahte akışta patlamamalı (Faz 14-A regresyonu).
+
+    Test sahteleri `stdout`u `iter([...])` olarak veriyor; liste yineleyicisinin
+    `close` metodu yoktur. Kapanış korumasız yazıldığında tur
+    `'list_iterator' object has no attribute 'close'` hatasıyla ölüyor, hata
+    metni de hafızaya düğüm olarak yazılıyordu (araştırma notu A §1 satır 3c).
+    Bu test o korumayı kilitler: hem sohbet hem arka plan yolu, `close`suz bir
+    akışla çöküşsüz tamamlanmalı.
+    """
+    import subprocess
+
+    errors = []
+
+    class MockPopen:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = iter([])   # close() YOK
+            self.stdin = None
+            self.pid = 4242
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", MockPopen)
+    monkeypatch.setattr(bridge, "find_agy_executable", lambda: "agy.exe")
+    from entropy.core.event_bus import bus
+    bus.terminal_output_received.connect(
+        lambda text: errors.append(text) if "close" in str(text) else None
+    )
+
+    bridge._execute_prompt_worker("merhaba")
+    bridge._execute_background_task_worker("task-close-1", "Kapanış", "Talimat: bir şey yap")
+
+    assert not errors, f"akış kapanışı hata üretmemeli: {errors}"
+
+    # Kapanış yardımcısı doğrudan da kilitlenir: iki köprü yolu da bunu çağırır.
+    from entropy.core.agy_bridge import close_stream
+
+    assert close_stream(iter([])) is False        # close() yok → çökmeden False
+    assert close_stream(None) is False
+
+    class _Closable:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    ok = _Closable()
+    assert close_stream(ok) is True and ok.closed
+
+    class _Exploding:
+        def close(self):
+            raise ValueError("boru zaten kapalı")
+
+    assert close_stream(_Exploding()) is False

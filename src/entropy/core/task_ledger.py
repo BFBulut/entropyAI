@@ -93,6 +93,11 @@ class TaskLedger:
                 # NULL kalır, okurken "" varsayılır.
                 if "model" not in cols:
                     conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT")
+                # Efor sütunu (Faz 14-A): aynı model farklı efor seviyelerinde
+                # çok farklı token yakıyor; efor yazılmazsa defterdeki tüketim
+                # nedeni ölçülemiyor. Göç geriye uyumlu: eski satırlar NULL.
+                if "effort" not in cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN effort TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);"
                 )
@@ -223,6 +228,7 @@ class TaskLedger:
         provider: str = "",
         model: str = "",
         task_id: str = "",
+        effort: str = "",
     ) -> Optional[str]:
         """
         Bir SOHBET turunun token maliyetini deftere yazar (Faz 12 kapanışı).
@@ -251,9 +257,9 @@ class TaskLedger:
                     INSERT INTO tasks (
                         task_id, task_name, project_path, status,
                         created_at, started_at, completed_at, error, result_summary,
-                        input_tokens, output_tokens, total_tokens, provider, model
+                        input_tokens, output_tokens, total_tokens, provider, model, effort
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(task_id) DO UPDATE SET
                         input_tokens = excluded.input_tokens,
                         output_tokens = excluded.output_tokens,
@@ -261,7 +267,8 @@ class TaskLedger:
                     """,
                     (row_id, CHAT_TURN_NAME, "", TaskStatus.SUCCESS.value,
                      now, now, now, CHAT_TURN_NAME,
-                     tok_in, tok_out, tok_total, provider or "", model or "")
+                     tok_in, tok_out, tok_total, provider or "", model or "",
+                     effort or "")
                 )
                 conn.commit()
         return row_id

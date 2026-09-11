@@ -14,10 +14,11 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü uygulaması) arayüz
 - `src/entropy/ui/widgets/skills_widget.py` (📘 damıtma düğmesi, sayaç `distill_counter_<yetenek>`, durum renkleri: guncel yeşil, kismi/bayat/yok turuncu, kaynak-yok gri)
 - `src/entropy/ui/widgets/*` (~35 widget: report_center/report_inbox/reports_viewer, agents_widget, task_board_widget, tasks_widget, effort_selector, provider_badge, token_badge, flow_layout, frameless, rules_panel, slash_prompt, ui_polish, notification_center, memory_inspector_dialog…), `ui/window_sizing.py`, `ui/manager.py`, `ui/themes/cyber_theme.py` (tokenlar)
 - `src/entropy/desk/**` (Entropy Agent Desk penceresi: window, scene + engine, offices/roster/board/projects/memory/terminals/changes/receipt panelleri)
+- `src/entropy/core/pending.py` (**Faz 14**: tek bekleyen işler kuyruğunun arayüz yüzeyi — onay kartı ne/hangi araç/hangi komut/risk gösterir; `pending_changed` sinyalini dinler, `resolve(id, decision, note)` çağırır; şema `docs/ARCHITECTURE.md` §6.7) ve canlı akış satırı (`bus.agent_stream` → 'ajan şunu yapıyor')
 - `src/entropy/core/event_bus.py` yalnızca sinyal EKLEME (additive); sözleşmeler `docs/STATE.md`'de
 
 ## Çalışma belleğin
-İşe başlamadan önce `docs/STATE.md` (varsa), `docs/DESIGN_SYSTEM.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Tasarım kararlarında token tabanlı stil (tek vurgu rengi, 4/8 px boşluk ızgarası, 4 kademeli tipografi), az ama okunur öğe, tek ekrana sığma ilkesini uygula; `frontend-design` yeteneğinin ilkeleri geçerlidir (şablon görünümlü varsayılanlardan kaçın).
+İşe başlamadan önce `docs/STATE.md` (varsa), `docs/DESIGN_SYSTEM.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 yürürlükte: plan ve dilimler `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (dayanak: aynı tarihli A ve B araştırma notları), karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md). Tasarım kararlarında token tabanlı stil (tek vurgu rengi, 4/8 px boşluk ızgarası, 4 kademeli tipografi), az ama okunur öğe, tek ekrana sığma ilkesini uygula; `frontend-design` yeteneğinin ilkeleri geçerlidir (şablon görünümlü varsayılanlardan kaçın).
 
 ## Kırılmaz kurallar
 - `git stash`, `git checkout --`, `git reset --hard` YASAK. Commit atmazsın.

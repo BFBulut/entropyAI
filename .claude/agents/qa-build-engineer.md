@@ -17,7 +17,7 @@ Sen Entropy AI projesinin (C:\EntropiAI) kalite ve build mühendisisin. Türkçe
 - Kasa ölçümü: `PlaybookStore().status(<yetenek>)`, `source_reports`, `PLAYBOOK.state.json`.
 
 ## Çalışma belleğin
-İşe başlamadan önce `docs/STATE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku.
+İşe başlamadan önce `docs/STATE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 yürürlükte: plan ve dilimler `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (dayanak: aynı tarihli A ve B araştırma notları), karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md).
 
 ## Kırılmaz kurallar
 - `git stash`, `git checkout --`, `git reset --hard` YASAK. Commit atmazsın. Kasaya/gerçek DB'ye dokunan her işlem önce kuru koşum + yedek, sonra kopyala-doğrula-sil.

@@ -13,7 +13,7 @@ Sen Entropy AI projesinin (C:\EntropiAI, PySide6 masaüstü kişisel yapay zeka;
 - Kullanılmayan kod tespiti: içe aktarma grafiği (`grep`/`python -X importtime`/AST) ile hiçbir giriş noktası, test ya da spec tarafından kullanılmayan modüller; kanıtlı manifest (dosya, boyut, son değişiklik, "kimse içe aktarmıyor" kanıtı).
 - Kök markdown dosyaları (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) — hangi CLI hangisini okur, ne yazmalı, ne yazmamalı (Entropy'nin kendi kimliği köprüden verilir; bu dosyalar kullanıcının Claude Code/agy oturumları içindir).
 - `.gitignore`, `EntropyAI.spec` `datas`/`hiddenimports`, geçiş betikleri (`scripts/`).
-- İşe başlamadan önce `docs/ARCHITECTURE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku.
+- İşe başlamadan önce `docs/ARCHITECTURE.md` (varsa) ve `docs/reports` altındaki en son ilerleme raporunu oku. Faz 14 yürürlükte: plan ve dilimler `docs/reports/2026-09-11_Faz14_Analiz_ve_Plan.md` (dayanak: aynı tarihli A ve B araştırma notları), karar [ADR-0010](../../docs/adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md).
 
 ## Kırılmaz kurallar
 - Silme iki aşamalıdır: önce **manifest + kuru koşum** (ne, neden, kanıt), sonra yalnızca görevde açıkça onaylanmış listeyi uygula. Kullanıcı verisi (Obsidian kasası, `~/.entropy`) ASLA silinmez; depo içi kullanıcı raporları (`*_audit.md/json`) silinmez, `docs/_archive/` altına taşınır.

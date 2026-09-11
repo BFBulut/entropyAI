@@ -5,7 +5,11 @@
 > belgesi olmamasının tek yolu budur; `docs/_archive/prototype/` altındaki eski belgeler
 > tam olarak bu kural uygulanmadığı için arşive düştü.
 >
-> Sürüm: v0.10.3 · Dal: `ai/v0.1.7` · Son güncelleme: 2026-09-11 (Faz 13-C)
+> Sürüm: v0.11.0 · Dal: `ai/v0.1.7` · Son güncelleme: 2026-09-11 (Faz 14 açılışı)
+>
+> **"Hedef" etiketi bir sözleşme değildir.** Bu belgede yalnız **bugün kod olan** şeyler
+> etiketsiz anlatılır; henüz yazılmamış olan her şey açıkça **(Faz 14 hedefi)** diye
+> işaretlenir ve kod bittiğinde etiket aynı commit'te kalkar.
 > Güncel durum ve açık işler için: [`STATE.md`](STATE.md) · Kararlar için: [`adr/`](adr/)
 
 ---
@@ -29,15 +33,21 @@ rapor alır; Desk Entropy'nin panosuna kart **itemez**. Gerekçe ve zorlayıcı 
 
 ## 2. Paketler
 
+> **Ölçüm tarihi 2026-09-11** (`find src/entropy -name '*.py' | wc -l`, satırlar `cat | wc -l`).
+> Önceki tablo Faz 11'den kalmıştı ve `agents/` için **%59 eksik** sayı veriyordu; "yaşayan
+> mimari" kuralı burada çiğnenmişti (Faz 14 A notu §2.1, §3 madde 8). Sayı değiştiğinde
+> tablo **aynı commit'te** yeniden ölçülür.
+
 | Paket | Dosya | Satır | Rol |
 |---|---:|---:|---|
-| `ui/` (+ `modes/`, `widgets/`, `themes/`) | 37 | ~20.700 | PySide6 kabuğu: Zen / Chat / Floating kipleri, 29 widget |
-| `brain/` (+ `rag/`, `obsidian/`, `supabase/`) | 22 | ~13.800 | bilişsel bellek, graf, wiki, playbook, bağlam kurucu, ofis çalışma alanı, damıtıcı |
-| `core/` | 15 | ~11.700 | yapılandırma, olay veriyolu, iki sağlayıcı köprüsü, slash komutlar, kilit, kimlik, defter |
-| `agents/` | 13 | ~8.500 | ajan kayıt defteri, derleme, görev kartları, harness, posta kutusu, worktree, PR akışı, şablonlar |
-| `desk/` (+ `engine/`, `assets/`, `templates/`) | 20 | ~6.700 | Agent Desk penceresi, piksel sahne motoru, paneller |
-| `skills/` | 5 | ~2.000 | `SKILL.md` keşfi (`manager.py`) + motorlar (tembel yüklenir) |
-| `mcp/` · `scheduler/` · `platform/` · `tools/` | 8 | ~1.000 | MCP yapılandırması, zamanlayıcı, Windows panosu (`platform/clipboard.py`), araç sentezleyici |
+| `ui/` (+ `modes/`, `widgets/`, `themes/`) | 54 | 25.973 | PySide6 kabuğu: Zen / Chat / Floating kipleri, widget'lar |
+| `brain/` (+ `rag/`, `obsidian/`, `supabase/`) | 27 | 17.448 | bilişsel bellek, graf, wiki, playbook, bağlam kurucu, ofis çalışma alanı, damıtıcı |
+| `core/` | 18 | 14.070 | yapılandırma, olay veriyolu, iki sağlayıcı köprüsü, slash komutlar, kilit, kimlik, defter |
+| `agents/` | 22 | 13.494 | ajan kayıt defteri, derleme, görev kartları, FSM, olay günlüğü, tetikleyici, harness, posta kutusu, worktree, PR akışı, şablonlar, Desk yönetimi |
+| `desk/` (+ `engine/`, `assets/`, `templates/`) | 20 | 6.712 | Agent Desk penceresi, piksel sahne motoru, paneller |
+| `skills/` | 5 | 1.972 | `SKILL.md` keşfi (`manager.py`) + motorlar (tembel yüklenir) |
+| `mcp/` · `scheduler/` · `platform/` · `tools/` | 9 | 1.111 | MCP yapılandırması, zamanlayıcı, Windows panosu (`platform/clipboard.py`), gizli alt süreç (`platform/proc.py`), araç sentezleyici |
+| **Toplam** | **158** | **81.193** | test dosyası 204 · toplanan test 2.648 |
 
 **Bellek paketinin adı `entropy.brain`** (Faz 13-B, [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)).
 Eski `entropy.memory` adı `src/entropy/memory/__init__.py` şimiyle bir sürüm daha çalışır
@@ -64,6 +74,27 @@ Giriş noktaları: `run_entropy.py` → `entropy.main:main`; `pyproject.toml`
 ---
 
 ## 3. Veri kökleri
+
+### 3.0 Ölçülen gerçek: veri kökü **tek değil, üç parçalı** (Faz 14 bulgusu)
+
+`_resolve_state_dir()` bir sıra tanımlıyor ama **7 modül `Path.home()/".entropy"` yolunu
+sabit yazıyor**, dolayısıyla ayarlar ile veritabanları farklı köklere düşüyor
+(A notu §2.2, ölçüm 2026-09-11):
+
+| Kök | İçerik | Durum |
+|---|---|---|
+| `<depo>\.entropy` | `settings.json`, `chat_history.json`, `logs/`, **boş** `tasks_ledger.db` (0 B) | `_resolve_state_dir()` sırasının kazananı |
+| `~/.entropy` | `cognitive_memory.db` (9,85 MB), **canlı** `tasks_ledger.db`, `memory/`, `skills_state.json`, `scheduler_tasks.json` | sabit yazılmış yol (7 modül) |
+| `%LOCALAPPDATA%\EntropyAI` | bayat `settings.json` | üçüncü sıra; artık yazılmıyor |
+
+Sabit yazan modüller: `brain/supabase/cognitive_memory.py`, `core/task_ledger.py`,
+`core/config.py` (üç yer), `skills/manager.py`, `scheduler/cron_engine.py`,
+`platform/clipboard.py`, `skills/media_agency_soldier_engine.py`.
+
+**Hedef (Faz 14-F):** tek kaynak `core/paths.py`; sabit `Path.home()` yazımları oradan
+türetilen tek çağrıyla değiştirilir, mevcut veri **taşınmadan** çalışmaya devam eder
+(kullanıcı verisi silinmez, ROADMAP §4 madde 2). Aşağıdaki §3.1 **hedefi** tarif eder;
+bugünkü fiili dağılım yukarıdaki tablodur.
 
 ### 3.1 Uygulama durumu — `~/.entropy` (kullanıcı verisi, ASLA silinmez)
 
@@ -308,6 +339,15 @@ zorunlu**; arşivlemenin tek meşru yolu budur. `done` terminal kalır.
 doğrulanır (bayat önbellek iki kez `seq` yazıyordu) ve `board.drift` olayı
 **kendi korelasyonunu** taşır (`drift:<hash16>`).
 
+**Yeniden oynatma güvenliği (Faz 14, [ADR-0010](adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md)).**
+Bir adım ya **yeniden oynatılabilir** olmalı ya da açıkça "yan etkili, oynatma" diye
+işaretlenmelidir: CLI çağrısı kota harcar. Aynı olayın iki kez uygulanması
+`events.jsonl`'de ikinci satır üretmez (`idempotency_key`); `review → done` yalnız
+`actor="human"` + kanıtla geçer. Duraklama noktası (onay bekleme) devam ederken
+**tekrar çalışır** — kuyruk bu yüzden idempotent olmak zorundadır. Paralel genişlik
+kartın token bütçesiyle sınırlanır; ledger `parent_run_id` + `run_type ∈ {llm, chain, tool}`
+alanlarını taşır (yerelde kalır, dış servis yok).
+
 **Olay günlüğü** `agents/board_events.py` — `events.jsonl`, **yalnızca ekleme**; satır şeması
 `{schema_version, seq, ts, correlation_id, task_id, attempt_id, actor, action,
 idempotency_key, payload}`. `projection_hash` = kanonik JSON + SHA-256;
@@ -396,6 +436,118 @@ Rapor üreten **tek** yollar: pano kartı çıktısı, `[OTONOM PLANLI GÖREV]` 
 değil **olay**tır: `brain/playbook.py` onları bilerek dışarıda bırakır ve
 `brain/handoff.py` oraya düşmüş bir dosyayı aktarım sanmaz. Eski dosyalar **taşınmaz**;
 görüntü katmanı onları yeniden başlıklar.
+
+### 6.4 Geçici ajan döngüsü (**Faz 14 hedefi**, [ADR-0010](adr/ADR-0010-gecici-ajan-mimarisi-langgraph-alinmadi.md))
+
+Kullanıcının bağlayıcı tanımı: bir yetenek koşulacaksa Entropy `SKILL.md`'yi alır,
+o iş için bir `agent.md` üretir, ajana beyinden ilgili bağlamı verir, **ayrı bir CLI
+oturumu** açar, akışı anlık gösterir, raporu alır ve **ajan kendini siler**.
+Kalıcı adlı kadro istenmiyor; kadro **gizlenir, silinmez** (Desk ve pano ona bağlı).
+
+```
+kullanıcı istemi
+  └─ yetenek çözümü (skills/manager.rank_skills_for_prompt)
+       └─ 1. agent.md üretici (saf Python, Qt'siz)
+            └─ 2. geçici oturum (yeni uuid, kalıcı depoya yazılmaz)
+                 ├─ 3. canlı akış  → bus.agent_stream → sohbette "ajan şunu yapıyor"
+                 ├─ 4. izin isteği → bekleyen işler kuyruğu → "onaylıyorum"
+                 ├─ 5. rapor       → Entropy/Reports (başlık H1'den)
+                 ├─ 6. hafıza      → ALT AJAN'ın ürettiği JSON → MemoryGate.admit
+                 └─ 7. kendini silme
+```
+
+**Yedi adımlık sözleşme.**
+
+1. **`agent.md` üretimi** — girdi: `SkillDefinition` (`skills/manager.py`), kullanıcı istemi,
+   `AssembledContext` (`brain/context_builder.py`, 4.000 token). Gövde
+   `## Görev / ## Kabul ölçütleri / ## Rapor şablonu / ## Yasaklar`; rapor şablonunun ilk
+   satırı **`# H1`** olmak zorundadır (§6.3 başlık sözleşmesi).
+2. **Oturum** — her koşu yeni uuid; `AgentSessionStore`'a yazılmaz; claude yolunda tanım
+   `--agents <json>` ile **argv'de** taşınır (dosya yazılmaz), agy yolunda geçici
+   `.agents/agents/<slug>/agent.md` yazılır ve koşu sonunda dizin silinir.
+3. **Canlı akış** — mevcut `provider._agent_stream_emitter` → `bus.agent_stream`; eksik olan
+   yalnız sohbette görünür satırdır.
+4. **Onay** — §6.6.
+5. **Rapor** — `Entropy/Reports/`; başlık `core/report_title.derive_report_title`.
+6. **Hafıza** — **Entropy yazmaz**: raporu okuyan kısa bir alt ajan turu kapıya verilecek
+   JSON'u üretir, `MemoryGate.admit` tek kapı olarak kalır (§5.1).
+7. **Kendini silme** —
+
+| Silinir | Kalır |
+|---|---|
+| geçici `agent.md` / `.agents` dizini | ledger satırı (`core/task_ledger.py`) |
+| sistem istemi dosyası (`write_system_prompt_file` çıktısı) | rapor dosyası |
+| oturum kaydı / geçici çalışma dizini | `Board/events.jsonl` satırları |
+| — | hafıza düğümü (kapıdan geçmişse) |
+
+**Pano FSM'ine dokunulmaz** (§6.1.1; sadeleştirmek Desk'i kırar): geçici koşu yalnız
+`running → review → done|failed` alt kümesini kullanır. Adım tavanı (`MAX_STEPS_PER_CARD`)
+yeteneğe göre ölçeklenir ve tavana çarpan kart `failed` değil **`review` + "tavan aşıldı"
+kanıtı** ile kapanır.
+
+### 6.5 Sohbet sürekliliği sözleşmesi (**Faz 14 hedefi**)
+
+Ölçülen hata: sistem istemi sorguya bağlı bilişsel bağlam taşıdığı için
+`prompt_signature` hemen her turda değişiyor, `_forget_stale_session` oturumu düşürüyor
+ve 3. turdan itibaren her tur **geçmişsiz yeni bir oturum** oluyor (A notu Ölçüm B:
+`NO-RESUME / RESUME / NO-RESUME / NO-RESUME`). Kullanıcı "onaylıyorum" dediğinde neyi
+onayladığı bu yüzden kayboldu.
+
+Sözleşme:
+
+- **Sistem istemi turdan tura sabittir**: kimlik + kurallar + araç sözleşmesi. Bilişsel
+  bağlam, yetenek afişi ve geri çağırma sistem istemine **girmez**.
+- **Bağlam kullanıcı mesajının başına** blok olarak konur (`build_system_context_block`).
+- **İmza kapsamı** yalnızca sabit bölümlerdir; oturum yalnız **model ya da efor**
+  değiştiğinde düşürülür. Oturum yine de düşerse yeni oturumun istemi sohbet özetini
+  **almak zorundadır** (bugünkü hata: özet `resuming=True` varsayımıyla atlanıyor).
+- Defterde `model` alanı gerçek modeli taşır (bugün sohbet satırlarında boş).
+
+### 6.6 Onay yüzeyi — `--permission-prompt-tool` (**Faz 14 hedefi**)
+
+[ADR-0002](adr/ADR-0002-claude-saf-kip.md) saf kipe geçerken CLI'ın varsayılan izin
+diyaloğunu da düşürmüştü; yerine hiçbir şey konmamıştı. Ölçüm: `permission_denial` /
+`can_use_tool` için kaynakta **0 isabet**; reddedilen araç modele hata metni olarak
+döndüğü için model "onay penceresinde bekliyor" diye **uyduruyordu**.
+
+- Entropy kendi **stdio MCP onay sunucusunu** ayrı bir süreçte açar
+  (`platform/proc.popen_kwargs` zorunlu, §4.3), `--mcp-config` ile tanıtır,
+  `--strict-mcp-config` ile yalnız onu bırakır ve CLI'ya
+  `--permission-prompt-tool mcp__entropy__ask` verir.
+- Sunucu **CLI'dan önce** ayakta olmalıdır (bağlantı zaman aşımı); kullanıcının onayı
+  beklemesi aracın kendi süresidir.
+- `--dangerously-skip-permissions` **koşullu** olur: açıkken izin aracı hiç çağrılmaz.
+- Köprü `consume_stream` izin reddini **olay olarak** tanır ve
+  `bus.tool_approval_requested` / `tool_approval_responded` sinyallerini yayar.
+- **Kural:** sohbet turunda **proje kökü salt okunurdur**; kod değişikliği yalnızca
+  **onaylı kart** (worktree) yolundan yapılır. Bugünkü davranış bunun tersidir
+  (`accept-edits` varsayılanı + yazma niyeti sezgisi + `--add-dir <proje kökü>`;
+  Entropy kendi kaynağını commit'siz düzenledi).
+
+### 6.7 Bekleyen işler — tek kuyruk (**Faz 14 hedefi**)
+
+Bugün iki ayrı kuyruk var (Desk onayları `agents/desk_admin.py` + sohbet kartları).
+Hepsi **tek** modelde birleşir; şema `desk_admin`'in şemasından genişletilir
+(`id, kind, payload, created_at, source, summary`).
+
+| Tür (`kind`) | Kaynak | "Onaylıyorum" ne yapar |
+|---|---|---|
+| `tool_permission` | CLI izin aracı (§6.6) | araca `allow` döner, oturum kesintisiz sürer |
+| `desk_change` | `[DESK …]` blokları | ofis/ajan/görev değişikliği uygulanır |
+| `rule_candidate` | ajanın keşfettiği kural (§5) | kural o ajanın sistem istemine kalıcı enjekte edilir |
+| `skill_candidate` | beceri sentezleyici | beceri kurulur |
+
+API sözleşmesi (`core/pending.py` — **yeni modül**):
+
+```python
+PendingQueue.list(kind=None) -> list[PendingItem]
+PendingQueue.resolve(item_id, decision, note="") -> PendingItem   # decision ∈ {approve, reject}
+```
+
+Sinyal: `pending_changed(dict)` (yalnızca **ekleme**; §7 sözleşmesi bozulmaz).
+Çözülmüş kayıtlar silinmez, kararla birlikte saklanır — "kayıt bırakmayan silme yoktur"
+(ROADMAP §4 madde 8). Tek yön sözleşmesi korunur: Desk bu kuyruğa **kart itemez**,
+yalnızca kendi değişiklik istekleri onay için buraya düşer ([ADR-0001](adr/ADR-0001-desk-ayrimi.md)).
 
 ---
 
