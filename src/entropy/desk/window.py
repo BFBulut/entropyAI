@@ -81,6 +81,13 @@ def scroll_host(widget: QWidget, min_width: int = 0, min_height: int = 0) -> QSc
     host.setWidget(widget)
     if min_width:
         host.setMinimumWidth(min_width)
+    else:
+        # Faz 13-C madde 6 (G13-4: beyan >= hesaplanan). Kabuk `0` beyan
+        # ediyordu, ama bir kaydırma alanı kendi çerçevesi + kaydırma çubuğu
+        # kadar (Qt'nin hesabıyla 60 px) yerin altına inemez. Beyan artık
+        # hesaplanan tabana eşitlenir: pencere asgarisi BÜYÜMEZ (sekme
+        # yığınının kendi asgarisi 200 px) ama kapı gerçeği ölçer.
+        host.setMinimumWidth(host.minimumSizeHint().width())
     if min_height:
         host.setMinimumHeight(min_height)
     return host

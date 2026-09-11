@@ -81,10 +81,11 @@ def test_status_set_has_eight_values_and_table_has_thirteen_rows():
     # Faz 13-A2: T13 (`review`/`failed` → `canceled`, gerekçe zorunlu) eklendi;
     # QA artığı kartların arşivlenmesi bu satırdan geçer.
     assert len(board_fsm.TRANSITIONS) == 13
-    # Faz 12-B: 12 geçiş olayı + 1 GÖZLEM olayı (`board.drift`, durum
-    # değiştirmez; `INFO_EVENTS` ile ayrılır).
-    assert len(board_fsm.EVENTS) == 13
-    assert board_fsm.INFO_EVENTS == ("board.drift",)
+    # Faz 12-B: 12 geçiş olayı + GÖZLEM olayları (durum değiştirmez;
+    # `INFO_EVENTS` ile ayrılır). Faz 13-C.4: arşivleme terminal kartın
+    # durumunu değiştirmeden kayda geçsin diye `board.archived` eklendi.
+    assert len(board_fsm.EVENTS) == 14
+    assert board_fsm.INFO_EVENTS == ("board.drift", "board.archived")
     assert set(board_fsm.INFO_EVENTS) <= set(board_fsm.EVENTS)
     # Tablodaki her olay sözlükte var (ve tersi, `task.reset` kaçış kapısı hariç).
     table_events = {t.event for t in board_fsm.TRANSITIONS}

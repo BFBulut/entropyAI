@@ -1,6 +1,9 @@
 # ADR-0007 — `core/claude_bg.py` "ertelendi" etiketiyle kalıyor
 
-- **Durum:** Kabul edildi (Faz 12-E, 2026-09-10)
+- **Durum:** **Sonuçlandı (arşiv)** — Faz 13-C, 2026-09-11. Madde 4'ün koşulu
+  gerçekleşti (üründen çağıran çıkmadı) ve modül arşive indi:
+  [ADR-0009](ADR-0009-claude-bg-arsivlendi.md). Aşağıdaki metin tarihsel kayıttır.
+- **Özgün durum:** Kabul edildi (Faz 12-E, 2026-09-10)
 - **Bağlam:** `docs/reports/2026-09-10_Faz11F_Spike_Kalici_Terminal.md`,
   `docs/reports/2026-09-10_Faz12_Arastirma_B_Depo_Denetimi.md` §2.2, §7 M4
 

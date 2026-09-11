@@ -59,10 +59,17 @@ EVENTS: Tuple[str, ...] = (
     # projeksiyonu ayrıştığında yazılır; `project()` bunu geçiş tablosuna
     # sokmadan atlar (aksi hâlde her ayrışma bir de "rejected" üretirdi).
     "board.drift",
+    # Faz 13-C.4: DURUM DEĞİŞTİRMEYEN arşiv olayı. Silme artık "dosyayı yok
+    # et" değil "kartı panodan kaldır, kaydı bırak" demektir; ama TERMİNAL bir
+    # kart (kabul edilmiş `done`, iptal edilmiş `canceled`) geri alınamaz —
+    # onu `task.canceled` ile yeniden iptal etmek tabloyu yalancı yapardı.
+    # T13 `review`/`failed` kartını iptale taşır, bu olay ise terminal kartın
+    # yanına "arşivlendi" notunu düşer.
+    "board.archived",
 )
 
 #: Geçiş üretmeyen (yalnızca kayda geçen) olaylar.
-INFO_EVENTS: Tuple[str, ...] = ("board.drift",)
+INFO_EVENTS: Tuple[str, ...] = ("board.drift", "board.archived")
 
 # Kartı `review`den `done`a yalnızca İNSAN taşıyabilir. Ajan çıktısını kimse
 # okumadan "bitti" saymak panonun tamamını anlamsız kılardı (tasks.py:23-26).

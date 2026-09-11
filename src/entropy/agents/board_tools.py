@@ -50,6 +50,22 @@ from typing import Dict, List, Optional, Tuple
 OPEN_RE = re.compile(r"^\[PANO\s+(board_[a-z_]+)\]\s*$", re.MULTILINE)
 CLOSE_TAG = "[/PANO]"
 
+# Faz 13-C.3: Entropy → Desk düzenleme blokları. AYNI taşıma biçimi (satır
+# başında etiket, gövdede tek JSON nesnesi, kapanış etiketi), ayrı ad alanı:
+# `[PANO …]` Entropy'nin KENDİ panosuna, `[DESK …]` Desk'in kadrosuna yazar.
+# İkisini tek etikette toplamak yön kuralını (Desk → Entropy tek yön) okunmaz
+# hâle getirirdi; ayrı etiket sayesinde Desk ajanlarının çıktısında bir
+# `[DESK …]` bloğu görülürse bu apaçık bir ihlaldir ve tek regex'le ölçülür.
+DESK_OPEN_RE = re.compile(r"^\[DESK\s+([a-z_]+)\]\s*$", re.MULTILINE)
+DESK_CLOSE_TAG = "[/DESK]"
+
+#: Entropy'nin Desk üzerinde kullanabildiği düzenleme araçları.
+#: İlk üçü YAPISAL değişikliktir ve kullanıcı onayı ister; `msg` onaysızdır
+#: (Entropy zaten `/ask` ve `/desk msg` ile orkestratöre yazabiliyor).
+DESK_TOOLS: Tuple[str, ...] = ("office_create", "agent_edit", "task", "msg")
+#: Onay bekleyen (yapısal) araçlar.
+DESK_APPROVAL_TOOLS: Tuple[str, ...] = ("office_create", "agent_edit", "task")
+
 # Ajanın gördüğü araçlar (Entropy'nin ek aracı listede DEĞİL).
 AGENT_TOOLS: Tuple[str, ...] = ("board_next", "board_checkpoint",
                                 "board_finish", "board_ask")
@@ -89,6 +105,34 @@ def parse_tool_calls(text: str) -> List[ToolCall]:
             continue
         end = (text or "").find(CLOSE_TAG, m.end())
         body = (text or "")[m.end():end if end != -1 else len(text or "")]
+        raw = body.strip()
+        args: Dict[str, object] = {}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except ValueError:
+                continue
+        out.append(ToolCall(name=name, args=args, raw=raw))
+    return out
+
+
+def parse_desk_calls(text: str) -> List[ToolCall]:
+    """
+    `[DESK <araç>] … [/DESK]` bloklarını ayrıştırır (Faz 13-C.3).
+
+    `parse_tool_calls` ile aynı bağışlayıcılık: bilinmeyen ad ve bozuk JSON
+    ATLANIR. Dönen `ToolCall.name` araç adıdır (`office_create` gibi).
+    """
+    out: List[ToolCall] = []
+    raw_text = text or ""
+    for m in DESK_OPEN_RE.finditer(raw_text):
+        name = m.group(1)
+        if name not in DESK_TOOLS:
+            continue
+        end = raw_text.find(DESK_CLOSE_TAG, m.end())
+        body = raw_text[m.end():end if end != -1 else len(raw_text)]
         raw = body.strip()
         args: Dict[str, object] = {}
         if raw:
@@ -209,16 +253,26 @@ _ENTROPY_TOOL_TEXT = """[PANO board_create]
  "criteria": ["<ölçüt>"], "agent": "<ajan>", "priority": "P1",
  "effort": "<low|medium|high>", "input_paths": ["<girdi>"]}
 [/PANO]
-  Bir işi devretmeye karar verdiğinde kart doğurur. Kartı SEN koşturmazsın:
-  pano sıradaki turda ajanı uyandırır.
-  `kind` ZORUNLU; yazmazsan başlıktan sezilir. Her kart CANLI koşar:
-  `research` kartı da ajana gider, hafıza yalnızca `[BEYİN]` bağlamıdır."""
+  Bir işi devretmeye karar verdiğinde kart doğurur; kartı SEN koşturmazsın.
+  `kind` ZORUNLU. Her kart CANLI koşar (hafıza yalnızca bağlamdır)."""
+
+# Faz 13-C.3. Bütçe notu: `brain.system_prompt._fit_board_tools` blokları
+# `[PANO ` başlangıcından bölüyor, yani bu metin `board_create` bloğunun
+# KUYRUĞU olarak taşınır ve ikisi birlikte `BUDGET_BOARD_TOOLS` (600) içinde
+# kalmak zorundadır. Bu yüzden `board_create` açıklaması kısaltıldı; ölçüm
+# sözleşme testinde (`test_phase13c_desk.py`) sabittir.
+_DESK_TOOL_TEXT = """[DESK office_create]
+{"name": "<ofis>", "purpose": "<amaç>"}
+[/DESK]
+  Aynı biçimde: agent_edit {office,name,description}, task {office,title,goal},
+  msg {office,text}. İlk üçü KULLANICI ONAYI bekler; msg doğrudan gider."""
 
 
 def tools_section(for_entropy: bool = False) -> str:
     """İsteme eklenecek araç sözleşmesi metni."""
     if for_entropy:
-        return _AGENT_TOOLS_TEXT + "\n\n" + _ENTROPY_TOOL_TEXT
+        return (_AGENT_TOOLS_TEXT + "\n\n" + _ENTROPY_TOOL_TEXT
+                + "\n\n" + _DESK_TOOL_TEXT)
     return _AGENT_TOOLS_TEXT
 
 
@@ -240,16 +294,24 @@ LINE_TAGS: Tuple[str, ...] = ("[KURAL]",)
 _BRACKET_LINE_RE = re.compile(r"^\[[^\]]+\]\s*$")
 
 
-def _strip_pano_blocks(text: str) -> str:
-    """`[PANO …] … [/PANO]` bloklarını (kapanmamış olanlar dahil) siler."""
+def _strip_block_pairs(text: str, open_re, close_tag: str) -> str:
+    """Etiket çifti arasındaki blokları (kapanmamış olanlar dahil) siler."""
     out = text
     while True:
-        m = OPEN_RE.search(out)
+        m = open_re.search(out)
         if m is None:
             return out
-        end = out.find(CLOSE_TAG, m.end())
-        stop = len(out) if end == -1 else end + len(CLOSE_TAG)
+        end = out.find(close_tag, m.end())
+        stop = len(out) if end == -1 else end + len(close_tag)
         out = out[: m.start()] + out[stop:]
+
+
+def _strip_pano_blocks(text: str) -> str:
+    """`[PANO …] … [/PANO]` ve `[DESK …] … [/DESK]` bloklarını siler."""
+    out = _strip_block_pairs(text, OPEN_RE, CLOSE_TAG)
+    # Faz 13-C.3: Desk düzenleme blokları da MAKİNE yüküdür; kullanıcı
+    # sohbette JSON değil, onay satırını görür.
+    return _strip_block_pairs(out, DESK_OPEN_RE, DESK_CLOSE_TAG)
 
 
 def strip_tool_blocks(text: str) -> str:
@@ -296,7 +358,7 @@ def has_tool_blocks(text: str) -> bool:
     """Metinde temizlenecek bir araç/etiket bloğu var mı (test/ölçüm çıpası)."""
     raw = (text or "")
     upper = raw.upper()
-    if OPEN_RE.search(raw):
+    if OPEN_RE.search(raw) or DESK_OPEN_RE.search(raw):
         return True
     return any(tag in upper for tag in LINE_BLOCK_TAGS + LINE_TAGS)
 

@@ -57,10 +57,10 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
 | Dilim | Durum | Not |
 |---|---|---|
 | 13-A UX ve çekirdek + onaylı canlı koşular | **tamamlandı, v0.10.1** | `docs/reports/2026-09-10_Faz13_Ilerleme_Raporu_v0.10.1.md` |
-| 13-A2 v0.10.1 geri bildirimi (donma, görünmeyen düğmeler, ajan durumu, pencere yanıp sönmesi, beyin kısa devresi kapalı) | **yürürlükte** | `v0.10.2` |
-| 13-B eski bellek paketi → `entropy.brain` taşıması | **tamamlandı** (2026-09-11, tek başına) | kota 0; 27 modül `git mv`; 166 dosyada dizgi; uyumluluk şimi (v0.12.0'da silinir); [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md); toplama sayısı 2.596 → 2.596 |
-| 13-C Desk kanıt zinciri ve temizlik + wiki ikinci parti | onaylandı (kota ~90k) | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı), `claude_bg` arşivi |
-| 13-D Kapanış | 13-B/C sonrası | v0.11.0 |
+| 13-A2 v0.10.1 geri bildirimi (donma, görünmeyen düğmeler, ajan durumu, pencere yanıp sönmesi, beyin kısa devresi kapalı) | **tamamlandı, v0.10.2** | tam süit 2.596 passed, `ui_audit --gate --final` exit 0; **açık regresyon R-13A2-1** (kullanıcının iki kart dosyası kayıp) `STATE.md` §2.10'da |
+| 13-B eski bellek paketi → `entropy.brain` taşıması | **tamamlandı, v0.10.3** | kota 0; 27 modül `git mv`; 166 dosyada dizgi; uyumluluk şimi (v0.12.0'da silinir); [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md); toplama 2.596 → 2.596, QA tam süit **2.605 passed / 0 failed**, build exit 0, `Entropy AI 0.10.3` |
+| 13-C Desk kanıt zinciri ve temizlik + wiki ikinci parti | **yürürlükte** | ~60k kota; ofis kartı blok sızıntısı, tek yazıcı kontrol noktası, `[DESK …]` araçları (onaylı). **Depo bakımı kolu bitti (kota 0):** `claude_bg` arşivlendi ([ADR-0009](adr/ADR-0009-claude-bg-arsivlendi.md), toplama 2.605 → 2.573), `STATE.md` 1.685 → 1.032 satır (eski ölçümler `docs/_archive/state/`), `ARCHITECTURE.md` 13-A/13-A2/13-B sözleşmeleriyle eşitlendi |
+| 13-D Kapanış | **sırada** (13-C sonrası) | tam süit + build + `ui_audit --gate --final` + faz raporu → v0.11.0 |
 
 ---
 
@@ -74,3 +74,12 @@ Faz 13 planı: `docs/reports/2026-09-10_Faz13_Plan_ve_Yol_Haritasi.md` (araştı
 5. **`git stash` / `git checkout --` / `git reset --hard` yasaktır.**
 6. **Marka kuralı:** ticari referans ürünün ve üreticisinin adı hiçbir dosyaya yazılmaz.
 7. **Bilgi ve görev akışı tek yönlüdür** (Entropy → Desk) — [ADR-0001](adr/ADR-0001-desk-ayrimi.md).
+8. **Silme = arşiv + olay.** Ürüne bağlanmamış kod `docs/_archive/spikes/`, eskiyen ölçüm
+   `docs/_archive/state/`, kullanıcı çıktısı `docs/_archive/customer/` altına **taşınır**;
+   kart arşivlenmesi FSM'de T13'tür ve **gerekçesiz yapılamaz**. Kayıt bırakmayan silme
+   yoktur: her taşımanın bir ADR'si ya da olay satırı olur (R-13A2-1 tam olarak bu kural
+   çiğnendiği için doğdu — iki kart dosyası olay yazılmadan kayboldu).
+9. **Araştırma kartları beyinden kısa devre yapmaz.** "Araştır" dendiğinde araştırma
+   **canlı** koşar; beyin ajana bağlamdır, yanıtın yerine geçmez
+   (`config.brain_shortcut_enabled` varsayılan **False**; tek meşru kapı kullanıcının
+   açık `brain_only` tercihidir).

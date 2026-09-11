@@ -340,6 +340,68 @@ def parse_rule_candidates(text: str) -> List[str]:
     return out
 
 
+def propose_rule_candidates(office: str, agent: str, text: str, source: str = "",
+                            vault_path=None, offices=None) -> List[str]:
+    """
+    `[KURAL] …` satırlarını ofisin ADAY kuyruğuna yazar; yazılanları döndürür.
+
+    Ajan keşfettiği kuralı belleğe kendisi yazamaz (kullanıcının kuralı): aday
+    kuyruğa düşer, "kalıcı yap" onayını kullanıcı verir. Modül düzeyinde
+    durur çünkü iki çağıranı var: harness'ın plan/kapanış turu ve
+    `tasks._finish` (ofis kartının ham çıktısı temizlenmeden önce).
+    """
+    office = str(office or "").strip()
+    rules = parse_rule_candidates(text or "")
+    if not office or not rules:
+        return []
+    stored: List[str] = []
+    for rule in rules:
+        try:
+            from entropy.brain import promoted_rules  # type: ignore
+
+            result = _flex_call(
+                promoted_rules.propose_rule,
+                office=office,
+                agent=agent or "",
+                text=rule,
+                source=source or "",
+                vault_path=vault_path,
+            )
+            # `propose_rule` kural olmayan metne None döner (log satırı, yol,
+            # çok kısa cümle): o zaman aday da açılmaz.
+            if result is not None:
+                stored.append(rule)
+            continue
+        except Exception:
+            logger.debug("propose_rule bellek katmanında yok: %s", office)
+        try:
+            if offices is None:
+                from entropy.agents.desk_registry import DeskRegistry
+
+                offices = DeskRegistry(vault_path=vault_path) if vault_path is not None \
+                    else DeskRegistry()
+            path = offices.office_dir(office) / RULE_CANDIDATES_FILENAME
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"- [ ] {rule} · {agent or '-'} · kaynak: {source or '-'}\n")
+            stored.append(rule)
+        except OSError:
+            logger.warning("Kural adayı yazılamadı: %s", office)
+        except Exception:
+            logger.debug("Kural adayı kuyruğu açılamadı: %s", office, exc_info=True)
+    if stored:
+        # UI sinyali: çekirdek olay yolunda henüz yoksa sessizce atlanır.
+        try:
+            from entropy.core.event_bus import bus
+
+            signal = getattr(bus, "rules_updated", None)
+            if signal is not None:
+                signal.emit(office, len(stored))
+        except Exception:
+            logger.debug("rules_updated sinyali yayılamadı: %s", office)
+    return stored
+
+
 def _flex_call(func: Callable, **kwargs):
     """
     Bellek katmanı fonksiyonunu İMZASINDA olan argümanlarla çağırır.
@@ -1063,6 +1125,20 @@ class OfficeHarness:
             return None
         return str(path)
 
+    @staticmethod
+    def _card_proof(card: TaskCard) -> Optional[dict]:
+        """
+        Kartın ALANLARINDAN kanıt: `{"text", "green"}` ya da None (13-C.1).
+
+        `proof_green` üç değerlidir; `None` "kanıt var ama yeşilliği
+        okunamadı" demektir ve o durumda metin yolu (`read_proof`) konuşur.
+        """
+        text = str(getattr(card, "proof", "") or "").strip()
+        green = getattr(card, "proof_green", None)
+        if not text or green is None:
+            return None
+        return {"text": text, "green": bool(green)}
+
     def read_proof(self, text: str, needs_write: bool = True) -> Optional[dict]:
         """
         `[KANIT]` bloğu -> {"text", "green"}; blok yoksa None.
@@ -1124,51 +1200,15 @@ class OfficeHarness:
         """
         Çıktıdaki `[KURAL] …` satırlarını ADAY olarak kaydeder ve sinyal yayar.
 
-        Ajan keşfettiği kuralı belleğe kendisi yazamaz (kullanıcının kuralı):
-        aday kuyruğa düşer, onayı kullanıcı verir.
+        Gövde Faz 13-C.1'de modül düzeyine (`propose_rule_candidates`) taşındı:
+        artık `tasks._finish` de aynı yolu çağırıyor (kart özeti temizlendiği
+        için kural satırları harness'a ulaşmıyordu) ve iki kopya kural yazıcısı
+        olmamalı.
         """
-        rules = parse_rule_candidates(text or "")
-        if not rules:
-            return []
-        stored: List[str] = []
-        for rule in rules:
-            try:
-                from entropy.brain import promoted_rules  # type: ignore
-
-                result = _flex_call(
-                    promoted_rules.propose_rule,
-                    office=self.office_name,
-                    agent=agent or "",
-                    text=rule,
-                    source=source or "",
-                    vault_path=self.board.vault_path,
-                )
-                # `propose_rule` kural olmayan metne None döner (log satırı,
-                # yol, çok kısa cümle): o zaman aday da açılmaz.
-                if result is not None:
-                    stored.append(rule)
-                continue
-            except Exception:
-                logger.debug("propose_rule bellek katmanında yok: %s", self.office_name)
-            path = self.offices.office_dir(self.office_name) / RULE_CANDIDATES_FILENAME
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("a", encoding="utf-8") as handle:
-                    handle.write(f"- [ ] {rule} · {agent or '-'} · kaynak: {source or '-'}\n")
-                stored.append(rule)
-            except OSError:
-                logger.warning("Kural adayı yazılamadı: %s", path)
-        if stored:
-            # UI sinyali: çekirdek olay yolunda henüz yoksa sessizce atlanır.
-            try:
-                from entropy.core.event_bus import bus
-
-                signal = getattr(bus, "rules_updated", None)
-                if signal is not None:
-                    signal.emit(self.office_name, len(stored))
-            except Exception:
-                logger.debug("rules_updated sinyali yayılamadı: %s", self.office_name)
-        return stored
+        return propose_rule_candidates(
+            self.office_name, agent, text, source=source,
+            vault_path=self.board.vault_path, offices=self.offices,
+        )
 
     # -- proje deposu ve kart worktree'si (Faz 10-C) ---------------------
 
@@ -1607,6 +1647,14 @@ class OfficeHarness:
                 office=self.office_name,
                 project=card.project,
                 parent=card_id,
+                # Faz 13-C.6: EFOR UÇTAN UCA. Üst kartın eforu alt kartlara
+                # iner; plandaki açık `effort` onu ezer, ikisi de boşsa ofisin
+                # varsayılanı kalır. Eskiden zincir burada kopuyordu: kullanıcı
+                # ofis kartına efor yazsa da işçi ajanın argv'sinde iz yoktu
+                # (claude'da `--effort`, agy'de model son eki).
+                effort=(str(raw.get("effort") or "").strip().lower()
+                        or (card.effort or "")
+                        or (office.default_effort or "")),
             )
             try:
                 child = self.board.create(child)
@@ -1834,6 +1882,12 @@ class OfficeHarness:
                     return
             # Faz 10-A: kontrol noktası + kanıtla kapatma + kural adayları.
             child = self._close_child(child, ok)
+            # Kural adayları Faz 13-C.1'den beri `tasks._finish` içinde, ham
+            # çıktı temizlenmeden ÖNCE toplanıyor; burada ikinci kez taramak
+            # (a) temizlenmiş özette hiçbir şey bulamaz, (b) bulursa çift aday
+            # yazardı. Yine de eski/dış çağıranların yazdığı kartlar için
+            # özetteki artık satırlar taranır — `propose_rule` yinelenen adayı
+            # zaten yutuyor.
             self.collect_rule_candidates(child.agent, child.summary or "", source=child.id)
         self.render_board()
         # Makbuz artımlı: kullanıcı koşu sürerken `## İlerleme` bölümünü okur.
@@ -1852,7 +1906,13 @@ class OfficeHarness:
         """
         text = child.summary or ""
         fields: Dict[str, object] = {}
-        checkpoint = self.record_checkpoint(child, text)
+        # Faz 13-C.1: TEK GERÇEK KAYNAK kartın ALANLARI. `tasks._finish` ham
+        # çıktıyı kapanışta bir kez ayrıştırıp `checkpoint`/`proof`/
+        # `proof_green` alanlarına yazıyor; `summary` artık temizlenmiş metin,
+        # yani buradan blok okumak boş dönerdi. Alan boşsa (eski kart, dış
+        # çağıran, sahte köprü) eski metin yolu yedek kalır.
+        checkpoint = str(getattr(child, "checkpoint", "") or "") \
+            or self.record_checkpoint(child, text)
         if checkpoint:
             fields["checkpoint"] = checkpoint
         if not ok:
@@ -1862,7 +1922,7 @@ class OfficeHarness:
             return child
         spec = self.registry.get(child.agent) if child.agent else None
         needs_write = card_needs_write(child, agent_spec=spec)
-        proof = self.read_proof(text, needs_write=needs_write)
+        proof = self._card_proof(child) or self.read_proof(text, needs_write=needs_write)
         if proof is not None and not proof["green"] and not needs_write and child.output_paths:
             # Salt araştırma kartı: blok var ama yol yazmamış; ürettiği dosya
             # kartın kendi `output_paths` alanında duruyorsa kanıt sayılır.
@@ -2533,6 +2593,14 @@ class OfficeHarness:
             run_model = resolve_model(spec, provider)
             if run_model:
                 kwargs["model"] = run_model
+            # Faz 13-C.6: efor argv'ye ulaşır (claude `--effort`, agy model
+            # son eki). Kart yolu bunu zaten geçiriyordu; plan/değerlendirme
+            # turu geçirmiyordu ve ofisin `default_effort` ayarı orkestratörde
+            # hiç görünmüyordu.
+            run_effort = (str(getattr(spec, "effort", "") or "").strip().lower()
+                          or str(getattr(office, "default_effort", "") or "").strip().lower())
+            if run_effort:
+                kwargs["effort"] = run_effort
             payload = agent_spec_payload(spec)
             if payload:
                 # Künyede `tools_policy` var; orkestratörde yürürlükteki
@@ -2556,7 +2624,7 @@ class OfficeHarness:
             "card_id": str(task_id or "").replace("card-", "", 1),
         }
         for optional in ("needs_write", "project_path", "conversation_id",
-                         "model", "agent_spec", "stream_meta", "tools"):
+                         "model", "agent_spec", "stream_meta", "tools", "effort"):
             if not _accepts_kwarg(bridge.send_background_task_async, optional):
                 kwargs.pop(optional, None)
         try:

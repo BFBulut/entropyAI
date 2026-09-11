@@ -47,7 +47,35 @@ def entropy_tools_section() -> str:
         return ""
 
 
-def process_chat_response(text: str, board=None, registry=None) -> str:
+def _active_provider() -> str:
+    """
+    Sohbet turunu koşan sağlayıcının adı ("claude" | "agy" | "").
+
+    Önce canlı köprünün `provider_name`i, o yoksa yapılandırmanın varsayılanı
+    okunur. Neden gerekli: `[DESK …]` düzenleme blokları YALNIZCA claude sohbet
+    yolunda geçerlidir (Faz 13-C.3); agy kolunda blok metinden temizlenir ama
+    hiçbir şey uygulanmaz.
+    """
+    try:
+        from entropy.ui.manager import EntropyUIManager
+
+        mgr = getattr(EntropyUIManager, "instance", None)
+        bridge = getattr(mgr, "bridge", None) if mgr is not None else None
+        name = str(getattr(bridge, "provider_name", "") or "").strip().lower()
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        from entropy.core.config import config
+
+        return str(config.default_provider() or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def process_chat_response(text: str, board=None, registry=None,
+                          provider: str = "") -> str:
     """
     Sohbet yanıtını tüketir ve GÖRÜNTÜLENECEK metni döndürür.
 
@@ -58,6 +86,9 @@ def process_chat_response(text: str, board=None, registry=None) -> str:
     if not raw.strip():
         return raw
     receipts = _consume_board_create(raw, board=board, registry=registry)
+    # Faz 13-C.3: Entropy → Desk düzenlemesi. Yapısal bloklar onay kuyruğuna
+    # düşer, `msg` doğrudan uygulanır; ikisi de YALNIZCA claude sohbet yolunda.
+    receipts += _consume_desk_blocks(raw, provider=provider)
     try:
         from entropy.agents.board_tools import strip_tool_blocks
 
@@ -69,6 +100,20 @@ def process_chat_response(text: str, board=None, registry=None) -> str:
         return cleaned
     tail = "\n".join(receipts)
     return (cleaned + "\n\n" + tail).strip() if cleaned else tail
+
+
+def _consume_desk_blocks(text: str, provider: str = "") -> List[str]:
+    """`[DESK …]` bloklarını tüketir (yalnız claude); makbuz satırları döner."""
+    name = str(provider or "").strip().lower() or _active_provider()
+    if name != "claude":
+        return []
+    try:
+        from entropy.agents import desk_admin
+
+        return list(desk_admin.consume_desk_calls(text) or [])
+    except Exception:
+        logger.warning("Desk blokları tüketilemedi", exc_info=True)
+        return []
 
 
 def _consume_board_create(text: str, board=None, registry=None) -> List[str]:

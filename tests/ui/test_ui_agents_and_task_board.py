@@ -108,6 +108,7 @@ class FakeBoard:
     def __init__(self, cards=None):
         self._cards = list(cards or [])
         self.ran, self.stopped, self.deleted, self.updated = [], [], [], []
+        self.archived = []
 
     def list(self, status=None):
         if status is None:
@@ -141,6 +142,12 @@ class FakeBoard:
         self.deleted.append(card_id)
         self._cards = [c for c in self._cards if c["id"] != card_id]
         return True
+
+    def archive_card(self, card_id, reason=""):
+        """Faz 13-C madde 2: arayüzün tek kaldırma yolu (dosya silinmez)."""
+        self.archived.append((card_id, reason))
+        self._cards = [c for c in self._cards if c["id"] != card_id]
+        return {"ok": True, "archived_to": f"_archive/{card_id}.md"}
 
     def run(self, card_id):
         self.ran.append(card_id)
@@ -350,7 +357,9 @@ def test_kanban_run_stop_done_delete_transitions(qapp):
     assert [c["id"] for c in widget.cards_in_column("done")] == ["t1"]
 
     assert widget.delete_card("t1", confirm=False) is True
-    assert board.deleted == ["t1"]
+    # Faz 13-C madde 2: "Sil" artık ARŞİVLER; doğrudan silme çağrılmaz.
+    assert board.deleted == []
+    assert board.archived and board.archived[0][0] == "t1"
     assert widget.card_widgets == []
 
 

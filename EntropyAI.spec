@@ -148,6 +148,10 @@ a = Analysis(
         # Faz 6: Desk kayit defteri, ofis grafigi, piksel sahne motoru,
         # pencere sigdirma ve efor secici.
         'entropy.agents.desk_registry',
+        # Faz 13-C: Entropy -> Desk duzenleme onay kuyrugu. Yalnizca gec
+        # import ediliyor (sohbet yanit kancasi ve /desk komutu); statik
+        # tarayici goremez.
+        'entropy.agents.desk_admin',
         # Faz 10-C: bu moduller yalnizca calisma aninda importlib ile
         # cagriliyor; PyInstaller statik tarayicisi goremedigi icin paketten
         # dusuyor ve .exe'de worktree/PR/sablon/makbuz yollari sessizce
@@ -237,13 +241,14 @@ a = Analysis(
         'entropy.agents.board_autonomy',
         'entropy.agents.session_budget',
         'entropy.agents.dispatcher',
-        'entropy.core.claude_bg',
         'entropy.brain.categories',
         'entropy.brain.dream',
         'entropy.brain.gate',
         'entropy.brain.gray_merge',
         # Faz 12-C: beceri sentezi (slash komutu calisma aninda ice aktariyor).
         'entropy.brain.skill_synthesis',
+        # Faz 13-C: Desk duzenleme onay paneli (bekleyen [DESK ...] istekleri).
+        'entropy.ui.widgets.desk_approvals_panel',
         'entropy.ui.widgets.agent_session_badge',
         'entropy.ui.widgets.header_bar',
         'entropy.ui.widgets.nav_list',

@@ -128,6 +128,17 @@ FINAL_GATES_12D2: Dict[str, int] = {
     "unnamed_icon_buttons": 0,            # metni de adı da olmayan düğme (WCAG 4.1.2)
 }
 
+#: Faz 13-C madde 6: Desk penceresi de canlı taranır. Aynı kapılar, ayrı
+#: sayaçlar — Desk ekranları (ofisler, kartlar, terminaller, projeler, bellek,
+#: değişiklikler, makbuz) Faz 13-A2'de hiç süpürülmüyordu.
+FINAL_GATES_13C_DESK: Dict[str, int] = {
+    "desk_empty_interactive_count": 0,
+    "desk_unnamed_icon_buttons": 0,
+    "desk_ghost_button_contrast": 0,
+    "desk_button_contrast": 0,
+    "desk_min_width_declaration_failures": 0,
+}
+
 #: Faz 13 kapı seti (araştırma notu §1.7). Dördü de **canlı** ölçülür.
 FINAL_GATES_13: Dict[str, int] = {
     "empty_interactive_count": 0,          # G13-1: metinsiz+ikonsuz+adsız düğme
@@ -542,6 +553,153 @@ def persistence_metrics() -> Dict[str, Any]:
     }
 
 
+def button_token_pair(btn) -> tuple:
+    """(ön plan, zemin) belirteç çifti — QSS kuralıyla aynı eşleme.
+
+    Düğme kontrast kapısının tek kaynağı; hem Entropy hem Desk kolu bunu
+    kullanır (iki ayrı kopya iki ayrı sonuç veriyordu).
+    """
+    from entropy.ui.design import TOKENS as _T
+
+    variant = str(btn.property("variant") or "")
+    tone = str(btn.property("tone") or "")
+    colors = _T["color"]
+    if variant == "primary":
+        return colors["accent.ink"], colors["accent"]
+    if variant == "danger":
+        return colors["danger"], colors["surface"]
+    if tone in ("ok", "warn", "danger"):
+        return colors[tone], colors["surface"]
+    if tone == "muted":
+        return colors["text.muted"], colors["surface"]
+    return colors["text"], colors["surface"]
+
+
+def desk_live_metrics(app) -> Dict[str, Any]:
+    """Faz 13-C madde 6 — Entropy Agent Desk penceresinin canlı taraması.
+
+    Desk kendi penceresidir ve Faz 13-A2'nin sekme süpürmesi ona hiç
+    uğramıyordu: ofisler, kartlar, terminaller, projeler, bellek,
+    değişiklikler ve makbuz ekranlarındaki boş düğme / adsız ikon / ghost
+    kontrast ihlalleri kapıdan geçmeden kalıyordu. Burada her sekmeye
+    geçilir, ihlaller sekme adıyla birlikte toplanır.
+    """
+    from PySide6.QtWidgets import QAbstractButton
+
+    from entropy.ui.design import contrast_ratio as _cr
+
+    out: Dict[str, Any] = {}
+    try:
+        from entropy.desk.window import AgentDeskWindow
+
+        win = AgentDeskWindow()
+        win.resize(1100, 700)
+        win.show()
+        app.processEvents()
+
+        empty: List[str] = []
+        unnamed: List[str] = []
+        ghost: List[str] = []
+        contrast: List[str] = []
+        screens: List[str] = []
+        tabs = getattr(win, "tabs", None)
+
+        def sweep(label: str, root=None) -> None:
+            root = win if root is None else root
+            screens.append(label)
+            for name in empty_interactive_widgets(root):
+                empty.append(f"{label}/{name}")
+            for name in unnamed_icon_buttons(root):
+                unnamed.append(f"{label}/{name}")
+            for name in ghost_button_contrast_failures(root):
+                ghost.append(f"{label}/{name}")
+            for btn in root.findChildren(QAbstractButton):
+                if not btn.isVisible() or btn.visibleRegion().isEmpty():
+                    continue
+                fg, bg = button_token_pair(btn)
+                ratio = _cr(fg, bg)
+                name = btn.accessibleName() or btn.text() or type(btn).__name__
+                if btn.text().strip() and ratio < 4.5:
+                    contrast.append(f"{label}/{name}: {ratio:.2f}")
+                elif not btn.icon().isNull() and ratio < 3.0:
+                    contrast.append(f"{label}/{name}: {ratio:.2f}")
+
+        if tabs is not None:
+            for index in range(tabs.count()):
+                try:
+                    tabs.setCurrentIndex(index)
+                    app.processEvents()
+                except Exception:
+                    continue
+                sweep(tabs.tabText(index) or f"#{index}")
+            if tabs.count():
+                tabs.setCurrentIndex(0)
+                app.processEvents()
+        else:
+            sweep("desk")
+
+        # Kart detayının bölmeleri (Değişiklikler, Makbuz) ve ofis kuralları
+        # ancak bir kart/ofis seçilince görünür olur; kapı onları hiç
+        # görmesin diye ayrı birer üst pencere olarak kurulup taranır.
+        for label, factory in (
+            ("değişiklikler", lambda: __import__(
+                "entropy.desk.changes_panel", fromlist=["ChangesPanel"]).ChangesPanel()),
+            ("makbuz", lambda: __import__(
+                "entropy.desk.receipt_panel", fromlist=["ReceiptPanel"]).ReceiptPanel()),
+            ("kurallar", lambda: __import__(
+                "entropy.ui.widgets.rules_panel",
+                fromlist=["RuleCandidatesPanel"]).RuleCandidatesPanel(office="denetim")),
+        ):
+            try:
+                panel = factory()
+            except Exception as exc:
+                out[f"desk_panel_error_{label}"] = f"{type(exc).__name__}: {exc}"
+                continue
+            panel.resize(520, 420)
+            panel.show()
+            app.processEvents()
+            sweep(label, panel)
+            panel.close()
+            panel.deleteLater()
+            app.processEvents()
+
+        out["desk_screens_swept"] = screens
+        out["desk_screens_swept_count"] = len(screens)
+        out["desk_empty_interactive_count"] = len(empty)
+        out["desk_empty_interactive_names"] = empty
+        out["desk_unnamed_icon_buttons"] = len(unnamed)
+        out["desk_unnamed_icon_button_names"] = unnamed
+        out["desk_ghost_button_contrast"] = len(ghost)
+        out["desk_ghost_button_contrast_failures"] = ghost
+        out["desk_button_contrast"] = len(contrast)
+        out["desk_button_contrast_failures"] = contrast
+
+        # Beyan >= hesaplanan (G13-4). Kapı yalnızca KAYDIRILAMAYAN kapları
+        # ölçer: pencerenin kendisi ve sekme kaydırma kabukları. Panellerin
+        # `setMinimumWidth(0)` beyanı kasıtlıdır (Faz 12-D.1) — içerik
+        # kırpılmaz, kabuğun içinde kaydırılır; onları ölçmek yanlış kırmızı
+        # verirdi.
+        hosts = [win]
+        if tabs is not None:
+            hosts += [tabs.widget(i) for i in range(tabs.count())
+                      if tabs.widget(i) is not None]
+        host = getattr(win, "roster_host", None)
+        if host is not None:
+            hosts.append(host)
+        failures = min_width_declaration_failures(hosts)
+        out["desk_min_width_declaration_failures"] = len(failures)
+        out["desk_min_width_declaration_failure_names"] = failures
+        out["desk_min_width_declared"] = int(win.minimumWidth())
+        out["desk_min_width_computed"] = int(win.minimumSizeHint().width())
+
+        win.close()
+        win.deleteLater()
+        app.processEvents()
+    except Exception as exc:  # pragma: no cover - ölçüm kolu
+        out["desk_live_error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 def _phase13_live_metrics(app) -> Dict[str, Any]:
     """G13-3 (tıklama gecikmesi) ve G13-4 (okuyucu + beyan) canlı ölçümü."""
     import time as _time
@@ -826,6 +984,8 @@ def live_metrics() -> Dict[str, Any]:
         out["ghost_button_contrast"] = len(ghost)
         out["ghost_button_contrast_failures"] = ghost
         out.update(_phase13_live_metrics(app))
+        # Faz 13-C madde 6: Desk penceresi de aynı kapılardan geçer.
+        out.update(desk_live_metrics(app))
 
         # Gömülü okuma yüzeyi: 1366 ve 460 px'te yatay kaydırma çubuğu
         from entropy.ui.widgets.markdown_renderer import render_markdown_to_html
@@ -902,6 +1062,7 @@ def main(argv: List[str] | None = None) -> int:
         # olmaması için `live_error` alanı JSON'a yazılır.
         gates.update(FINAL_GATES_12D2)
         gates.update(FINAL_GATES_13)
+        gates.update(FINAL_GATES_13C_DESK)
     violations = []
     for key, limit in gates.items():
         actual = data.get(key)
@@ -942,7 +1103,13 @@ def main(argv: List[str] | None = None) -> int:
             "click_latency_ms", "click_latency_cards",
             "min_width_declaration_failures", "reader_min_width",
             "board_view_mode_1366",
-        ] if "interactive_count_zen_1366" in data else [])
+        ] if "interactive_count_zen_1366" in data else []) + ([
+            # Faz 13-C madde 6: Desk sayaçları da kanıt raporuna girer.
+            "desk_screens_swept_count", "desk_empty_interactive_count",
+            "desk_unnamed_icon_buttons", "desk_ghost_button_contrast",
+            "desk_button_contrast", "desk_min_width_declaration_failures",
+            "desk_min_width_declared", "desk_min_width_computed",
+        ] if "desk_screens_swept_count" in data else [])
         width = max(len(k) for k in keys)
         for k in keys:
             base = BASELINE.get(k)

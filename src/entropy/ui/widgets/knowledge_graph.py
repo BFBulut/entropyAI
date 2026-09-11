@@ -9,6 +9,16 @@ from typing import Optional, Dict, List, Any, Set, Tuple
 from functools import partial
 
 from PySide6.QtCore import QRunnable, Qt, QThreadPool, QTimer, Slot
+
+# Faz 13-C madde 5: yıkım sırası koruması. İşçi iş parçacığı bittiğinde
+# widget (ve kapanışta olay yolu) çoktan silinmiş olabilir; Python sarmalayıcı
+# hayatta kalır ama C++ nesnesi yoktur ve her erişim `RuntimeError` atar
+# (`ui_audit` kapanışında traceback bu yüzden düşüyordu).
+try:  # pragma: no cover - shiboken her zaman var, koruma savunma amaçlı
+    from shiboken6 import isValid as _qt_alive
+except Exception:  # pragma: no cover
+    def _qt_alive(obj) -> bool:  # type: ignore[misc]
+        return obj is not None
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QComboBox
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
@@ -4057,15 +4067,29 @@ class KnowledgeGraphWidget(QFrame):
 
         class _GraphJob(QRunnable):
             def run(self):  # isci is parcacigi
+                # Uygulama kapanırken widget ya da olay yolu bu iş bitmeden
+                # silinebilir. Silinmiş bir C++ nesnesine dokunmak yerine
+                # sessizce çıkılır: sonucu yazacak bir ekran zaten yok.
+                if not (_qt_alive(widget) and _qt_alive(bus)):
+                    return
                 try:
                     data = widget.build_unified_graph()
+                except RuntimeError:
+                    return
                 except Exception:
                     data = None
-                bus.invoke_on_main(partial(widget._apply_async_graph, data))
+                if not (_qt_alive(widget) and _qt_alive(bus)):
+                    return
+                try:
+                    bus.invoke_on_main(partial(widget._apply_async_graph, data))
+                except RuntimeError:
+                    return
 
         QThreadPool.globalInstance().start(_GraphJob())
 
     def _apply_async_graph(self, data):
+        if not _qt_alive(self):
+            return
         try:
             self._graph_job_running = False
             if data is not None:

@@ -5,7 +5,7 @@
 > belgesi olmamasının tek yolu budur; `docs/_archive/prototype/` altındaki eski belgeler
 > tam olarak bu kural uygulanmadığı için arşive düştü.
 >
-> Sürüm: v0.9.4 · Dal: `ai/v0.1.7` · Son güncelleme: 2026-09-10 (Faz 12-E)
+> Sürüm: v0.10.3 · Dal: `ai/v0.1.7` · Son güncelleme: 2026-09-11 (Faz 13-C)
 > Güncel durum ve açık işler için: [`STATE.md`](STATE.md) · Kararlar için: [`adr/`](adr/)
 
 ---
@@ -15,7 +15,7 @@
 | | Entropy AI | Entropy Agent Desk |
 |---|---|---|
 | Ne | Kişisel, kendi kendini geliştiren yapay zeka: beyin (RAG + hafıza), kendi ajanları, görev panosu, üç arayüz kipi | Entropy'nin **içine gömülü ayrı uygulama**: ofisler, orkestratörler, terminallerde yazılım geliştiren alt ajanlar |
-| Kod | `src/entropy/{core,agents,memory,skills,ui,mcp,scheduler,platform,tools}` | `src/entropy/desk/` + `src/entropy/agents/{desk_registry,harness,offices,worktrees,pr_flow,templates}.py` |
+| Kod | `src/entropy/{core,agents,brain,skills,ui,mcp,scheduler,platform,tools}` | `src/entropy/desk/` + `src/entropy/agents/{desk_registry,harness,offices,worktrees,pr_flow,templates}.py` |
 | Veri kökü (kasa) | `<kasa>/Entropy/**` | `<kasa>/Desk/**` |
 | Ajanları | `Entropy/Agents/<ad>/AGENT.md` | `Desk/Offices/<ofis>/agents/**` |
 
@@ -39,9 +39,15 @@ rapor alır; Desk Entropy'nin panosuna kart **itemez**. Gerekçe ve zorlayıcı 
 | `skills/` | 5 | ~2.000 | `SKILL.md` keşfi (`manager.py`) + motorlar (tembel yüklenir) |
 | `mcp/` · `scheduler/` · `platform/` · `tools/` | 8 | ~1.000 | MCP yapılandırması, zamanlayıcı, Windows panosu (`platform/clipboard.py`), araç sentezleyici |
 
-**Deneysel, ürüne bağlı değil:** `core/claude_bg.py` (741 satır, Faz 11-F kalıcı terminal
-spike'ı) üründen çağrılmaz ve `EntropyAI.spec` hiddenimports'ta **yoktur** → `.exe`'ye
-girmez; yalnız `tests/test_phase11_claude_bg.py` doğrular ([ADR-0007](adr/ADR-0007-claude-bg-ertelendi.md)).
+**Bellek paketinin adı `entropy.brain`** (Faz 13-B, [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)).
+Eski `entropy.memory` adı `src/entropy/memory/__init__.py` şimiyle bir sürüm daha çalışır
+(`DeprecationWarning`) ve **v0.12.0'da silinir**. **Veri yolları paket adından bağımsızdır
+ve değişmedi:** `~/.entropy/memory/`, kasada `Entropy/Memory`.
+
+**Arşive inen kod (ürün yüzeyinde yok):** `core/claude_bg.py` (739 satır, Faz 11-F kalıcı
+terminal spike'ı) Faz 13-C'de `docs/_archive/spikes/claude_bg/` altına alındı, spec girdisi
+kaldırıldı, testi `tests/_reference/` altında ve **toplanmıyor**
+([ADR-0009](adr/ADR-0009-claude-bg-arsivlendi.md), ADR-0007 madde 4'ün koşulu).
 `platform/autostart.py` **kaldırıldı** — ayar vardı, davranış yoktu
 ([ADR-0006](adr/ADR-0006-autostart-kaldirildi.md)).
 
@@ -146,6 +152,19 @@ dayanır. agy ikilisinde `--setting-sources` / `--strict-mcp-config` karşılı�
 bu, mevcut CLI ile kapatılabilir bir açık değil, belgelenmesi gereken bir sınırdır.
 Efor ayrı bir bayrak değil **model varyantı** olarak geçirilir (v0.7.1).
 
+### 4.3 Gizli alt süreç — `platform/proc.py` (Faz 13-A2, **sözleşme**)
+
+`popen_kwargs(**extra)`: Windows'ta `CREATE_NO_WINDOW` + `STARTUPINFO(SW_HIDE)`,
+başka platformda boş sözlük. Çağıranın `creationflags`i **ezilmez, VEYA'lanır**;
+`DETACHED_PROCESS` varsa `CREATE_NO_WINDOW` eklenmez (ikisi birlikte geçersizdir).
+`src/entropy/**` içindeki **her** `subprocess.{Popen,run,check_output,check_call,call}`
+çağrısı bunu almak zorundadır; kapı AST taramasıyla ölçülür
+(`tests/contracts/test_phase13_board_hygiene.py`). Muafiyet yalnızca kullanıcıya
+**görünmesi istenen** açıcılardır (`explorer /select,`, `open -R`, `xdg-open`).
+Gerekçe: kullanıcı bir görev koşarken ekranda konsol pencereleri parlıyordu;
+ölçüm kaynağın kart koşusu değil bayraksız `taskkill`/`git` çağrıları olduğunu
+gösterdi.
+
 ---
 
 ## 5. Beyin: hafıza katmanları
@@ -209,10 +228,28 @@ N aday **tek istemde**; yanıt `{"decisions":[{"id","action","content","reason"}
 artımlı (`WIKI.state.json` işlenen rapor kümesini tutar), `bridge=None` ise model
 çağrılmaz (yalnız playbook tabanlı sayfalar + indeks + lint).
 
-**Öz-amplifikasyon kilidi** `agents/amplification.py` — üç kapı: (a) açık tespiti
-(`brain_has_answer` ise kart CLI'ya gitmez, `review`e düşer), (b) yenilik kotası
-(`MIN_NOVELTY_RATIO = 0.30` altında aynı konudaki zamanlanmış görev kapatılır, silinmez),
-(c) kaynak zorunluluğu. `config.amplification_lock=False` kilidi kapatır.
+**Öz-amplifikasyon kilidi** `agents/amplification.py` — üç kapı: (a) açık tespiti,
+(b) yenilik kotası (`MIN_NOVELTY_RATIO = 0.30` altında aynı konudaki zamanlanmış görev
+kapatılır, silinmez), (c) kaynak zorunluluğu. `config.amplification_lock=False` kilidi kapatır.
+
+**Beyin kısa devresi VARSAYILAN KAPALI (Faz 13-A2, sözleşme).** Kullanıcı kuralı
+bağlayıcıdır: *"araştır" dendiğinde araştırma CANLI koşar; beyin ajana **bağlamdır**,
+araştırmanın yerine geçmez.* Kart CLI'ya hiç gitmeden ancak **dört koşul birden**
+sağlanırsa kapanabilir (`amplification._shortcut_decision`):
+
+1. **açık tercih** — `TaskCard.brain_only` alanı (`agents/tasks.py`, ön bilgiye
+   gidip gelir) ya da metindeki işaret (`BRAIN_ONLY_MARKERS`: `--brain-only`,
+   `[brain-only]`, "yalnız beyin") **ya da** `config.brain_shortcut_enabled`
+   (`core/config.py:388`, **varsayılan `False`**);
+2. CRAG isabeti; 3. güven ≥ `SHORTCUT_MIN_CONFIDENCE = 0.75`; 4. metin dolu **ve** kaynaklı.
+
+Kısa devreyle kapanan kartın özeti **"CANLI ARAŞTIRMA YAPILMADI"** yazar.
+**Kimlik düğümü yanıt sayılmaz ve bağlama hiç paketlenmez** (`brain/context_builder.py`
+`is_answer_node` / `is_identity_node`); "0,49 güvenle beyinden yanıtlandı" hatasının
+kaynağı tam olarak buydu — sunulan "yanıt" Entropy'nin kimlik düğümüydü.
+Tazelik ipuçlu sorguda (`FRESHNESS_HINTS`: güncel/sıfırdan/yeni/bugün/web/internet/tara
++ tarih deseni) `brain_has_answer` **False**. `[BEYİN]` bölümü kalır ama tonu
+"bağlamdır, yanıt değildir" olarak yazılıdır. Kapı: `tests/contracts/test_phase13_brain_shortcut.py`.
 
 **Geri çağırma kapsamı:** `hybrid_recall(query, top_k, min_threshold, categories=None,
 include_episodic=False, expand_graph=False)` — varsayılan **L2+L3**, `archived=1` indekse
@@ -240,7 +277,10 @@ Neden dosya: kullanıcı Obsidian'da düzenleyebilsin ve iki taraf da aynı ger�
 started_at, finished_at, output_paths, summary, office, project, parent, children, grade,
 verdict, attempt, budget_tokens, intent, checkpoint, proof, worktree, branch, pr_url`
 + **Faz 11-C**: `effort, priority, input_paths, report_path, claimed_by, claim_expiry,
-event_seq`; ayrıca `kind` (`"research"` ya da boş).
+event_seq`; ayrıca `kind` (`"research"` ya da boş) ve **Faz 13-A2**: `brain_only`
+(bool — kullanıcının açık tercihi, beyin kısa devresinin tek meşru kapısı;
+`/task --brain-only` bayrağı başlığa sızmadan sökülür, `[PANO board_create]` onu JSON
+alanı ya da metindeki işaretle okur).
 Gövde: `## Hedef / ## Kabul ölçütleri / ## Notlar / ## Sonuç`.
 Ofis kartları ayrı depoda: `<ofis>/cards/`.
 
@@ -261,6 +301,12 @@ backlog → assigned → taken → running → review → done | failed | cancel
 
 `review → done` yalnızca `actor="human"` + kanıt ile; `run.finished` kanıt `green=False`
 ise `failed`. **Ajansız `backlog` kart koşmaz.**
+**T13 (Faz 13-A2):** `review`/`failed` → `canceled` (`task.canceled`) — **gerekçe (`reason`)
+zorunlu**; arşivlemenin tek meşru yolu budur. `done` terminal kalır.
+`board_events.board_drift` dosyası olmayan `canceled` kartı **ayrışma saymaz**
+(arşivlenen kart panodan kalkmış demektir). Olay `seq`i dosyanın **son satırından**
+doğrulanır (bayat önbellek iki kez `seq` yazıyordu) ve `board.drift` olayı
+**kendi korelasyonunu** taşır (`drift:<hash16>`).
 
 **Olay günlüğü** `agents/board_events.py` — `events.jsonl`, **yalnızca ekleme**; satır şeması
 `{schema_version, seq, ts, correlation_id, task_id, attempt_id, actor, action,
@@ -278,6 +324,18 @@ sonra `start()`**; `app.aboutToQuit` kancasına `dispatcher.stop`. Hata YÜKSELM
 **Ajan oturum deposu** `core/identity.AgentSessionStore` →
 `Entropy/Board/agents/<ad>/session.json`
 `{provider: {session_id|conversation_id, signature, model, effort, cwd, updated_at}}`.
+**Canlı durum ayrı dosyada (Faz 13-A2, sözleşme):** `Entropy/Board/agents/<ad>/state.json`
+(`store.state_path`). Ayrılma nedeni: `session.json` **sağlayıcı anahtarlıdır** ve
+`rotate`/`run_kwargs` onu baştan yazar; devir sırasında canlı durum siliniyordu.
+Arayüz rozetinin **TEK** kaynağı `store.status(name)`:
+`{state: "idle"|"running", since, card_id, card_title, last_run_at, provider (ajanın
+GÜNCEL sağlayıcısı), session (o sağlayıcının kaydı), stale_sessions[]}`;
+yazma boğazı tek: `TaskBoard.apply_event` → `_sync_agent_live_state`
+(`taken`/`running` → `mark_running`, diğer her hedef → `mark_idle`; **ofis kartları
+hariç**). Çökme sonrası `dispatcher.reconcile` → `_clear_orphan_live_states`.
+Eski hata: rozet "en taze sağlayıcı kaydı"nı seçtiği için ajan agy'ye geçtikten
+sonra bile saatler önceki claude oturumunu gösteriyordu.
+
 Claude kimliği `uuid5("entropy-agent:<ad>")`; `run_kwargs()` yeni oturumda
 `{"session_id"}`, sürdürmede `{"conversation_id"}` döndürür. İmza
 `sha1(kimlik istemi|model|efor)` — kart istemine **bağlı değildir**, yoksa `--resume`
@@ -314,6 +372,30 @@ Zincir: **planla → paralel koş → notla → kapat**. Dosya tabanlıdır, kes
 
 **Orkestratör kod yazmaz.** Araştırır, planlar, kendi alt ajanlarını oluşturur/düzenler,
 raporlar; araç politikası salt okunurdur.
+
+### 6.3 Rapor başlığı ve "sohbet turu ≠ rapor" (Faz 13-A, **sözleşme**)
+
+**Başlığın tek kaynağı** `core/report_title.py` (saf Python; Qt/kasa/ajan bağımlılığı yok):
+
+```
+derive_report_title(body, fallback) :  gövdedeki ilk `# H1` → ilk anlamlı cümle → fallback
+```
+
+**Kullanıcının istem satırı hiçbir zaman başlık kaynağı değildir.** Eski davranış
+başlığı istemin ilk 40 karakterinden üretiyordu; kasada "Tamamdır, şimdi senden…"
+gibi başlıklar oluşmuştu. `TITLE_MAX_CHARS = 80`, `safe_filename_title()` Windows'ta
+yasak karakterleri temizler, makine etiketleri (`[KONTROL NOKTASI]`, `[KANIT]`) ve
+kod çitleri ayıklanır. Okuma tarafı (`ui/widgets/report_center.derive_report_title`)
+**aynı sırayı** izler.
+
+**Serbest sohbet turu RAPOR DEĞİLDİR.** Kelime sayısına dayalı sezgi kaldırıldı;
+sohbet çıktısı `save_session_note()` ile `<kasa>/Entropy/Sessions/<YYYY-MM-DD>/<HHMM>-<konu>.md`
+altına **`type: session`** künyesiyle yazılır (`report_title.session_note_path`).
+Rapor üreten **tek** yollar: pano kartı çıktısı, `[OTONOM PLANLI GÖREV]` ve açık `/learn`
+(`core/claude_bridge.py:1846`, `core/agy_bridge.py:2401`). `Sessions/` sayfaları yordam
+değil **olay**tır: `brain/playbook.py` onları bilerek dışarıda bırakır ve
+`brain/handoff.py` oraya düşmüş bir dosyayı aktarım sanmaz. Eski dosyalar **taşınmaz**;
+görüntü katmanı onları yeniden başlıklar.
 
 ---
 
@@ -396,6 +478,21 @@ dosyaları `EntropyAI.spec` `datas`'ına **koşullu** eklenir (paketlenmezse iko
 | Odak halkası | odaklanabilir her denetimin QSS `:focus` halkası **ve** `setAccessibleName` değeri vardır (WCAG 4.1.2) |
 | Emoji | gövde metninde çıplak emoji yok; işaretler `CHECK_ON="[x]"` / `CHECK_OFF="[ ]"` + `tone` rengi |
 
+**`ui-design` 1.2.0 kapıları (Faz 13-A/13-A2, `scripts/ui_audit.py --gate --final`).**
+§0 değişmezi: **metni kaldıran sadeleştirme ikon + erişilebilir ad koymak zorundadır.**
+
+| Kapı | Kural | Sayaç |
+|---|---|---|
+| G13-1 | boş etkileşimli öğe yok (metinsiz **ve** ikonsuz düğme) | `empty_interactive_count` = 0, `unnamed_icon_buttons` = 0 |
+| G13-2 | düğme kenarlık kontrastı ≥ 3:1, **ghost dâhil**; yüzey başına ölçülür (yükseltilmiş zeminde `line.onraised`) | `ghost_button_contrast` = 0, `button_contrast` = 0 |
+| G13-3 | tıklama gecikmesi ≤ 50 ms (gerçek kart sayısıyla) | `click_latency_ms` |
+| G13-4 | okuyucu ≥ 560 px **ve beyan ≥ hesaplanan** ("kapı beyana dayanamaz") | `reader_min_width`, `min_width_declaration_failures` = 0 |
+| G13A2 | ebeveynsiz widget yok (§8 yaşam döngüsü) | `orphan_reparents` = 0 |
+
+Kapılar **gerçekten ölçtüğü** için sınanır: bilerek bozulmuş bir girdiyle kırmızıya
+dönmeleri testlidir. Kapı ölçerken gerçek kusur da çıktı (ghost kenarlık 1,29:1 → 3,02:1,
+digest şeridi 2,35:1 → 4,85/5,49:1).
+
 Gerekçe: [ADR-0005](adr/ADR-0005-tasarim-sistemi-kendi-belirtecler.md).
 
 ---
@@ -411,6 +508,8 @@ tests/
 ├── skills/            skills/** paketleri
 ├── _reference/        (Faz 12-E) sevk edilen kodu SINAMAYAN, kendi kendine yeten
 │                      ispat defterleri: 82 dosya / 563 test, `entropy.*` içe aktarmaz
+│                      + (Faz 13-C) arşivlenen `claude_bg` spike'ının 32 testi,
+│                      `conftest.py` `collect_ignore` ile TOPLANMAZ (ADR-0009)
 └── (kök)              modül düzeyi testler
 ```
 
@@ -420,7 +519,9 @@ Güncel test sayısı `STATE.md`'dedir.
 
 **Neden `_reference/` ayrıldı:** hız değil (563 test ≈ 7 s, süitin %1,7'si), **ölçüm
 dürüstlüğü** — kökte dururken "süit yeşil" cümlesi ürün güvencesini %24 abartıyordu.
-Toplama sayısı **değişmedi**; `pyproject.toml` ve `conftest.py` dokunulmadı.
+Toplama sayısı **değişmedi**; `pyproject.toml` dokunulmadı. Tek istisna Faz 13-C'dir:
+`tests/_reference/conftest.py` yalnızca arşivlenen `claude_bg` testlerini toplama dışı
+bırakır (toplama 2.605 → 2.573); geri kalan 563 referans testi koşmaya devam eder.
 
 **Bekleme bütçeleri:** sabit duvar saati yerine `tests/timing.budget(saniye)` — makinenin
 o anki hızıyla ölçeklenen bütçe (ölçek 1,0–8,0; `ENTROPY_TEST_TIMEOUT_SCALE` ile ezilir).
@@ -438,6 +539,14 @@ bugünkü hafızanın %30'u bu yalıtım eksikken sızmış fikstürlerdi.
 - Kullanıcı raporları (`*_audit.md/json`) **silinmez**, `docs/_archive/` altına taşınır.
 - Eskimiş özellik belgeleri `docs/_archive/prototype/` altına iner; yerlerine mezar taşı
   `README` bırakılır (`docs/specifications/README.md`).
+- **Ürüne bağlanmamış spike kodu** `docs/_archive/spikes/<ad>/` altına iner; yanına
+  "ne yapıyordu / neden ertelendi / geri getirme adımları" yazan `README.md` konur
+  ([ADR-0009](adr/ADR-0009-claude-bg-arsivlendi.md)).
+- **`STATE.md` sıkıştırma kuralı (Faz 13-C):** dosya alt ajanların çalışma belleğidir,
+  arşiv değil. §3 sözleşmeler, §5 açık işler ve §7 kırmızı çizgiler **her zaman kalır**;
+  yalnız **son iki dilimin** ölçüm tabloları tutulur, daha eskiler
+  `docs/_archive/state/STATE_<tarih>_<aralık>.md` altına iner ve STATE'te 3–5 satırlık
+  özet + bağlantı kalır.
 
 ---
 
@@ -473,8 +582,8 @@ Karşılıkları: `brain/gate.py`, `brain/categories.py`, `brain/dream.py`,
 
 | # | Hedef | Kapı / doğrulama |
 |---|---|---|
-| 1 | **Depo bakımı (12-E, bu dilim):** tek seferlik betikler `scripts/_oneshot/`, referans testler `tests/_reference/`, çürük spec ve eskimiş özellik belgeleri `docs/_archive/prototype/`, `skills/` üçüzlemesinin tekilleştirilmesi, `platform/autostart.py` kaldırılması | toplama sayısı değişmez; `tests/_reference` + `tests/skills` + `test_exe` + `test_scheduler` yeşil |
-| 2 | **`EntropyAI.spec` sapması:** Faz 11'de eklenen 15 modülün paketlenip paketlenmediği **ölçülür**, eksikse hiddenimports tamamlanır | derleme exit 0; `build/EntropyAI/xref-EntropyAI.html` taraması ya da `.exe` içi içe aktarma kontrolü |
+| 1 | ~~**Depo bakımı (12-E):**~~ — **YAPILDI**; tek seferlik betikler `scripts/_oneshot/`, referans testler `tests/_reference/`, çürük spec ve eskimiş özellik belgeleri `docs/_archive/prototype/`, `skills/` üçüzlemesinin tekilleştirilmesi, `platform/autostart.py` kaldırılması | toplama sayısı değişmez; `tests/_reference` + `tests/skills` + `test_exe` + `test_scheduler` yeşil |
+| 2 | ~~**`EntropyAI.spec` sapması:**~~ — **YAPILDI** (Faz 12-A): sapmayı `tests/contracts/test_spec_sync.py` kalıcı olarak sıfırda tutuyor; Faz 11'de eklenen 15 modülün paketlenip paketlenmediği **ölçülür**, eksikse hiddenimports tamamlanır | derleme exit 0; `build/EntropyAI/xref-EntropyAI.html` taraması ya da `.exe` içi içe aktarma kontrolü |
 | 3 | ~~**`memory → brain` taşıması**~~ — **YAPILDI** (Faz 13-B, [ADR-0008](adr/ADR-0008-brain-paket-tasimasi.md)); kalan iş: uyumluluk şimi `src/entropy/memory/__init__.py` **v0.12.0'da silinir** | `grep -rn 'entropy\.memory' src tests scripts EntropyAI.spec` → 0 (şim hariç); test sayısı değişmedi (2.596) |
 | 4 | **Açık işler:** `K4/K5/K6` için kalıcı harness, `config.amplification_lock`'un arayüz karşılığı, kartın `report_path` alanının doldurulması, `ui/widgets/tasks_widget.py` eski `dream_and_consolidate` çağrısı | her biri sözleşme testiyle kapanır |
 

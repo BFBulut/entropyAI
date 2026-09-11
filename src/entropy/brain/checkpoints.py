@@ -43,6 +43,7 @@ __all__ = [
     "checkpoint_path",
     "write_checkpoint",
     "read_checkpoint",
+    "read_checkpoint_file",
     "resume_section",
     "parse_checkpoint_block",
     "parse_proof_block",
@@ -108,7 +109,15 @@ ENTROPY_CHECKPOINTS_SUBDIR = "Entropy/Board/checkpoints"
 
 
 def _is_entropy_office(office: str) -> bool:
-    return (office or "").strip().lower() == ENTROPY_OFFICE
+    """
+    Ofis adı Entropy'nin KENDİ panosunu mu gösteriyor?
+
+    Faz 13-C.2: boş ad da Entropy sayılır. Kontrol noktasının iki yazıcısı
+    vardı (`board_tool_exec.write_entropy_checkpoint` aynı biçimi ikinci kez
+    üretiyordu); tek yazıcı bu modül olduğu için "ofissiz kart" kolunun da
+    burada karşılığı olmak zorunda.
+    """
+    return (office or "").strip().lower() in ("", ENTROPY_OFFICE)
 
 
 def checkpoints_dir(office: str, vault_path: Optional[Path] = None) -> Path:
@@ -132,6 +141,13 @@ def checkpoints_dir(office: str, vault_path: Optional[Path] = None) -> Path:
 def checkpoint_path(
     office: str, card_id: str, vault_path: Optional[Path] = None
 ) -> Path:
+    if _is_entropy_office(office):
+        # Dosya adı sözleşmesi `core.paths`ten gelir: eski `write_entropy_
+        # checkpoint` yazıcısı da oradan türetiyordu, tek yazıcıya inerken
+        # yol ŞEMASI değişmemeli (var olan dosyalar okunabilir kalsın).
+        from entropy.core.paths import board_checkpoint_path
+
+        return board_checkpoint_path(card_id, vault_path)
     return checkpoints_dir(office, vault_path) / f"{_safe(card_id)}.md"
 
 
@@ -217,7 +233,23 @@ def read_checkpoint(
     office: str, card_id: str, vault_path: Optional[Path] = None
 ) -> Optional[Dict[str, object]]:
     """Kontrol noktasını sözlük olarak okur; yoksa None."""
-    path = checkpoint_path(office, card_id, vault_path)
+    return read_checkpoint_file(
+        checkpoint_path(office, card_id, vault_path), office=office, card_id=card_id
+    )
+
+
+def read_checkpoint_file(
+    path: Path, office: str = "", card_id: str = ""
+) -> Optional[Dict[str, object]]:
+    """
+    Kontrol noktasını MUTLAK yolundan okur (Faz 13-C.2).
+
+    Kartın `checkpoint` alanı dosyanın yolunu taşıyor; arayüz o alanı okurken
+    ofis adından yolu yeniden türetmek zorunda kalmamalı (eski kökteki kartlar
+    aksi hâlde "kontrol noktası yok" görünüyordu).
+    """
+    path = Path(path)
+    card_id = card_id or path.stem
     try:
         if not path.is_file():
             return None

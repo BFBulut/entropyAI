@@ -6,7 +6,7 @@ __app_name__ = "Entropy AI"
 
 #: Kurulum yoksa (kaynaktan/`.exe` içinden koşum) `pyproject.toml` okunur;
 #: o da yoksa bu yedek kullanılır. Sürümün TEK kaynağı `pyproject.toml`dur.
-_FALLBACK_VERSION = "0.10.3"
+_FALLBACK_VERSION = "0.10.4"
 
 
 def _read_pyproject_version() -> str | None:

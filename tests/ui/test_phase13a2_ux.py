@@ -356,7 +356,9 @@ def test_kart_silme_erisilebilir(qapp):
 
     board = TaskBoardWidget(board=Board())
     btn = board.detail_panel.delete_btn
-    assert btn.accessibleName().strip() == "Sil"
+    # Faz 13-C madde 2: eylem "silmek" değil ARŞİVLEMEK (dosya kaybolmaz).
+    assert btn.text().strip() == "Arşivle"
+    assert btn.accessibleName().strip() == "Kartı arşivle"
     assert btn.toolTip().strip()
     board.close()
 

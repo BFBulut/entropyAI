@@ -292,6 +292,67 @@ def title_from_body(body: str) -> str:
     return core_title_from_h1(body)
 
 
+#: Faz 13-C madde 4: eski yazma yolu frontmatter `title` alanını **40 karakterde
+#: kesiyordu** (ör. "Entropy Agent Desk Uygulamasının Tekrar A"). Kırpık başlık
+#: `title_is_plausible` için makul görünüyor ve karta öyle düşüyordu. Bu eşiğin
+#: üstündeki bir frontmatter başlığı, gövde H1'i onu kapsıyorsa şüphelidir.
+TRUNCATED_TITLE_MIN_CHARS = 38
+
+
+def title_looks_truncated(front_title: str, h1: str) -> bool:
+    """Frontmatter başlığı yazma zamanında kesilmiş mi (gövde H1'e göre)?
+
+    İki işaret aranır, ikisi de H1'in varlığını şart koşar (H1 yoksa elimizde
+    karşılaştıracak tam metin yoktur, uydurma yapılmaz):
+
+    1. H1 **tam olarak** frontmatter başlığıyla başlıyor ve daha uzun →
+       başlık sonundan kesilmiş.
+    2. Başlık **sözcük ortasında** bitiyor: son sözcük atıldığında kalan
+       parça H1'in öneki, son sözcük ise H1'deki daha uzun bir sözcüğün
+       öneki ("… Tekrar A" ↔ "… Tekrar Analizi").
+    """
+    front = str(front_title or "").strip()
+    head_line = str(h1 or "").strip()
+    if len(front) < TRUNCATED_TITLE_MIN_CHARS or not head_line:
+        return False
+    if len(head_line) <= len(front):
+        return False
+    if head_line.startswith(front):
+        return True
+    prefix, _, last = front.rpartition(" ")
+    if not prefix or not last:
+        return False
+    if not head_line.startswith(prefix + " "):
+        return False
+    rest = head_line[len(prefix) + 1:]
+    # Son sözcük, H1'deki karşılığının gerçek bir öneki mi?
+    return rest.startswith(last) and len(rest.split(" ", 1)[0]) > len(last)
+
+
+def clause_title(h1: str) -> str:
+    """Uzun bir H1'den okunur bir başlık: ilk TAM yan tümce.
+
+    Kasadaki eski araştırma raporlarının H1'i 170 karakteri aşıyor ve altı
+    virgülle bağlı konu listesinden oluşuyor. Kart başlığında bunun tamamı
+    okunmaz; kırpık frontmatter başlığı da kullanılamaz. Çözüm, `TITLE_MAX_CHARS`
+    sınırının içinde kalan **son doğal sınırda** (virgül / iki nokta / noktalı
+    virgül / tire) kesmek; sınır yoksa son sözcük sınırında. Yarım sözcük
+    üretilmez, sondaki noktalama atılır.
+    """
+    value = " ".join(str(h1 or "").split())
+    if not value:
+        return ""
+    if len(value) <= TITLE_MAX_CHARS and len(value.split()) <= TITLE_MAX_WORDS:
+        return value.rstrip(" ,;:-")
+    window = value[:TITLE_MAX_CHARS]
+    cut = max(window.rfind(sep) for sep in (",", ";", ":", " - "))
+    if cut < TITLE_MAX_CHARS // 3:
+        cut = window.rfind(" ")
+    if cut <= 0:
+        return window.rstrip(" ,;:-")
+    return window[:cut].rstrip(" ,;:-")
+
+
 def derive_report_title(
     front_title: str = "", body: str = "", path: Any = "", fallback: str = "",
 ) -> str:
@@ -306,6 +367,17 @@ def derive_report_title(
         title_from_body(body),
         title_from_filename(path),
     ]
+    # Faz 13-C madde 4: kırpık frontmatter başlığı gövde H1'ine yenilir.
+    # Sıra değişmez, yalnızca birinci aday düşürülür; H1 yoksa hiçbir şey olmaz.
+    if candidates[0] and title_looks_truncated(candidates[0], candidates[1]):
+        candidates[0] = ""
+        # H1 çoğu eski raporda çok uzun (170+ karakter, virgüllü) ve
+        # `title_is_plausible` onu eler; eleyince sıra kırpık dosya adına
+        # düşüyor, kullanıcı yine yarım başlık görüyordu. Bu yüzden kırpılma
+        # SAPTANDIĞINDA H1'in ilk tam yan tümcesi kullanılır.
+        clause = clause_title(candidates[1])
+        if clause:
+            return clause
     for candidate in candidates:
         if title_is_plausible(candidate):
             return candidate

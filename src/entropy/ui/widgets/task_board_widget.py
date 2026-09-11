@@ -19,7 +19,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import QFontMetrics, QTextLayout, QTextOption
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSplitter,
@@ -45,6 +46,23 @@ _QUOTE_RE = re.compile(r"^\s{0,3}>\s?", re.M)
 _BULLET_RE = re.compile(r"^\s{0,3}(?:[-*+]|\d+[.)])\s+", re.M)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _EMPHASIS_RE = re.compile(r"[`*~]+")
+
+
+def archive_card_api():
+    """`entropy.agents.tasks.archive_card` sözleşmesi; yoksa None.
+
+    Sözleşme (Faz 13-C, köprü ajanı yazıyor):
+        archive_card(card_id: str, reason: str = "") -> dict(ok, archived_to)
+
+    Modül henüz eklenmemişse arayüz **hiçbir şey silmez**: arşiv düğmesi
+    devre dışı kalır ve ipucu nedenini söyler.
+    """
+    try:
+        from entropy.agents import tasks as _tasks
+    except Exception:
+        return None
+    fn = getattr(_tasks, "archive_card", None)
+    return fn if callable(fn) else None
 
 
 def plain_preview(text: Any, limit: int = 110) -> str:
@@ -159,6 +177,21 @@ def card_checkpoint(card: Any, office: str = "") -> Optional[Dict[str, Any]]:
     data = spec_field(card, "checkpoint", None)
     if isinstance(data, dict) and data:
         return dict(data)
+    # Faz 13-C.2: kartın `checkpoint` alanı kontrol noktası DOSYASININ mutlak
+    # yolunu taşır (tek yazıcı oraya yazar). Önce o okunur; yol yoksa/dosya
+    # silinmişse eski kök (ofis adı + kart kimliği) yedek kalır.
+    raw_path = str(data or "").strip()
+    if raw_path:
+        try:
+            from pathlib import Path as _Path
+
+            from entropy.brain.checkpoints import read_checkpoint_file  # type: ignore
+
+            found = read_checkpoint_file(_Path(raw_path))
+            if isinstance(found, dict) and found:
+                return dict(found)
+        except Exception:
+            pass
     card_id = str(spec_field(card, "id", ""))
     office = office or str(spec_field(card, "office", ""))
     if not card_id or not office:
@@ -266,6 +299,91 @@ def format_duration(card: Any) -> str:
     return f"{seconds // 3600} sa {(seconds % 3600) // 60} dk"
 
 
+def elide_to_lines(text: str, font: Any, width: int, lines: int) -> str:
+    """Metni `lines` satıra sığacak şekilde kırpar ve sonuna "…" koyar.
+
+    Faz 13-C madde 3: önizleme `setMaximumHeight` ile **kesiliyordu** — üçüncü
+    satır ortadan ikiye bölünüyor, kullanıcı metnin bittiğini mi sandığını
+    bilemiyordu. Qt'nin kendi satır kırma motoru (`QTextLayout`) ile gerçek
+    kırılma noktası bulunur; taşan bölüm atılır ve son satır `elidedText` ile
+    üç noktayla bitirilir. Piksel sabiti yok: her şey yazı tipi ölçüsünden.
+    """
+    body = str(text or "")
+    if not body or width <= 0 or lines <= 0:
+        return body
+    metrics = QFontMetrics(font)
+    layout = QTextLayout(body, font)
+    option = QTextOption()
+    option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    layout.setTextOption(option)
+    layout.beginLayout()
+    cut = -1
+    last_start = 0
+    count = 0
+    while True:
+        line = layout.createLine()
+        if not line.isValid():
+            break
+        line.setLineWidth(width)
+        count += 1
+        if count == lines:
+            last_start = line.textStart()
+            cut = line.textStart() + line.textLength()
+        line.setPosition(QPointF(0, 0))
+    layout.endLayout()
+    if count <= lines or cut < 0:
+        return body
+    # Yalnızca SON GÖRÜNEN satır kırpılır: "…" için yer açılsın. Önceki
+    # satırlar olduğu gibi kalır (etiket aynı genişlikte aynı yerde kırar).
+    head = body[:last_start]
+    # Kalanın TAMAMI verilir: `elidedText` bir satır genişliğine indirirken
+    # üç noktayı kendisi ekler. Yalnızca `cut`a kadar verilseydi metin zaten
+    # satıra sığdığı için üç nokta hiç eklenmezdi (ölçüm: kırpma sessizdi).
+    return head + metrics.elidedText(body[last_start:], Qt.TextElideMode.ElideRight, width)
+
+
+class ElidedPreviewLabel(QLabel):
+    """Üç satıra sığan, sonu "…" ile biten kart önizlemesi.
+
+    Genişlik her yeniden boyutlanmada değiştiği için kırpma `resizeEvent`'te
+    yenilenir; tam metin ipucunda kalır (bilgi kaybı yok).
+    """
+
+    def __init__(self, text: str, color: str, max_lines: int = CARD_PREVIEW_LINES,
+                 parent=None):
+        super().__init__(parent)
+        self._full_text = str(text or "")
+        self._color = color
+        self._max_lines = max(1, int(max_lines))
+        self.setWordWrap(True)
+        self.setToolTip(self._full_text)
+        self._apply(self.width())
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def elided_text(self) -> str:
+        return getattr(self, "_elided", self._full_text)
+
+    def _apply(self, width: int) -> None:
+        metrics = self.fontMetrics()
+        usable = max(0, int(width) - self.contentsMargins().left()
+                     - self.contentsMargins().right())
+        shown = elide_to_lines(self._full_text, self.font(), usable, self._max_lines)             if usable > 0 else self._full_text
+        self._elided = shown
+        self.setText(
+            f"<span style='color:{self._color}; font-size:{LABEL_PX}px;'>"
+            f"{html.escape(shown)}</span>"
+        )
+        # Kesme değil kırpma: tavan yine yazı tipi ölçüsünden gelir ama artık
+        # metin zaten sığdığı için yarım satır oluşmaz.
+        self.setMaximumHeight(metrics.lineSpacing() * self._max_lines)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._apply(event.size().width())
+
+
 class TaskCardWidget(QFrame):
     """Kanban kartı: başlık, ajan, sağlayıcı/model, süre, özet."""
 
@@ -345,18 +463,13 @@ class TaskCardWidget(QFrame):
         summary = str(spec_field(card, "summary", ""))
         short = plain_preview(summary, CARD_PREVIEW_CHARS)
         if short:
-            summary_label = QLabel(
-                f"<span style='color:{RT['text_body']}; font-size:{LABEL_PX}px;'>"
-                f"{html.escape(short)}</span>"
-            )
-            summary_label.setWordWrap(True)
-            # Faz 13-A2 madde 6: önizleme EN ÇOK ÜÇ SATIR. Sarma açıkken uzun
-            # bir özet kartı beş-altı satıra çıkarıyor, pano tek ekrandan
-            # taşıyordu. Tavan yazı tipi ölçüsünden gelir (sabit piksel yok).
-            line = summary_label.fontMetrics().lineSpacing()
-            summary_label.setMaximumHeight(line * CARD_PREVIEW_LINES)
-            # Kısaltılan özetin tamamı ipucunda kalır (bilgi kaybı olmasın).
+            # Faz 13-A2 madde 6: önizleme EN ÇOK ÜÇ SATIR (uzun özet kartı
+            # beş-altı satıra çıkarıp panoyu tek ekrandan taşırıyordu).
+            # Faz 13-C madde 3: tavan artık üçüncü satırı KESMİYOR; metin
+            # satır sınırında kırpılıp "…" ile bitiyor.
+            summary_label = ElidedPreviewLabel(short, RT["text_body"])
             summary_label.setToolTip(summary)
+            self.summary_label = summary_label
             layout.addWidget(summary_label)
 
     def mousePressEvent(self, event):
@@ -502,10 +615,21 @@ class TaskDetailPanel(QFrame):
         self.contract_btn.clicked.connect(self._on_open_contract)
         actions.addWidget(self.contract_btn)
 
-        self.delete_btn = QPushButton("Sil")
-        self.delete_btn.setAccessibleName("Sil")
-        self.delete_btn.setToolTip("Kartı panodan sil")
+        # Faz 13-C madde 2: eylem "silmek" değil ARŞİVLEMEK. Aynı eylem
+        # akış boyunca aynı adı taşır (tasarım sistemi §3).
+        self.delete_btn = QPushButton("Arşivle")
+        self.delete_btn.setAccessibleName("Kartı arşivle")
+        self.delete_btn.setToolTip(
+            "Kart _archive/ altına taşınır ve olay günlüğüne yazılır; dosya silinmez"
+        )
         self.delete_btn.clicked.connect(self._on_delete)
+        board = getattr(board_widget, "board", None)
+        if not callable(getattr(board, "archive_card", None)) and archive_card_api() is None:
+            self.delete_btn.setEnabled(False)
+            self.delete_btn.setToolTip(
+                "Arşiv sözleşmesi (agents.tasks.archive_card) bu sürümde yok; "
+                "kart arşivlenemez"
+            )
         actions.addWidget(self.delete_btn)
         actions.addStretch()
         layout.addLayout(actions)
@@ -923,6 +1047,7 @@ class TaskBoardWidget(QFrame):
         # Faz 13: çağrı çocuklar eklendikten SONRA — boş bölücüde geri yükleme
         # sessizce başarısız oluyordu.
         install_splitter_persistence("board.detail", splitter)
+        self.board_splitter = splitter
         root.addWidget(splitter, 1)
 
         signal = getattr(bus, "task_cards_updated", None)
@@ -989,11 +1114,58 @@ class TaskBoardWidget(QFrame):
         # Beyan = hesaplanan (G13-4). Liste kipi her zaman geçerli bir taban
         # olduğu için pencere asgarisi büyümez.
         self.setMinimumWidth(self.list_min_width())
+        self.fit_detail_panel(available)
         return self._view_mode
+
+    # ---------------------------------------- Faz 13-C: detay paneli sığdırma
+
+    def board_area_min_width(self) -> int:
+        """Pano gövdesinin (kanban sütunları ya da liste) okunur asgarisi."""
+        if self.view_mode() == "list":
+            return LIST_VIEW_MIN_WIDTH
+        count = max(1, len(self.visible_column_keys()))
+        return count * COLUMN_MIN_WIDTH + (count - 1) * COLUMN_SPACING
+
+    def detail_max_width(self, available: int) -> int:
+        """Detay panelinin bu genişlikte alabileceği EN ÇOK yer."""
+        room = int(available) - 2 * BOARD_MARGIN - COLUMN_SPACING - self.board_area_min_width()
+        return max(DETAIL_MIN_WIDTH, room)
+
+    def fit_detail_panel(self, available: Optional[int] = None) -> int:
+        """Dar pencerede detay paneli ÖNCE asgarisine iner; pano taşmaz.
+
+        Faz 13-C madde 3: 1.200 px'lik pencerede kaydedilmiş bölücü konumu
+        detaya 442 px veriyordu (asgarisi 180). Kalan 738 px dört sütuna
+        yetmiyor, pano yatay kaydırma çubuğu açıyordu — kullanıcı bunu
+        ekran görüntüsüyle bildirdi. Kural: yer daralınca kısılan taraf
+        DETAY panelidir; pano gövdesi okunur asgarisinin altına inmez.
+        Genişlerken hiçbir şey zorlanmaz (kullanıcının bölücü tercihi kalır).
+        """
+        splitter = getattr(self, "board_splitter", None)
+        if splitter is None or self.compact:
+            return 0
+        width = int(self.width() if available is None else available)
+        if width <= 0:
+            return 0
+        sizes = splitter.sizes()
+        if len(sizes) < 2:
+            return 0
+        allowed = self.detail_max_width(width)
+        if sizes[1] <= allowed:
+            return int(sizes[1])
+        splitter.setSizes([max(0, sum(sizes) - allowed), allowed])
+        return allowed
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self.apply_view_mode(event.size().width())
+
+    def showEvent(self, event):  # noqa: N802
+        # Bölücü konumu QSettings'ten pencere GÖSTERİLİRKEN geri yüklenir;
+        # sığdırma ondan sonra bir kez daha koşmalı (yoksa kaydedilmiş geniş
+        # detay paneli ilk çizimde panoyu taşırıyordu).
+        super().showEvent(event)
+        self.apply_view_mode(self.width())
 
     def _on_list_selection(self, current, _previous=None) -> None:
         """Liste görünümünde seçim (QObject metodu — lambda değil)."""
@@ -1291,21 +1463,55 @@ class TaskBoardWidget(QFrame):
         self._emit_updated(card_id)
         return True
 
-    def delete_card(self, card_id: str, confirm: bool = True) -> bool:
+    def delete_card(self, card_id: str, confirm: bool = True,
+                    reason: str = "kullanıcı arşivledi") -> bool:
+        """"Sil" = ARŞİVLE (Faz 13-C madde 2).
+
+        Regresyon R-13A2-1: kullanıcının üç kartından ikisinin `.md` dosyası
+        kasadan **olay yazılmadan** yok olmuştu; pano onları olay
+        projeksiyonundan göstermeye devam ediyordu. Arayüz artık dosya
+        SİLMEZ; `entropy.agents.tasks.archive_card` sözleşmesini çağırır
+        (kart `_archive/` altına taşınır, olay yazılır). Sözleşme yoksa
+        düğme devre dışıdır ve hiçbir şey silinmez — eski `board.delete()`
+        yolu arayüzde KALMADI.
+        """
         if self.board is None or not card_id:
+            return False
+        # Arşivleyen HER ZAMAN panonun kendi metodudur: enjekte edilmiş pano
+        # kendi deposunu yönetir, modül düzeyi sözleşme ise gerçek kasayı
+        # açardı (test panosuyla çağrıldığında kullanıcı kasasına dokunmak
+        # olurdu). Metot yoksa arayüz hiçbir şey yapmaz.
+        archiver = getattr(self.board, "archive_card", None)
+        if not callable(archiver):
             return False
         if confirm:
             answer = QMessageBox.question(
-                self, "Görevi Sil", f"'{card_id}' görev kartı silinsin mi?",
+                self, "Görevi arşivle",
+                f"'{card_id}' görev kartı arşivlenecek ve olay günlüğüne "
+                f"yazılacak. Dosya silinmez, _archive/ altına taşınır."
+                f"\n\nArşivlensin mi?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         try:
-            self.board.delete(card_id)
+            result = archiver(card_id, reason)
         except Exception as exc:
-            bus.terminal_output_received.emit(f"[Görev Panosu] Silme hatası: {exc}\n")
+            bus.terminal_output_received.emit(
+                f"[Görev Panosu] Arşivleme hatası: {exc}\n"
+            )
             return False
+        ok = bool(result.get("ok", True)) if isinstance(result, dict) else bool(result)
+        if not ok:
+            message = result.get("message", "") if isinstance(result, dict) else ""
+            bus.terminal_output_received.emit(
+                f"[Görev Panosu] Kart arşivlenemedi: {message or card_id}\n"
+            )
+            return False
+        if isinstance(result, dict) and result.get("archived_to"):
+            bus.terminal_output_received.emit(
+                f"[Görev Panosu] Kart arşivlendi: {result['archived_to']}\n"
+            )
         if self.selected_id == card_id:
             self.selected_id = ""
         self.refresh_cards()

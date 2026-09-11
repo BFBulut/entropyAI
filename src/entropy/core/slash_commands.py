@@ -233,7 +233,7 @@ LOCAL_COMMANDS: List[SlashCommand] = [
         category="builtin",
         badge="📋 GÖREV",
         color="#FFB300",
-        usage="/task [backlog|running|review|done|failed]  |  /task <ajan> <başlık> :: <hedef>  |  /task stop <id>",
+        usage="/task [backlog|running|review|done|failed]  |  /task <ajan> <başlık> :: <hedef>  |  /task stop <id>  |  /task rm <id> :: <gerekçe>",
     ),
     SlashCommand(
         name="/offices",
@@ -525,7 +525,8 @@ def _handle_tasks(args: str) -> str:
         f"<b>📋 Görev Kartları</b> ({len(cards)})"
         f"<table style='font-size:11px;margin-top:4px;'>{rows}</table>"
         "<div style='color:#8B949E;font-size:11px;margin-top:4px;'>"
-        "Durdur: <code>/task stop &lt;id&gt;</code></div>"
+        "Durdur: <code>/task stop &lt;id&gt;</code> · "
+        "Arşivle: <code>/task rm &lt;id&gt; :: &lt;gerekçe&gt;</code></div>"
     )
 
 
@@ -533,6 +534,7 @@ def _handle_task(args: str) -> str:
     """
     `/task <ajan> <başlık> :: <hedef>` — kartı YALNIZCA oluşturur.
     `/task stop <id>` — süren kartı keser.
+    `/task rm <id> :: <gerekçe>` — kartı arşive taşır (silmez, 13-C.4).
 
     Faz 11-C'de davranış değişti: komut artık `board.run()` ÇAĞIRMAZ. Kart
     `assigned` olarak panoya düşer ve koşturmayı `BoardDispatcher` yapar.
@@ -550,10 +552,43 @@ def _handle_task(args: str) -> str:
     args = (args or "").strip()
     if not args:
         return ("<b>📋 Görev</b><br/>Kullanım: "
-                "<code>/task &lt;ajan&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code> ya da "
-                "<code>/task stop &lt;id&gt;</code>")
+                "<code>/task &lt;ajan&gt; &lt;başlık&gt; :: &lt;hedef&gt;</code>, "
+                "<code>/task stop &lt;id&gt;</code> ya da "
+                "<code>/task rm &lt;id&gt; :: &lt;gerekçe&gt;</code>")
 
     board = TaskBoard()
+    # Faz 13-C.4: `/task rm <id> :: <gerekçe>` — kartı panodan KALDIRIR ama
+    # SİLMEZ. Kullanıcı verisi yok edilmez: dosya `_archive/` altına taşınır,
+    # olay defterine `board.archived` bilgi olayı düşer ve terminal kartın
+    # durumu (done/canceled) değişmez. Gerekçe ZORUNLU — gerekçesiz arşiv,
+    # altı ay sonra "bu kart neden yok" sorusunun yanıtsız kalması demek.
+    _rm_head = args.split(None, 1)[0].lower()
+    if _rm_head in ("rm", "remove", "archive"):
+        rest = args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else ""
+        card_id, sep, reason = rest.partition("::")
+        card_id, reason = card_id.strip(), (reason.strip() if sep else "")
+        if not card_id:
+            return ("<b>📋 Görev</b><br/>Kullanım: "
+                    "<code>/task rm &lt;id&gt; :: &lt;gerekçe&gt;</code>")
+        if not reason:
+            return ("<b>📋 Görev</b><br/>Arşivleme gerekçesi zorunlu: "
+                    "<code>/task rm &lt;id&gt; :: &lt;gerekçe&gt;</code>")
+        card = board.get(card_id)
+        if card is None:
+            return f"<b>📋 Görev</b><br/>'{_html_escape(card_id)}' kimlikli kart yok."
+        title = card.title
+        try:
+            result = board.archive_card(card_id, reason)
+        except Exception as exc:
+            return f"<b>📋 Görev</b><br/>Arşivlenemedi: {_html_escape(exc)}"
+        if not result.get("ok"):
+            return (f"<b>📋 Görev</b><br/>Arşivlenemedi: "
+                    f"{_html_escape(str(result.get('reason') or 'bilinmeyen sebep'))}")
+        return (f"<b>📋 Görev Arşivlendi</b><br/>{_html_escape(title)}"
+                f"<br/><span style='color:#8B949E;font-size:11px;'>Gerekçe: "
+                f"{_html_escape(reason)} · Dosya: "
+                f"<code>{_html_escape(str(result.get('archived_to') or ''))}</code>"
+                "</span>")
     if args.lower().startswith("stop"):
         card_id = args.split(None, 1)[1].strip() if len(args.split(None, 1)) > 1 else ""
         if not card_id:
@@ -713,8 +748,77 @@ def _desk_usage() -> str:
         "<code>/desk push &lt;kart&gt;</code><br/>"
         "<code>/desk task &lt;ofis&gt; [@proje] &lt;başlık&gt; :: &lt;hedef&gt;</code> · "
         "<code>/desk stop &lt;kart&gt;</code><br/>"
-        "<code>/desk msg &lt;ofis&gt; :: &lt;talimat&gt;</code>"
+        "<code>/desk msg &lt;ofis&gt; :: &lt;talimat&gt;</code><br/>"
+        "<code>/desk pending</code> · <code>/desk approve &lt;id&gt;</code> · "
+        "<code>/desk reject &lt;id&gt; [gerekçe]</code>"
     )
+
+
+def _handle_desk_pending(verb: str, rest: str) -> str:
+    """
+    `/desk pending|approve|reject` — Entropy'nin Desk düzenleme istekleri (13-C.3).
+
+    Entropy sohbette `[DESK office_create|agent_edit|task]` bloğu yazdığında
+    hiçbir yapı değişmez: istek kuyruğa düşer ve YALNIZCA buradan uygulanır.
+    Kural: kalıcı yapı değişikliği kullanıcının onayıdır.
+    """
+    from entropy.agents import desk_admin
+
+    rest = (rest or "").strip()
+    if verb == "pending":
+        rows = desk_admin.list_pending()
+        if not rows:
+            return ("<b>🏢 Desk Onayları</b><br/>Bekleyen düzenleme yok."
+                    "<br/><span style='color:#8B949E;font-size:11px;'>Entropy "
+                    "sohbette <code>[DESK …]</code> bloğu yazınca burada belirir.</span>")
+        body = "<br/>".join(
+            f"<code>{_html_escape(str(r.get('id')))}</code> — "
+            f"{_html_escape(str(r.get('summary') or r.get('kind')))}"
+            f"<span style='color:#8B949E;font-size:11px;'> · "
+            f"{_html_escape(str(r.get('created_at') or ''))}</span>"
+            for r in rows
+        )
+        return (f"<b>🏢 Desk Onayları ({len(rows)})</b><br/>{body}<br/>"
+                "<span style='color:#8B949E;font-size:11px;'>Uygula: "
+                "<code>/desk approve &lt;id&gt;</code> · Reddet: "
+                "<code>/desk reject &lt;id&gt; [gerekçe]</code></span>")
+
+    if not rest:
+        return _desk_usage()
+
+    if verb == "approve":
+        result = desk_admin.apply_pending(rest.split()[0])
+        if not result.get("ok"):
+            return ("<b>🏢 Desk Onayı</b><br/>Uygulanamadı: "
+                    f"{_html_escape(str(result.get('message') or ''))}")
+        paths = result.get("created_paths") or []
+        extra = ("<br/><span style='color:#8B949E;font-size:11px;'>"
+                 + "<br/>".join(f"<code>{_html_escape(str(p))}</code>" for p in paths)
+                 + "</span>") if paths else ""
+        return (f"<b>🏢 Desk Düzenlemesi Uygulandı</b><br/>"
+                f"{_html_escape(str(result.get('message') or ''))}{extra}")
+
+    # verb == "reject"
+    parts = rest.split(None, 1)
+    request_id = parts[0]
+    reason = parts[1].strip() if len(parts) > 1 else ""
+    ok = desk_admin.reject_pending(request_id, reason)
+    return ("<b>🏢 Desk Onayı</b><br/>"
+            + (f"'{_html_escape(request_id)}' reddedildi; hiçbir yapı değişmedi."
+               if ok else f"'{_html_escape(request_id)}' kimlikli istek yok."))
+
+
+def _desk_office_name(raw: str) -> str:
+    """
+    `/desk office add ...` gövdesinden ofis ADINI çıkarır.
+
+    Ad boşluk içerebilir; tırnaklıysa tırnaklar sökülür. Boşluğa göre bölmek
+    (`split()[0]`) adı sessizce kırpıyordu — bkz. Faz 13-C QA bulgusu.
+    """
+    name = (raw or "").strip()
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'":
+        name = name[1:-1].strip()
+    return name
 
 
 def _handle_desk_admin(verb: str, rest: str, offices) -> str:
@@ -734,10 +838,14 @@ def _handle_desk_admin(verb: str, rest: str, offices) -> str:
     detail = detail.strip() if sep else ""
 
     if verb == "office":
+        # Ofis adı ÇOK KELİMELİ olabilir ("QA Ofisi 13C"). Eskiden `names[0]`
+        # alınıyordu ve ad sessizce ilk kelimeye kırpılıyordu: kullanıcı
+        # "QA Ofisi 13C" açtığını sanırken diskte "QA" ofisi doğuyor, sonraki
+        # `/desk task "QA Ofisi 13C"` çağrıları "ofis yok" diyordu.
         if action == "add":
-            if not names:
+            name = _desk_office_name(body)
+            if not name:
                 return _desk_usage()
-            name = names[0]
             try:
                 spec = offices.create(DeskOffice(name=name, purpose=detail, charter=detail))
             except FileExistsError:
@@ -752,10 +860,11 @@ def _handle_desk_admin(verb: str, rest: str, offices) -> str:
                 f"<code>{_html_escape(str(offices.office_dir(spec.name)))}</code></span>"
             )
         if action in ("rm", "remove", "delete"):
-            if not names:
+            name = _desk_office_name(body)
+            if not name:
                 return _desk_usage()
-            ok = offices.delete(names[0])
-            return (f"<b>🏢 Ofis</b><br/>'{_html_escape(names[0])}' "
+            ok = offices.delete(name)
+            return (f"<b>🏢 Ofis</b><br/>'{_html_escape(name)}' "
                     + ("silindi." if ok else "bulunamadı."))
         return _desk_usage()
 
@@ -1027,6 +1136,11 @@ def _handle_desk(args: str) -> str:
 
     if verb in ("office", "agent", "project"):
         return _handle_desk_admin(verb, rest, offices)
+
+    # Faz 13-C.3: Entropy'nin kendi kararıyla açtığı düzenleme isteklerinin
+    # onay kapısı. Yerel: dosya okur/siler, model çağırmaz.
+    if verb in ("pending", "approve", "reject"):
+        return _handle_desk_pending(verb, rest)
 
     # Faz 10-C: şablondan ofis, inceleme özeti ve (yalnızca kullanıcı eylemiyle)
     # dal gönderme. Üçü de yerel: model çağırmaz, kota harcamaz.

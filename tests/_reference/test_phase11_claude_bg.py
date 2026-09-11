@@ -5,6 +5,12 @@ durum makinesi ve GERÇEK süreç yolu (sahte bir `claude` çalıştırılabilir
 Gerçek CLI çağrısı yapılmaz: kota harcayan koşu yalnızca spike betiğindeydi,
 bulguları rapora ve modül başlığına yazıldı. Buradaki beklentiler o koşudan
 birebir kopyalanan CLI çıktılarına dayanır.
+
+**ARŞİV (Faz 13-C, ADR-0007 / ADR-0009).** Sınadığı modül üründen çıkarıldı:
+`docs/_archive/spikes/claude_bg/claude_bg.py`. Bu dosya bir *ispat defteri*
+olarak saklanır ve **toplanmaz** (`tests/_reference/conftest.py`
+`collect_ignore`). Yeniden koşmak için modülü `src/entropy/core/claude_bg.py`
+yoluna geri koymak yeterlidir; geri getirme adımları arşiv README'sindedir.
 """
 
 from __future__ import annotations

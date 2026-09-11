@@ -375,7 +375,8 @@ def test_drift_event_does_not_poison_the_projection(board, tmp_path):
     assert view["rejected"] == before["rejected"]
     assert set(view["cards"]) == set(before["cards"]) == {card.id}
     assert "board.drift" in board_fsm.EVENTS
-    assert board_fsm.INFO_EVENTS == ("board.drift",)
+    # Faz 13-C.4: ikinci bilgi olayı `board.archived` (arşivleme).
+    assert board_fsm.INFO_EVENTS == ("board.drift", "board.archived")
 
 
 # --------------------------------------------------------------------------

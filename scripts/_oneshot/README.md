@@ -15,4 +15,9 @@ Kurallar:
 - Silme kararı ayrı bir ADR gerektirir; kasadaki çıktıları zaten yazılmış durumdadır,
   taşıma kasaya dokunmaz.
 
+- **Faz 13-B dokunuşu (2026-09-11):** 55 betikte `entropy.memory` → `entropy.brain`
+  dizgi değişimi yapıldı ([ADR-0008](../../docs/adr/ADR-0008-brain-paket-tasimasi.md)).
+  Bu bir onarım değil **tutarlılık** işidir: betikler yine koşulmaz, ama depoda
+  eski paket adı arandığında yanlış eşleşme vermezler.
+
 Taşıma: Faz 12-E, `git mv` (geçmiş korunur). Manifest: `docs/reports/2026-09-10_Faz12_Arastirma_B_Depo_Denetimi.md` §7 M1.

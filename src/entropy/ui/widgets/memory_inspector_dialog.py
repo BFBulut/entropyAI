@@ -452,7 +452,9 @@ class MemoryInspectorDialog(QDialog):
         open_btn.clicked.connect(lambda: self._open_standalone_report(str(p)))
         btn_box.addWidget(open_btn)
 
-        del_btn = QPushButton("Notu Sil")
+        del_btn = QPushButton("Notu arşivle")
+        del_btn.setAccessibleName("Notu arşivle")
+        del_btn.setToolTip("Not _archive/ altına taşınır; dosya silinmez.")
         del_btn.clicked.connect(lambda: self._delete_report_file(p))
         btn_box.addWidget(del_btn)
 
@@ -535,17 +537,43 @@ class MemoryInspectorDialog(QDialog):
             bus.knowledge_graph_updated.emit()
             self.accept()
 
+    def archive_report_file(self, p: Path) -> Path:
+        """Notu `_archive/` altına TAŞIR ve taşınan yolu döndürür.
+
+        Faz 13-C madde 2: arayüzde doğrudan dosya silme yolu kalmadı. Kullanıcı
+        verisi geri alınamaz biçimde yok olmaz; not haritadan düşer ama diskte
+        arşivde durur (aynı adda dosya varsa sayaç eklenir).
+        """
+        target_dir = p.parent / "_archive"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / p.name
+        counter = 1
+        while target.exists():
+            target = target_dir / f"{p.stem}_{counter}{p.suffix}"
+            counter += 1
+        p.replace(target)
+        return target
+
     def _delete_report_file(self, p: Path):
         reply = QMessageBox.question(
             self,
-            "Raporu Sil",
-            f"'{p.name}' dosyasını diskten ve hafıza haritasından silmek istediğinizden emin misiniz?",
+            "Notu arşivle",
+            f"'{p.name}' notu hafıza haritasından çıkarılıp _archive/ altına"
+            f" taşınacak. Dosya silinmez.\n\nArşivlensin mi?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            p.unlink(missing_ok=True)
+            try:
+                target = self.archive_report_file(p)
+            except Exception as exc:
+                bus.terminal_output_received.emit(
+                    f"[Bilişsel Hafıza] '{p.name}' arşivlenemedi: {exc}\n"
+                )
+                return
             self.vault.sync_map_of_content()
-            bus.terminal_output_received.emit(f"[Bilişsel Hafıza] '{p.name}' dosyası silindi.\n")
+            bus.terminal_output_received.emit(
+                f"[Bilişsel Hafıza] '{p.name}' arşivlendi: {target}\n"
+            )
             bus.knowledge_graph_updated.emit()
             self.accept()
 

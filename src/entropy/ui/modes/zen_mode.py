@@ -70,6 +70,7 @@ from entropy.ui.widgets.terminal_pane import TerminalPaneWidget
 from entropy.ui.widgets.agents_widget import AgentsWidget
 from entropy.ui.widgets.rules_panel import RuleCandidatesPanel
 from entropy.ui.widgets.skill_candidates_panel import SkillCandidatesPanel
+from entropy.ui.widgets.desk_approvals_panel import DeskApprovalsPanel
 from entropy.ui.widgets.office_cards_panel import OfficeCardsPanel
 from entropy.ui.widgets.task_board_widget import TaskBoardWidget
 from entropy.ui.widgets.frameless import FramelessWindowHelper
@@ -345,6 +346,12 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         # etkinleşmez (12-C `memory.skill_synthesis` sözleşmesi, guard'lı).
         self.skill_candidates_panel = SkillCandidatesPanel(parent=self)
         agents_tab_layout.addWidget(self.skill_candidates_panel, 1)
+        # Faz 13-C madde 1: Desk yapı değişiklikleri de AYNI onay yüzeyinde.
+        # Sohbetteki "Desk düzenleme onayı bekliyor" satırı buraya bağlanır;
+        # kullanıcı artık istek kimliğini elle yazmak zorunda değil.
+        self.desk_approvals_panel = DeskApprovalsPanel(parent=self)
+        self.desk_approvals_panel.request_decided.connect(self._on_desk_request_decided)
+        agents_tab_layout.addWidget(self.desk_approvals_panel, 1)
         self.agents_tab = agents_tab
         self.left_tabs.addTab(agents_tab, "Ajanlar", "robot")
         # Faz 13-A2 madde 4: gezinmede "Ajanlar ●n" — kaç ajan şu anda koşuyor.
@@ -1091,6 +1098,9 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         url_str = url.toString()
         if self.handle_context_anchor(url_str):
             return
+        if url_str.startswith("entropy-desk-approvals://"):
+            self.open_desk_approvals()
+            return
         if "entropy-report://" in url_str:
             target = url_str.split("entropy-report://")[-1]
             self._open_report_path(target)
@@ -1728,6 +1738,70 @@ class ZenModeWindow(ReportCardMixin, QMainWindow):
         self.submit_btn.setText("Çalıştır")
         self.chat_browser.append("<div style='margin-bottom:12px;'></div>")
         self.chat_browser.moveCursor(QTextCursor.MoveOperation.End)
+        self.show_desk_approval_prompt(response)
+
+    #: Sohbet makbuzunun sabit ön eki (`agents.desk_admin.consume_desk_calls`).
+    DESK_APPROVAL_RECEIPT = "Desk düzenleme onayı bekliyor"
+
+    def show_desk_approval_prompt(self, response: str) -> bool:
+        """Makbuz satırını onay paneline bağlayan kartı sohbete basar.
+
+        Faz 13-C madde 1: satır bugüne kadar yalnızca `/desk approve <id>`
+        diyordu — kullanıcı kimliği elle yazacaktı. Artık aynı satırın altına
+        panele giden bir bağlantı düşer; karar düğmeyle verilir.
+        """
+        if self.DESK_APPROVAL_RECEIPT not in str(response or ""):
+            return False
+        panel = getattr(self, "desk_approvals_panel", None)
+        if panel is not None:
+            panel.refresh()
+            count = panel.pending_count()
+        else:
+            count = 0
+        browser = getattr(self, "chat_browser", None)
+        if browser is None:
+            return False
+        browser.append(
+            f"<div style='background-color:{_P["surface"]};"
+            f" border:1px solid {_P["accent"]}; border-radius:8px;"
+            f" padding:8px 12px; margin:6px 0;'>"
+            f"<div style='color:{_P["accent"]}; font-size:11px; font-weight:bold;'>"
+            f"Desk düzenlemesi onay bekliyor</div>"
+            f"<div style='color:{_P["text"]}; font-size:13px;'>"
+            f"{count} istek kuyrukta; onaysız hiçbir ofis, ajan ya da kart"
+            f" oluşmaz.</div>"
+            f"<a href='entropy-desk-approvals://open' style='color:{_P["accent"]};"
+            f" font-size:11px;'>Ajanlar sekmesinde onayla</a></div>"
+        )
+        return True
+
+    def open_desk_approvals(self) -> bool:
+        """Ajanlar sekmesine geçer ve onay panelini tazeler."""
+        tab = getattr(self, "agents_tab", None)
+        nav = getattr(self, "left_tabs", None)
+        panel = getattr(self, "desk_approvals_panel", None)
+        if panel is not None:
+            panel.refresh()
+        if nav is None or tab is None:
+            return False
+        index = nav.indexOf(tab)
+        if index < 0:
+            return False
+        nav.setCurrentIndex(index)
+        return True
+
+    @Slot(str, bool)
+    def _on_desk_request_decided(self, request_id: str, approved: bool) -> None:
+        """Onay sonrası kadro tazelenir (yeni ofis/ajan hemen görünsün)."""
+        if not approved:
+            return
+        widget = getattr(self, "agents_widget", None)
+        refresh = getattr(widget, "refresh_agents", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                pass
 
     def try_paste_image(self) -> bool:
         """Handle Ctrl+V image detection and staging."""

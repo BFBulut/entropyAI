@@ -39,7 +39,7 @@ import re
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from entropy.core import paths as _paths
 
@@ -195,6 +195,13 @@ class TaskCard:
     # aynı tek kaynağı okur.
     checkpoint: str = ""
     proof: str = ""
+    # Faz 13-C.1. `proof_green`: kanıt YEŞİL mi (None = kanıt yok). Eskiden bu
+    # bilgi yalnızca ham çıktının içinde duruyordu ve harness onu kartın
+    # `summary`sinden geri ayrıştırıyordu; bu yüzden ofis kartlarında araç
+    # blokları temizlenemiyordu (kullanıcı panoda JSON görüyordu). Artık
+    # `tasks._finish` blokları bir kez ayrıştırır, alanlara yazar ve harness
+    # ALANLARI okur.
+    proof_green: Optional[bool] = None
     # Faz 10-C. `worktree`: bu kartın izole çalışma ağacının MUTLAK yolu
     # (boş = ofisin ortak `_workdir()`'i; eski kartlar böyle kalır).
     # `branch`: o ağacın dalı (`desk/<kart-id>`). `pr_url`: taslak PR bağlantısı
@@ -283,6 +290,8 @@ class TaskCard:
             # taşımıyor ve blok metni gövdeye yazılırsa bölüm ayrıştırıcısı
             # sonucu ikiye bölerdi.
             "proof": " ".join((self.proof or "").split())[:400],
+            # Üç değerli alan: "" (kanıt yok) | "true" | "false".
+            "proof_green": "" if self.proof_green is None else bool(self.proof_green),
         }
 
 
@@ -293,6 +302,22 @@ def _as_bool(value: object) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in ("true", "1", "yes", "evet", "on")
+
+
+def _as_tribool(value: object) -> Optional[bool]:
+    """Üç değerli bayrak: yazılmamışsa None, aksi hâlde True/False."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in ("true", "1", "yes", "evet", "on", "yeşil", "yesil"):
+        return True
+    if text in ("false", "0", "no", "hayır", "hayir", "off", "kırmızı", "kirmizi"):
+        return False
+    return None
 
 
 def _now() -> str:
@@ -768,6 +793,7 @@ class TaskBoard:
             intent=str(front.get("intent") or "").strip().lower(),
             checkpoint=str(front.get("checkpoint") or ""),
             proof=str(front.get("proof") or ""),
+            proof_green=_as_tribool(front.get("proof_green")),
             worktree=str(front.get("worktree") or ""),
             branch=str(front.get("branch") or ""),
             pr_url=str(front.get("pr_url") or ""),
@@ -964,7 +990,13 @@ class TaskBoard:
             from entropy.agents.board_events import board_drift
 
             view = self.events.write_projection()
-            drift = board_drift(cards, view)
+            # AYRIŞMA İKİ KÖKTEN hesaplanır. `TASKBOARD.md` satırları yalnız
+            # Entropy kartlarıdır (insan panosu Entropy'nindir) ama olay
+            # projeksiyonu ofis kartlarını da taşır: karşılaştırmayı tek kökle
+            # yapmak, dosyası Desk kökünde duran HER ofis kartını sonsuza dek
+            # "(dosya yok)" ayrışması sayıyordu — kullanıcının gördüğü
+            # "Pano ayrışması: N kart" uyarısının kaynağı buydu.
+            drift = board_drift(list(self.list(office=ALL_CARDS)), view)
             view = dict(view, drift=len(drift))
             self.events.render_taskboard(view, cards=rows)
             if drift:
@@ -1039,29 +1071,122 @@ class TaskBoard:
         self._notify(card.id)
         return replace(card, path=path)
 
-    def delete(self, task_id: str) -> bool:
-        card = self.get(task_id)
-        path = self.card_file(task_id) if card is None else (card.path or self.card_file(task_id))
-        if not path.is_file():
-            return False
-        # Faz 10-C: kart gidiyorsa izole çalışma ağacı da gider. Silme
-        # BAŞARISIZ olabilir (Windows dosya kilidi, ölçüm: rc=255); o durumda
-        # kayıt ertelenmiş temizlik kuyruğuna düşer ve kart yine silinir.
-        if card is not None and (card.worktree or ""):
-            try:
-                from entropy.agents import worktrees as _wt
+    def delete(self, task_id: str, reason: str = "") -> bool:
+        """
+        Kartı panodan kaldırır — Faz 13-C.4'ten beri SİLMEZ, ARŞİVLER.
 
-                _wt.release_worktree(card, force=True, vault_path=self.vault_path)
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "Kart worktree'si kaldırılamadı: %s", task_id, exc_info=True
+        Ad korundu (arayüz düğmesi ve eski çağıranlar bu imzayı kullanıyor),
+        davranış değişti: kart dosyası `Entropy/_archive/<tarih>/cards/`
+        altına taşınır ve olay günlüğüne düşer. Doğrudan `unlink` yolu yoktur;
+        kullanıcı verisi olaysız kaybolmaz.
+        """
+        return bool(self.archive_card(task_id,
+                                      reason or "Panodan kaldırıldı.").get("ok"))
+
+    def archive_card(self, card_id: str, reason: str = "") -> Dict[str, object]:
+        """
+        Kartı arşive taşır ve olayını yazar; `{ok, archived_to}` döndürür.
+
+        Üç kural:
+          * **Gerekçe zorunlu** (T13 koruması): "neden kaldırıldı" sorusunun
+            yanıtı olay günlüğünde durmalı.
+          * **Terminal kart terminal kalır**: `done`/`canceled` kart
+            `board.archived` BİLGİ olayıyla kaydedilir, durumu değişmez;
+            diğerleri `task.canceled` ile iptale taşınır.
+          * **Ledger'a YAZILMAZ**: arşivleme bir koşu sonucu değil, pano
+            bakımıdır; token muhasebesi bundan etkilenmemeli.
+        """
+        reason = str(reason or "").strip()
+        card = self.get(card_id)
+        if card is None:
+            return {"ok": False, "archived_to": "", "reason": "kart yok"}
+        if not reason:
+            return {"ok": False, "archived_to": "",
+                    "reason": "arşivleme gerekçesi (reason) boş olamaz"}
+        payload = {"reason": reason, "summary": reason,
+                   "title": card.title, "office": card.office or ""}
+        # `apply_event` kartı yazarken zaten `task_cards_updated` yayıyor;
+        # ikinci bir sinyal arayüzde çift yenileme demek olurdu.
+        notified = False
+        if card.status in _board_fsm.TERMINAL_STATUSES:
+            try:
+                self.events.append(
+                    task_id=card.id, actor="user", action="board.archived",
+                    payload=dict(payload, status=card.status),
                 )
+            except Exception:
+                logging.getLogger(__name__).debug("Arşiv olayı yazılamadı", exc_info=True)
+        else:
+            try:
+                self.apply_event(card.id, "task.canceled", actor="user", payload=payload)
+                notified = True
+            except _board_fsm.InvalidTransition:
+                logging.getLogger(__name__).info(
+                    "Arşivlenen kart iptale taşınamadı (%s); olay bilgi olarak yazılır",
+                    card.id,
+                )
+                try:
+                    self.events.append(
+                        task_id=card.id, actor="user", action="board.archived",
+                        payload=dict(payload, status=card.status),
+                    )
+                except Exception:
+                    pass
+            card = self.get(card.id) or card
+        self._release_worktree_for(card)
+        archived_to = self._move_card_to_archive(card)
+        if not notified:
+            self._notify(card.id)
+        self.rewrite_taskboard()
+        return {"ok": True, "archived_to": archived_to}
+
+    def _move_card_to_archive(self, card: TaskCard) -> str:
+        """Kart dosyasını `Entropy/_archive/<tarih>/cards/` altına taşır."""
+        source = card.path or self.card_file(card.id, office=card.office)
+        if not Path(source).is_file():
+            source = self.card_file(card.id, office=card.office)
+        if not Path(source).is_file():
+            source = self.card_file(card.id)
+        if not Path(source).is_file():
+            return ""
+        day = datetime.datetime.now().strftime("%Y-%m-%d")
+        target_dir = self.vault_path / "Entropy" / "_archive" / day / "cards"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / Path(source).name
+        if target.exists():
+            target = target_dir / f"{Path(source).stem}-{datetime.datetime.now():%H%M%S}.md"
         try:
-            path.unlink()
+            Path(source).replace(target)
         except OSError:
-            return False
-        self._notify(task_id)
-        return True
+            try:
+                target.write_text(Path(source).read_text(encoding="utf-8"),
+                                  encoding="utf-8")
+                Path(source).unlink()
+            except OSError:
+                logging.getLogger(__name__).warning(
+                    "Kart arşive taşınamadı: %s", source
+                )
+                return ""
+        return str(target)
+
+    def _release_worktree_for(self, card: TaskCard) -> None:
+        """
+        Arşivlenen kartın izole çalışma ağacını bırakır (Faz 10-C kuralı).
+
+        Kaldırma BAŞARISIZ olabilir (Windows dosya kilidi, ölçüm: rc=255); o
+        durumda kayıt ertelenmiş temizlik kuyruğuna düşer ve kart yine arşive
+        gider — asılı bir ağaç, arşivlenmemiş bir karttan ucuzdur.
+        """
+        if card is None or not (card.worktree or ""):
+            return
+        try:
+            from entropy.agents import worktrees as _wt
+
+            _wt.release_worktree(card, force=True, vault_path=self.vault_path)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Kart worktree'si kaldırılamadı: %s", card.id, exc_info=True
+            )
 
     # -- taşıma (Faz 9 / B-9.2) ------------------------------------------
 
@@ -1681,11 +1806,21 @@ class TaskBoard:
         return f"brain-{card.id}"
 
     def stop(self, card_id: str) -> bool:
-        """Süren kartı keser; kart `failed` olur."""
+        """
+        Süren kartı keser: süreç AĞACI ölür, kart `canceled`, ledger kapanır.
+
+        Faz 13-C (QA canlı kartı): köprünün `terminate_background_task`ı yalnız
+        o köprü örneği kartın sürecini hâlâ tanıyorsa işe yarıyordu. Ölçüm
+        sürecinin kapandığı turda CLI ÖKSÜZ kaldı ve `tasks_ledger` satırı
+        `RUNNING`/NULL takılı kaldı: kart panoda iptal, defterde koşuyor
+        görünüyordu. Bu yüzden burada iki güvence eklendi — süreç ağacı
+        doğrudan gizli `taskkill /F /T` ile indirilir (pencere açılmaz) ve
+        ledger satırı her hâlükârda `canceled` yazılır.
+        """
         card = self.get(card_id)
         if card is None or card.status not in ("running", "taken"):
             return False
-        killed = False
+        killed = self._kill_card_process_tree(card_id)
         for provider in ("agy", "claude"):
             bridge = self._bridge_cache.get(provider)
             if bridge is None:
@@ -1721,9 +1856,114 @@ class TaskBoard:
             ClaimStore(self.vault_path).release(card.id)
         except Exception:
             pass
+        self._close_ledger_rows(card_id, "Kullanıcı isteğiyle durduruldu.")
         emit_terminal(card.id, card.office or card.agent or "entropy", "canceled",
                       "Kullanıcı isteğiyle durduruldu.", vault_path=self.vault_path)
         return killed
+
+    #: Bir kartın defterde açabileceği görev kimlikleri (köprü sözleşmesi).
+    _LEDGER_TASK_PREFIXES: Tuple[str, ...] = ("card-", "office-plan-", "office-eval-")
+
+    def _card_task_ids(self, card_id: str) -> List[str]:
+        return [f"{prefix}{card_id}" for prefix in self._LEDGER_TASK_PREFIXES]
+
+    def _card_process_pids(self, card_id: str) -> List[int]:
+        """
+        Kartın CANLI CLI süreçlerinin pid'leri (bilinen TÜM köprülerden).
+
+        Köprünün kendi `terminate_background_task`ı yalnız o köprü örneği
+        süreci hâlâ tanıyorsa çalışır; burada aynı defterler doğrudan okunur,
+        çünkü `stop` için tek soru "hangi işletim sistemi süreci ölecek".
+        """
+        bridges: List[object] = [b for b in self._bridge_cache.values() if b is not None]
+        try:
+            from entropy.ui.manager import EntropyUIManager
+
+            mgr = getattr(EntropyUIManager, "instance", None)
+            active = getattr(mgr, "bridge", None) if mgr is not None else None
+            if active is not None and active not in bridges:
+                bridges.append(active)
+        except Exception:
+            pass
+        wanted = set(self._card_task_ids(card_id))
+        pids: List[int] = []
+        for bridge in bridges:
+            table = getattr(bridge, "_background_processes", None)
+            if not isinstance(table, dict):
+                continue
+            for task_id, proc in list(table.items()):
+                if str(task_id) not in wanted or proc is None:
+                    continue
+                try:
+                    if proc.poll() is not None:
+                        continue
+                    pid = int(proc.pid)
+                except Exception:
+                    continue
+                if pid > 0 and pid not in pids:
+                    pids.append(pid)
+        return pids
+
+    def _kill_card_process_tree(self, card_id: str) -> bool:
+        """
+        Kartın süreç AĞACINI indirir (Windows: gizli `taskkill /F /T`).
+
+        `/T` şart: CLI kendi alt süreçlerini (dil sunucusu, kabuk) doğuruyor ve
+        yalnız kökü öldürmek ÖKSÜZ bir ağaç bırakıyordu — kart panoda iptal,
+        diskte hâlâ yazıyor oluyordu. Pencere açılmaz (`popen_kwargs`), aksi
+        hâlde her durdurmada siyah bir konsol parlıyordu.
+        """
+        import subprocess
+        import sys
+
+        pids = self._card_process_pids(card_id)
+        if not pids:
+            return False
+        from entropy.platform.proc import popen_kwargs
+
+        killed = False
+        for pid in pids:
+            try:
+                if sys.platform == "win32" or os.name == "nt":
+                    subprocess.run(
+                        f"taskkill /F /T /PID {pid}", shell=True,
+                        **popen_kwargs(stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL),
+                    )
+                else:
+                    os.kill(pid, 15)
+                killed = True
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Kart süreci indirilemedi: %s (pid %s)", card_id, pid, exc_info=True
+                )
+        return killed
+
+    def _close_ledger_rows(self, card_id: str, reason: str) -> None:
+        """
+        Kartın defterdeki AÇIK satırlarını `canceled` yazar.
+
+        Süreç öldürüldüğünde köprünün `finally` bloğu çalışmayabiliyor: satır
+        `RUNNING` takılı kalıyor ve kart panoda iptal, defterde koşuyor
+        görünüyordu (Faz 13-C, QA canlı kartı).
+        """
+        try:
+            from entropy.core.task_ledger import task_ledger
+        except Exception:
+            return
+        for task_id in self._card_task_ids(card_id):
+            try:
+                row = task_ledger.get_task(task_id)
+                if not row:
+                    continue
+                status = str(row.get("status") or "").lower()
+                if status in ("completed", "failed", "cancelled", "canceled"):
+                    continue
+                task_ledger.record_task_cancelled(task_id, reason=reason)
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "Defter satırı kapatılamadı: %s", task_id, exc_info=True
+                )
 
     # -- tamamlama ------------------------------------------------------
 
@@ -1745,11 +1985,15 @@ class TaskBoard:
         # günlüğünde kayıpsız kalır (risk R-C); buradan sonraki her tüketici
         # temizlenmiş metni görür.
         tool_calls, finish_args, tool_reject = _board_tool_results(raw_output)
-        # OFİS kartı KAPSAM DIŞI: Desk harness'ı blokları kartın `summary`sinden
-        # geri ayrıştırıyor (kontrol noktası dosyası, kanıt, kural adayı).
-        # Orada temizlik yapmak harness'ın tek gerçek kaynağını yok ederdi;
-        # Desk'in kendi temizliği harness'ın işidir (açık iş).
-        summary = raw_output if card.office else _strip_tool_blocks(raw_output)
+        # Faz 13-C.1: OFİS kartında da temizlik KOŞULSUZ. Harness eskiden
+        # blokları kartın `summary`sinden geri ayrıştırıyordu, bu yüzden ofis
+        # kartlarında ham `[PANO …] {json} [/PANO]` metni Desk arayüzünde
+        # kullanıcıya görünüyordu. Artık bloklar burada bir kez ayrıştırılıp
+        # KART ALANLARINA yazılır (`checkpoint`, `proof`, `proof_green`, kural
+        # adayları) ve harness alanları okur. Ham metin köprü raporunda ve olay
+        # günlüğünde kayıpsız kalır.
+        office_fields = self._office_block_fields(card, raw_output, finish_args)
+        summary = _strip_tool_blocks(raw_output)
         if not summary and isinstance(finish_args, dict):
             # Ajan SADECE araç bloğu yazdıysa özet boş kalmasın: `board_finish`
             # zaten bir `summary` alanı taşıyor.
@@ -1821,11 +2065,12 @@ class TaskBoard:
                 # tüketildiği yerde (değerlendirici prompt'u) yapılır.
                 summary=payload["summary"],
                 output_paths=outputs,
+                **office_fields,
             )
             self._write(card)
         else:
             card = self._write(replace(moved, summary=payload["summary"],
-                                       output_paths=outputs))
+                                       output_paths=outputs, **office_fields))
         try:
             from entropy.agents.dispatcher import ClaimStore
 
@@ -1867,6 +2112,96 @@ class TaskBoard:
             # kullanıcının "neden durdu" sorusunun tek yanıtıdır.
             card = self._apply_amplification_lock(card, summary, ok)
             self._report_to_entropy(card, summary, ok)
+
+    def _office_block_fields(self, card: TaskCard, raw_output: str,
+                             finish_args: Optional[Dict[str, object]] = None
+                             ) -> Dict[str, object]:
+        """
+        Ofis kartının ham çıktısındaki blokları KART ALANLARINA çevirir (13-C.1).
+
+        Üç blok okunur ve ham metin temizlenmeden ÖNCE tüketilir:
+          * `[KONTROL NOKTASI]` → dosyaya yazılır, yolu `checkpoint` alanına;
+          * `[KANIT]` ya da `[PANO board_finish].proof` → `proof` + `proof_green`;
+          * `[KURAL] …` satırları → ofisin kural ADAYI kuyruğuna.
+
+        Entropy kartlarında boş sözlük döner: onların kontrol noktası zaten
+        `board_tool_exec` yolundan (`[PANO board_checkpoint]`) yazılıyor ve
+        kural adayları Desk'in kavramıdır.
+
+        Hiçbir hata YÜKSELTİLMEZ: bloklar bir kolaylıktır, kartın kapanmasının
+        önkoşulu değildir.
+        """
+        fields: Dict[str, object] = {}
+        if not card.office or not (raw_output or "").strip():
+            return fields
+        # -- kontrol noktası
+        try:
+            from entropy.brain import checkpoints as _cp
+
+            parsed = _cp.parse_checkpoint_block(raw_output) or {}
+            if parsed:
+                path = _cp.write_checkpoint(
+                    card.office, card.id,
+                    summary=str(parsed.get("summary") or parsed.get("done") or ""),
+                    done=str(parsed.get("done") or ""),
+                    next_steps=str(parsed.get("next_steps") or ""),
+                    files_touched=parsed.get("files_touched") or [],
+                    tests=str(parsed.get("tests") or ""),
+                    author=card.agent or "",
+                    vault_path=self.vault_path,
+                )
+                if path:
+                    fields["checkpoint"] = str(path)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Ofis kontrol noktası yazılamadı (%s)", card.id, exc_info=True
+            )
+        # -- kanıt. Metin ve yeşillik kararı HARNESS'IN eski yolundan birebir
+        # üretilir (`OfficeHarness.read_proof`): kart alanı o okumanın yerine
+        # geçtiği için en ufak bir farklılık "kanıt kırmızı" ile "kanıt yok"u
+        # karıştırır ve salt araştırma kartı bir daha `done` olamazdı.
+        proof_text, green = "", None
+        try:
+            from entropy.agents.harness import parse_proof
+            from entropy.brain import checkpoints as _cp
+
+            local = parse_proof(raw_output, needs_write=card_needs_write(card))
+            data = _cp.parse_proof_block(raw_output)
+            if isinstance(data, dict) and data.get("ok") is not None:
+                proof_text = (local or {}).get("text") or " · ".join(
+                    str(data.get(k) or "") for k in ("command", "raw_result", "summary")
+                ).strip(" ·")
+                green = bool(data["ok"])
+            elif local:
+                proof_text, green = local.get("text", ""), bool(local.get("green"))
+        except Exception:
+            logging.getLogger(__name__).debug("Kanıt bloğu okunamadı", exc_info=True)
+        if not proof_text:
+            # Araç sözleşmesi yolu: `board_finish` kendi `proof` nesnesini
+            # taşıyorsa serbest blok hiç yazılmamış olabilir.
+            args_proof = (finish_args or {}).get("proof") if finish_args else None
+            if isinstance(args_proof, dict) and args_proof:
+                proof_text = " · ".join(
+                    str(args_proof.get(k) or "").strip()
+                    for k in ("command", "result", "summary")
+                    if str(args_proof.get(k) or "").strip()
+                )
+                if args_proof.get("green") is not None:
+                    green = bool(args_proof.get("green"))
+        if proof_text:
+            fields["proof"] = proof_text
+            fields["proof_green"] = green
+        # -- kural adayları (ajan kuralı belleğe kendisi yazamaz: ADAY kuyruğu)
+        try:
+            from entropy.agents.harness import propose_rule_candidates
+
+            propose_rule_candidates(
+                card.office, card.agent or "", raw_output, source=card.id,
+                vault_path=self.vault_path,
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Kural adayı yazılamadı", exc_info=True)
+        return fields
 
     def _note_session_usage(self, card: TaskCard) -> None:
         """Kartın token harcamasını ajanın oturum sayacına işler (Faz 12-B)."""
@@ -2048,6 +2383,19 @@ class TaskBoard:
 # ---------------------------------------------------------------------------
 
 FOLLOWUP_NOTE_PREFIX = "Takip turu"
+
+
+def archive_card(card_id: str, reason: str = "",
+                 vault_path: Optional[Path | str] = None) -> Dict[str, object]:
+    """
+    Kartı arşive taşır — MODÜL DÜZEYİ sözleşme (Faz 13-C.4).
+
+    `dict(ok, archived_to)` döner. Arayüzün ve `/task rm` yolunun tek kapısı
+    burasıdır: doğrudan `unlink` eden bir yol YOKTUR, kullanıcı verisi olaysız
+    kaybolmaz. Gerekçe zorunludur; boş gerekçeyle çağrı `ok=False` döner.
+    """
+    board = TaskBoard(vault_path=Path(vault_path) if vault_path else None)
+    return board.archive_card(str(card_id or ""), reason)
 
 
 def _strip_tool_blocks(text: str) -> str:
