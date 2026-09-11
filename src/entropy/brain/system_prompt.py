@@ -64,7 +64,13 @@ BUDGET_RULES = 600
 # Pano araçlarının (Faz 12-C) payı: araç sözleşmesinin sonuna eklenir, kendi
 # tavanı vardır. Entropy sohbette bu blokla ajanına kart açar; blok büyürse
 # araç sözleşmesinin geri kalanını ezmesin diye ayrı kelepçelenir.
-BUDGET_BOARD_TOOLS = 600
+# Faz 14-C: geçici ajan sözleşmesi (`[AJAN run]`) de bu bölüme giriyor ve
+# 600 karakterlik tavan ÖLÇÜLDÜ ki `board_create` bloğunun tamamını (içindeki
+# `[DESK …]` araçlarıyla birlikte) dışarıda bırakıyor — yani Entropy hem kart
+# açma hem ajan açma aracını aynı anda göremiyordu. Tavan 1000'e çıkarıldı
+# (~+100 token, tur başına bir kez): ölçüm `board_tools_section(1000)` →
+# 933 karakter, üç blok da tam.
+BUDGET_BOARD_TOOLS = 1000
 
 # Kırpma önceliği: sona doğru gidildikçe önce düşer. Kurallar bağlamdan sonra
 # düşer: kullanıcının "kalıcı yap" dediği bir kural, geri çağrılan bir nottan

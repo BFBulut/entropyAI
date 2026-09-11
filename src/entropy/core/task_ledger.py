@@ -98,6 +98,15 @@ class TaskLedger:
                 # nedeni ölçülemiyor. Göç geriye uyumlu: eski satırlar NULL.
                 if "effort" not in cols:
                     conn.execute("ALTER TABLE tasks ADD COLUMN effort TEXT")
+                # Koşu türü ve ana koşu (Faz 14-C): geçici ajan koşusu
+                # (`run_type="ephemeral"`) kalıcı kadro koşusundan ayrılabilmeli
+                # ve hangi sohbet turundan doğduğu (`parent_run_id`) defterden
+                # okunabilmeli — ajan kendini siler, defter kalır. Göç geriye
+                # uyumlu: eski satırlar NULL, okurken "" varsayılır.
+                if "run_type" not in cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN run_type TEXT")
+                if "parent_run_id" not in cols:
+                    conn.execute("ALTER TABLE tasks ADD COLUMN parent_run_id TEXT")
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);"
                 )
@@ -129,6 +138,39 @@ class TaskLedger:
                     """,
                     (task_id, task_name, str(project_path), TaskStatus.PENDING.value, now)
                 )
+                conn.commit()
+
+    def record_run_meta(self, task_id: str, run_type: str = "",
+                        parent_run_id: str = "") -> None:
+        """
+        Koşu künyesini yazar (Faz 14-C): tür + ana koşu kimliği.
+
+        Satır henüz yoksa oluşturulur: geçici ajanın künyesi köprü `record_task_
+        start` çağırmadan ÖNCE bilinir ve koşu ilk saniyede ölse bile defterde
+        "bir geçici ajan doğdu" izi kalmalıdır.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._lock:
+            with self._get_connection() as conn:
+                cur = conn.execute("SELECT task_id FROM tasks WHERE task_id = ?",
+                                   (task_id,))
+                if cur.fetchone():
+                    conn.execute(
+                        "UPDATE tasks SET run_type = ?, parent_run_id = ? "
+                        "WHERE task_id = ?",
+                        (run_type or "", parent_run_id or "", task_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO tasks (
+                            task_id, task_name, project_path, status, created_at,
+                            run_type, parent_run_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (task_id, task_id, "", TaskStatus.PENDING.value, now,
+                         run_type or "", parent_run_id or ""),
+                    )
                 conn.commit()
 
     def record_task_start(

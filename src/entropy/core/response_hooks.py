@@ -41,10 +41,20 @@ def entropy_tools_section() -> str:
     try:
         from entropy.agents.board_tools import tools_section
 
-        return tools_section(for_entropy=True)
+        section = tools_section(for_entropy=True)
     except Exception:
         logger.debug("Entropy araç sözleşmesi üretilemedi", exc_info=True)
-        return ""
+        section = ""
+    # Faz 14-C: geçici ajan çağrısı. Kart açmak (`board_create`) uzun soluklu
+    # iş içindir; bir yetenek/araştırma koşusu için kart, kadro ve tetikleyici
+    # gerekmez — `[AJAN run]` bloğu tek seferlik bir ajan doğurur.
+    try:
+        from entropy.agents.ephemeral import AGENT_TOOL_SECTION
+
+        section = (section + "\n\n" + AGENT_TOOL_SECTION).strip()
+    except Exception:
+        logger.debug("Geçici ajan sözleşmesi eklenemedi", exc_info=True)
+    return section
 
 
 def _active_provider() -> str:
@@ -89,6 +99,10 @@ def process_chat_response(text: str, board=None, registry=None,
     # Faz 13-C.3: Entropy → Desk düzenlemesi. Yapısal bloklar onay kuyruğuna
     # düşer, `msg` doğrudan uygulanır; ikisi de YALNIZCA claude sohbet yolunda.
     receipts += _consume_desk_blocks(raw, provider=provider)
+    # Faz 14-C: `[AJAN run]` — Entropy'nin kendi kararıyla geçici ajan açması.
+    # Onay ARANMAZ: ajan açmak Entropy'nin işidir (kart açmak zaten onaysız);
+    # ajanın izin isteyen araçları 14-B onay kuyruğundan geçer.
+    receipts += _consume_agent_blocks(raw)
     try:
         from entropy.agents.board_tools import strip_tool_blocks
 
@@ -96,10 +110,27 @@ def process_chat_response(text: str, board=None, registry=None,
     except Exception:
         logger.debug("Araç blokları temizlenemedi", exc_info=True)
         cleaned = raw
+    try:
+        from entropy.agents.ephemeral import strip_agent_blocks
+
+        cleaned = strip_agent_blocks(cleaned)
+    except Exception:
+        logger.debug("Geçici ajan bloğu temizlenemedi", exc_info=True)
     if not receipts:
         return cleaned
     tail = "\n".join(receipts)
     return (cleaned + "\n\n" + tail).strip() if cleaned else tail
+
+
+def _consume_agent_blocks(text: str) -> List[str]:
+    """`[AJAN run]` bloklarını tüketir; makbuz satırlarını döndürür."""
+    try:
+        from entropy.agents import ephemeral
+
+        return list(ephemeral.consume_agent_blocks(text) or [])
+    except Exception:
+        logger.warning("Geçici ajan blokları tüketilemedi", exc_info=True)
+        return []
 
 
 def _consume_desk_blocks(text: str, provider: str = "") -> List[str]:

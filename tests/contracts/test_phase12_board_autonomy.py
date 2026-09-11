@@ -384,9 +384,12 @@ def test_drift_event_does_not_poison_the_projection(board, tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_local_command_surface_is_thirty_one():
+def test_local_command_surface_is_thirty_two():
     names = {c.name for c in sc.BUILTIN_AGY_COMMANDS + sc.LOCAL_COMMANDS}
-    assert len(names) == 31, sorted(names)
+    # 31 → 32: Faz 14-C'nin `/skill run <yetenek> :: <istem>` komutu (geçici
+    # ajan koşusunun doğrudan tetikleyicisi). `/skills` (liste) ayrı durur.
+    assert len(names) == 32, sorted(names)
+    assert "/skill" in names
     # Birleşen üçlü: `/agents`, `/tasks`, `/wiki` artık ayrı komut değil.
     assert {"/agents", "/tasks", "/wiki"}.isdisjoint(names)
     assert {"/agent", "/task", "/distill"} <= names

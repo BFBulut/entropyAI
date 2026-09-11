@@ -104,6 +104,13 @@ MAX_STEPS_MARKER = "[ADIM SINIRI]"
 # bu anahtar açıkça True yapılmadıkça eklenmez.
 CLAUDE_SUPPORTS_MAX_TURNS = False
 
+# Faz 14-C: `--no-session-persistence` ("Do not persist the session to disk",
+# yalnız `--print` ile) `claude --help` 2.1.268 çıktısında AÇIKÇA var — yani
+# `--max-turns` gibi belirsiz değil, ölçüldü (araştırma B §2.2 tablosu).
+# Geçici ajanın "kendini silmesi"nin CLI tarafındaki karşılığı budur: oturum
+# kaydı hiç oluşmadığı için silinecek bir dosya kalmaz.
+CLAUDE_SUPPORTS_NO_SESSION_PERSISTENCE = True
+
 # `--append-system-prompt` argv'de taşındığı için bilişsel bağlam sınırsız
 # olamaz: prompt + sistem istemi birlikte Windows komut satırı sınırına yazılır.
 # 6000 karakter (~1500 token) AGY köprüsündeki bütçeyle aynı; orada da bağlam
@@ -465,6 +472,9 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         # yazıyor; `on_result(text, ok)` sözleşmesi kimliği taşıyamıyor ve
         # sözleşmeyi genişletmek tüm sahte köprüleri kırardı.
         self._background_conversations: Dict[str, str] = {}
+        # Faz 14-C: görev başına araç adımı sayısı (bildirim satırı "N araç
+        # adımı" der; `consume_stream` sayıyor, geri çağrı göremiyordu).
+        self.background_step_counts: Dict[str, int] = {}
         self._is_running: bool = False
         self._shutting_down: bool = False
         self._side_threads: List[threading.Thread] = []
@@ -866,6 +876,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
         permission_tool: Optional[str] = None,
+        no_session_persistence: bool = False,
     ) -> List[str]:
         """
         Başsız bir Claude Code çağrısının argv'sini kurar.
@@ -1026,6 +1037,11 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             # sürdürür. `--resume` ile birlikte VERİLMEZ: CLI ikisini bir arada
             # kabul etmiyor ve zaten anlamsız (kimlik ya yeni ya sürdürülüyor).
             cmd.extend(["--session-id", str(session_id)])
+        # Faz 14-C: geçici ajan oturumu diske HİÇ yazılmaz. Bayrak yalnız
+        # `--print` ile geçerli (ölçüm: araştırma B §2.2) ve `--resume` ile
+        # birlikte anlamsızdır — sürdürülecek bir kayıt zaten yok.
+        if no_session_persistence and CLAUDE_SUPPORTS_NO_SESSION_PERSISTENCE and not resume_id:
+            cmd.append("--no-session-persistence")
 
         # Efor önceliği (Faz 11-C.4): prompt'taki tek seferlik `/effort <seviye>`
         # > bu koşuya AÇIKÇA verilen efor (ajanın/kartın eforu) > oturum eforu
@@ -2369,6 +2385,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
         skill: Optional[str] = None,
+        ephemeral: Optional[dict] = None,
     ) -> None:
         """
         AGY köprüsüyle birebir aynı sözleşme; farklar yalnızca CLI bayraklarında.
@@ -2414,7 +2431,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                   save_report, agent, needs_write, conversation_id, max_steps,
                   model, agent_spec, stream_meta, interactive,
                   on_followup_start, on_followup_end, tools, effort, session_id,
-                  skill),
+                  skill, ephemeral),
             daemon=True,
         ).start()
 
@@ -2536,7 +2553,14 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
         effort: Optional[str] = None,
         session_id: Optional[str] = None,
         skill: Optional[str] = None,
+        ephemeral: Optional[dict] = None,
     ) -> None:
+        # Faz 14-C: `ephemeral` dolu geldiğinde bu koşu GEÇİCİ bir ajanındır.
+        # Yükün alanları: `agents_json` (koşu başına üretilmiş tek ajan tanımı,
+        # Entropy kadrosunun YERİNE geçer), `system_prompt` (agent.md gövdesi),
+        # `extra_dirs` (izole çalışma dizini + kasa rapor klasörü),
+        # `no_session_persistence`. Kalıcı oturum defterine HİÇBİR ŞEY yazılmaz.
+        eph = dict(ephemeral or {})
         emit_stream = self._agent_stream_emitter(task_id, stream_meta, model)
         # Kip bayrağı ayardan; kapalıysa hiçbir çağıran değişmeden Faz 10-B
         # davranışına dönülür.
@@ -2601,7 +2625,7 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
             # KİMLİK (Faz 9.4). Arka plan kartları eskiden sistem istemi HİÇ
             # almıyordu (ölçüm: kart oturumlarında Entropy payı 0 karakter);
             # sohbet alıyordu. İki yol artık tek kurucudan besleniyor.
-            card_system_prompt = self.entropy_system_prompt(
+            card_system_prompt = eph.get("system_prompt") or self.entropy_system_prompt(
                 "card",
                 project_path=str(project_dir),
                 agent_spec=agent_spec,
@@ -2642,9 +2666,12 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     if tools else self.tools_for(mode, needs_write=bool(needs_write))
                 ),
                 agents_json=(
-                    self.entropy_agents_json(effort=effort)
-                    if getattr(config, "claude_isolated", False) else None
+                    (eph.get("agents_json") or None) if eph else
+                    (self.entropy_agents_json(effort=effort)
+                     if getattr(config, "claude_isolated", False) else None)
                 ),
+                extra_dirs=[str(d) for d in (eph.get("extra_dirs") or [])] or None,
+                no_session_persistence=bool(eph.get("no_session_persistence")),
                 # Faz 11-C.4/C.3: ajanın eforu ve kalıcı oturum kimliği.
                 effort=effort,
                 session_id=session_id if not resume_id else None,
@@ -2752,7 +2779,10 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                         self._background_conversations[task_id] = str(session_id)
                     # Faz 11-C.3: ajanın kalıcı oturumu diske yazılır; bellek
                     # sözlüğü uygulama kapanınca gidiyordu.
-                    self._remember_agent_session(agent, str(session_id))
+                    if not eph:
+                        # Geçici ajanın kimliği KALICI deftere yazılmaz: koşu
+                        # bitince ondan geriye yalnız ledger, rapor ve hafıza kalır.
+                        self._remember_agent_session(agent, str(session_id))
 
                 full_text = str(result.get("text", "") or "").strip()
                 success = (
@@ -2762,6 +2792,15 @@ class ClaudeCodeBridge(ProviderCommonMixin, QObject):
                     and not result.get("is_error")
                 )
                 card_success = success
+                # Faz 14-C: araç adımı sayısı çağırana da lazım ("N araç adımı"
+                # bildirimi). `consume_stream` zaten sayıyordu ama sayı geri
+                # çağrıya hiç ulaşmıyordu.
+                try:
+                    self.background_step_counts[task_id] = int(
+                        result.get("tool_steps") or 0
+                    )
+                except Exception:
+                    pass
                 task_usage = dict(result.get("usage") or {})
 
                 if task_usage:

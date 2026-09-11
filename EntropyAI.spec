@@ -148,6 +148,10 @@ a = Analysis(
         'entropy.agents.offices',
         'entropy.agents.harness',
         'entropy.agents.bootstrap',
+        # Faz 14-C: gecici (kendini silen) ajan dongusu. Yalnizca gec import
+        # ediliyor (sohbet yanit kancasi, /skill komutu, dispatcher turu);
+        # statik tarayici goremez.
+        'entropy.agents.ephemeral',
         # Faz 6: Desk kayit defteri, ofis grafigi, piksel sahne motoru,
         # pencere sigdirma ve efor secici.
         'entropy.agents.desk_registry',

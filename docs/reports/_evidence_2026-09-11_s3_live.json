@@ -1,0 +1,391 @@
+{
+  "runs": [
+    {
+      "finished": true,
+      "duration_s": 79.0,
+      "slug": "media-agency-soldier-d841dcee",
+      "skill": "media-agency-soldier",
+      "max_steps": 60,
+      "argv": [
+        "C:\\Users\\batu_\\.vscode\\extensions\\anthropic.claude-code-2.1.268-win32-x64\\resources\\native-binary\\claude.exe",
+        "-p",
+        "",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--permission-mode",
+        "default",
+        "--model",
+        "claude-fable-5-1",
+        "--fallback-model",
+        "claude-sonnet-5",
+        "--add-dir",
+        "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_ephemeral\\media-agency-soldier-d841dcee",
+        "--add-dir",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_vault",
+        "--add-dir",
+        "C:\\Users\\batu_\\.entropy\\workspace",
+        "--add-dir",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Reports",
+        "--system-prompt-file",
+        "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_claude_prompts\\sysprompt_36224_8272_1789101837349.txt",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_data\\mcp\\permission_mcp.json",
+        "--setting-sources",
+        "",
+        "--disable-slash-commands",
+        "--tools",
+        "Read,Glob,Grep,WebSearch,WebFetch,Write,Bash",
+        "--agents",
+        "{\"media-agency-soldier-d841dcee\": {\"description\": \"Bir web sitesi, marka, e-ticaret mağazası veya SaaS için 360 adli denetim, rakip/pazar araştırması, derinlemesine SEO (Schema.org, CWV, Indexability, SERP Feature), UX/CRO ve ödeme sürtünmesi analizi, HTTP güvenlik başlıkları (CSP, HSTS, X-Frame) ve Google Consent Mode v2 denetimi yapan; ileri düzey birim ekonomisi (LTV:CAC, Payback Period, CM1/CM2/CM3, nCAC, Breakeven ROAS, POAS net kâr, Blended \", \"prompt\": \"# media-agency-soldier-d841dcee\\n\\n## Görev\\ncanivopets.com sitesini SIFIRDAN, canlı olarak araştır: ne satıyor, hedef kitlesi kim, öne çıkan ürün/kampanya başlıkları neler, sosyal medya ve iletişim kanalları hangileri. Web araması ve sayfa okuması yap; her bulguya kaynak URL ekle. KISA bir rapor yaz.\\n\\n### Yetenek yordamı: media-agency-soldier\\n# Media Agency Soldier Skill\\n\\nBu yetenek, web sitelerini 360 derece adli denetimle inceleyen, kurumsal/e-ticaret/SaaS verilerini ve MarTech sinyallerini çıkaran, kârlılık odaklı birim ekonomisi (LTV:CAC, CAC Payback Period, 3 Kademeli Katkı Marjı CM1/CM2/CM3, nCAC, Breakeven ROAS, Target ROAS, Max CPA, Blended MER, Gerçek POAS, İndirim Başa Baş Hacim Oranı $\\\\Delta Q = \\\\frac{d}{m-d}$, A/B Test Z-skoru p-değeri ve Reklam Bütçe Hızı Pacing) hesaplayan; Schema.org, SERP Fırsatları (Snippet/PAA/Merchant), Core Web Vitals ve E-Ticaret CRO Sürtünme İndeksini denetleyen; HTTP güvenlik başlıkları (CSP, HSTS) ve Google Consent Mode v2 uyumluluğunu doğrulayan; uçtan uca ilişkisel büyüme kampanyaları ile çok kanallı reklam planları (Meta Advantage+ Shopping ASC, Google Performance Max PMax, Google Demand Gen multi-format, Google Search RSA, Meta/Instagram Carousel & 5 Aşamalı UGC, TikTok Spark Ads, Klaviyo Retention Flows), Kreatif Yorgunluk Hook-Swap 5 Psikolojik Kanca Mimarisi, 30 Günlük Müşteri Kabul SLA Karar Kapıları ve 30-60-90 günlük medya uçuş planı inşa eden otonom bir medya ajansı askeridir.\\n\\n## Bileşenler\\n1. **URLAnalyzer**: Web sitesi HTML'i üzerinden marka kimliği, fiziksel konum, iletişim, ürün kataloğu, rakip analizi, SEO teknik denetimi, Core Web Vitals ve CRO/UX sürtünme analizi yapar.\\n2. **MediaAgencyCalculator**:\\n   - Birim ekonomisi: Başa Baş ROAS ($1 / \\\\text{Brüt Marj}$), Hedef ROAS, Maksimum CPA, MER, POAS.\\n   - İleri Finans: LTV (Müşteri Yaşam Boyu Değeri), LTV:CAC Rasyosu ve CAC Geri Ödeme Süresi (Payback Period in Months).\\n   - 3 Kademeli Katkı Marjı: CM1 (Brüt Kâr), CM2 (Operasyonel Marj), CM3 (Pazarlama Faaliyet Net Katkısı).\\n   - nCAC (Yeni Müşteri CAC) ve Organik Yamyamlık tespiti.\\n   - Fiyat Esnekliği & İndirim Başa Baş Hacim Formülü ($\\\\Delta Q = \\\\frac{d}{m-d}$).\\n   - Gerçek POAS (Profit On Ad Spend) Net Kârlılık Simülasyonu (İadeler, COGS, Kargo, Gateway POS komisyonu).\\n   - Blended MER (Marketing Efficiency Ratio) ve Çok Kanallı Çift Sayım (Attribution Overlap) tespiti.\\n   - A/B Test İki Oran Farkı İki Kuyruklu Z-Testi (p-değeri ve %95 güven aralığı).\\n   - Reklam Bütçesi Hızı (Budget Pacing, günlük burn rate, ay sonu projeksiyonu ve pacing koridoru).\\n   - 3:2:2 Dinamik Kreatif Testi bütçe ve örneklem hesaplayıcısı.\\n   - RFM Müşteri Segmentasyonu ve bütçe dağılım stratejileri.\\n3. **SEOAndMarTechAuditor**:\\n   - MarTech & Güvenlik: GA4 (`G-`), GTM (`GTM-`), Meta Pixel (`fbq`), Meta CAPI sunucu tekilleştirmesi (`event_id`), TikTok Pixel (`ttq`), Clarity/Hotjar, Klaviyo, Google Consent Mode v2 (`ad_storage`, `analytics_storage`, `ad_user_data`, `ad_personalization`), CSP, HSTS, X-Frame-Options ve KVKK/Çerez banner denetimi.\\n   - E-Ticaret CRO Skor Kartı: Mobil yapışkan CTA, Express Checkout (Masterpass, Apple Pay, Google Pay), Misafir Alışverişi, Form Alan Sürtünme İndeksi ve Güven Rozetleri.\\n   - SERP Fırsatları & Zengin Sonuçlar: Sıfırıncı Sıra (Featured Snippet adayları), PAA soru tespiti, Rich Merchant ve Sitelinks searchbox.\\n   - Schema.org: JSON-LD bloklarında Product (`name`, `image`, `offers.price`, `offers.availability`), Organization, LocalBusiness, BreadcrumbList, FAQPage zengin sonuç geçerliliğini test eder.\\n   - Core Web Vitals DOM Teşhisi: Head içi render-blocking senkron scriptler, CSS dosyaları, görsellerde `width`/`height` ve `loading=\\\"lazy\\\"` eksiklikleri ile FOUT font gecikmelerini puanlar.\\n   - İndekslenebilirlik: Meta robots (`noindex`/`nofollow`), canonical etiketi doğrulaması, OpenGraph (`og:title`, `og:image`) ve Twitter Cards denetimi.\\n   - Semantik Mimari: Konu Kümeleri (Topic Clusters), Arama Niyeti sınıflandırması (Informational, Commercial, Navigational, Transactional) ve ajans araç kiti eşlemesi.\\n4. **CampaignArchitect**:\\n   - Promosyonlar: BOGO (\\\"1 Alana 1 Bedava\\\"), Çapraz İndirim (\\\"X alana Y %10 indirimli\\\"), Sepet Eşik Teşviki (\\\"X TL üzeri kargo bedava\\\").\\n   - Google Demand Gen Blueprint: 9:16 Shorts dikey video, 16:9 YouTube video, 1:1 Discover kare görseller ve 3 kademeli Lookalike kitle segmentleri.\\n   - Kreatif Yorgunluk Hook-Swap Paketi: Kazanan video gövdesini koruyarak 5 psikolojik kanca varyantı (Merak/Kalıp Kırıcı, Negatif Uyarı, Kronik Acı, Müşteri İtirafı, Dönüşüm Öncesi/Sonrası) ve 5 günlük test protokolü.\\n   - Ajans Müşteri Kabul (Onboarding) SLA'sı: 30 günlük kilometre taşları ve 4 Fail-Closed Karar Kapısı (Data & Tracking Gate, Profitability Gate, CRO & Friction Gate, Scaling Gate).\\n   - Çok Kanallı Reklam: Meta Advantage+ Shopping Campaigns (ASC), Google Performance Max (PMax) varlık grupları, Google RSA, 5 Aşamalı UGC Video Senaryoları (Kanca, Problem, Çözüm, Demo, CTA), TikTok Spark Ads.\\n   - Retention: 4 Temel Klaviyo/Omnisend akışı (Hoş Geldin, Terk Edilen Sepet/SMS, Satın Alma Sonrası VIP, 60 Gün Geri Kazanım).\\n   - 30-60-90 Günlük Medya Uçuş Planı: Hafta hafta bütçe hızı (pacing), kanal payları ve KPI kilometre taşları.\\n5. **Web Media Audit CLI (`scripts/web_media_audit.py`)**: 12 kategoride 360 derece denetim gerçekleştiren, terminalde renkli/ASCII özet tablosu sunan ve JSON/Markdown raporu üreten profesyonel ajans aracıdır.\\n6. **AgencySoldier CLI**: Çevrimdışı (`--offline-html`) ve canlı URL analizi ile tam kampanya paketini orkestre eder.\\n7. **MediaAgencySoldierEngine**: Entropy AI mimarisiyle tam entegre çalışan köprü motorudur.\\n\\n## Kullanım Örnekleri\\n```bash\\n# 360 Medya Ajansı Denetimi (12 Kategori, İleri Matematik, Demand Gen, Hook-Swap, SLA), Terminal Özet Tablosu, JSON ve Markdown Raporu\\npython skills/media-agency-soldier/scripts/web_media_audit.py --url https://novastep.com.tr --brand \\\"NovaStep\\\" --budget 75000 --output-json ./report.json --output-md ./report.md\\n\\n# Çevrimdışı HTML ile tam denetim ve raporlama\\npython skills/media-agency-soldier/scripts/web_media_audit.py --offline-html ./data/sample.html --output-json ./report.json --output-md ./report.md\\n```\\n\\n## Araştırma Katmanı & Çalışma Yordamı (Playbook)\\nBu yeteneğin damıtılmış çalışma yordamı Obsidian kasasında `<vault>/Entropy/Skills/media-agency-soldier/PL\\n\\n## Bağlam (beyinden)\\n[Kalıcı Bilişsel Hafıza (MEMORY.md)]:\\n# Entropy AI - Global Memory & Architecture Decisions\\n\\n## System Beliefs & Core Directives\\n- System Name: Entropy AI\\n- Core Framework: Antigravity CLI (agy)\\n- Privacy Policy: Local data-on-disk priority\\n\\n## Learned User Preferences\\n- Zero external LLM API keys requested\\n- Multi-modal interaction with Ctrl+C / Ctrl+V\\n\\n## Kabul ölçütleri\\n- Bulguların her biri KAYNAKLI olacak (URL ya da dosya yolu).\\n- Beyinden gelen bağlam araştırmanın YERİNE geçmez; doğrulanmadan\\n  yazılmaz.\\n- En çok 60 araç adımı kullan; ölçütleri karşıladığında dur.\\n- Sonuç raporu tek mesajda, aşağıdaki şablonla dönecek.\\n\\n## Rapor şablonu\\n```\\n# <Raporun başlığı — tek satır, konuyu söyler>\\n\\n## Özet\\n<3-6 madde>\\n\\n## Bulgular\\n<kaynaklı bulgular>\\n\\n## Kaynaklar\\n- <url ya da dosya yolu>\\n```\\n\\n## Hafıza\\nRaporun EN SONUNA, kalıcı olmayı hak eden bilgiyi şu blokla ekle\\n(en çok 8 madde, her maddede kaynak ZORUNLU; yoksa bloğu hiç yazma):\\n\\n```\\n[HAFIZA]\\n{\\\"items\\\": [{\\\"category\\\": \\\"semantic\\\", \\\"content\\\": \\\"<en az 40 karakter, tek cümlelik kalıcı bilgi>\\\", \\\"importance\\\": 0.6, \\\"provenance\\\": \\\"<url ya da dosya yolu>\\\"}]}\\n[/HAFIZA]\\n```\\n\\nKategori kapalı küme: working | episodic | semantic | procedural.\\nHata metni, yığın izi ya da günlük çıktısı hafızaya YAZILMAZ.\\n\\n## Yasaklar\\n- Kod değişikliği yok: kaynak dosyaları düzenleme, commit atma.\\n- Proje kökü SALT OKUNUR; yazman gereken geçici dosyalar yalnız kendi\\n  çalışma dizinine yazılır.\\n- Beyinden gelen yanıt araştırmanın yerine geçmez.\\n- Kendi adına kalıcı bir ajan/oturum kaydı oluşturma; bu koşu tek\\n  seferliktir ve bitince silinirsin.\", \"tools\": [\"Read\", \"Glob\", \"Grep\", \"WebSearch\", \"WebFetch\", \"Write\", \"Bash\"], \"model\": \"claude-fable-5-1\"}}",
+        "--permission-prompt-tool",
+        "mcp__entropy__approve",
+        "--session-id",
+        "7e6fd22a-d8b3-45f9-b233-6de5b10a65a8",
+        "--no-session-persistence",
+        "--effort",
+        "low",
+        "--input-format",
+        "stream-json"
+      ],
+      "argv_has_agents": true,
+      "argv_has_session_id": true,
+      "argv_no_session_persistence": true,
+      "argv_permission_tool": true,
+      "stream_lines": [
+        {
+          "kind": "status",
+          "agent": "media-agency-soldier-d841dcee",
+          "text": "media-agency-soldier-d841dcee doğdu; media-agency-soldier işine başlıyor…"
+        }
+      ],
+      "stream_count": 1,
+      "approvals": [
+        {
+          "id": "20260911-074406-tool_permission-a7227e",
+          "kind": "tool_permission",
+          "title": "WebFetch: https://canivopets.com",
+          "detail": "{\n  \"url\": \"https://canivopets.com\",\n  \"prompt\": \"Sitede ne satılıyor, hedef kitle, öne çıkan ürünler/kampanyalar/başlıklar, sosyal medya linkleri, iletişim bilgileri (telefon, e-posta, adres, whatsapp) neler? Ayrıntılı listele.\"\n}",
+          "risk": "low",
+          "created_at": "2026-09-11T07:44:06",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "WebFetch",
+            "input": {
+              "url": "https://canivopets.com",
+              "prompt": "Sitede ne satılıyor, hedef kitle, öne çıkan ürünler/kampanyalar/başlıklar, sosyal medya linkleri, iletişim bilgileri (telefon, e-posta, adres, whatsapp) neler? Ayrıntılı listele."
+            },
+            "tool_use_id": "toolu_019DRY4Cvw5sYqoYeqDhdmM6"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "20260911-074406-tool_permission-cce40f",
+          "kind": "tool_permission",
+          "title": "WebSearch: canivopets.com",
+          "detail": "{\n  \"query\": \"canivopets.com\"\n}",
+          "risk": "low",
+          "created_at": "2026-09-11T07:44:06",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "WebSearch",
+            "input": {
+              "query": "canivopets.com"
+            },
+            "tool_use_id": "toolu_01RPU1pL5fQafRUgH9fqHxSf"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "20260911-074418-tool_permission-26341a",
+          "kind": "tool_permission",
+          "title": "WebFetch: https://canivopets.com/kopek-mamalari",
+          "detail": "{\n  \"url\": \"https://canivopets.com/kopek-mamalari\",\n  \"prompt\": \"Ürün adları, fiyatlar, indirim/kampanya etiketleri, marka konumlandırma mesajları (üreticiden, kuzu etli vb.) neler?\"\n}",
+          "risk": "low",
+          "created_at": "2026-09-11T07:44:18",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "WebFetch",
+            "input": {
+              "url": "https://canivopets.com/kopek-mamalari",
+              "prompt": "Ürün adları, fiyatlar, indirim/kampanya etiketleri, marka konumlandırma mesajları (üreticiden, kuzu etli vb.) neler?"
+            },
+            "tool_use_id": "toolu_01TrmFtFVhWuY66wvPCeyXdF"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "20260911-074419-tool_permission-b71358",
+          "kind": "tool_permission",
+          "title": "WebFetch: https://canivopets.com/blog",
+          "detail": "{\n  \"url\": \"https://canivopets.com/blog\",\n  \"prompt\": \"Blog yazı başlıkları ve marka mesajları neler? Hedef kitleye dair ipuçları?\"\n}",
+          "risk": "low",
+          "created_at": "2026-09-11T07:44:19",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "WebFetch",
+            "input": {
+              "url": "https://canivopets.com/blog",
+              "prompt": "Blog yazı başlıkları ve marka mesajları neler? Hedef kitleye dair ipuçları?"
+            },
+            "tool_use_id": "toolu_01LxLtXQhiG3aTD6JUVacT9Z"
+          },
+          "status": "pending"
+        },
+        {
+          "id": "20260911-074426-tool_permission-59e68d",
+          "kind": "tool_permission",
+          "title": "Bash: curl -sL -A \"Mozilla/5.0\" https://canivopets.com | grep -oiE 'href=\"https?://(www\\.)?(instagram|facebook|youtube|tiktok|twitter|x|linkedin|wa\\.me|api\\.whatsapp)\\.com[^\"]*\"|mailto:[^\"]+|tel:[^\"]+|G-[A-Z0-9]{6,}|GTM-[A-Z0-9]+|fbq\\(|ttq\\.|<title>[^<]*' | sort -u",
+          "detail": "{\n  \"command\": \"curl -sL -A \\\"Mozilla/5.0\\\" https://canivopets.com | grep -oiE 'href=\\\"https?://(www\\\\.)?(instagram|facebook|youtube|tiktok|twitter|x|linkedin|wa\\\\.me|api\\\\.whatsapp)\\\\.com[^\\\"]*\\\"|mailto:[^\\\"]+|tel:[^\\\"]+|G-[A-Z0-9]{6,}|GTM-[A-Z0-9]+|fbq\\\\(|ttq\\\\.|<title>[^<]*' | sort -u\",\n  \"description\": \"Extract social, contact and tracking signals from homepage HTML\"\n}",
+          "risk": "high",
+          "created_at": "2026-09-11T07:44:26",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "Bash",
+            "input": {
+              "command": "curl -sL -A \"Mozilla/5.0\" https://canivopets.com | grep -oiE 'href=\"https?://(www\\.)?(instagram|facebook|youtube|tiktok|twitter|x|linkedin|wa\\.me|api\\.whatsapp)\\.com[^\"]*\"|mailto:[^\"]+|tel:[^\"]+|G-[A-Z0-9]{6,}|GTM-[A-Z0-9]+|fbq\\(|ttq\\.|<title>[^<]*' | sort -u",
+              "description": "Extract social, contact and tracking signals from homepage HTML"
+            },
+            "tool_use_id": "toolu_012hyNX54HZPovnGnjdB4tkU"
+          },
+          "status": "pending"
+        }
+      ],
+      "pending_changed": [],
+      "notifications": [],
+      "notification_count": 0,
+      "report_path": "C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Skills\\media-agency-soldier\\Reports\\Ajan_canivopets_com Canlı Araştırma Raporu _ Üreticiden Kuzu_20260911_0745.md",
+      "report_bytes": 3611,
+      "report_h1": "---",
+      "report_source_urls": [
+        "https://canivopets.com",
+        "https://canivopets.com/blog",
+        "https://canivopets.com/en/tasima-kutulari",
+        "https://canivopets.com/kedi-mamalari",
+        "https://canivopets.com/kopek-mamalari",
+        "https://www.canivopets.com/canivo-alman-coban-kopek-mamasi-15-kg",
+        "https://www.canivopets.com/canivo-yavru-kopek-mamasi-15-kg",
+        "https://www.canivopets.com/yetiskin-kopek-somonlu-performans-mamasi",
+        "https://www.facebook.com/profile.php?id=61581502411962",
+        "https://www.instagram.com/canivopets",
+        "https://www.youtube.com/@CanivoPets"
+      ],
+      "memory_written": [
+        "semantic-e6fca9ee0152d0bb",
+        "semantic-46912daca32ba4cb",
+        "semantic-5ebcd4e462b3c5c0",
+        "semantic-7c135ff0a741241e",
+        "semantic-f0497ae3dc2982c2"
+      ],
+      "memory_errors": [],
+      "memory_skipped": "",
+      "workdir": "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_ephemeral\\media-agency-soldier-d841dcee",
+      "workdir_exists": false,
+      "ledger_run_type": "ephemeral",
+      "ledger_parent": "s3-live",
+      "ledger_status": "SUCCESS",
+      "step_count": 5,
+      "fresh_tokens": 3189,
+      "raw_tokens": 38747,
+      "fresh_ceiling": 20000,
+      "raw_ceiling": 60000,
+      "raw_ceiling_exceeded": false
+    },
+    {
+      "finished": true,
+      "duration_s": 30.7,
+      "slug": "media-agency-soldier-dde61d93",
+      "skill": "media-agency-soldier",
+      "max_steps": 60,
+      "argv": [
+        "C:\\Users\\batu_\\.vscode\\extensions\\anthropic.claude-code-2.1.268-win32-x64\\resources\\native-binary\\claude.exe",
+        "-p",
+        "",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--permission-mode",
+        "default",
+        "--model",
+        "claude-fable-5-1",
+        "--fallback-model",
+        "claude-sonnet-5",
+        "--add-dir",
+        "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_ephemeral\\media-agency-soldier-dde61d93",
+        "--add-dir",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_vault",
+        "--add-dir",
+        "C:\\Users\\batu_\\.entropy\\workspace",
+        "--add-dir",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Reports",
+        "--system-prompt-file",
+        "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_claude_prompts\\sysprompt_15116_38904_1789101964801.txt",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "C:\\EntropiAI\\scratch\\phase14\\s3_data\\mcp\\permission_mcp.json",
+        "--setting-sources",
+        "",
+        "--disable-slash-commands",
+        "--tools",
+        "Read,Glob,Grep,WebSearch,WebFetch,Write,Bash",
+        "--agents",
+        "{\"media-agency-soldier-dde61d93\": {\"description\": \"Bir web sitesi, marka, e-ticaret mağazası veya SaaS için 360 adli denetim, rakip/pazar araştırması, derinlemesine SEO (Schema.org, CWV, Indexability, SERP Feature), UX/CRO ve ödeme sürtünmesi analizi, HTTP güvenlik başlıkları (CSP, HSTS, X-Frame) ve Google Consent Mode v2 denetimi yapan; ileri düzey birim ekonomisi (LTV:CAC, Payback Period, CM1/CM2/CM3, nCAC, Breakeven ROAS, POAS net kâr, Blended \", \"prompt\": \"# media-agency-soldier-dde61d93\\n\\n## Görev\\ncanivopets.com sitesini tek bir web aramasıyla kontrol et ve TEK paragrafta ne sattığını kaynak URL vererek yaz. Başka hiçbir şey yapma.\\n\\n### Yetenek yordamı: media-agency-soldier\\n# Media Agency Soldier Skill\\n\\nBu yetenek, web sitelerini 360 derece adli denetimle inceleyen, kurumsal/e-ticaret/SaaS verilerini ve MarTech sinyallerini çıkaran, kârlılık odaklı birim ekonomisi (LTV:CAC, CAC Payback Period, 3 Kademeli Katkı Marjı CM1/CM2/CM3, nCAC, Breakeven ROAS, Target ROAS, Max CPA, Blended MER, Gerçek POAS, İndirim Başa Baş Hacim Oranı $\\\\Delta Q = \\\\frac{d}{m-d}$, A/B Test Z-skoru p-değeri ve Reklam Bütçe Hızı Pacing) hesaplayan; Schema.org, SERP Fırsatları (Snippet/PAA/Merchant), Core Web Vitals ve E-Ticaret CRO Sürtünme İndeksini denetleyen; HTTP güvenlik başlıkları (CSP, HSTS) ve Google Consent Mode v2 uyumluluğunu doğrulayan; uçtan uca ilişkisel büyüme kampanyaları ile çok kanallı reklam planları (Meta Advantage+ Shopping ASC, Google Performance Max PMax, Google Demand Gen multi-format, Google Search RSA, Meta/Instagram Carousel & 5 Aşamalı UGC, TikTok Spark Ads, Klaviyo Retention Flows), Kreatif Yorgunluk Hook-Swap 5 Psikolojik Kanca Mimarisi, 30 Günlük Müşteri Kabul SLA Karar Kapıları ve 30-60-90 günlük medya uçuş planı inşa eden otonom bir medya ajansı askeridir.\\n\\n## Bileşenler\\n1. **URLAnalyzer**: Web sitesi HTML'i üzerinden marka kimliği, fiziksel konum, iletişim, ürün kataloğu, rakip analizi, SEO teknik denetimi, Core Web Vitals ve CRO/UX sürtünme analizi yapar.\\n2. **MediaAgencyCalculator**:\\n   - Birim ekonomisi: Başa Baş ROAS ($1 / \\\\text{Brüt Marj}$), Hedef ROAS, Maksimum CPA, MER, POAS.\\n   - İleri Finans: LTV (Müşteri Yaşam Boyu Değeri), LTV:CAC Rasyosu ve CAC Geri Ödeme Süresi (Payback Period in Months).\\n   - 3 Kademeli Katkı Marjı: CM1 (Brüt Kâr), CM2 (Operasyonel Marj), CM3 (Pazarlama Faaliyet Net Katkısı).\\n   - nCAC (Yeni Müşteri CAC) ve Organik Yamyamlık tespiti.\\n   - Fiyat Esnekliği & İndirim Başa Baş Hacim Formülü ($\\\\Delta Q = \\\\frac{d}{m-d}$).\\n   - Gerçek POAS (Profit On Ad Spend) Net Kârlılık Simülasyonu (İadeler, COGS, Kargo, Gateway POS komisyonu).\\n   - Blended MER (Marketing Efficiency Ratio) ve Çok Kanallı Çift Sayım (Attribution Overlap) tespiti.\\n   - A/B Test İki Oran Farkı İki Kuyruklu Z-Testi (p-değeri ve %95 güven aralığı).\\n   - Reklam Bütçesi Hızı (Budget Pacing, günlük burn rate, ay sonu projeksiyonu ve pacing koridoru).\\n   - 3:2:2 Dinamik Kreatif Testi bütçe ve örneklem hesaplayıcısı.\\n   - RFM Müşteri Segmentasyonu ve bütçe dağılım stratejileri.\\n3. **SEOAndMarTechAuditor**:\\n   - MarTech & Güvenlik: GA4 (`G-`), GTM (`GTM-`), Meta Pixel (`fbq`), Meta CAPI sunucu tekilleştirmesi (`event_id`), TikTok Pixel (`ttq`), Clarity/Hotjar, Klaviyo, Google Consent Mode v2 (`ad_storage`, `analytics_storage`, `ad_user_data`, `ad_personalization`), CSP, HSTS, X-Frame-Options ve KVKK/Çerez banner denetimi.\\n   - E-Ticaret CRO Skor Kartı: Mobil yapışkan CTA, Express Checkout (Masterpass, Apple Pay, Google Pay), Misafir Alışverişi, Form Alan Sürtünme İndeksi ve Güven Rozetleri.\\n   - SERP Fırsatları & Zengin Sonuçlar: Sıfırıncı Sıra (Featured Snippet adayları), PAA soru tespiti, Rich Merchant ve Sitelinks searchbox.\\n   - Schema.org: JSON-LD bloklarında Product (`name`, `image`, `offers.price`, `offers.availability`), Organization, LocalBusiness, BreadcrumbList, FAQPage zengin sonuç geçerliliğini test eder.\\n   - Core Web Vitals DOM Teşhisi: Head içi render-blocking senkron scriptler, CSS dosyaları, görsellerde `width`/`height` ve `loading=\\\"lazy\\\"` eksiklikleri ile FOUT font gecikmelerini puanlar.\\n   - İndekslenebilirlik: Meta robots (`noindex`/`nofollow`), canonical etiketi doğrulaması, OpenGraph (`og:title`, `og:image`) ve Twitter Cards denetimi.\\n   - Semantik Mimari: Konu Kümeleri (Topic Clusters), Arama Niyeti sınıflandırması (Informational, Commercial, Navigational, Transactional) ve ajans araç kiti eşlemesi.\\n4. **CampaignArchitect**:\\n   - Promosyonlar: BOGO (\\\"1 Alana 1 Bedava\\\"), Çapraz İndirim (\\\"X alana Y %10 indirimli\\\"), Sepet Eşik Teşviki (\\\"X TL üzeri kargo bedava\\\").\\n   - Google Demand Gen Blueprint: 9:16 Shorts dikey video, 16:9 YouTube video, 1:1 Discover kare görseller ve 3 kademeli Lookalike kitle segmentleri.\\n   - Kreatif Yorgunluk Hook-Swap Paketi: Kazanan video gövdesini koruyarak 5 psikolojik kanca varyantı (Merak/Kalıp Kırıcı, Negatif Uyarı, Kronik Acı, Müşteri İtirafı, Dönüşüm Öncesi/Sonrası) ve 5 günlük test protokolü.\\n   - Ajans Müşteri Kabul (Onboarding) SLA'sı: 30 günlük kilometre taşları ve 4 Fail-Closed Karar Kapısı (Data & Tracking Gate, Profitability Gate, CRO & Friction Gate, Scaling Gate).\\n   - Çok Kanallı Reklam: Meta Advantage+ Shopping Campaigns (ASC), Google Performance Max (PMax) varlık grupları, Google RSA, 5 Aşamalı UGC Video Senaryoları (Kanca, Problem, Çözüm, Demo, CTA), TikTok Spark Ads.\\n   - Retention: 4 Temel Klaviyo/Omnisend akışı (Hoş Geldin, Terk Edilen Sepet/SMS, Satın Alma Sonrası VIP, 60 Gün Geri Kazanım).\\n   - 30-60-90 Günlük Medya Uçuş Planı: Hafta hafta bütçe hızı (pacing), kanal payları ve KPI kilometre taşları.\\n5. **Web Media Audit CLI (`scripts/web_media_audit.py`)**: 12 kategoride 360 derece denetim gerçekleştiren, terminalde renkli/ASCII özet tablosu sunan ve JSON/Markdown raporu üreten profesyonel ajans aracıdır.\\n6. **AgencySoldier CLI**: Çevrimdışı (`--offline-html`) ve canlı URL analizi ile tam kampanya paketini orkestre eder.\\n7. **MediaAgencySoldierEngine**: Entropy AI mimarisiyle tam entegre çalışan köprü motorudur.\\n\\n## Kullanım Örnekleri\\n```bash\\n# 360 Medya Ajansı Denetimi (12 Kategori, İleri Matematik, Demand Gen, Hook-Swap, SLA), Terminal Özet Tablosu, JSON ve Markdown Raporu\\npython skills/media-agency-soldier/scripts/web_media_audit.py --url https://novastep.com.tr --brand \\\"NovaStep\\\" --budget 75000 --output-json ./report.json --output-md ./report.md\\n\\n# Çevrimdışı HTML ile tam denetim ve raporlama\\npython skills/media-agency-soldier/scripts/web_media_audit.py --offline-html ./data/sample.html --output-json ./report.json --output-md ./report.md\\n```\\n\\n## Araştırma Katmanı & Çalışma Yordamı (Playbook)\\nBu yeteneğin damıtılmış çalışma yordamı Obsidian kasasında `<vault>/Entropy/Skills/media-agency-soldier/PL\\n\\n## Bağlam (beyinden)\\n[Hatırlanan İlgili Bilgiler]:\\n• (0.34) Canivo Pets (canivopets.com), Edremit/Balıkesir merkezli, 15 kg kuzu etli köpek maması ağırlıklı D2C pet e-ticaret sitesidir; kedi maması, takviye ve aksesuar da satar.\\n• (0.32) canivopets.com ana sayfasında GA4 G-YF6J5MPHRN, GTM GTM-WGTLTFP6 ve Meta Pixel (fbq) kurulu olduğu tespit edildi.\\n• (0.32) Canivo Pets iletişim kanalları: WhatsApp/tel +90 540 720 62 62, info@canivopets.com, Instagram @canivopets, YouTube @CanivoPets, Facebook profil 61581502411962.\\n• (0.31) Canivo Pets 15 kg köpek mamalarını ₺1.999–₺2.499 aralığında, %14-15 indirim ve ücretsiz kargo etiketleriyle satmaktadır.\\n• (0.31) Canivo Pets'in ana kampanya mesajı '11:30'a kadar verilen siparişler aynı gün kargoda' ve konumlandırması 'Sağlıklı & Ekonomik Kuzu Etli Köpek Mamaları'dır.\\n\\n[🎯 media-agency-soldier — İlgili Rapor Alıntıları]:\\n— [Ajan_canivopets_com Canlı Araştırma Raporu _ Üreticiden Kuzu_20260911_0745]\\n**Hedef kitle / konumlandırma**\\n- Slogan: \\\"Sağlıklı & Ekonomik Kuzu Etli Köpek Mamaları\\\"; yüksek protein, üreticiden uygun fiyat vurgusu. Kaynak: https://canivopets.com/blog , https://www.canivopets.com/canivo-yavru-kopek-mamasi-15-kg\\n- Blog içeriği ırk bazlı beslenme rehberleri (Avustralya Çoban, Poodle), kilo kontrolü, kuru mama doğruluğu — eğitici içerikle güven inşası. Kaynak: https://canivopets.com/blog\\n\\n**Kampanya başlıkları**\\n- \\\"11:30'a Kadar Verilen Siparişler Aynı Gün Kargo'da\\\", \\\"Fırsat Ürünü\\\" etiketleri, %14-25 indirimler. Kaynak: https://canivopets.com\\n\\n**Sosyal medya & iletişim**\\n- Instagram: https://www.instagram.com/canivopets ; Facebook: https://www.facebook.com/profile.php?id=61581502411962 ; YouTube: https://www.youtube.com/@CanivoPets (ana sayfa HTML'inden). Kaynak: https://canivopets.com\\n- Telefon/WhatsApp: +90 540 720 62 62; e-posta: info@canivopets.com; adres: Yolören Mh. Yolören 66 Sk. No.3/A, Edremit/Balıkesir. Kaynak: https://canivopets.com\\n\\n**Teknik sinyaller**\\n- GA4 `G-YF6J5MPHRN`, GTM `GTM-WGTLTFP6`, Meta Pixel `fbq` mevcut. Kaynak: https://canivopets.com (HTML kaynak taraması)\\n\\n[Kalıcı Bilişsel Hafıza (MEMORY.md)]:\\n# Entropy AI - Global Memory & Architecture Decisions\\n\\n## System Beliefs & Core Directives\\n- System Name: Entropy AI\\n- Core Framework: Antigravity CLI (agy)\\n- Privacy Policy: Local data-on-disk priority\\n\\n## Learned User Preferences\\n- Zero external LLM API keys requested\\n- Multi-modal interaction with Ctrl+C / Ctrl+V\\n\\n## Kabul ölçütleri\\n- Bulguların her biri KAYNAKLI olacak (URL ya da dosya yolu).\\n- Beyinden gelen bağlam araştırmanın YERİNE geçmez; doğrulanmadan\\n  yazılmaz.\\n- En çok 60 araç adımı kullan; ölçütleri karşıladığında dur.\\n- Sonuç raporu tek mesajda, aşağıdaki şablonla dönecek.\\n\\n## Rapor şablonu\\n```\\n# <Raporun başlığı — tek satır, konuyu söyler>\\n\\n## Özet\\n<3-6 madde>\\n\\n## Bulgular\\n<kaynaklı bulgular>\\n\\n## Kaynaklar\\n- <url ya da dosya yolu>\\n```\\n\\n## Hafıza\\nRaporun EN SONUNA, kalıcı olmayı hak eden bilgiyi şu blokla ekle\\n(en çok 8 madde, her maddede kaynak ZORUNLU; yoksa bloğu hiç yazma):\\n\\n```\\n[HAFIZA]\\n{\\\"items\\\": [{\\\"category\\\": \\\"semantic\\\", \\\"content\\\": \\\"<en az 40 karakter, tek cümlelik kalıcı bilgi>\\\", \\\"importance\\\": 0.6, \\\"provenance\\\": \\\"<url ya da dosya yolu>\\\"}]}\\n[/HAFIZA]\\n```\\n\\nKategori kapalı küme: working | episodic | semantic | procedural.\\nHata metni, yığın izi ya da günlük çıktısı hafızaya YAZILMAZ.\\n\\n## Yasaklar\\n- Kod değişikliği yok: kaynak dosyaları düzenleme, commit atma.\\n- Proje kökü SALT OKUNUR; yazman gereken geçici dosyalar yalnız kendi\\n  çalışma dizinine yazılır.\\n- Beyinden gelen yanıt araştırmanın yerine geçmez.\\n- Kendi adına kalıcı bir ajan/oturum kaydı oluşturma; bu koşu tek\\n  seferliktir ve bitince silinirsin.\", \"tools\": [\"Read\", \"Glob\", \"Grep\", \"WebSearch\", \"WebFetch\", \"Write\", \"Bash\"], \"model\": \"claude-fable-5-1\"}}",
+        "--permission-prompt-tool",
+        "mcp__entropy__approve",
+        "--session-id",
+        "1e258025-2278-409d-ab7c-16af925bea7c",
+        "--no-session-persistence",
+        "--effort",
+        "low",
+        "--input-format",
+        "stream-json"
+      ],
+      "argv_has_agents": true,
+      "argv_has_session_id": true,
+      "argv_no_session_persistence": true,
+      "argv_permission_tool": true,
+      "stream_lines": [
+        {
+          "kind": "status",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "media-agency-soldier-dde61d93 doğdu; media-agency-soldier işine başlıyor…"
+        },
+        {
+          "kind": "status",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "Oturum başladı (claude-fable-5-1)"
+        },
+        {
+          "kind": "tool_call",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "WebSearch: {\"query\": \"canivopets.com\"}"
+        },
+        {
+          "kind": "tool_result",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "Web search results for query: \"canivopets.com\"\n\nLinks: [{\"title\":\"Canivopets\",\"url\":\"https://www.canivopets.com/en\"},{\"title\":\"GoPets\",\"url\":\"https://en.wikiped"
+        },
+        {
+          "kind": "text",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "# canivopets.com — Tek Aramayla Ne Sattığının Doğrulaması\n\n## Özet\n- Tek web araması yapıldı; site sonuçları doğrudan canivopets.com alan adından geldi.\n- Caniv"
+        },
+        {
+          "kind": "result",
+          "agent": "media-agency-soldier-dde61d93",
+          "text": "# canivopets.com — Tek Aramayla Ne Sattığının Doğrulaması\n\n## Özet\n- Tek web araması yapıldı; site sonuçları doğrudan canivopets.com alan adından geldi.\n- Caniv"
+        }
+      ],
+      "stream_count": 6,
+      "approvals": [
+        {
+          "id": "20260911-074612-tool_permission-1b4796",
+          "kind": "tool_permission",
+          "title": "WebSearch: canivopets.com",
+          "detail": "{\n  \"query\": \"canivopets.com\"\n}",
+          "risk": "low",
+          "created_at": "2026-09-11T07:46:12",
+          "source": "claude-cli",
+          "payload": {
+            "tool_name": "WebSearch",
+            "input": {
+              "query": "canivopets.com"
+            },
+            "tool_use_id": "toolu_01Hoyzo69yf6sNAb61qgswCR"
+          },
+          "status": "pending"
+        }
+      ],
+      "pending_changed": [
+        {
+          "action": "resolved",
+          "item": {
+            "created_at": "2026-09-11T07:46:12",
+            "decided_at": "2026-09-11T07:46:12",
+            "decision": "approve",
+            "detail": "{\n  \"query\": \"canivopets.com\"\n}",
+            "id": "20260911-074612-tool_permission-1b4796",
+            "kind": "tool_permission",
+            "note": "S3 canlı",
+            "payload": {
+              "input": {
+                "query": "canivopets.com"
+              },
+              "tool_name": "WebSearch",
+              "tool_use_id": "toolu_01Hoyzo69yf6sNAb61qgswCR"
+            },
+            "risk": "low",
+            "source": "claude-cli",
+            "status": "approved",
+            "title": "WebSearch: canivopets.com"
+          }
+        },
+        {
+          "action": "resolved",
+          "item": {
+            "created_at": "2026-09-11T07:46:12",
+            "decided_at": "2026-09-11T07:46:12",
+            "decision": "approve",
+            "detail": "{\n  \"query\": \"canivopets.com\"\n}",
+            "id": "20260911-074612-tool_permission-1b4796",
+            "kind": "tool_permission",
+            "note": "S3 canlı",
+            "payload": {
+              "input": {
+                "query": "canivopets.com"
+              },
+              "tool_name": "WebSearch",
+              "tool_use_id": "toolu_01Hoyzo69yf6sNAb61qgswCR"
+            },
+            "risk": "low",
+            "source": "claude-cli",
+            "status": "approved",
+            "title": "WebSearch: canivopets.com"
+          }
+        }
+      ],
+      "notifications": [
+        [
+          "eph-media-agency-soldier-dde61d93",
+          "Ajan media-agency-soldier-dde61d93 bitti: canivopets.com — Tek Aramayla Ne Sattığının Doğrulaması; 1 araç adımı; rapor: C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Skills\\media-agency-soldier\\Reports\\Ajan_canivopets_com _ Tek Aramayla Ne Sattığının Doğrulaması_20260911_0746.md",
+          "C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Skills\\media-agency-soldier\\Reports\\Ajan_canivopets_com _ Tek Aramayla Ne Sattığının Doğrulaması_20260911_0746.md"
+        ]
+      ],
+      "notification_count": 1,
+      "report_path": "C:\\EntropiAI\\scratch\\phase14\\s3_vault\\Entropy\\Skills\\media-agency-soldier\\Reports\\Ajan_canivopets_com _ Tek Aramayla Ne Sattığının Doğrulaması_20260911_0746.md",
+      "report_bytes": 2315,
+      "report_h1": "# canivopets.com — Tek Aramayla Ne Sattığının Doğrulaması",
+      "report_source_urls": [
+        "https://canivopets.com/blog",
+        "https://canivopets.com/en/tasima-kutulari",
+        "https://canivopets.com/kedi-mamalari",
+        "https://canivopets.com/kopek-mamalari",
+        "https://www.canivopets.com/canivo-alman-coban-kopek-mamasi-15-kg",
+        "https://www.canivopets.com/canivo-yavru-kopek-mamasi-15-kg",
+        "https://www.canivopets.com/en",
+        "https://www.canivopets.com/yetiskin-kopek-somonlu-performans-mamasi"
+      ],
+      "memory_written": [
+        "semantic-eff9664873554211",
+        "semantic-a538dc4e93b48105"
+      ],
+      "memory_errors": [],
+      "memory_skipped": "",
+      "workdir": "C:\\Users\\batu_\\AppData\\Local\\Temp\\entropy_ephemeral\\media-agency-soldier-dde61d93",
+      "workdir_exists": false,
+      "ledger_run_type": "ephemeral",
+      "ledger_parent": "s3-live",
+      "ledger_status": "SUCCESS",
+      "step_count": 1,
+      "fresh_tokens": 1336,
+      "raw_tokens": 24525,
+      "fresh_ceiling": 20000,
+      "raw_ceiling": 60000,
+      "raw_ceiling_exceeded": false
+    }
+  ],
+  "note": "run1: tam senaryo (07:44) — akış/bildirim kanıtı ÖLÇÜM hatasıyla boş kaldı (otomatik sinyal bağlantısı, iş parçacığı sınırı). run2: kısa hedefle (07:46) aynı ürün yolu, DirectConnection ile ölçüldü.",
+  "raw_total": 63272,
+  "fresh_total": 4525
+}

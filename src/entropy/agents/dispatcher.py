@@ -343,7 +343,82 @@ class BoardDispatcherCore:
                                                     "reason": "başlatılamadı"})
                 except board_fsm.InvalidTransition:
                     pass
+        started.extend(self.tick_ephemeral())
         return started
+
+    # -- geçici ajan turu (Faz 14-C) ------------------------------------
+
+    def tick_ephemeral(self) -> List[str]:
+        """
+        **Ajansız** kartlar için geçici ajan doğurur.
+
+        Faz 14-C öncesinde ajansız kart `backlog`ta sonsuza kadar bekliyordu
+        ("ajansız kart koşmaz", `board_autonomy`) — yani Entropy'nin kendi
+        kararıyla açtığı her kart ya kalıcı kadrodan birine yazılıyor ya da
+        hiç koşmuyordu. Kullanıcının istediği yol bu: kart `agent` alanı boşsa
+        **o iş için** tek seferlik bir ajan doğar; kadrodan kimse seçilmez.
+
+        Kart FSM'i değişmez: koşuyu `ephemeral.EphemeralRun` yürütür ve bitişte
+        `run.finished` yayar (adım tavanında `review`).
+        """
+        started: List[str] = []
+        try:
+            from entropy.agents import ephemeral
+        except Exception:
+            logger.debug("Geçici ajan modülü yüklenemedi", exc_info=True)
+            return started
+        for card in self.board.list():
+            if self.running_count() >= self.max_parallel:
+                break
+            if card.office or str(card.agent or "").strip():
+                continue
+            if str(card.status or "") not in ("backlog", "assigned"):
+                continue
+            with self._lock:
+                if card.id in self._starting:
+                    continue
+                self._starting.add(card.id)
+            try:
+                goal = str(getattr(card, "goal", "") or card.title or "").strip()
+                run = ephemeral.EphemeralRun(
+                    skill=str(getattr(card, "skill", "") or "") or None,
+                    goal=goal,
+                    card_id=card.id,
+                    engine={"model": str(getattr(card, "model", "") or ""),
+                            "effort": str(getattr(card, "effort", "") or "")},
+                )
+                run.prepare()
+                # Sahiplenme kilidi geçici koşuda da alınır: iki tur aynı
+                # ajansız kart için iki ajan doğurmasın (T3 koruması bunu şart
+                # koşuyor).
+                if self.claims.acquire(card.id, run.spec.slug) is None:
+                    continue
+                self._advance_for_ephemeral(card, run.spec.slug)
+                run.spawn()
+                started.append(card.id)
+            except Exception:
+                logger.exception("Geçici ajan koşusu başlatılamadı: %s", card.id)
+            finally:
+                with self._lock:
+                    self._starting.discard(card.id)
+        return started
+
+    def _advance_for_ephemeral(self, card, slug: str) -> None:
+        """Kartı `running`e taşır (T2 → T3 → T4); FSM'e yeni geçiş eklenmez."""
+        cur = card
+        events = [
+            ("task.assigned", {"agent": slug}),
+            ("task.claimed", {"claimed": True, "claimed_by": slug, "agent": slug}),
+            ("run.started", {"agent": slug, "provider": "claude"}),
+        ]
+        for event, payload in events:
+            if str(getattr(cur, "status", "")) == "running":
+                break
+            try:
+                cur = self.board.apply_event(cur.id, event, actor=slug,
+                                             payload=payload) or cur
+            except board_fsm.InvalidTransition:
+                continue
 
     # -- uzlaştırma ----------------------------------------------------
 

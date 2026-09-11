@@ -304,6 +304,114 @@ yeni sohbette kaynaklı hatırlama) CLI kurulu olmadığı için koşulmadı; be
 
 ---
 
+### §2.15-C Faz 14-C — geçici ajan döngüsü (2026-09-11, agy-integration-engineer) — kota **taze 4.525 / ham 63.272 token (canlı S3 KOŞTU, GEÇTİ; ham tavan 60k iki koşumun toplamında 3.272 token aşıldı)**
+
+**Sözleşme (bundan sonra bağlayıcı):**
+
+1. **Tek modül, tek yaşam döngüsü.** `agents/ephemeral.py` (Qt'siz):
+   `prepare → spawn → stream → report → memory → cleanup`.
+   `prepare(skill, prompt, brain_context, engine) -> EphemeralSpec`
+   (`slug, skill, goal, agent_md, provider, model, effort, tools, max_steps,
+   run_id, session_id, workdir`). `EphemeralRun(skill, goal, bridge=, engine=,
+   brain_context=, parent_run_id=, card_id=, memory=, vault=, on_done=)`;
+   `run.finished` (threading.Event) koşunun bittiğini bildirir.
+2. **`agent.md` şablonu.** `# <slug>` başlık + `## Görev` · `### Yetenek yordamı`
+   · `## Bağlam (beyinden)` (bütçe 4.000 token, `context_builder`, kimlik/legacy
+   düğümleri zaten dışarıda) · `## Kabul ölçütleri` · `## Rapor şablonu`
+   (**ilk satır `# H1`**) · `## Hafıza` (`[HAFIZA]{json}[/HAFIZA]`, ≤ 8 madde,
+   kaynak zorunlu) · `## Yasaklar` (kod değişikliği yok, proje kökü salt okunur,
+   beyin yanıtı araştırmanın yerine geçmez, kalıcı kayıt açma).
+3. **Taşıma.** claude'da tanım **argv'de**: `--agents '{"<slug>": {...}}'` +
+   kullanıcı mesajı `Use the <slug> subagent …`; **dosya yazılmaz**. agy'de
+   `<workdir>/.agents/agents/<slug>/agent.md` yazılır ve koşu sonunda dizin
+   silinir. Her koşu yeni `uuid4` → `--session-id`, ayrıca
+   `--no-session-persistence` (`CLAUDE_SUPPORTS_NO_SESSION_PERSISTENCE = True`,
+   `--resume` ile birlikte verilmez). `AgentSessionStore`'a **hiçbir şey
+   yazılmaz**.
+4. **Köprü sözleşmesi (yeni kwarg).** `send_background_task_async(...,
+   ephemeral={"agents_json", "system_prompt", "extra_dirs",
+   "no_session_persistence", "run_id"})`. Dolu geldiğinde: kadro JSON'u
+   **yerine** koşunun tek ajanı gider, sistem istemi `agent.md` gövdesidir,
+   izin verilen dizinler yalnız izole `workdir` + kasa rapor klasörüdür
+   (**proje kökü argv'ye girmez**) ve oturum kimliği kalıcı deftere yazılmaz.
+   14-B onay yüzeyi aynen geçerli (`--permission-mode default` +
+   `--permission-prompt-tool`). `build_command(..., no_session_persistence=)`.
+   `bridge.background_step_counts[task_id]` araç adımı sayısını çağırana açar.
+5. **Adım tavanı yeteneğe göre.** `SKILL.md` ön bilgisindeki `max_steps`
+   (1–500), yoksa `ephemeral.DEFAULT_MAX_STEPS = 60` — kart tavanı
+   (`MAX_STEPS_PER_CARD = 20`) geçici koşuda kullanılmaz. Tavana çarpan kart
+   `failed` DEĞİL `review`: `run.finished` **`ok=True`** ile yayılır (T6).
+6. **Tek bildirim.** Köprünün kendi rapor yolu kapalı (`save_report=False`);
+   raporu Entropy yazar (`Ajan_<H1>_<zaman>.md`, `[HAFIZA]` bloğu
+   `strip_machine_blocks` ile görüntüden silinir) ve **tek**
+   `bus.task_notification` yayılır: `"Ajan <slug> bitti: <H1>; N araç adımı;
+   rapor: <yol>"`. `report_created` bilerek yayılmaz (çift kart yok).
+7. **Hafızayı ALT AJAN yazar.** `agent_memory_writer.ingest_agent_report(...,
+   success=<koşu başarısı>, has_proof=<rapor dosyası var mı>)`; Entropy kapı
+   dışında hiçbir şey yazmaz.
+8. **Kendini silme.** Silinen: geçici `workdir` (agy `agent.md` dâhil), sistem
+   istemi dosyası (köprü siler), oturum kaydı (hiç oluşmaz). **Kalan:** ledger
+   satırı, rapor, olay, hafıza düğümleri.
+9. **Defter.** `tasks` tablosuna geriye uyumlu iki sütun: `run_type`
+   (`"ephemeral"`), `parent_run_id` (doğuran sohbet turu/koşu).
+   `task_ledger.record_run_meta(task_id, run_type=, parent_run_id=)`.
+10. **Tetikleme yüzeyleri.** (a) `/skill run <yetenek> :: <istem>` (yerel komut,
+    modele gitmez; komut yüzeyi 31 → **32**). (b) Entropy'nin kendi kararı:
+    `[AJAN run] {"skill": …, "goal": …} [/AJAN]` — `response_hooks` tüketir,
+    **tur başına 1 ajan**, blok görüntüden silinir, onay aranmaz.
+    (c) Pano kartının `agent` alanı BOŞSA `BoardDispatcherCore.tick_ephemeral()`
+    o iş için geçici ajan doğurur (kadrodan kimse seçilmez); kart
+    `assigned → taken → running` üzerinden yürür, FSM'e yeni geçiş eklenmez.
+    Kalıcı kadro kodu **silinmedi**, yalnız varsayılan yol artık geçici ajandır.
+11. **İstem bütçesi.** `brain/system_prompt.BUDGET_BOARD_TOOLS` 600 → **1000**:
+    600'de `[AJAN run]` eklenince `board_create` bloğu (ve içindeki `[DESK …]`
+    araçları) tamamen düşüyordu. Ölçüm: `board_tools_section(1000)` = 933
+    karakter, üç blok da tam (~+100 token, tur başına bir kez).
+
+**Sözleşme testleri:** `tests/contracts/test_phase14c_ephemeral_agent.py`
+(13 test; biri gerçek `send_background_task_async` yolunu sahte `Popen` ile
+uçtan uca ölçer: argv'de `--agents`/`--session-id`/`--no-session-persistence`/
+`--permission-mode default`/`--permission-prompt-tool`, proje kökü `--add-dir`
+listesinde YOK, kalıcı oturum dosyası yazılmadı, akış olayı ≥ 3, rapor H1,
+`[HAFIZA]` → kapı çağrısı, tek bildirim, `workdir` silindi, ledger
+`run_type="ephemeral"`). Köprüden gelen olaylar test/betiklerde **`Qt.DirectConnection`**
+ile dinlenmeli — otomatik bağlantıda iş parçacığı sınırında sessizce düşüyor.
+Koşu: `tests/contracts` + `test_agents_registry_tasks` + `test_report_attribution_and_handoff`
++ `test_provider_abstraction` + `test_agent_commands_and_claude_chat`.
+
+**Canlı S3 — KOŞTU ve GEÇTİ** (2026-09-11 07:44 ve 07:46, `claude` 2.1.268 VS Code
+eklenti ikilisi; izole veri kökü/kasa/hafıza DB'si; kanıt
+`scratch/phase14/s3_live.json` + `s3_live_run1.json` / `s3_live_run2.json`,
+`s3_agent.md`):
+
+| Ölçüt | run1 (tam senaryo) | run2 (kısa hedef) |
+|---|---|---|
+| argv `--agents` / `--session-id` / `--no-session-persistence` / izin aracı | ✔ / ✔ / ✔ / ✔ | ✔ / ✔ / ✔ / ✔ |
+| `agent_stream` satırı | (ölçüm hatası: 1) | **6** (status, oturum, `WebSearch`, sonuç, metin) |
+| onaylanan `tool_permission` | **5** (Bash/high) | 1 |
+| tek bildirim | (ölçüm hatası: 0) | **1** — "Ajan … bitti: …; 1 araç adımı; rapor: …" |
+| rapor | 3.611 B, **11 kaynak URL** | 2.315 B, H1 doğru |
+| `[HAFIZA]` → kapıdan geçen | **5 ADD** | 2 ADD |
+| `workdir` silindi / ledger `ephemeral` | ✔ / ✔ | ✔ / ✔ |
+| taze / ham token | 3.189 / 38.747 | 1.336 / 24.525 |
+
+run1'de akış ve bildirim kanıtının boş kalması **ürün değil ölçüm hatasıydı**
+(betik sinyalleri otomatik bağlantıyla dinliyordu; `step_count=5` aynı akıştan
+geliyordu). run2 aynı ürün yolunu `DirectConnection` ile ölçtü ve ikisini de
+kanıtladı.
+
+**Doğrulanamayan / açık:** (a) İki koşumun **ham** toplamı 63.272 → tavan 60k
+**3.272 token aşıldı**; tavan koşum başına uygulanıyordu, kümülatif değil
+(`s3_live.py` bunu koşum başına ölçüyor). Üçüncü koşum YAPILMADI. (b) Rapor
+kasada `Entropy/Skills/<yetenek>/Reports/` altına düşüyor, `Entropy/Reports/`
+altına değil: yetenek atfı Faz 13-A sözleşmesinden geliyor (yeteneksiz koşuda
+`Entropy/Reports/`). (c) agy kolu canlı koşulmadı (yalnız birim testi:
+`agent.md` yazılır ve silinir). (d) "Güvenli komut" sınıfı 14-B'deki gibi hâlâ
+izin kancasından önce koşuyor. (e) S3 izole hafıza DB'siyle koşuldu, yani
+"ajana beyninden bağlam ver" adımı canlıda ~79 token'lık boş bağlamla ölçüldü.
+
+---
+
 ## 2.14 Faz 13-D KAPANIŞ (v0.11.0, 2026-09-11, qa-build-engineer) — kota **0 token, model çağrısı yok**
 
 Ortam: `EntropyAI.exe` **kapalıydı** (`Get-Process EntropyAI` → 0) → build doğrudan `dist/`.

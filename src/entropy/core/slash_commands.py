@@ -118,6 +118,15 @@ BUILTIN_AGY_COMMANDS: List[SlashCommand] = [
         usage="/help",
     ),
     SlashCommand(
+        name="/skill",
+        description=("Yetenek için tek seferlik (geçici) bir ajan koşturur; "
+                     "rapor yazılır, ajan kendini siler."),
+        category="builtin",
+        badge="⚡ Yerel",
+        color="#00FF9D",
+        usage="/skill run <yetenek> :: <istem>",
+    ),
+    SlashCommand(
         name="/skills",
         description="Kullanılabilir tüm Antigravity ve yerel uzmanlık yeteneklerini listeler.",
         category="builtin",
@@ -439,6 +448,46 @@ def _handle_handoff(note: str, bridge) -> str:
         + ("<br/>Bağlam sıkıştırıldı; sohbet aktarım sayfasından sürüyor." if compressed
            else "<br/>Sayfa bir sonraki oturuma 'Önceki oturum' olarak enjekte edilecek.")
         + "</div>"
+    )
+
+
+def _handle_skill_run(args: str, bridge=None) -> str:
+    """
+    `/skill run <ad> :: <istem>` — geçici ajan koşusu başlatır (Faz 14-C).
+
+    Ayraç `::`: yetenek adları boşluk içerebiliyor ("media agency soldier"),
+    boşlukla ayırmak adı istemin ilk sözcüğüyle karıştırırdı. Ayraç yoksa ilk
+    sözcük yetenek, kalanı istem sayılır.
+    """
+    from entropy.agents import ephemeral
+
+    rest = (args or "").strip()
+    verb, _, tail = rest.partition(" ")
+    if verb.lower() != "run" or not tail.strip():
+        return ("<b>🧪 Yetenek koşusu</b><br/>Kullanım: "
+                "<code>/skill run &lt;yetenek&gt; :: &lt;istem&gt;</code><br/>"
+                "Yetenek için tek seferlik bir ajan doğar, raporunu iletir ve "
+                "kendini siler.")
+    body = tail.strip()
+    if "::" in body:
+        skill_name, _, goal = body.partition("::")
+    else:
+        skill_name, _, goal = body.partition(" ")
+    skill_name = skill_name.strip()
+    goal = goal.strip() or skill_name
+    try:
+        run = ephemeral.run_skill(skill_name or None, goal, bridge=bridge)
+    except Exception as exc:
+        return f"<b>🧪 Yetenek koşusu</b><br/>Ajan açılamadı: {_html_escape(str(exc))}"
+    spec = run.spec
+    return (
+        f"<b>🧪 Geçici ajan doğdu: {_html_escape(spec.slug)}</b><br/>"
+        f"Yetenek: {_html_escape(spec.skill or '(yeteneksiz)')} · "
+        f"Motor: {_html_escape(spec.provider)}/"
+        f"{_html_escape(spec.model or '(oturum modeli)')} · "
+        f"Adım tavanı: {spec.max_steps}<br/>"
+        f"İş: {_html_escape(goal[:160])}<br/>"
+        f"Bitince rapor yazılır ve ajan kendini siler."
     )
 
 
@@ -2129,6 +2178,12 @@ def try_handle_local_command(prompt: str, bridge, distiller=None) -> Optional[st
 
     if head_low == "/handoff":
         return _handle_handoff(args, bridge)
+
+    # Faz 14-C: `/skill run <ad> :: <istem>` — kullanıcının döngüsünün doğrudan
+    # tetikleyicisi. Kart, kadro ve tetikleyici YOK: yetenek için tek seferlik
+    # bir ajan doğar, raporunu anlık iletir ve kendini siler.
+    if head_low == "/skill":
+        return _handle_skill_run(args, bridge)
 
     # Ajan ve görev kartı komutları: hepsi yerel: kart yazımı ve listeleme model
     # çağırmaz, yalnızca /task <ajan> ... kartı çalıştırırken köprüyü kullanır.
